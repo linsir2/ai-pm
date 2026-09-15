@@ -45,3 +45,17 @@ CREATE TABLE IF NOT EXISTS document_versions (
 
 CREATE INDEX IF NOT EXISTS idx_document_versions_doc ON document_versions (doc_id, seq);
 
+-- ── 流水（只增不改） ───────────────────────────────────────────
+-- 它回答一个问题："这件事到底发了没有"。列与 CONTRACTS C13 的不变量一一对应。
+
+CREATE TABLE IF NOT EXISTS events (
+    event_id     TEXT PRIMARY KEY,
+    at           TEXT NOT NULL,
+    type         TEXT NOT NULL,
+    round_id     TEXT,
+    project_id   TEXT,
+    producer     TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_round ON events (round_id);

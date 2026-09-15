@@ -27,6 +27,7 @@ TRACE = "trc"
 REGISTRY = "reg"
 PACKET = "pkt"
 CLAIM = "clm"
+EVENT = "evt"
 
 ALL_PREFIXES = frozenset(
     {
@@ -48,6 +49,7 @@ ALL_PREFIXES = frozenset(
         REGISTRY,
         PACKET,
         CLAIM,
+        EVENT,
     }
 )
 

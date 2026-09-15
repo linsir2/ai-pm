@@ -8,7 +8,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
@@ -29,12 +29,22 @@ class Database:
         return database
 
     def _migrate(self) -> None:
+        """建表 + 把库版本推到代码版本。
+
+        当前的变更都是"加表"这类可以重复执行的语句，所以 `schema.sql` 本身就是迁移脚本
+        （全部 `CREATE ... IF NOT EXISTS`）。将来要改列形状或回填数据时，在这里按版本号加步骤。
+        """
         self._connection.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
         row = self._connection.execute("SELECT version FROM schema_meta").fetchone()
         if row is None:
             self._connection.execute("INSERT INTO schema_meta (version) VALUES (?)", (SCHEMA_VERSION,))
-        elif row["version"] > SCHEMA_VERSION:
-            raise RuntimeError(f"库的 schema 版本（{row['version']}）比代码新（{SCHEMA_VERSION}），拒绝打开")
+            return
+
+        stored = int(row["version"])
+        if stored > SCHEMA_VERSION:
+            raise RuntimeError(f"库的 schema 版本（{stored}）比代码新（{SCHEMA_VERSION}），拒绝打开")
+        if stored < SCHEMA_VERSION:
+            self._connection.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
 
     def schema_version(self) -> int:
         row = self._connection.execute("SELECT version FROM schema_meta").fetchone()

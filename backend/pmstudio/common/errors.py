@@ -32,3 +32,10 @@ class VersionConflict(PmStudioError):
 
 class BlockNotFound(PmStudioError):
     """要写的块不存在。"""
+
+
+class EventDispatchOverflow(PmStudioError):
+    """一次发布引发的分发条数超过上限——多半是订阅者之间形成了环。
+
+    与其把进程挂死，不如当场炸在调用方，并且流水里留着"发过哪些"。
+    """
