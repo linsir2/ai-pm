@@ -85,7 +85,7 @@ def test_write_blocks_bumps_version_and_records_source_card(ledger: Ledger) -> N
         ops=[
             BlockOp(
                 block_id="blk_goal",
-                kind=BlockOpKind.REPLACE,
+                op=BlockOpKind.REPLACE,
                 content="给产品经理和工程师做需求对齐",
                 expected_version=1,
             )
@@ -108,7 +108,7 @@ def test_append_keeps_existing_content(ledger: Ledger) -> None:
         ops=[
             BlockOp(
                 block_id="blk_features",
-                kind=BlockOpKind.APPEND,
+                op=BlockOpKind.APPEND,
                 content="第 1 条：支持把讨论候选带进主闭环",
                 expected_version=1,
             )
@@ -128,7 +128,7 @@ def test_stale_expected_version_is_rejected(ledger: Ledger) -> None:
             ops=[
                 BlockOp(
                     block_id="blk_goal",
-                    kind=BlockOpKind.REPLACE,
+                    op=BlockOpKind.REPLACE,
                     content="x",
                     expected_version=99,
                 )
@@ -146,13 +146,13 @@ def test_write_is_atomic_all_or_nothing(ledger: Ledger) -> None:
             ops=[
                 BlockOp(
                     block_id="blk_goal",
-                    kind=BlockOpKind.REPLACE,
+                    op=BlockOpKind.REPLACE,
                     content="这条不该被写进去",
                     expected_version=1,
                 ),
                 BlockOp(
                     block_id="blk_features",
-                    kind=BlockOpKind.REPLACE,
+                    op=BlockOpKind.REPLACE,
                     content="这条版本对不上",
                     expected_version=99,
                 ),
@@ -173,7 +173,7 @@ def test_version_seq_is_monotonic(ledger: Ledger) -> None:
             ops=[
                 BlockOp(
                     block_id="blk_goal",
-                    kind=BlockOpKind.REPLACE,
+                    op=BlockOpKind.REPLACE,
                     content=f"v{expected}",
                     expected_version=expected,
                 )
@@ -191,7 +191,7 @@ def test_manual_edit_has_no_source_card_id(ledger: Ledger) -> None:
         ops=[
             BlockOp(
                 block_id="blk_goal",
-                kind=BlockOpKind.REPLACE,
+                op=BlockOpKind.REPLACE,
                 content="手改的",
                 expected_version=1,
             )
@@ -210,7 +210,7 @@ def test_rollback_creates_new_version_and_keeps_history(ledger: Ledger) -> None:
         ops=[
             BlockOp(
                 block_id="blk_goal",
-                kind=BlockOpKind.REPLACE,
+                op=BlockOpKind.REPLACE,
                 content="第一版",
                 expected_version=1,
             )
@@ -222,7 +222,7 @@ def test_rollback_creates_new_version_and_keeps_history(ledger: Ledger) -> None:
         ops=[
             BlockOp(
                 block_id="blk_goal",
-                kind=BlockOpKind.REPLACE,
+                op=BlockOpKind.REPLACE,
                 content="第二版",
                 expected_version=2,
             )

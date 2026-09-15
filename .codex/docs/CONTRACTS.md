@@ -1,10 +1,34 @@
 # PM Studio 公共契约
 
-- 版本：v0.12
+- 版本：v0.13
 - 日期：2026-09-13
 - 对应：PRD v0.13
 
 ### 变更记录
+
+**v0.13**（2026-09-15）
+
+- **P1 `card_group` 区块的规则写清**：原来区块表说"当前的 C8 实例，含用户的回应"，不变量却说
+  "别处也有家的对象只放 id（`card_group` 放 `group_id`）"——两句打架。定成：**活对象放在区块里，
+  冻结出来的东西落账本**。`card_group` 区块装当前轮的 C8 实例；`state = confirmed` 那一刻整组
+  作为卡片历史落 L7，`confirmed` 区块只留 id。
+- **P5 L7 分块定**：`contracts/interfaces/` 里**故意没有 L7 的 Protocol**——文档只写了"各实体的读写"，
+  没有签名。谁先当消费者谁定自己那一小块（M0.3 定流水、M0.4 定工作台、M1 定业务读写）。
+  配套改 §5.2：**L3 可以落 L7**（黑板持久化把工作台放进 L7，也让"写工作台与写账本同一个事务"有落点）。
+- **§5.3 的三处签名修正**：`publish(event, producer)`（发布要带身份，白名单与流水都靠它）；
+  黑板的读/写拆成两个句柄（I19 的类型表达）；`ingest(file)` → `ingest(path)`；
+  `complete` 的 `messages` 形状定为 `PromptMessage{role, text}`（跨层刚需，不定就是无类型接缝）。
+- **`export` 从 §5.3 移出**：文档只写了返回是"交付物"，没有形状——声明它就得凭空发明返回类型。
+  PRD §14 已把它列为范围外，等 M21 真做时再定。
+- **L4 两个方法标注"当前无跨层调用方"**：`retrieve`（检索在 M13 组装内部发生）、
+  `invalidate`（由 `doc.changed` 事件驱动）。先声明、M1 评审时删。
+- **C11 补主张留痕**：新增 `claims` 字段（`ClaimDigest`：`packet_id` / `claim_id` / `role_id` /
+  `statement` / `kind` / `citations`）。形状归 C11 所有，不是 C4 的形状。
+- **C15 补引用规则**：`claim` 只允许出现在**编排层内部的对象及其留痕**里（C4 主张内部、C11 留痕）；
+  C7 的提案与备选、C9 的记忆不许引用 `claim`。
+- **C12 的 `priority` 定值域**：`≥ 0` 的整数，越大越先保留；同值按 `(source, ref)` 排序——
+  排序规则在这里定死一次，M24 才可能"只排序与裁剪、不做语义判断"。
+- **C13 的 `tool.invoked` 补 `role_id` 可空**：检索由记忆层在组装上下文时发起，那种调用没有角色。
 
 **v0.12**（2026-09-13）
 
@@ -538,6 +562,11 @@ claims: [
 | `context_used` | 这一轮带了哪些上下文，含被裁掉的 | M25 | 出问题时看"是不是该带的没带上" |
 | `tools_called` | 调了哪些工具 | M25 | 看"是不是没查资料就编了" |
 | `final_version_id` | 最终写进了哪一版 | M25 | 把 trace 和文档版本对上 |
+| `claims` | **主张留痕**：这一轮说过哪些主张。每条是 `ClaimDigest`——`packet_id` / `claim_id` / `role_id` / `statement` / `kind` / `citations` | M25 | 复盘："这个分歧怎么来的、当时凭什么这么说" |
+
+> **主张留痕的形状归 C11 所有，不是 C4 的形状。** C4 是编排层的内部通用语（层内），
+> 契约层不 import 编排层；C11 要的是"能复盘的那几列"，两者字段重合不代表同一个对象。
+> 没有这个字段，"要审计走 trace"就是一句空头支票——主张会随轮末的黑板一起消失。
 
 ### C12 Blackboard（黑板）
 
@@ -586,7 +615,7 @@ claims: [
 | `source` | 来自哪：`document` / `brief` / `memory` / `material` / `user_input` / `discussion` | M24 决定裁剪顺序；复盘 |
 | `ref` | 对应哪个对象：`block_id` / `memory_id` / `material_id` / `round_id` / `group_id`（用户的卡片回应） | 引用归因（C15）；审计 |
 | `content` | 带进来的正文 | 角色 prompt |
-| `priority` | 优先级。**M24 只按它裁，不做语义判断** | M24 |
+| `priority` | 优先级，**`≥ 0` 的整数，越大越先保留**；同值按 `(source, ref)` 排序，保证同一份上下文每次裁出同一个结果 | M13 给数值；M24 只按它排序并裁，不做语义判断 |
 | `credibility` | 只有材料有（继承 C5） | M28 判断能不能单独当依据 |
 
 > 上下文块**不是新契约**，它是"这一轮按优先级带上来的东西"的容器：每个块的 `content` 都来自某个已有契约的对象，`ref` 指回那个对象。
@@ -601,7 +630,8 @@ claims: [
   注意：**不要保留多轮区块**。历史轮次的东西各有各的家（文档与版本在 C2/C3、卡片在卡片历史、消息与摘要在 C17、结论在 C9、用了什么在 C11），再留几轮就是造第三个历史库。
 - **写入即广播**：写某个区块时，由黑板按"区块 → 事件"映射自动发事件——`round` → `round.updated`，`card_group` → `card_group.updated`，`context` / `claims` / `confirmed` → **不发**。这样不存在"写了状态、忘了通知"这个失效模式。
 - **先提交，后广播**：事件必须在事务**提交之后**发，绝不能在事务里发——否则订阅者回读时读到的是旧状态。
-- **每个对象只有一个家**：黑板里凡是别处也有家的对象，只放 id 引用（`card_group` 放 `group_id`，`confirmed` 放已确认的 C8 与 C9 候选的 id）。
+- **活对象放在区块里，冻结出来的东西落账本**：`card_group` 区块装**当前轮的 C8 实例**（含用户的回应）——它还没冻结，账本里没有它的位置；一旦 `state = confirmed`，整组作为卡片历史落 L7，`confirmed` 区块**只放 id**（已确认的 C8 与 C9 候选的 id）。
+- **`claims` 区块只有编排层能读**：其中装的是层内对象；其余区块的"谁读"是用途说明，权限上 §5.3 的 `read` 对所有层开放。
 - **`context` / `claims` 不存正文**：`context` 只存引用（`ref`）、优先级、可信度、被裁掉的部分，正文按需回源对象取。
 
 ### C13 Event（事件）
@@ -630,7 +660,7 @@ claims: [
 | `discussion.utterance_added` | 讨论轮（C14 `utterances`）、M7 讨论编排器 | 讨论区界面 | `round_id` / `role_id` / `packet_id` / `index` | 逐条把发言追加到界面上。讨论区是"一条一条冒出来"的，用增量，不必每次重画整轮 |
 | `memory.updated` | 记忆（C9）、M17 / M30 / 记忆层的失效判定 | M16 检索、M30 候选队列、界面 | `memory_id` / `project_id` / `type` / `status` / `from_status` | 更新检索索引；把新候选排进验证队列；记忆面板刷新。**候选产生、晋升、失效、退役都走它，不再单个 `memory.promoted`** |
 | `registry.updated` | 注册条目（C10）、M27 注册中心 | M7 / M10 / M23 / M28 | `id` / `kind` / `status` / `from_status` | 换掉手里那份定义：M7 按 skill 选编排策略、M10 按 `tags` 挑工具、M23 执行权限、M28 读模板字段——条目停用之后不能再用旧的。**M30 晋升 / 退役 skill 也走它** |
-| `tool.invoked` | 一次工具调用、工具层 | 界面 | `round_id` / `role_id` / `tool_id` / `status`（`started` / `finished`） | 联网、检索这类几秒到十几秒的操作，界面要显示"正在查什么"，否则看着像死了 |
+| `tool.invoked` | 一次工具调用、工具层 | 界面 | `round_id` / `tool_id` / `status`（`started` / `finished`）/ `role_id`（**可空**——检索是记忆层在组装上下文时发起的，那种调用没有角色） | 联网、检索这类几秒到十几秒的操作，界面要显示"正在查什么"，否则看着像死了 |
 | `generation.failed` | 这一次生成、Harness（L6） | 界面、编排层 | `round_id` / `step` / `reason` / `retryable` | **三样必须都在**：失败在哪一步、人话的原因、能不能重试。界面展示原因并提供重试；编排层据此把这一轮标成 `phase = failed` |
 
 **为什么失败要单独一个事件、不塞进 `round.updated`**：`generation.failed` 的生产者是 Harness（L6），`round.updated` 的生产者是编排层（L2）。失败细节（哪一步、什么原因、能不能重试）只有 Harness 知道；编排层是**收到之后**才把自己的轮次状态改成 `failed`。谁的状态谁发。
@@ -688,6 +718,7 @@ claims: [
 - **分发方式：进程内**（不引外部中间件）。分发语义：异步、按订阅顺序 await；嵌套发布排队、当前处理器返回后排空；同轮 FIFO。
 - **异常隔离**：一个订阅者抛异常，不阻断其它订阅者。否则前端渲染出个小错，就会让"记忆失效"这种链条整段跑不掉。
 - **事件流水**：每条 `publish` 都落一张 append-only 表（`event_id` / `at` / `type` / `round_id` / `project_id` / `producer` / `payload`）。它回答的是"这件事到底发了没有"——没有它，这类问题只能靠猜。
+- **发布要带身份**：`publish(event, producer)`。每个事件的生产者白名单写在上面的表里（一个事件可能有多个生产者，比如记忆层的候选产生与失效判定），**表外的身份发不出**；同一个白名单也用来判"谁能读 `claims` 区块"。
 
 ### C14 Discussion Round（讨论轮）
 
@@ -722,6 +753,7 @@ claims: [
 **不变量**
 
 - **引用必须能定位**（I21）：`target_id` 必须指向真实存在的对象，指不到的引用不许出现。含糊地说一句"根据项目文档"不算依据。
+- **`claim` 这一档只允许出现在编排层内部的对象及其留痕里**：C4 的主张内部、C11 的主张留痕可以引用 `claim`（审查角色指名反对哪一条）；**C7 的提案与备选、C9 的记忆不许**——跨层的永远是成品，不是原材料。
 - 每条主张要么有 ≥1 条引用，要么**显式声明无来源**（`citations: []`），并在界面文本上标明"这是我的推断"。不允许"看起来有依据"但实际没有。
 - 只有低可信材料的产出不能直接写入文档，见 C5 的不变量。
 
@@ -845,7 +877,7 @@ M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长�
 | L0 注册中心 | L7 存储（注册条目要落库、要能改状态） | — |
 | L1 交互层 | L2（所有 AI 动作）；L5 的**两件事**（M20 手动写入、M21 导出）；L7 存储**只读**（渲染文档、版本历史、卡片历史、trace） | **只读**；订阅事件，不发事件 |
 | L2 编排层 | L0（读定义）/ L4 / L5 / L6；写黑板、发事件 | 唯一写者 |
-| L3 通信层 | 不调任何层（它是通道，被所有层使用） | — |
+| L3 通信层 | L7 存储（只写工作台与流水，不含业务语义）；不调其它层（它是通道，被所有层使用） | — |
 | L4 记忆层 | L7 存储 | 只读 |
 | L5 工具层 | L7 存储 | 只读 |
 | L6 Harness | L7 存储（trace） | 只读 |
@@ -856,6 +888,9 @@ M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长�
 **为什么 L1 能读黑板、但不能发事件**：界面要渲染，就得多一份只读的状态源；但用户动作（点确认、打字纠正）不是"状态变化通知"，它是对 L2/L5 的调用。事件一律由状态的生产者发，事件的来源才唯一。
 
 **为什么 L0 从"不调任何层"改成可以落 L7**：注册条目唯一写入口是 M27（§5.4），M30 还要经它改 skill 状态；如果 L0 一个层都不能调，这些写操作就没有落点。它照旧**不读黑板**，也不参与任何一轮的流转。
+
+**为什么 L3 可以落 L7**：黑板持久化（C12）把工作台表（`rounds` / `board_regions`）放进了 L7，
+而"写工作台与写账本能在同一个事务里"要求两者共享同一个事务边界。它照旧不参与业务判断。
 
 ### 5.3 每层暴露什么
 
@@ -874,9 +909,9 @@ M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长�
 
 | 接口 | 说明 |
 |---|---|
-| `read(region)` | 黑板：读任一区块，所有层都能调 |
-| `write(region, value)` | 黑板：只有区块的拥有者能调 |
-| `publish(event)` | 事件：只有状态的生产者能调 |
+| `read(region)` | 黑板**只读句柄**：读任一区块，所有层都能调 |
+| `write(region, value)` | 黑板**写句柄**：只有编排层拿得到（I19）；其余层只读 |
+| `publish(event, producer)` | 事件：只有状态的生产者能调。`producer` 是身份，按 §C13 的白名单校验，并落进流水 |
 | `subscribe(type, handler)` | 事件：任何层都能订 |
 
 **L4 记忆层**
@@ -884,22 +919,25 @@ M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长�
 | 接口 | 入参 | 返回 | 契约 |
 |---|---|---|---|
 | `assembleContext(round)` | 这一轮的 C12 `round` 区块 | **`{blocks, base_versions}`**：上下文块数组（C12 `context.blocks`）+ 这一轮的 C1 版本快照 | C12 / C1 |
-| `retrieve(project_id, query)` | 项目、查询 | C5 数组（`source_type = retrieval`） | C5 |
+| `retrieve(project_id, query)` | 项目、查询 | C5 数组（`source_type = retrieval`） | C5；**当前没有跨层调用方**（检索在 M13 组装内部发生），先声明、M1 评审时删 |
 | `readBrief(project_id)` / `updateBrief(project_id, lines[])` | 项目、要加/删的行 | 简报全文 | M14 |
 | `appendMessage(message)` | C17 Message | — | C17 |
 | `historyContext(project_id, round_id)` | 项目、这一轮 | 上下文块数组（**全量历史或摘要 + 最近若干轮**，由 M15 按预算决定） | C17 |
 | `recordCandidates(C9[])` | 候选记忆 | — | C9 |
-| `invalidate(citations[])` | 受影响的引用 | — | C15（按 `block` 引用的 `target_version` 判） |
+| `invalidate(citations[])` | 受影响的引用 | — | C15（按 `block` 引用的 `target_version` 判）；**当前没有跨层调用方**（它由 `doc.changed` 事件驱动），先声明、M1 评审时删 |
 
 **L5 工具层**
 
 | 接口 | 入参 | 返回 | 契约 |
 |---|---|---|---|
 | `searchWeb(query)` | 查询 | C5 数组（`source_type = web`） | C5 |
-| `ingest(file)` | 上传的文件 | `material_id` | 进资料库，之后被检索命中才成材料包 |
+| `ingest(path)` | 文件的本地路径 | `material_id` | 进资料库，之后被检索命中才成材料包 |
 | `createProject(template_id, name)` | 模板、项目名 | `{project_id, doc_id}` | C16 / C2；**应用函数，不是能力工具**；一次事务建项目 + 9 字段空骨架 |
 | `writeDocument(trigger, payload)` | 见下方"payload 形状" | 更新的 C2 块 + 新的 C3 版本 | C2 / C3 |
-| `export(doc_id, format)` | 文档、格式 | 交付物 | M21 |
+
+> **`export(doc_id, format)` 不在这张表里。** 它的返回在文档里只写了"交付物"，不是契约对象——
+> 声明它就得凭空发明一个返回类型，撞上"入参和返回值只能是契约对象"这条纪律。PRD §14 把它列为
+> 范围外（M21），等它真做时再定形状。
 
 **`writeDocument` 的 `payload` 形状**（这是框架要照着写的签名，不能靠猜）
 
@@ -913,11 +951,15 @@ M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长�
 
 | 接口 | 入参 | 返回 | 契约 |
 |---|---|---|---|
-| `complete(model_ref, messages)` | 模型、提示词 | 文本 | M22；重试与降级在里面（M26） |
+| `complete(model_ref, messages)` | 模型、提示词（`messages` = `PromptMessage` 数组，见下） | 文本 | M22；重试与降级在里面（M26） |
 | `canUse(role_id, tool_id)` | 角色、工具 | `allow` / `deny` | C10 的 `allowed_tools` 白名单，在这里执行 |
 | `canEnter(role_id, entry)` | 角色、入口（`main` / `discussion`） | `allow` / `deny` | C10 的 `allowed_entries` 白名单，在这里执行 |
 | `trim(blocks[], project_id, model_ref)` | 上下文块、项目、模型 | `{blocks[], dropped[]}` | C12；**预算由 L6 自己算**（`模型窗口 − 输出预留 − 系统开销`，叠 C16 的 `config`），调用方不传预算；**只按 `priority` 裁** |
-| `recordTrace(C11)` | 这一轮用了什么 | — | C11 |
+| `recordTrace(C11)` | 这一轮用了什么，含主张留痕 | — | C11 |
+
+**`complete` 的 `messages` 形状**（跨层刚需，不定它就是一道无类型接缝）：
+
+`PromptMessage { role: system | user | assistant, text }`
 
 **L0 注册中心**
 

@@ -100,23 +100,25 @@ class Ledger:
             current = {block.block_id: block for block in self._read_blocks(conn, doc_id)}
 
             # 先全部校验，再动手——校验不过就一个字节都不该改。
-            for op in ops:
-                block = current.get(op.block_id)
+            for edit in ops:
+                block = current.get(edit.block_id)
                 if block is None:
-                    raise BlockNotFound(f"块不存在：{op.block_id}")
-                if block.version != op.expected_version:
+                    raise BlockNotFound(f"块不存在：{edit.block_id}")
+                if block.version != edit.expected_version:
                     raise VersionConflict(
-                        f"块 {op.block_id} 的版本是 {block.version}，"
-                        f"但你按 {op.expected_version} 写的——有人在中间改过它"
+                        f"块 {edit.block_id} 的版本是 {block.version}，"
+                        f"但你按 {edit.expected_version} 写的——有人在中间改过它"
                     )
 
-            for op in ops:
-                block = current[op.block_id]
+            for edit in ops:
+                block = current[edit.block_id]
                 content = (
-                    f"{block.content}\n{op.content}".strip() if op.kind is BlockOpKind.APPEND else op.content
+                    f"{block.content}\n{edit.content}".strip()
+                    if edit.op is BlockOpKind.APPEND
+                    else edit.content
                 )
                 updated = block.model_copy(update={"content": content, "version": block.version + 1})
-                current[op.block_id] = updated
+                current[edit.block_id] = updated
                 self._update_block(conn, doc_id, updated)
 
             return self._append_version(

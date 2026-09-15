@@ -27,6 +27,8 @@ class Block(ContractModel):
             raise ContractViolation("block_id 不能为空")
         if not self.schema_label:
             raise ContractViolation("schema_label 不能为空——M20 靠它定位、M28 靠它落位")
+        if self.parent_id == self.block_id:
+            raise ContractViolation("块不能把自己当父块——文档树不是环")
         return self
 
     @property
@@ -42,12 +44,22 @@ class Document(ContractModel):
     project_id: str
     template_id: str
 
+    @model_validator(mode="after")
+    def _check(self) -> "Document":
+        if not self.doc_id:
+            raise ContractViolation("doc_id 不能为空")
+        if not self.project_id:
+            raise ContractViolation("project_id 不能为空——记忆与检索按项目隔离")
+        if not self.template_id:
+            raise ContractViolation("template_id 不能为空——决定文档的字段分区")
+        return self
+
 
 class BlockOp(ContractModel):
     """一次写入里对某个块的操作（CONTRACTS §5.3 `writeDocument` 的 payload 项）。"""
 
     block_id: str
-    kind: BlockOpKind
+    op: BlockOpKind
     content: str
     expected_version: int = Field(ge=1)
 
@@ -56,6 +68,15 @@ class DocumentSnapshot(ContractModel):
     """某一版文档的完整内容。"""
 
     blocks: tuple[Block, ...]
+
+    @model_validator(mode="after")
+    def _check(self) -> "DocumentSnapshot":
+        seen: set[str] = set()
+        for block in self.blocks:
+            if block.block_id in seen:
+                raise ContractViolation(f"同一份快照里出现了重复的 block_id：{block.block_id}")
+            seen.add(block.block_id)
+        return self
 
 
 class DocumentVersion(ContractModel):
@@ -83,3 +104,43 @@ class DocumentVersion(ContractModel):
         elif self.target_version_id is not None:
             raise ContractViolation("target_version_id 只有 rollback 版本才有")
         return self
+
+
+class SubmitPayload(ContractModel):
+    """`writeDocument(trigger = submit, ...)` 的入参：M20 自己去黑板读这一组。"""
+
+    group_id: str
+
+    @model_validator(mode="after")
+    def _check(self) -> "SubmitPayload":
+        if not self.group_id:
+            raise ContractViolation("提交写入必须指名是哪一组卡片")
+        return self
+
+
+class ManualEditPayload(ContractModel):
+    """`writeDocument(trigger = manual, ...)` 的入参：一次显式保存 = 一版（AC8）。"""
+
+    block_ops: tuple[BlockOp, ...]
+
+    @model_validator(mode="after")
+    def _check(self) -> "ManualEditPayload":
+        if not self.block_ops:
+            raise ContractViolation("一次保存至少要改一处")
+        return self
+
+
+class RollbackPayload(ContractModel):
+    """`writeDocument(trigger = rollback, ...)` 的入参：回退产生新版本，不删不改历史（I8）。"""
+
+    target_version_id: str
+
+    @model_validator(mode="after")
+    def _check(self) -> "RollbackPayload":
+        if not self.target_version_id:
+            raise ContractViolation("回退必须指名退回哪一版")
+        return self
+
+
+WritePayload = SubmitPayload | ManualEditPayload | RollbackPayload
+"""三种 trigger 各自的 payload。配错由 `invariants.check_write_payload` 拒。"""
