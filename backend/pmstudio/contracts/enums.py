@@ -59,6 +59,7 @@ class RoundEndReason(StrEnum):
     COMPLETED = "completed"
     USER_STOPPED = "user_stopped"
     FAILED = "failed"
+    PROCESS_RESTART = "process_restart"
 
 
 class ClaimKind(StrEnum):

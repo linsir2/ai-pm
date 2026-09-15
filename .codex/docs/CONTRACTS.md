@@ -1,10 +1,16 @@
 # PM Studio 公共契约
 
-- 版本：v0.15
+- 版本：v0.16
 - 日期：2026-09-13
 - 对应：PRD v0.13
 
 ### 变更记录
+
+**v0.16**（2026-09-15）
+
+- **`round.end_reason` 从三种改成四种**：补 `process_restart`。原文只列了"写完 / 用户叫停 / 失败"，
+  而 directory §6.5 要求崩溃恢复写"进程重启"——代码里没有值可用。这两件事对用户不是一回事：
+  "上次跑到一半进程挂了"和"这一步生成失败了"，界面要说的话不同（AC12）。
 
 **v0.15**（2026-09-15）
 
@@ -635,7 +641,7 @@ claims: [
 | `user_input` | 这一轮用户说了什么（原文） | M8 复述；M13 组装；审计 |
 | `scope` | 这一轮的 C1 实例 | M20 强制写范围；界面高亮 |
 | `phase` | `assembling` 组装 / `restating` 复述理解 / `working` 生成 / `awaiting_user` 等用户回应 / `drafting` 成稿 / `writing` 写入 / `done` / `failed` | 界面显示进度；失败时和 `generation.failed` 一起说清卡在哪一步（AC12） |
-| `ended_at` / `end_reason` | 什么时候结束、为什么结束（写完 / 用户叫停 / 失败） | C11 trace；界面 |
+| `ended_at` / `end_reason` | 什么时候结束、为什么结束（写完 / 用户叫停 / 失败 / **进程重启**——最后这个由启动恢复写上） | C11 trace；界面 |
 
 **`context` 区块的形状**
 

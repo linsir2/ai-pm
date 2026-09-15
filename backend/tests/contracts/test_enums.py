@@ -30,7 +30,7 @@ EXPECTED_VALUES: dict[type, set[str]] = {
         "failed",
     },
     # C12 round.end_reason
-    enums.RoundEndReason: {"completed", "user_stopped", "failed"},
+    enums.RoundEndReason: {"completed", "user_stopped", "failed", "process_restart"},
     # C4 claim.kind，被 C11 主张留痕复用
     enums.ClaimKind: {"proposal", "challenge"},
     # C7 card.kind

@@ -12,7 +12,14 @@
 
 from pmstudio.common.clock import Clock
 from pmstudio.common.errors import ContractViolation
-from pmstudio.contracts.enums import CardKind, EventType, ProducerIdentity, RegionName
+from pmstudio.contracts.enums import (
+    CardKind,
+    EventType,
+    ProducerIdentity,
+    RegionName,
+    RoundEndReason,
+    RoundPhase,
+)
 from pmstudio.contracts.interfaces.communication import EventBus
 from pmstudio.contracts.interfaces.storage import BoardStorePort
 from pmstudio.contracts.models.card_group import CardGroup
@@ -76,6 +83,29 @@ class Blackboard:
         round_id = self._require_round()
         await self._store.drop_regions(round_id)
         self._round_id = None
+
+    async def recover_unfinished_rounds(self) -> tuple[str, ...]:
+        """启动时把上次没跑完的轮标成 `failed`（C12 的黑板生命周期）。
+
+        它**不走 `open_round`**：恢复不是"开新一轮"，不该触发那里的清理——失败轮的五个区块
+        要留着给人看"跑到哪了"（用户开新一轮时才删）。
+        """
+        recovered: list[str] = []
+        for round_id in await self._store.unfinished_round_ids():
+            previous = await self._store.read_round(round_id)
+            if previous is None:
+                continue
+            failed = previous.model_copy(
+                update={
+                    "phase": RoundPhase.FAILED,
+                    "ended_at": self._clock.now(),
+                    "end_reason": RoundEndReason.PROCESS_RESTART,
+                }
+            )
+            await self._store.write_round(failed)
+            await self._broadcast(RegionName.ROUND, failed, previous)
+            recovered.append(round_id)
+        return tuple(recovered)
 
     # ── 内部 ────────────────────────────────────────────────
 

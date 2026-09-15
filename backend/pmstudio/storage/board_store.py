@@ -11,7 +11,7 @@
 import json
 
 from pmstudio.common.errors import ContractViolation
-from pmstudio.contracts.enums import RegionName
+from pmstudio.contracts.enums import RegionName, RoundPhase
 from pmstudio.contracts.models.scope import Scope
 from pmstudio.contracts.skeleton.board import REGION_VALUE_TYPES, RegionValue, RoundRegion
 from pmstudio.storage.db import Database
@@ -98,6 +98,15 @@ class BoardStore:
         """开新一轮时，把别的轮残留的区块清掉（C12）。"""
         with self._db.transaction() as conn:
             conn.execute("DELETE FROM board_regions WHERE round_id != ?", (round_id,))
+
+    async def unfinished_round_ids(self) -> tuple[str, ...]:
+        """还没结束的轮（启动时恢复要扫它）。按落库顺序给，方便复现。"""
+        finished = (RoundPhase.DONE.value, RoundPhase.FAILED.value)
+        rows = self._db._connection.execute(
+            "SELECT round_id FROM rounds WHERE phase NOT IN (?, ?) ORDER BY rowid",
+            finished,
+        ).fetchall()
+        return tuple(row["round_id"] for row in rows)
 
     @staticmethod
     def _reject_round_region(region: RegionName) -> None:

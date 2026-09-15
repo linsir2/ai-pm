@@ -39,3 +39,10 @@ class EventDispatchOverflow(PmStudioError):
 
     与其把进程挂死，不如当场炸在调用方，并且流水里留着"发过哪些"。
     """
+
+
+class SingleInstanceViolation(PmStudioError):
+    """同一个库已经有一个进程打开着。
+
+    两个进程各写一半，比开不起来更糟；所以启动时拿锁，拿不到就说清是谁占着。
+    """
