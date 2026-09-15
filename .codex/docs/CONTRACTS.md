@@ -1,10 +1,27 @@
 # PM Studio 公共契约
 
-- 版本：v0.11
+- 版本：v0.12
 - 日期：2026-09-13
-- 对应：PRD v0.12
+- 对应：PRD v0.13
 
 ### 变更记录
+
+**v0.12**（2026-09-13）
+
+- **补齐一轮 11 处"接口写不出来"的缺口**（逐条背景见 `DECISIONS.md`）：
+  - L0 补写接口 `register` / `updateStatus` / `remove`——原来注册条目唯一写入口是 M27，L0 却没有写接口
+  - 建项目定为**应用函数**（不是能力工具），进 L5 的接口表
+  - `assembleContext` 的返回补上 `base_versions`——原来这个快照没有回到编排层的通道
+  - M17 只**返回**候选记忆，`confirmed` 区块由编排层写（I19）
+  - `writeDocument` 的 `payload` 与 `submitCards` 的 `answers[]` 补上结构——框架要照这个写签名
+  - `trim` 不再接收外部预算，预算由 L6 自己算（叠项目配置）
+- **新增 C16 Project**：项目本体 + 项目级配置。C1–C15 里原来连 Project 都没有契约，这是"建项目没有写入口"和"预算没有来源"两条缺口的共同根
+- **新增 C17 Conversation**：消息 + 滚动摘要。原来 M15 没有家，§7.3 却要落"消息记录"
+- **C10 补 `allowed_tools[]` / `allowed_entries[]`**：权限是角色上的两组白名单，不是一句含糊的 `permissions`；L6 相应补 `canEnter`
+- **C8 的 5 张上限定死**：每批最多 5 张、**没有例外**，填充卡**单独成批**；删掉原来"填充卡不算"那句括注
+- **C3 定死回退语义**：改动与回退的原子单位 = 一个文档版本；补 `target_version_id`，回退本身也留痕（AC8）
+- **C6 定死消费时点**：`consumed` 在**组装上下文那一刻**整批写，写者是 M13；§5.4 补上 M13
+- 重入语义（`doc.changed` → `memory.updated` 这条嵌套链）与事件生产者集合写进 `ARCHITECTURE.md`，不再靠猜
 
 **v0.11**（2026-09-13）
 
@@ -76,6 +93,8 @@
 ## 0. 这份文档解决什么
 
 > **两份文档的分工**：本文件是**契约的唯一真相源**——每个契约有哪些字段、字段干什么、谁写谁读、有什么不变量，只在这里写一次。`PRD.md` 回答"做什么、为什么这么做"，不重复任何字段级定义。两份冲突时以本文件为准。
+>
+> **工程与实现**（包结构、守卫、依赖怎么强制）在 `ARCHITECTURE.md`；**裁决背景**在 `DECISIONS.md`。
 
 解耦分三层：**模块 → 契约 → 数据流**。模块内部怎么实现（用什么框架、串行还是并行、prompt 怎么写）全部自由。跨模块传的东西不能自由变——那是契约。
 
@@ -133,6 +152,8 @@
 | C13 Event | M12 事件流 | 各层订阅者 |
 | C14 Discussion Round | M7 讨论编排器 | M29 / 讨论区界面 |
 | C15 Citation | 各角色 / M28 / M17 | 卡片界面 / M28 / M17 / M25 |
+| C16 Project | M1 项目容器（经应用函数建项目） | 全局：记忆与检索按项目隔离；L6 读配置算预算 |
+| C17 Conversation | M15 长对话管理 | M13 组装上下文；讨论区与主闭环界面 |
 
 ---
 
@@ -227,8 +248,14 @@
 | `snapshot` | 这一版的完整内容 | 同上 | 回退时恢复 |
 | `trigger` | 三个值：`manual` 手动编辑 / `submit` 卡片确认 / `rollback` 回退 | 同上 | 界面区分版本来源 |
 | `group_id` | 由哪组卡片确认产生（手动编辑和回退时为空） | 同上 | 审计：这版对应哪组卡片 |
+| `target_version_id` | **只有 `rollback` 用**：这版是从哪一版退回来的 | 同上 | 审计：回退本身也要留痕（AC8） |
 
-**不变量**：回退是**产生一个新版本**，不删除也不篡改历史。
+**不变量**
+
+- 回退是**产生一个新版本**，不删除也不篡改历史（I8）。
+- **改动与回退的原子单位 = 一个文档版本。** 一次改动产生一个版本，版本就是回退的粒度，所以"回退到改动之前"= 回退到目标版本。
+- 三种 trigger 各自对应一次改动：`submit` = 一次卡片组确认（整组一次事务，改几处也只有一版）；`manual` = **一次显式保存**；`rollback` = 一次回退动作。
+- 因为 `submit` 版本上带 `group_id`，"撤销某次 AI 写入"是可表达的：查到该 `group_id` 产生的版本，回退到它之前那一版。
 
 ### C4 Agent Packet（信息包）
 
@@ -335,6 +362,7 @@ claims: [
 
 - 每个候选必须能追溯到 ≥1 条信息包（`from_packet_ids`）。不允许出现没有出处的思路。
 - **`selected` 的候选只被消费一次**：进了某一轮的上下文之后由 M13 标成 `consumed`。否则同一批候选会被之后每一轮重复带进来，越滚越多。用户想再用一次，就再勾一次。
+- **消费发生在"组装上下文那一刻"，不是"用户勾选那一刻"，而且是整批一次性消费、不是逐条。** 所以这一轮如果失败或没产出任何东西，候选已经标成 `consumed` 了，用户要重新勾选。
 
 ### C7 Card（卡片）
 
@@ -420,7 +448,7 @@ claims: [
 | 字段 | 作用 | 谁写 | 谁读 |
 |---|---|---|---|
 | `group_id` | 标识 | 系统 | 被引用 |
-| `cards` | 卡片列表，**最多 5 张**，数组顺序就是依次回应的顺序 | 系统 | 界面 |
+| `cards` | 卡片列表，**最多 5 张**（没有例外），数组顺序就是依次回应的顺序 | 系统 | 界面 |
 | `state` | `answering` 回答中 / `confirmed` 已确认 | 界面 | **决定能不能改** |
 | `round_id` | 这组卡片属于哪一轮 | 系统 | M20 按它取这一轮的 C1 当写范围；M25 复盘的入口 |
 | `result_version_id` | 如果这组里含填充卡，提交后产生的文档版本 | M20 | 审计 |
@@ -429,7 +457,7 @@ claims: [
 
 **规则（你明确要的）**
 
-1. **裁决卡一组最多 5 张**（填充卡不算，它永远只有一张）。超过了就说明问题没拆干净，应该分批问。
+1. **一批最多 5 张，没有例外。** 填充卡**单独成批**（它的批里只有 1 张），不和裁决卡同批——所以"填充卡算不算占名额"这个问题根本不存在。超过 5 张说明问题没拆干净，应该分批问。
 2. **每张卡只针对一个议题**：一个冲突，或者一个独立类别的问题。每张卡的信息量可以大，但必须聚焦——不能一张卡拉七件事。
 3. 一次可能连着给多张卡片，**在提交之前，可以回到任意一张改**。
 4. **提交之后，整组不能再改**。要改就是新一轮。
@@ -483,12 +511,20 @@ claims: [
 | `when_to_use` | 什么情况下该用它 | M27 | **只有工具和 skill 必填**；没有它 AI 没法自己选 |
 | `owner` | `preset` 预设 / `user` 用户创建 | M27 | 权限：预设角色可定制工具，自定义角色限统一工具池 |
 | `status` | `active` 启用 / `retired` 停用 | M27 | 只有 `active` 会被调用 |
+| `allowed_tools` | **只有 `kind = 角色` 用**：这个角色能调哪些工具的 id 白名单 | M27 | M23 执行 `canUse`；M10 只在这个范围内挑工具 |
+| `allowed_entries` | **只有 `kind = 角色` 用**：这个角色能在哪些入口出现（`main` / `discussion`） | M27 | M23 执行 `canEnter`；M7 讨论区预选、M8 主闭环挑角色都要先按它过滤 |
+
+**权限为什么是两组白名单，而不是一句 `permissions`**：角色对外的限制有两类，混在一起就说不清。一类是**能力**（这个角色能用哪些工具），一类是**场合**（这个角色能不能出现在主闭环里）——比如某些角色只能在讨论区发言，不参与主闭环生成。这两类必须分开表达。
+
+**执行**在 L6 的两个判定：`canUse(role_id, tool_id)`、`canEnter(role_id, entry)`。
 
 **不变量**
 
 - **工具和 skill 缺 `description` / `tags` / `when_to_use` 的，不许注册。** 其他 kind 不要求。
 - `tags` 必须是能力词，不是产品词，否则 AI 检索不到。
 - 权限的**声明**在这里，权限的**执行**在 M23。
+- **`allowed_tools` / `allowed_entries` 只对 `kind = 角色` 有意义**，其他 kind 不要求、也不校验。
+- 预设角色可以带专属工具；**用户自定义角色只能从统一工具池里选**——这是**注册时**的校验（M27），不是运行时判断。
 - **用户可以自己删掉 skill**，包括系统收割出来的。删了就删了，不搞软删除。角色、prompt 这些同理。
 
 > `kind = skill` 的条目由 M30 复利验证器管理，不允许人工直接置为 `active`。M30 改状态之后发 `registry.updated`（C13）。
@@ -560,6 +596,13 @@ claims: [
 - 黑板只放**当前这一轮**的状态。要长期留下的东西，在这一轮结束时写进 L7 存储或 C9 记忆。
 - **每个区块只有一个直接写者**（编排层）；其他层只能读。产出来源可以多，写入口只有一个。
 - 区块里的对象都是已有契约的实例（C1 / C2 / C4 / C5 / C8 / C9）。黑板定义的是**放哪儿**，不是**长什么样**——`round` 和 `context` 两个区块除外，它们的形状就定义在上面这一节。
+- **黑板持久化**（落 SQLite）。介质不再是内存。换来三件事：崩溃后知道上一轮跑到哪、前端可以直接拉当前轮状态、写工作台和写账本能在同一个事务里。
+- **只持久化当前这一轮**。轮结束时该落账本的落账本、该落 trace 的落 trace，然后删掉这一轮的区块；`rounds` 里那一条长期保留。
+  注意：**不要保留多轮区块**。历史轮次的东西各有各的家（文档与版本在 C2/C3、卡片在卡片历史、消息与摘要在 C17、结论在 C9、用了什么在 C11），再留几轮就是造第三个历史库。
+- **写入即广播**：写某个区块时，由黑板按"区块 → 事件"映射自动发事件——`round` → `round.updated`，`card_group` → `card_group.updated`，`context` / `claims` / `confirmed` → **不发**。这样不存在"写了状态、忘了通知"这个失效模式。
+- **先提交，后广播**：事件必须在事务**提交之后**发，绝不能在事务里发——否则订阅者回读时读到的是旧状态。
+- **每个对象只有一个家**：黑板里凡是别处也有家的对象，只放 id 引用（`card_group` 放 `group_id`，`confirmed` 放已确认的 C8 与 C9 候选的 id）。
+- **`context` / `claims` 不存正文**：`context` 只存引用（`ref`）、优先级、可信度、被裁掉的部分，正文按需回源对象取。
 
 ### C13 Event（事件）
 
@@ -640,7 +683,11 @@ claims: [
 - **一个状态对象只有一个事件类型**：新加订阅者时，不该出现"它该订哪个事件"这种问题。
 - **一个状态变化只发一条事件**：同一件事发两条，订阅者就得去重，迟早有一处忘了去重。
 - 事件必须由**状态的生产者**发；订阅者要细节，自己回黑板或存储读。
-- **8 个事件全部实现。** 事件是整套流程的骨架，缺一个就有一段流程没人知道。至于分发方式（进程内还是消息总线），那是运行时选择，不影响事件的定义。
+- **8 个事件全部实现。** 事件是整套流程的骨架，缺一个就有一段流程没人知道。
+- **只有一条总线**：所有跨层通知都从它出去，没有第二套通道。黑板是它的一半（状态），事件是另一半（通知）；**改状态会经它广播**，但它上面跑的不止黑板（8 个事件里只有 2 个的源在黑板）。
+- **分发方式：进程内**（不引外部中间件）。分发语义：异步、按订阅顺序 await；嵌套发布排队、当前处理器返回后排空；同轮 FIFO。
+- **异常隔离**：一个订阅者抛异常，不阻断其它订阅者。否则前端渲染出个小错，就会让"记忆失效"这种链条整段跑不掉。
+- **事件流水**：每条 `publish` 都落一张 append-only 表（`event_id` / `at` / `type` / `round_id` / `project_id` / `producer` / `payload`）。它回答的是"这件事到底发了没有"——没有它，这类问题只能靠猜。
 
 ### C14 Discussion Round（讨论轮）
 
@@ -677,6 +724,55 @@ claims: [
 - **引用必须能定位**（I21）：`target_id` 必须指向真实存在的对象，指不到的引用不许出现。含糊地说一句"根据项目文档"不算依据。
 - 每条主张要么有 ≥1 条引用，要么**显式声明无来源**（`citations: []`），并在界面文本上标明"这是我的推断"。不允许"看起来有依据"但实际没有。
 - 只有低可信材料的产出不能直接写入文档，见 C5 的不变量。
+
+### C16 Project（项目）
+
+项目的本体。它之前一直只以 `project_id` 的形式出现在别的契约里，自己没有契约——这是"建项目没有写入口"和"预算没有来源"两条缺口的共同根。
+
+| 字段 | 作用 | 谁写 | 谁读 |
+|---|---|---|---|
+| `project_id` | 标识 | 建项目时 | 全局：记忆、检索、材料按项目隔离 |
+| `name` | 项目名 | 建项目时 / 用户改 | 界面 |
+| `template_id` | 用哪个模板（决定 9 个字段分区） | 建项目时 | M28 校验字段名合法；M2 渲染分区 |
+| `config` | **项目级配置**：预算相关设置等 | 用户 / 系统 | L6 读它算预算；界面展示 |
+| `created_at` | 建项目时间 | 建项目时 | 界面排序 |
+
+**不变量**
+
+- 建项目 = **一次事务**：建项目本体 + 按模板实例化 9 字段空 block 骨架，要么全成要么全不成。
+- **建项目是应用函数，不是能力工具**：它不进注册中心、不需要 `description` / `tags` / `when_to_use`、不受 M23 管。没有人会让 AI 去挑"要不要创建项目"。
+- 项目是记忆与检索的隔离边界：跨项目不可见。
+
+### C17 Conversation（会话、消息与滚动摘要）
+
+M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长之后压出来的那段"。**不保存内部思考过程**（I12）。
+
+**Message（消息）**
+
+| 字段 | 作用 | 谁写 | 谁读 |
+|---|---|---|---|
+| `message_id` | 标识 | 产生消息的那一轮 | 被引用 |
+| `project_id` | 属于哪个项目 | 同上 | 按项目隔离 |
+| `round_id` | 哪一轮说的（主闭环与讨论区共用一套 id 空间） | 同上 | 和轮次对上 |
+| `author` | `user` / 角色 id | 同上 | 界面区分谁说的 |
+| `text` | 面向界面的文本 | 同上 | M13 组装上下文；界面 |
+| `packet_id` | 如果这条消息来自某个角色，指向信息包（C4） | 同上 | 审计：这条是哪个包说的 |
+
+**Summary（滚动摘要）**
+
+| 字段 | 作用 | 谁写 | 谁读 |
+|---|---|---|---|
+| `summary_id` | 标识 | M15 | 被引用 |
+| `project_id` | 属于哪个项目 | M15 | 按项目隔离 |
+| `covers_round_ids` | 这段摘要盖住了哪些轮次 | M15 | 审计：摘要之后的原文还在，能对回去 |
+| `text` | 摘要正文 | M15 | M13 组装上下文 |
+
+**不变量**
+
+- **M13 只管"这一轮"要带的东西**；历史消息继续保留，不因为进入新一轮就丢。
+- **超过预算就开始摘要**，然后从这一轮开始重新计算对话历史上下文。
+- 分工不许越界：**M15** 决定"带全量历史还是带摘要"；**M24** 只按 `priority` 裁、不做语义判断；**M13** 一个 token 都不裁。
+- 摘要**不是删除**：`covers_round_ids` 盖住的原文仍然留在消息表里，摘要只是"带进上下文的那一份"换成它。
 
 ---
 
@@ -746,7 +842,7 @@ claims: [
 
 | 层 | 可以调 | 黑板 |
 |---|---|---|
-| L0 注册中心 | 不调任何层（只被读） | — |
+| L0 注册中心 | L7 存储（注册条目要落库、要能改状态） | — |
 | L1 交互层 | L2（所有 AI 动作）；L5 的**两件事**（M20 手动写入、M21 导出）；L7 存储**只读**（渲染文档、版本历史、卡片历史、trace） | **只读**；订阅事件，不发事件 |
 | L2 编排层 | L0（读定义）/ L4 / L5 / L6；写黑板、发事件 | 唯一写者 |
 | L3 通信层 | 不调任何层（它是通道，被所有层使用） | — |
@@ -758,6 +854,8 @@ claims: [
 **为什么 L1 可以直接调 L5 那两件事、可以直接读存储**：手动改文档、导出、渲染文档和回看历史都不属 AI 流程，不必绕经编排。手改照样走 M20（唯一写入口，`trigger = manual`），所以 I1 不受影响；反过来，如果这些都绕道 L2，编排层就平白多出一堆与 AI 无关的活。**读是只读的**，不碰任何状态，不违反 I20。
 
 **为什么 L1 能读黑板、但不能发事件**：界面要渲染，就得多一份只读的状态源；但用户动作（点确认、打字纠正）不是"状态变化通知"，它是对 L2/L5 的调用。事件一律由状态的生产者发，事件的来源才唯一。
+
+**为什么 L0 从"不调任何层"改成可以落 L7**：注册条目唯一写入口是 M27（§5.4），M30 还要经它改 skill 状态；如果 L0 一个层都不能调，这些写操作就没有落点。它照旧**不读黑板**，也不参与任何一轮的流转。
 
 ### 5.3 每层暴露什么
 
@@ -785,9 +883,11 @@ claims: [
 
 | 接口 | 入参 | 返回 | 契约 |
 |---|---|---|---|
-| `assembleContext(round)` | 这一轮的 C12 `round` 区块 | 上下文块数组（C12 `context.blocks`） | C12 |
+| `assembleContext(round)` | 这一轮的 C12 `round` 区块 | **`{blocks, base_versions}`**：上下文块数组（C12 `context.blocks`）+ 这一轮的 C1 版本快照 | C12 / C1 |
 | `retrieve(project_id, query)` | 项目、查询 | C5 数组（`source_type = retrieval`） | C5 |
 | `readBrief(project_id)` / `updateBrief(project_id, lines[])` | 项目、要加/删的行 | 简报全文 | M14 |
+| `appendMessage(message)` | C17 Message | — | C17 |
+| `historyContext(project_id, round_id)` | 项目、这一轮 | 上下文块数组（**全量历史或摘要 + 最近若干轮**，由 M15 按预算决定） | C17 |
 | `recordCandidates(C9[])` | 候选记忆 | — | C9 |
 | `invalidate(citations[])` | 受影响的引用 | — | C15（按 `block` 引用的 `target_version` 判） |
 
@@ -797,19 +897,37 @@ claims: [
 |---|---|---|---|
 | `searchWeb(query)` | 查询 | C5 数组（`source_type = web`） | C5 |
 | `ingest(file)` | 上传的文件 | `material_id` | 进资料库，之后被检索命中才成材料包 |
-| `writeDocument(trigger, payload)` | `trigger = submit / manual / rollback`；确认过的 C8 或用户手改内容 | 更新的 C2 块 + 新的 C3 版本 | C2 / C3 |
+| `createProject(template_id, name)` | 模板、项目名 | `{project_id, doc_id}` | C16 / C2；**应用函数，不是能力工具**；一次事务建项目 + 9 字段空骨架 |
+| `writeDocument(trigger, payload)` | 见下方"payload 形状" | 更新的 C2 块 + 新的 C3 版本 | C2 / C3 |
 | `export(doc_id, format)` | 文档、格式 | 交付物 | M21 |
+
+**`writeDocument` 的 `payload` 形状**（这是框架要照着写的签名，不能靠猜）
+
+| trigger | payload | 说明 |
+|---|---|---|
+| `submit` | `{group_id}` | M20 自己去黑板读这一组，取 `state = kept` 的提案 |
+| `manual` | `{block_ops[]}`，每项 `{block_id, op: replace \| append, content, expected_version}` | 一次**显式保存** = 一版 |
+| `rollback` | `{target_version_id}` | 用目标版本的 `snapshot` 写一次，产生新版本 |
 
 **L6 Harness**
 
 | 接口 | 入参 | 返回 | 契约 |
 |---|---|---|---|
 | `complete(model_ref, messages)` | 模型、提示词 | 文本 | M22；重试与降级在里面（M26） |
-| `canUse(role_id, tool_id)` | 角色、工具 | `allow` / `deny` | C10 的 `content` 里声明的权限，在这里执行 |
-| `trim(blocks[], budget)` | 上下文块、预算 | `{blocks[], dropped[]}` | C12；**只按 `priority` 裁** |
+| `canUse(role_id, tool_id)` | 角色、工具 | `allow` / `deny` | C10 的 `allowed_tools` 白名单，在这里执行 |
+| `canEnter(role_id, entry)` | 角色、入口（`main` / `discussion`） | `allow` / `deny` | C10 的 `allowed_entries` 白名单，在这里执行 |
+| `trim(blocks[], project_id, model_ref)` | 上下文块、项目、模型 | `{blocks[], dropped[]}` | C12；**预算由 L6 自己算**（`模型窗口 − 输出预留 − 系统开销`，叠 C16 的 `config`），调用方不传预算；**只按 `priority` 裁** |
 | `recordTrace(C11)` | 这一轮用了什么 | — | C11 |
 
-**L0 注册中心**：`resolve(kind, id)` → C10；`list(kind, tags[])` → C10 数组。
+**L0 注册中心**
+
+| 接口 | 入参 | 返回 | 契约 |
+|---|---|---|---|
+| `resolve(kind, id)` | 种类、标识 | C10 | C10 |
+| `list(kind, tags[])` | 种类、标签 | C10 数组 | C10 |
+| `register(entry)` | C10 条目（由 M27 校验 `description` / `tags` / `when_to_use` 与 `allowed_*`） | `id` | C10 |
+| `updateStatus(id, status)` | 条目、新状态 | — | C10；**M30 改 skill 状态只能经这里**，改完发 `registry.updated` |
+| `remove(id)` | 条目 | — | C10；用户删 skill / 角色 / prompt 走这里 |
 
 **L7 存储底座**：各实体（项目 / block / 版本 / 消息 / 角色 / 记忆 / 卡片历史 / 材料）的读写，不含业务语义。读取对所有层开放（只读不改状态）；**写只经由各层的写入口**——文档写入走 M20，记忆走 M17/M30，注册条目走 M27，trace 走 M25。
 
@@ -823,7 +941,7 @@ claims: [
 | 本轮的上下文 / 主张 / 卡片组 / 已确认（C12 各区块） | 编排层 | 全部（只读） |
 | 记忆（C9） | M17 写候选、M30 改状态 | M13 / M16 |
 | 注册条目（C10） | M27 | M7 / M10 / M23 / M28 |
-| 思路候选（C6） | M29 生成，用户改 `status` | 勾选界面 / M13 |
+| 思路候选（C6） | M29 生成，用户改 `status`，**M13 组装上下文时标 `consumed`** | 勾选界面 / M13 |
 | trace（C11） | M25 | 复盘 |
 
 **这张表排掉了一整类问题**："这个状态到底谁说了算"。只要某个状态能找到两个写入口，就是设计有问题。
@@ -850,7 +968,7 @@ claims: [
 | I12 | **不存思维链**：信息包和讨论留存只存结论与界面文本 | 上下文爆炸，而且没必要 |
 | I13 | **只有工具和 skill 必须有描述**：这两个缺 `description` / `tags` / `when_to_use` 不许注册；角色、prompt 等只做统一管理，不要求 | AI 无法自行挑工具，注册中心沦为死目录 |
 | I14 | **先组装上下文，再复述理解**：复述必须包含只有读了文档才知道的信息 | 不带上下文的复述等于抄一遍用户原话，没有价值；误读还会直接变成文档内容 |
-| I15 | **一张裁决卡只针对一个议题**；裁决卡一组最多 5 张（填充卡不算，永远只有一张） | 一张卡拉七件事，用户没法答；卡片泛滥，用户窒息 |
+| I15 | **一张卡只针对一个议题**；一批最多 5 张、没有例外，填充卡单独成批 | 一张卡拉七件事，用户没法答；卡片泛滥，用户窒息 |
 | I16 | **填充卡是收尾**：只在整个任务没问题了才出现；不含填充卡的卡片组提交后不写文档 | 每轮都想写入，产生大量半成品版本 |
 | I17 | **写范围由 M20 强制**：AI 只能写 `selected_fields` 里的字段，有选区时每条提案的 `target_label` 必须落在选区内 | 靠提示词自觉拦不住，AI 会顺手改别处 |
 | I18 | **选区在轮内不变**：每轮用户输入重新选，轮内的循环沿用同一份 | 用户被反复打断，且无法回答"这轮改动的作用域是什么" |
@@ -874,8 +992,8 @@ claims: [
 | 4 | L2 → L4 `assembleContext(round)` | 入参就是整个 `round` 区块 | — |
 | 5 | L4 → L7 读 | ① C2 全文档块：`block_id` / `parent_id` / `schema_label` / `content` / `version`（**读全文**，同时生成 C1 的 `base_versions`）② M14 简报全文 ③ C9 里 `status = active` 的：`memory_id` / `type` / `content` / `citations` ④ 任务至今各轮的 `user_input` ⑤ C6 里 `status = selected` 的候选 | C1、C2、C9、C6 |
 | 6 | L4 → L5 工具（按需） | `retrieve(project_id, query)` → C5（`source_type = retrieval`）；`searchWeb(query)` → C5（`source_type = web`）；两者都必须带 `ref` | C5 |
-| 7 | L4 → L2 | 上下文块数组，每块：`source` / `ref` / `content` / `priority` / `credibility` | C12 `context.blocks` |
-| 8 | L2 → L6 `trim(blocks, budget)` | 返回 `{blocks, dropped}`。**只按 `priority` 裁，不做语义判断** | C12 |
+| 7 | L4 → L2 | **`{blocks, base_versions}`**：上下文块数组（每块 `source` / `ref` / `content` / `priority` / `credibility`）+ 这一轮的 C1 版本快照。**快照由编排层写进 C1**（round 区块只有编排层能写，I19） | C12 `context.blocks`、C1 |
+| 8 | L2 → L6 `trim(blocks, project_id, model_ref)` | 返回 `{blocks, dropped}`。**预算由 L6 自己算**（叠 C16 的 `config`），调用方不传；**只按 `priority` 裁，不做语义判断** | C12 |
 | 9 | L2 → L3 | 写 `context` 区块：`blocks` / `dropped` / `assembled_at` | C12 |
 | 10 | L2 → L6 `complete`（复述理解） | 产出 C7：`card_id`（新）/ `kind = understanding` / `prompt`（**必须含至少一条只有读了文档才知道的信息**）/ `status = pending` | C7 |
 | 11 | L2 → L3 → L1 | 写 `card_group`：`group_id`（新）/ `round_id` / `cards: [上面那张]` / `state = answering`；发 `card_group.updated {group_id, round_id, state: answering, card_count}` | C8、C13 |
@@ -899,10 +1017,10 @@ claims: [
 | 29 | M20 → 事件 | `doc.changed {doc_id, version_id, seq, trigger: submit, block_ids[]}` | C13 |
 | 30 | 记忆层收到 `doc.changed` | 按 `block_ids` 找到引用它们的 C9，`target_version` 小于当前版本 → `status = invalid`（I6 / AC6），并发 `memory.updated {memory_id, project_id, type, status: invalid, from_status: active}` | C15、C9、C13 |
 | 31 | 编排层收到 `doc.changed` | 两种走法：**是这一轮自己写出来的**（`trigger = submit` 且版本与它等的对上）→ 收尾，`phase = done`，发 `round.updated`；**是别处改的**（`trigger = manual` / `rollback`）→ 只把自己手里那份上下文标成过期，下一轮重新组装，**不动当前轮的 phase** | C12、C13 |
-| 32 | L2 → M17 | 从这一轮的 C8（用户回应）与 C4 提炼 C9 候选：`memory_id` / `type` / `content` / `status = candidate` / `citations`；**`state = removed` 的提案也算一条反馈**（AI 提了用户不要的东西）；写进 `confirmed` 区块并落库，发 `memory.updated {memory_id, project_id, type, status: candidate, from_status: null}` | C9、C13 |
+| 32 | L2 → M17 | M17 从这一轮的 C8（用户回应）与 C4 提炼 C9 候选并**返回**：`memory_id` / `type` / `content` / `status = candidate` / `citations`；**`state = removed` 的提案也算一条反馈**（AI 提了用户不要的东西）。**区块由编排层写**（I19）：编排层把候选写进 `confirmed` 区块并落库，发 `memory.updated {memory_id, project_id, type, status: candidate, from_status: null}` | C9、C13 |
 | 33 | L2 → M25 | 写 C11：`trace_id` / `round_id` / `context_used`（含 `dropped`）/ `tools_called` / `final_version_id` | C11 |
-| 34 | **手改路径（不走 AI）** | L1 → L5 `writeDocument(trigger = manual)`：`source_card_id` 留空；同样产生 C3，并发 `doc.changed {trigger: manual}`（记忆层一样要失效判定） | C2、C3、C13 |
-| 35 | 回退 | L1 → L5 `writeDocument(trigger = rollback)`：**产生一个新版本**，不删不改历史（I8），发 `doc.changed {trigger: rollback}` | C3、C13 |
+| 34 | **手改路径（不走 AI）** | L1 → L5 `writeDocument(trigger = manual, payload = {block_ops[]})`：**一次显式保存 = 一版**；`source_card_id` 留空；同样产生 C3，并发 `doc.changed {trigger: manual}`（记忆层一样要失效判定） | C2、C3、C13 |
+| 35 | 回退 | L1 → L5 `writeDocument(trigger = rollback, payload = {target_version_id})`：用目标版本的 `snapshot` 写一次，**产生一个新版本**并把 `target_version_id` 记上，不删不改历史（I8），发 `doc.changed {trigger: rollback}` | C3、C13 |
 | 36 | 讨论区素材进场 | 上一轮讨论勾选的 C6 在第 5 步被读取、转成 C5（映射见 C5），并标成 `consumed` | C6、C5 |
 
 ### 7.2 讨论区
