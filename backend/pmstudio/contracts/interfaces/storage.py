@@ -12,6 +12,8 @@
 
 from typing import Protocol, runtime_checkable
 
+from pmstudio.contracts.enums import RegionName
+from pmstudio.contracts.skeleton.board import RegionValue, RoundRegion
 from pmstudio.contracts.skeleton.events import EventLogEntry
 
 
@@ -20,3 +22,24 @@ class EventLogPort(Protocol):
     """事件流水：只增不改。"""
 
     async def append(self, entry: EventLogEntry) -> None: ...
+
+
+@runtime_checkable
+class BoardStorePort(Protocol):
+    """工作台：`rounds`（永久）＋ `board_regions`（只装当前轮的四个区块）。
+
+    **`round` 区块的家就是 `rounds` 表**（轮末删区块，`rounds` 那一条留着），
+    其余四个区块在 `board_regions`。所以这里有两对读写口。
+    """
+
+    async def write_round(self, region: RoundRegion) -> None: ...
+
+    async def read_round(self, round_id: str) -> RoundRegion | None: ...
+
+    async def write_region(self, round_id: str, region: RegionName, value: RegionValue) -> None: ...
+
+    async def read_region(self, round_id: str, region: RegionName) -> RegionValue | None: ...
+
+    async def drop_regions(self, round_id: str) -> None: ...
+
+    async def drop_other_regions(self, round_id: str) -> None: ...

@@ -39,9 +39,10 @@ def test_old_database_is_upgraded_to_the_current_version(tmp_path: Path) -> None
 
     db = Database.open(path)
     try:
-        assert SCHEMA_VERSION == 2
+        assert SCHEMA_VERSION == 3
         assert db.schema_version() == SCHEMA_VERSION
         assert "events" in _table_names(db)
+        assert {"rounds", "board_regions"} <= _table_names(db)
     finally:
         db.close()
 

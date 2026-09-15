@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from pmstudio.common.errors import ContractViolation
 from pmstudio.contracts.enums import (
     ContextBlockSource,
     Credibility,
@@ -26,6 +27,7 @@ from pmstudio.contracts.skeleton.board import (
     ContextBlock,
     ContextRegion,
     RoundRegion,
+    assert_region_value,
 )
 
 NOW = datetime(2026, 9, 15, 10, 0, tzinfo=UTC)
@@ -160,3 +162,28 @@ def test_confirmed_region_holds_ids_only() -> None:
     assert set(ConfirmedRegion.model_fields) == {"card_group_ids", "memory_ids"}
     region = ConfirmedRegion(card_group_ids=("grp_1",), memory_ids=("mry_1",))
     assert region.card_group_ids == ("grp_1",)
+
+
+def _round_region() -> RoundRegion:
+    return RoundRegion(**_round())
+
+
+def test_region_value_must_match_its_region() -> None:
+    assert_region_value(RegionName.ROUND, _round_region())
+    assert_region_value(RegionName.CONTEXT, ContextRegion(assembled_at=NOW))
+    assert_region_value(RegionName.CONFIRMED, ConfirmedRegion())
+    assert_region_value(RegionName.CLAIMS, ())
+
+    with pytest.raises(ContractViolation):
+        assert_region_value(RegionName.ROUND, ContextRegion(assembled_at=NOW))
+    with pytest.raises(ContractViolation):
+        assert_region_value(RegionName.CONTEXT, _round_region())
+
+
+def test_claims_region_only_takes_an_opaque_sequence() -> None:
+    """`claims` 是类型别名，`isinstance` 用不了参数化泛型——所以单独判。"""
+    assert_region_value(RegionName.CLAIMS, (object(), object()))
+    with pytest.raises(ContractViolation):
+        assert_region_value(RegionName.CLAIMS, _round_region())
+    with pytest.raises(ContractViolation):
+        assert_region_value(RegionName.CLAIMS, [])

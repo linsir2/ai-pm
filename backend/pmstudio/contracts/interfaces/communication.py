@@ -20,14 +20,24 @@ EventHandler = Callable[[Event], Awaitable[None]]
 class Board(Protocol):
     """黑板只读句柄。所有层都能调。"""
 
-    async def read(self, region: RegionName) -> RegionValue: ...
+    async def read(self, region: RegionName) -> RegionValue | None:
+        """读当前轮的一个区块。**还没写过就是 `None`**——开轮时只有 `round` 有值。"""
+        ...
 
 
 @runtime_checkable
 class BoardWriter(Protocol):
     """黑板写句柄。**只有编排层拿得到它**（I19）。"""
 
+    async def open_round(self, round_id: str) -> None:
+        """把这一轮设为黑板当前的轮，并清掉其它轮残留的区块（C12：用户开新一轮时再删）。"""
+        ...
+
     async def write(self, region: RegionName, value: RegionValue) -> None: ...
+
+    async def drop_round(self) -> None:
+        """轮末清理：删掉当前轮的区块；`rounds` 那一行长期保留。"""
+        ...
 
 
 @runtime_checkable

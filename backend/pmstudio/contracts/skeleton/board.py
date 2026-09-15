@@ -151,3 +151,19 @@ REGION_BROADCAST: Final = {
     RegionName.CARD_GROUP: EventType.CARD_GROUP_UPDATED,
 }
 """写入即广播的映射：写这两个区块会自动发事件；`context` / `claims` / `confirmed` 不发。"""
+
+
+def assert_region_value(region: RegionName, value: object) -> None:
+    """区块值必须与区块对得上。黑板写入时调它。
+
+    单独一个函数，是因为 `REGION_VALUE_TYPES` 里 `claims` 是类型别名——`isinstance` 用不了
+    参数化的泛型（`isinstance(x, tuple[object, ...])` 直接抛 TypeError），只能在这里显式分开判。
+    """
+    if region is RegionName.CLAIMS:
+        if not isinstance(value, tuple):
+            raise ContractViolation("claims 区块装的是编排层自有的主张数组（不透明序列）")
+        return
+
+    expected = REGION_VALUE_TYPES[region]
+    if not isinstance(value, expected):
+        raise ContractViolation(f"{region.value} 区块只能装 {expected.__name__}，收到 {type(value).__name__}")

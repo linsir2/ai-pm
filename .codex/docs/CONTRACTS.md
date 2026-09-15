@@ -1,10 +1,33 @@
 # PM Studio 公共契约
 
-- 版本：v0.14
+- 版本：v0.15
 - 日期：2026-09-13
 - 对应：PRD v0.13
 
 ### 变更记录
+
+**v0.15**（2026-09-15）
+
+- **P7 给 `card_group.updated` 补 `from_state`**：它是唯一缺 `from_*` 的状态事件（`round` 有
+  `from_phase`、`memory` / `registry` 有 `from_status`），而 C13 自己定的原则是"变化性质写进
+  payload，订阅者按 payload 过滤"。不补就有这条路：M20 写完文档回填 `result_version_id` →
+  又发一条"`state = confirmed` 且 `has_fill_card = true`" → **M20 自己再被触发一次**，第二次比对
+  时目标块版本已被它自己改过、`base_versions` 还是旧的 → 弹一张**假冲突卡**。
+- **P8 回填 `result_version_id` 只改账本里的卡片历史**：C8 的"谁写 = M20"指账本那一份；
+  黑板区块里的 C8 是这一轮的活对象，不参与回填。这样 I19（黑板只有编排层能写）与
+  §7.1 第 28 步的"一次事务"就不再打架，M20 的事务仍然只碰账本。
+- **P1 删掉"`context` / `claims` 不存正文"**：它与 C12 自己的区块形状表（`content` 带进来的正文）、
+  §7.1 第 7 步、以及"上下文块不是新契约，每个块的 `content` 都来自某个已有契约的对象"三处打架。
+  改成：**区块里的正文是这一轮的快照**——轮末随区块删掉，长期正文仍以 C2 / C5 / C9 为准。
+- **P2 L3 补两个生命周期操作**：`openRound(round_id)`（设为当前轮 + 清掉别的轮残留的区块，
+  C12 那句"用户开新一轮时再删"）、`dropRound()`（轮末清理，`rounds` 那行留着）。
+  原来只有 `read` / `write`，轮末与开轮的清理没有落点。
+- **P3 `read` 可以返回空**："还没写过"是正常状态（开轮时只有 `round` 有值），不是错误。
+- **P4 修掉 §5.3 与 C12 的矛盾**：`read` 那行原本写"读任一区块，所有层都能调"，
+  与"`claims` 只有编排层能读"打架。改成：`claims` 除外；并明说它是**声明、不是机器执行**。
+- **P5 写明"提交之后广播失败不回滚"**：这不是新决定，是"先提交后广播"的推论——事务已经提交，
+  无从回滚。状态是权威的，通知是后手。
+- **P6 写明"写即广播"不去重**：值没变也发，要去重是订阅者按 payload 判断的事。
 
 **v0.14**（2026-09-15）
 
@@ -489,7 +512,7 @@ claims: [
 | `cards` | 卡片列表，**最多 5 张**（没有例外），数组顺序就是依次回应的顺序 | 系统 | 界面 |
 | `state` | `answering` 回答中 / `confirmed` 已确认 | 界面 | **决定能不能改** |
 | `round_id` | 这组卡片属于哪一轮 | 系统 | M20 按它取这一轮的 C1 当写范围；M25 复盘的入口 |
-| `result_version_id` | 如果这组里含填充卡，提交后产生的文档版本 | M20 | 审计 |
+| `result_version_id` | 如果这组里含填充卡，提交后产生的文档版本。**回填的是账本里的卡片历史那一份**——黑板区块里的 C8 是这一轮的活对象，不参与回填（I19：黑板只有编排层能写） | M20 | 审计 |
 
 > **为什么不另存一个 `scope_id`**：选区在轮内不变（I18），所以"这一组的写范围"就等于"这一轮的写范围"。多存一份作用域，就多一份和 C1 对不上的可能。
 
@@ -645,8 +668,11 @@ claims: [
 - **写入即广播**：写某个区块时，由黑板按"区块 → 事件"映射自动发事件——`round` → `round.updated`，`card_group` → `card_group.updated`，`context` / `claims` / `confirmed` → **不发**。这样不存在"写了状态、忘了通知"这个失效模式。
 - **先提交，后广播**：事件必须在事务**提交之后**发，绝不能在事务里发——否则订阅者回读时读到的是旧状态。
 - **活对象放在区块里，冻结出来的东西落账本**：`card_group` 区块装**当前轮的 C8 实例**（含用户的回应）——它还没冻结，账本里没有它的位置；一旦 `state = confirmed`，整组作为卡片历史落 L7，`confirmed` 区块**只放 id**（已确认的 C8 与 C9 候选的 id）。
-- **`claims` 区块只有编排层能读**：其中装的是层内对象；其余区块的"谁读"是用途说明，权限上 §5.3 的 `read` 对所有层开放。
-- **`context` / `claims` 不存正文**：`context` 只存引用（`ref`）、优先级、可信度、被裁掉的部分，正文按需回源对象取。
+- **`claims` 区块只有编排层能读**：其中装的是层内对象，§5.3 的 `read` 对它是例外。这条是**声明、不靠机器执行**——进程内没有身份边界，靠评审（守卫已撤）。其余区块的"谁读"是用途说明。
+- **区块里的正文是这一轮的快照，不是第二个家**：`context` 带着正文、`claims` 带着主张，都是为了这一轮马上要用（角色 prompt、M8 汇总）；轮末随区块一起删，长期正文仍以 C2 区块 / C5 材料 / C9 记忆为准。
+- **`round` 区块的家就是 `rounds` 表**：轮末删的是 `board_regions` 里那四个区块，`rounds` 那一行长期保留。
+- **广播失败不回滚**：事件在事务**提交之后**发，提交已经完成，无从回滚。状态是权威的，通知是后手——广播出错会把异常抛给调用方，区块照旧留在库里。
+- **写即广播不去重**：值没变也发。要不要忽略是订阅者按 payload 判断的事（比如 `from_state == state` 就说明这次不是"刚变成"）。
 
 ### C13 Event（事件）
 
@@ -669,7 +695,7 @@ claims: [
 | 事件 | 状态对象、生产者 | 谁收 | payload（最小定位信息） | 订阅者拿它干什么 |
 |---|---|---|---|---|
 | `round.updated` | 轮次（C12 `round` 区块）、编排层 | 主闭环界面、讨论区界面 | `round_id` / `project_id` / `entry` / `phase` / `from_phase` / `end_reason` | 开轮时重置视图；干活期间显示卡在哪一步（`assembling` → `restating` → `working` → `drafting` → `writing` → `done`）；结束时收尾。**开轮就是第一次 `phase` 变化，不再单独发 `round.started`** |
-| `card_group.updated` | 卡片组（C8）、编排层 | 卡片界面、M20 文档写入 | `group_id` / `round_id` / `state` / `card_count` / `has_fill_card` | 界面重画卡片；M20 只在 `state = confirmed` 且 `has_fill_card = true` 时回黑板读这一组并写文档。**"用户确认了"就是 `state` 变成 `confirmed` 那一次，不再单独发 `card_group.confirmed`** |
+| `card_group.updated` | 卡片组（C8）、编排层 | 卡片界面、M20 文档写入 | `group_id` / `round_id` / `state` / `from_state` / `card_count` / `has_fill_card` | 界面重画卡片；M20 只在**刚变成** `state = confirmed`（`from_state ≠ confirmed`）且 `has_fill_card = true` 时回黑板读这一组并写文档——"用户确认了"就是 `state` 变成 `confirmed` **那一次**。不看 `from_state` 的话，事后任何一次对同一组的写都会把 M20 再触发一遍 |
 | `doc.changed` | 文档（C2 / C3）、M20 文档写入 | 编排层、记忆层、文档界面 | `doc_id` / `version_id` / `seq` / `trigger`（`submit` / `manual` / `rollback`）/ `block_ids[]` | 编排层：手里那份上下文过时了，下一轮重新组装；记忆层：按 `block_ids` 做引用失效；文档界面：正文和版本列表刷新。**AI 写入、用户手改、回退走同一个事件**，否则"手改之后记忆要不要失效"这种事就会漏 |
 | `discussion.utterance_added` | 讨论轮（C14 `utterances`）、M7 讨论编排器 | 讨论区界面 | `round_id` / `role_id` / `packet_id` / `index` | 逐条把发言追加到界面上。讨论区是"一条一条冒出来"的，用增量，不必每次重画整轮 |
 | `memory.updated` | 记忆（C9）、M17 / M30 / 记忆层的失效判定 | M16 检索、M30 候选队列、界面 | `memory_id` / `project_id` / `type` / `status` / `from_status` | 更新检索索引；把新候选排进验证队列；记忆面板刷新。**候选产生、晋升、失效、退役都走它，不再单个 `memory.promoted`** |
@@ -939,8 +965,10 @@ M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长�
 
 | 接口 | 说明 |
 |---|---|
-| `read(region)` | 黑板**只读句柄**：读任一区块，所有层都能调 |
+| `read(region)` | 黑板**只读句柄**：读任一区块，所有层都能调（`claims` 除外，见 C12）；**没写过的区块返回空** |
+| `openRound(round_id)` | 黑板**写句柄**：设为当前轮，并清掉别的轮残留的区块（C12：用户开新一轮时再删） |
 | `write(region, value)` | 黑板**写句柄**：只有编排层拿得到（I19）；其余层只读 |
+| `dropRound()` | 黑板**写句柄**：轮末清理，删掉当前轮的区块；`rounds` 那一行留着 |
 | `publish(event, producer)` | 事件：只有状态的生产者能调。`producer` 是身份，按 §C13 的白名单校验，并落进流水 |
 | `subscribe(type, handler)` | 事件：任何层都能订 |
 

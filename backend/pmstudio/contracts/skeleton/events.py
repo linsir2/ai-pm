@@ -62,6 +62,7 @@ class CardGroupUpdatedPayload(ContractModel):
     group_id: str
     round_id: str
     state: CardGroupState
+    from_state: CardGroupState | None = None
     card_count: int = Field(ge=0)
     has_fill_card: bool
 

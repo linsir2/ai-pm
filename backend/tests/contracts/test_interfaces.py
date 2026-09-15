@@ -14,7 +14,7 @@ from pmstudio.contracts.interfaces.tools import AppServicesPort, CapabilityTools
 
 EXPECTED_METHODS: dict[type, set[str]] = {
     Board: {"read"},
-    BoardWriter: {"write"},
+    BoardWriter: {"open_round", "write", "drop_round"},
     EventBus: {"publish", "subscribe"},
     OrchestrationPort: {
         "start_round",

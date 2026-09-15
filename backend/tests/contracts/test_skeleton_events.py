@@ -44,7 +44,14 @@ EXPECTED_PAYLOAD_FIELDS: dict[type, set[str]] = {
         "from_phase",
         "end_reason",
     },
-    CardGroupUpdatedPayload: {"group_id", "round_id", "state", "card_count", "has_fill_card"},
+    CardGroupUpdatedPayload: {
+        "group_id",
+        "round_id",
+        "state",
+        "from_state",
+        "card_count",
+        "has_fill_card",
+    },
     DocChangedPayload: {"doc_id", "version_id", "seq", "trigger", "block_ids"},
     DiscussionUtteranceAddedPayload: {"round_id", "role_id", "packet_id", "index"},
     MemoryUpdatedPayload: {"memory_id", "project_id", "type", "status", "from_status"},
@@ -192,3 +199,26 @@ def test_payload_carries_locators_not_full_state() -> None:
     assert MemoryStatus.ACTIVE in set(MemoryStatus)
     assert MemoryType.DECISION in set(MemoryType)
     assert CardGroupState.CONFIRMED in set(CardGroupState)
+
+
+def test_card_group_payload_says_what_it_changed_from() -> None:
+    """订阅者要能分清"刚变成 confirmed"和"已经是 confirmed 又被写了一次"——
+    round / memory / registry 都有 from_*，卡片组不能例外。"""
+    appeared = CardGroupUpdatedPayload(
+        group_id="grp_1",
+        round_id="rnd_1",
+        state=CardGroupState.ANSWERING,
+        card_count=3,
+        has_fill_card=False,
+    )
+    assert appeared.from_state is None
+
+    confirmed = CardGroupUpdatedPayload(
+        group_id="grp_1",
+        round_id="rnd_1",
+        state=CardGroupState.CONFIRMED,
+        from_state=CardGroupState.ANSWERING,
+        card_count=3,
+        has_fill_card=True,
+    )
+    assert confirmed.from_state is CardGroupState.ANSWERING

@@ -59,3 +59,29 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_round ON events (round_id);
+
+-- ── 工作台（黑板） ─────────────────────────────────────────────
+-- `round` 区块的家就是 rounds 表：轮末删掉区块，这一行长期保留。
+
+CREATE TABLE IF NOT EXISTS rounds (
+    round_id    TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL,
+    entry       TEXT NOT NULL,
+    user_input  TEXT NOT NULL,
+    scope_json  TEXT NOT NULL,
+    phase       TEXT NOT NULL,
+    ended_at    TEXT,
+    end_reason  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_rounds_project ON rounds (project_id);
+CREATE INDEX IF NOT EXISTS idx_rounds_phase ON rounds (phase);
+
+-- 其余四个区块（context / claims / card_group / confirmed）只装当前未结束的轮。
+
+CREATE TABLE IF NOT EXISTS board_regions (
+    round_id     TEXT NOT NULL,
+    region       TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY (round_id, region)
+);

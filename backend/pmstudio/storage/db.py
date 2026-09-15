@@ -8,7 +8,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
