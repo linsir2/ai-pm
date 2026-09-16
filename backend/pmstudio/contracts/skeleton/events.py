@@ -28,6 +28,7 @@ from pmstudio.contracts.enums import (
     RoundPhase,
     ToolInvocationStatus,
     VersionTrigger,
+    assert_phase_matches_reason,
 )
 from pmstudio.contracts.models.base import ContractModel
 
@@ -51,8 +52,14 @@ class RoundUpdatedPayload(ContractModel):
     @model_validator(mode="after")
     def _check(self) -> "RoundUpdatedPayload":
         _require(round_id=self.round_id, project_id=self.project_id)
-        if self.phase is RoundPhase.DONE and self.end_reason is None:
-            raise ContractViolation("这一轮结束了却没说为什么结束")
+        finished = self.phase in (RoundPhase.DONE, RoundPhase.FAILED)
+        if finished:
+            if self.end_reason is None:
+                raise ContractViolation("这一轮结束了却没说为什么结束")
+            # 与 `RoundRegion` 用同一张表：两头不一致就会出现"库里写了、广播构造不出来"
+            assert_phase_matches_reason(self.phase, self.end_reason)
+        elif self.end_reason is not None:
+            raise ContractViolation("还没结束就不该有结束原因")
         return self
 
 

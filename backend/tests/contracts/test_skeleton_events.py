@@ -13,11 +13,14 @@ from pmstudio.contracts.enums import (
     ProducerIdentity,
     RegistryKind,
     RegistryStatus,
+    RoundEndReason,
     RoundEntry,
     RoundPhase,
     ToolInvocationStatus,
     VersionTrigger,
 )
+from pmstudio.contracts.models.scope import Scope
+from pmstudio.contracts.skeleton.board import RoundRegion
 from pmstudio.contracts.skeleton.events import (
     PAYLOAD_FOR,
     PRODUCERS,
@@ -118,6 +121,106 @@ def test_opening_round_has_no_from_phase() -> None:
             entry=RoundEntry.MAIN,
             phase=RoundPhase.DONE,
         )
+
+
+@pytest.mark.parametrize(
+    ("phase", "reason"),
+    [
+        (RoundPhase.DONE, RoundEndReason.COMPLETED),
+        (RoundPhase.DONE, RoundEndReason.USER_STOPPED),
+        (RoundPhase.FAILED, RoundEndReason.FAILED),
+        (RoundPhase.FAILED, RoundEndReason.PROCESS_RESTART),
+    ],
+)
+def test_round_payload_accepts_the_same_pairs_as_the_region(
+    phase: RoundPhase, reason: RoundEndReason
+) -> None:
+    payload = RoundUpdatedPayload(
+        round_id="rnd_1",
+        project_id="prj_1",
+        entry=RoundEntry.MAIN,
+        phase=phase,
+        end_reason=reason,
+    )
+    assert payload.end_reason is reason
+
+
+@pytest.mark.parametrize("phase", [RoundPhase.DONE, RoundPhase.FAILED])
+def test_round_payload_requires_a_reason_when_finished(phase: RoundPhase) -> None:
+    """与 `RoundRegion` 对齐：结束了就得说为什么——原来只有 `done` 要求，`failed` 漏了。"""
+    with pytest.raises(ValidationError):
+        RoundUpdatedPayload(
+            round_id="rnd_1",
+            project_id="prj_1",
+            entry=RoundEntry.MAIN,
+            phase=phase,
+        )
+
+
+@pytest.mark.parametrize(
+    ("phase", "reason"),
+    [
+        (RoundPhase.DONE, RoundEndReason.FAILED),
+        (RoundPhase.FAILED, RoundEndReason.COMPLETED),
+        (RoundPhase.DONE, RoundEndReason.PROCESS_RESTART),
+        (RoundPhase.FAILED, RoundEndReason.USER_STOPPED),
+    ],
+)
+def test_round_payload_rejects_contradictory_pairs(
+    phase: RoundPhase, reason: RoundEndReason
+) -> None:
+    with pytest.raises(ValidationError):
+        RoundUpdatedPayload(
+            round_id="rnd_1",
+            project_id="prj_1",
+            entry=RoundEntry.MAIN,
+            phase=phase,
+            end_reason=reason,
+        )
+
+
+def test_running_round_payload_carries_no_reason() -> None:
+    with pytest.raises(ValidationError):
+        RoundUpdatedPayload(
+            round_id="rnd_1",
+            project_id="prj_1",
+            entry=RoundEntry.MAIN,
+            phase=RoundPhase.WORKING,
+            end_reason=RoundEndReason.COMPLETED,
+        )
+
+
+@pytest.mark.parametrize(
+    ("phase", "reason"),
+    [
+        (RoundPhase.DONE, RoundEndReason.COMPLETED),
+        (RoundPhase.DONE, RoundEndReason.USER_STOPPED),
+        (RoundPhase.FAILED, RoundEndReason.FAILED),
+        (RoundPhase.FAILED, RoundEndReason.PROCESS_RESTART),
+    ],
+)
+def test_every_legal_region_yields_a_legal_payload(
+    phase: RoundPhase, reason: RoundEndReason
+) -> None:
+    """黑板是"先提交后广播"：region 合法却构造不出 payload，就成了"库里写了、广播炸了"。"""
+    region = RoundRegion(
+        round_id="rnd_1",
+        project_id="prj_1",
+        entry=RoundEntry.MAIN,
+        user_input="细化一下功能清单",
+        scope=Scope(selected_fields=("功能清单",)),
+        phase=phase,
+        ended_at=NOW,
+        end_reason=reason,
+    )
+    payload = RoundUpdatedPayload(
+        round_id=region.round_id,
+        project_id=region.project_id,
+        entry=region.entry,
+        phase=region.phase,
+        end_reason=region.end_reason,
+    )
+    assert payload.phase is region.phase
 
 
 def test_tool_invocation_may_have_no_role() -> None:

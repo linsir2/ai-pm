@@ -67,12 +67,52 @@ def test_running_round_has_no_end_fields() -> None:
         RoundRegion(**_round(ended_at=NOW, end_reason=RoundEndReason.COMPLETED))
 
 
-@pytest.mark.parametrize("phase", [RoundPhase.DONE, RoundPhase.FAILED])
-def test_finished_round_must_say_when_and_why(phase: RoundPhase) -> None:
+@pytest.mark.parametrize(
+    ("phase", "reason"),
+    [
+        (RoundPhase.DONE, RoundEndReason.COMPLETED),
+        (RoundPhase.FAILED, RoundEndReason.FAILED),
+    ],
+)
+def test_finished_round_must_say_when_and_why(phase: RoundPhase, reason: RoundEndReason) -> None:
     with pytest.raises(ValidationError):
         RoundRegion(**_round(phase=phase))
-    region = RoundRegion(**_round(phase=phase, ended_at=NOW, end_reason=RoundEndReason.COMPLETED))
+    region = RoundRegion(**_round(phase=phase, ended_at=NOW, end_reason=reason))
     assert region.ended_at == NOW
+
+
+@pytest.mark.parametrize(
+    ("reason", "phase"),
+    [
+        (RoundEndReason.COMPLETED, RoundPhase.DONE),
+        (RoundEndReason.USER_STOPPED, RoundPhase.DONE),
+        (RoundEndReason.FAILED, RoundPhase.FAILED),
+        (RoundEndReason.PROCESS_RESTART, RoundPhase.FAILED),
+    ],
+)
+def test_each_terminal_reason_pairs_with_exactly_one_phase(
+    reason: RoundEndReason, phase: RoundPhase
+) -> None:
+    """C12：谁结束的 ↔ 以什么相位结束，两值域是一对一。"""
+    region = RoundRegion(**_round(phase=phase, ended_at=NOW, end_reason=reason))
+    assert region.end_reason is reason
+
+
+@pytest.mark.parametrize(
+    ("phase", "reason"),
+    [
+        (RoundPhase.DONE, RoundEndReason.FAILED),
+        (RoundPhase.FAILED, RoundEndReason.COMPLETED),
+        (RoundPhase.DONE, RoundEndReason.PROCESS_RESTART),
+        (RoundPhase.FAILED, RoundEndReason.USER_STOPPED),
+    ],
+)
+def test_contradictory_phase_and_reason_are_rejected(
+    phase: RoundPhase, reason: RoundEndReason
+) -> None:
+    """"done + failed"这类组合既能存进库、又能广播出去，订阅者没法解释——两头都要拦。"""
+    with pytest.raises(ValidationError):
+        RoundRegion(**_round(phase=phase, ended_at=NOW, end_reason=reason))
 
 
 def test_round_region_requires_ids_and_input() -> None:

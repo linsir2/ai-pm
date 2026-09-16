@@ -1,10 +1,16 @@
-"""契约用到的全部枚举。值域直接对应 CONTRACTS.md 的字段说明。
+"""契约用到的全部枚举，以及**值域之间的配对规则**。值域直接对应 CONTRACTS.md 的字段说明。
 
 一个值都不许在这里"顺手加"：每个成员都要能在 CONTRACTS.md 里指出出处。
 `tests/contracts/test_enums.py` 拿一张期望表逐字比对，加一个值就会红。
+
+配对规则（如 `PHASE_FOR_END_REASON`）也放在这里：它同时属于 C12 的 `round` 区块与 C13 的
+`round.updated`，两边必须用同一张表，放任何一边都会让另一边绕圈 import。
 """
 
 from enum import StrEnum
+from typing import Final
+
+from pmstudio.common.errors import ContractViolation
 
 
 class VersionTrigger(StrEnum):
@@ -60,6 +66,33 @@ class RoundEndReason(StrEnum):
     USER_STOPPED = "user_stopped"
     FAILED = "failed"
     PROCESS_RESTART = "process_restart"
+
+
+PHASE_FOR_END_REASON: Final[dict[RoundEndReason, RoundPhase]] = {
+    RoundEndReason.COMPLETED: RoundPhase.DONE,
+    RoundEndReason.USER_STOPPED: RoundPhase.DONE,
+    RoundEndReason.FAILED: RoundPhase.FAILED,
+    RoundEndReason.PROCESS_RESTART: RoundPhase.FAILED,
+}
+"""C12：谁结束的 ↔ 以什么相位结束，两个值域是一对一。
+
+「用户叫停」以 `done` 收尾（这一轮按用户的意思结束了，不是失败）；「进程重启」以 `failed` 收尾
+（那一轮没跑完）。配对表放在这里，是因为 C12 的 `round` 区块（`RoundRegion`）与 C13 的
+`round.updated`（`RoundUpdatedPayload`）**必须用同一张表**——两头不一致就会出现"库里写进去了、
+广播却构造不出来"（黑板是先提交后广播）。
+
+`user_stopped → done` 是 R1 开工前定的口径：在此之前没有实现用过这个值。
+"""
+
+
+def assert_phase_matches_reason(phase: RoundPhase, reason: RoundEndReason) -> None:
+    """C12：终态相位与结束原因必须配得上（`done + failed` 这类组合谁都没法解释）。"""
+    expected = PHASE_FOR_END_REASON[reason]
+    if phase is not expected:
+        raise ContractViolation(
+            f"phase={phase.value} 与 end_reason={reason.value} 配不上："
+            f"{reason.value} 只能配 {expected.value}"
+        )
 
 
 class ClaimKind(StrEnum):

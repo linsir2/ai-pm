@@ -30,6 +30,7 @@ from pmstudio.contracts.enums import (
     RoundEndReason,
     RoundEntry,
     RoundPhase,
+    assert_phase_matches_reason,
 )
 from pmstudio.contracts.models.base import ContractModel
 from pmstudio.contracts.models.card_group import CardGroup
@@ -94,6 +95,7 @@ class RoundRegion(ContractModel):
         if finished:
             if self.ended_at is None or self.end_reason is None:
                 raise ContractViolation("轮次结束必须记下什么时候结束、为什么结束")
+            assert_phase_matches_reason(self.phase, self.end_reason)
         elif self.ended_at is not None or self.end_reason is not None:
             raise ContractViolation("还没结束就不该有结束时间和结束原因")
         return self
