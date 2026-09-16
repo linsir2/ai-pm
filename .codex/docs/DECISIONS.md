@@ -1,11 +1,21 @@
 # PM Studio 工程裁决记录
 
-- 版本：v0.11
+- 版本：v0.12
 - 日期：2026-09-15
 - 作用：记录**工程与契约层面的裁决**。产品级决策仍以 `PRD.md` 为准，字段级定义仍以 `CONTRACTS.md` 为准；本文件只回答"这条到底怎么定的、为什么"。
 - 纪律：只写**已经拍板**的事。没定的进最后一节，不写进正文。
 
 ### 变更记录
+
+**v0.12**（2026-09-17）
+
+- **新增 §17：R1 开工前必修六条落地**。三条不动契约形状（事务可嵌套、轮次生命周期收紧、
+  顶层字段唯一 = I22），三条动了契约（`CR-002` 给 C7 `CardAnswer` 加 `proposal_states`；
+  `CR-003` 给 C13 的 `doc.changed` / `memory.updated` 加 `round_id`；C12/C13 的相位↔原因
+  改成同一张表）
+- **新增 I22**：同一个文档里顶层块的 `schema_label` 唯一——M20 靠 label 定位块
+- **两条新口径**：① 用户叫停以 `done` 收尾（`user_stopped` 在此之前没有任何实现用过）；
+  ② `dropRound` 不代填收尾原因——收尾是编排层的一次显式写
 
 **v0.11**（2026-09-16）
 
@@ -416,3 +426,34 @@ R0.2 = `contracts/` 从"文档里的表格"变成"代码里的唯一形状出处
 | 6 | **P3-3 版本号是写次数，不是内容指纹**：回退把所有块版本 +1，而 `is_memory_invalid` 只看版本 → 一次回退让引用未变块的记忆全部失效 | R4（记忆与上下文）开工前裁决 |
 | 7 | **P3-4 事件总线的并发语义未定义**：`publish` 在另一条链 drain 中会早退（嵌套设计），并发任务下调用者先于分发拿到返回。单事件循环下无实害 | R1 引入并发任务前写明串行化口径 |
 | 8 | **P3-6 存储侧口径不一致**：`ARCHITECTURE.md` 说 L6 只落 trace，但 C16 要它读项目 `config`（该文件已删除，这一条留在 CONTRACTS 侧对齐） | R1 做 M24 `trim` 时对齐（CONTRACTS §5.2 已写 L6 可读 C16 `config`） |
+
+---
+
+## 17. R1 开工前必修（2026-09-17）
+
+§16.2 列了六条挡路的问题，本章记录它们**怎么定的、落成了什么样**。三条不动契约形状，
+三条动了契约（`CR-002` / `CR-003` 与两条校验规则）。
+
+| # | 问题 | 裁决 | 落地 |
+|---|---|---|---|
+| 1 | 建项目不是一次事务 | **事务可以嵌套**：最外层 `BEGIN IMMEDIATE`，内层 `SAVEPOINT`。理由不只是"顺手"——C12 早定了"写工作台与写账本要能共享一个事务边界"，而 `BoardStore` 与 `Ledger` 各开事务，不能嵌套这条要求就永远落不了地 | `storage/db.py` 的 `transaction()` 带深度计数；内层失败只回滚到自己的保存点，外层可以吞掉它继续提交；深度在 `finally` 里复位 |
+| 2 | 开新轮静默清空未结束轮 | **禁止**，并顺手补上"轮末清理 ≠ 收尾"：`openRound` 发现别的未结束轮就抛 `ContractViolation`（同一 `round_id` 重开允许）；`dropRound` 在轮还没写成 `done` / `failed` 时抛错 | `communication/board.py`；`interfaces/communication.py` 两个 docstring 同步。`superseded`（取代）语义留到真有第二个入口的 R3 |
+| 3 | 顶层字段唯一 | 定成 **I22**：顶层块的 `schema_label` 唯一，`DocumentSnapshot` 与 `Ledger.create_document` 两头校验；**只约束顶层**——定位只发生在顶层，嵌套重名等 R2 引入加块时再定 | `models/document.py` 的 `assert_unique_top_level_labels`；写路径"先校验后动手"，拒绝就一行都不写 |
+| 4 | `round.updated` 与 `RoundRegion` 校验不对称 | 两头用**同一张表**（`PHASE_FOR_END_REASON`）：`completed` / `user_stopped` → `done`，`failed` / `process_restart` → `failed`；非终态不许带原因 | 表放 `contracts/enums.py`（C12 与 C13 都要用，放任何一边都会让另一边绕圈 import）；`skeleton/board.py` 与 `skeleton/events.py` 各自按它校验。**用户叫停以 `done` 收尾**是本次新定的口径 |
+| 5 | 填充卡提案级裁决没有通道 | `CardAnswer` 加 `proposal_states`（`CR-002`）；"必须列全"写成跨对象规则 `check_proposal_states`——`CardAnswer` 自己只拿得到 `card_id`，"列全"要看得见卡片 | `models/card.py` + `contracts/invariants.py`。**只有 `answered` 要求列全**；`pending` / `skipped` 不许带值；非填充卡不许带 |
+| 6 | 事件 payload 缺 `round_id` | `doc.changed` / `memory.updated` 加 `round_id`（`CR-003`），**可空**：用户手改不在一轮里（§5.2） | `skeleton/events.py`；`event_bus._build_entry` 本来就从 payload 取流水索引，补上字段即通。`project_id` 这次**不加**——没有"按项目查流水"的消费者，说不出消费者就不加（记在 §16.3） |
+
+**为什么第 4 条不能只改 payload**：黑板是"先提交后广播"（C12）。region 宽松而 payload 严格的话，
+一条矛盾的 region 能写进库、却构造不出 payload——就成了"库里写了、广播炸了、调用方拿到异常"。
+所以两头必须同表，并专门加一条用例钉住"合法 region ⇒ 合法 payload"。
+
+**这次改到的既有用例（4 条）**：`test_c7_card.py` 的 `CardAnswer` 字段集；`test_skeleton_events.py`
+两处 payload 字段集；`test_skeleton_board.py` 原来拿 `FAILED + COMPLETED` 当合法配对（现按相位配原因）；
+`test_board.py` 的 `drop_round` 用例（改成先收尾再清理）。
+
+**落地形态**：新增 `tests/storage/test_transactions.py`；`CR-002` / `CR-003` 与随之更新的形状锁、
+`frozen_in`（C7 → `CR-002`，C13 → `CR-003`）；CONTRACTS v0.19。测试 421 → 465；`ruff` 干净；
+冻结表 46 个模型两向对齐。
+
+**对 §16.2 的一处更正**：第 5 条当时写"走 CR"，但顶层字段唯一**没有改任何字段**（形状不变），
+按"只冻形状"的口径不需要 CR——它落在 I22 与 `invariants.py`，已按此执行。

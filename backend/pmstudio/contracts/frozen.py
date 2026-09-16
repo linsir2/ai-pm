@@ -143,6 +143,24 @@ CHANGE_RECORDS: Final[tuple[ContractChange, ...]] = (
             "C17",
         ),
     ),
+    ContractChange(
+        record_id="CR-002",
+        date="2026-09-17",
+        doc_version="CONTRACTS.md v0.19",
+        summary="C7 `CardAnswer` 加 `proposal_states`：填充卡提案级的「要 / 不要」原来没有传输通道，"
+        "M20 要取 `state = kept` 的提案，却没有任何接口能写 `Proposal.state`。"
+        "加字段是兼容的；「必须列全」那条规则是跨对象的，写在 `invariants.check_proposal_states`",
+        contracts=("C7",),
+    ),
+    ContractChange(
+        record_id="CR-003",
+        date="2026-09-17",
+        doc_version="CONTRACTS.md v0.19",
+        summary="C13 `doc.changed` / `memory.updated` 加 `round_id`：流水按 `round_id` 建索引，"
+        "而这两个 payload 没有该字段 → 索引为 NULL → 复盘查不到「这一轮改过哪些文档、哪些记忆失效」。"
+        "可空，因为用户手改不在一轮里（§5.2）",
+        contracts=("C13",),
+    ),
 )
 
 FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
@@ -179,7 +197,8 @@ FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
         "Card（卡片）",
         "models/card.py",
         ("Card", "CardOption", "Proposal", "CardAnswer"),
-        "CR-001",
+        "CR-002",
+        note="CR-002 给 `CardAnswer` 加了 `proposal_states`（填充卡的逐条裁决）",
     ),
     FrozenContract("C8", "Card Group（卡片组）", "models/card_group.py", ("CardGroup",), "CR-001"),
     FrozenContract("C9", "Memory（记忆）", "models/memory.py", ("Memory",), "CR-001"),
@@ -209,8 +228,9 @@ FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
             "ToolInvokedPayload",
             "GenerationFailedPayload",
         ),
-        "CR-001",
-        note="八个事件八个 payload，一个不多一个不少",
+        "CR-003",
+        note="八个事件八个 payload，一个不多一个不少；"
+        "CR-003 给 `doc.changed` / `memory.updated` 加了 `round_id`",
     ),
     FrozenContract(
         "C14",
@@ -300,6 +320,7 @@ CONTRACT_SHAPES: Final[dict[str, tuple[str, ...]]] = {
         "CardAnswer.card_id: str",
         "CardAnswer.status: CardStatus",
         "CardAnswer.answer: str | None = None",
+        "CardAnswer.proposal_states: dict[str, ProposalState] = {}",
     ),
     "C8": (
         "CardGroup.group_id: str",
@@ -394,6 +415,7 @@ CONTRACT_SHAPES: Final[dict[str, tuple[str, ...]]] = {
         "DocChangedPayload.seq: int [Ge(ge=1)]",
         "DocChangedPayload.trigger: VersionTrigger",
         "DocChangedPayload.block_ids: tuple[str, ...] = ()",
+        "DocChangedPayload.round_id: str | None = None",
         "DiscussionUtteranceAddedPayload.round_id: str",
         "DiscussionUtteranceAddedPayload.role_id: str",
         "DiscussionUtteranceAddedPayload.packet_id: str",
@@ -403,6 +425,7 @@ CONTRACT_SHAPES: Final[dict[str, tuple[str, ...]]] = {
         "MemoryUpdatedPayload.type: MemoryType",
         "MemoryUpdatedPayload.status: MemoryStatus",
         "MemoryUpdatedPayload.from_status: MemoryStatus | None = None",
+        "MemoryUpdatedPayload.round_id: str | None = None",
         "RegistryUpdatedPayload.id: str",
         "RegistryUpdatedPayload.kind: RegistryKind",
         "RegistryUpdatedPayload.status: RegistryStatus",

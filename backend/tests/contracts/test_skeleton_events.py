@@ -55,9 +55,16 @@ EXPECTED_PAYLOAD_FIELDS: dict[type, set[str]] = {
         "card_count",
         "has_fill_card",
     },
-    DocChangedPayload: {"doc_id", "version_id", "seq", "trigger", "block_ids"},
+    DocChangedPayload: {"doc_id", "version_id", "seq", "trigger", "block_ids", "round_id"},
     DiscussionUtteranceAddedPayload: {"round_id", "role_id", "packet_id", "index"},
-    MemoryUpdatedPayload: {"memory_id", "project_id", "type", "status", "from_status"},
+    MemoryUpdatedPayload: {
+        "memory_id",
+        "project_id",
+        "type",
+        "status",
+        "from_status",
+        "round_id",
+    },
     RegistryUpdatedPayload: {"id", "kind", "status", "from_status"},
     ToolInvokedPayload: {"round_id", "tool_id", "status", "role_id"},
     GenerationFailedPayload: {"round_id", "step", "reason", "retryable"},
@@ -190,6 +197,37 @@ def test_running_round_payload_carries_no_reason() -> None:
         )
 
 
+def test_doc_changed_and_memory_updated_carry_the_round() -> None:
+    """这两件事原来在流水里没有轮次可查（`round_id` 为 NULL），复盘拿不到它们。"""
+    doc = DocChangedPayload(
+        doc_id="doc_1",
+        version_id="ver_1",
+        seq=2,
+        trigger=VersionTrigger.SUBMIT,
+        round_id="rnd_1",
+    )
+    memory = MemoryUpdatedPayload(
+        memory_id="mry_1",
+        project_id="prj_1",
+        type=MemoryType.LESSON,
+        status=MemoryStatus.INVALID,
+        round_id="rnd_1",
+    )
+    assert doc.round_id == "rnd_1"
+    assert memory.round_id == "rnd_1"
+
+
+def test_the_round_is_optional_for_out_of_round_changes() -> None:
+    """用户手改文档不在一轮里（§5.2）：没有轮次就是没有，不编一个假的。"""
+    payload = DocChangedPayload(
+        doc_id="doc_1",
+        version_id="ver_1",
+        seq=2,
+        trigger=VersionTrigger.MANUAL,
+    )
+    assert payload.round_id is None
+
+
 @pytest.mark.parametrize(
     ("phase", "reason"),
     [
@@ -298,7 +336,14 @@ def test_payload_carries_locators_not_full_state() -> None:
     assert "card_count" in fields
     assert "cards" not in fields
     memory_fields = set(MemoryUpdatedPayload.model_fields)
-    assert memory_fields == {"memory_id", "project_id", "type", "status", "from_status"}
+    assert memory_fields == {
+        "memory_id",
+        "project_id",
+        "type",
+        "status",
+        "from_status",
+        "round_id",
+    }
     assert MemoryStatus.ACTIVE in set(MemoryStatus)
     assert MemoryType.DECISION in set(MemoryType)
     assert CardGroupState.CONFIRMED in set(CardGroupState)

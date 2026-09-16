@@ -7,8 +7,23 @@ from pathlib import Path
 
 import pytest
 
-from pmstudio.contracts.enums import EventType, ProducerIdentity, RoundEntry, RoundPhase
-from pmstudio.contracts.skeleton.events import EventLogEntry, RoundUpdatedPayload
+from pmstudio.communication.event_bus import EventBus
+from pmstudio.contracts.enums import (
+    EventType,
+    MemoryStatus,
+    MemoryType,
+    ProducerIdentity,
+    RoundEntry,
+    RoundPhase,
+    VersionTrigger,
+)
+from pmstudio.contracts.skeleton.events import (
+    DocChangedPayload,
+    Event,
+    EventLogEntry,
+    MemoryUpdatedPayload,
+    RoundUpdatedPayload,
+)
 from pmstudio.storage.db import Database
 from pmstudio.storage.event_log import EventLog
 
@@ -90,3 +105,72 @@ def test_the_log_is_append_only(log: EventLog) -> None:
     """只增不改：仓库里没有改和删的入口。"""
     for forbidden in ("update", "delete", "remove", "replace", "truncate"):
         assert not hasattr(log, forbidden)
+
+
+def _publish(log: EventLog, payload: object, producer: ProducerIdentity) -> None:
+    bus = EventBus(log)
+    asyncio.run(
+        bus.publish(Event(type=_type_of(payload), payload=payload, at=AT), producer=producer)  # type: ignore[arg-type]
+    )
+
+
+def _type_of(payload: object) -> EventType:
+    if isinstance(payload, DocChangedPayload):
+        return EventType.DOC_CHANGED
+    if isinstance(payload, MemoryUpdatedPayload):
+        return EventType.MEMORY_UPDATED
+    raise AssertionError(f"没有为 {type(payload).__name__} 配色事件类型")
+
+
+def test_doc_changed_is_findable_by_round(log: EventLog) -> None:
+    """复盘要按轮查："这一轮改过哪些文档"必须查得回来（C13 的 `round_id`）。"""
+    _publish(
+        log,
+        DocChangedPayload(
+            doc_id="doc_1",
+            version_id="ver_2",
+            seq=2,
+            trigger=VersionTrigger.SUBMIT,
+            block_ids=("blk_features",),
+            round_id="rnd_1",
+        ),
+        ProducerIdentity.DOCUMENT_WRITER,
+    )
+
+    rows = log.read_by_round("rnd_1")
+    assert [row.type for row in rows] == [EventType.DOC_CHANGED]
+    assert isinstance(rows[0].payload, DocChangedPayload)
+    assert rows[0].payload.block_ids == ("blk_features",)
+
+
+def test_memory_updated_is_findable_by_round(log: EventLog) -> None:
+    _publish(
+        log,
+        MemoryUpdatedPayload(
+            memory_id="mry_1",
+            project_id="prj_1",
+            type=MemoryType.LESSON,
+            status=MemoryStatus.INVALID,
+            from_status=MemoryStatus.ACTIVE,
+            round_id="rnd_1",
+        ),
+        ProducerIdentity.MEMORY,
+    )
+
+    assert [row.type for row in log.read_by_round("rnd_1")] == [EventType.MEMORY_UPDATED]
+
+
+def test_manual_edit_outside_a_round_is_not_indexed(log: EventLog) -> None:
+    """用户手改不在一轮里（§5.2）：`round_id` 为空就是空，不编一个假轮次顶上。"""
+    _publish(
+        log,
+        DocChangedPayload(
+            doc_id="doc_1",
+            version_id="ver_3",
+            seq=3,
+            trigger=VersionTrigger.MANUAL,
+        ),
+        ProducerIdentity.DOCUMENT_WRITER,
+    )
+
+    assert log.read_by_round("rnd_1") == []

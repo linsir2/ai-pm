@@ -113,11 +113,31 @@ def test_option_field_set_and_text_required() -> None:
 
 
 def test_card_answer_field_set() -> None:
-    assert set(CardAnswer.model_fields) == {"card_id", "answer", "status"}
+    assert set(CardAnswer.model_fields) == {"card_id", "answer", "status", "proposal_states"}
     answer = CardAnswer(card_id="crd_1", answer="确认", status=CardStatus.ANSWERED)
     assert answer.answer == "确认"
+    assert answer.proposal_states == {}
     skipped = CardAnswer(card_id="crd_1", status=CardStatus.SKIPPED)
     assert skipped.answer is None
+
+
+def test_card_answer_carries_per_proposal_decisions() -> None:
+    """填充卡的"要 / 不要"逐条传回来——M20 只写 `kept` 的那些（C7）。"""
+    answer = CardAnswer(
+        card_id="crd_fill",
+        status=CardStatus.ANSWERED,
+        proposal_states={"prp_1": ProposalState.KEPT, "prp_2": ProposalState.REMOVED},
+    )
+    assert answer.proposal_states["prp_2"] is ProposalState.REMOVED
+
+
+def test_card_answer_rejects_an_unknown_proposal_state() -> None:
+    with pytest.raises(ValidationError):
+        CardAnswer(
+            card_id="crd_fill",
+            status=CardStatus.ANSWERED,
+            proposal_states={"prp_1": "maybe"},
+        )
 
 
 def test_answered_card_answer_must_carry_text() -> None:

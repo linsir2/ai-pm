@@ -10,6 +10,7 @@
 | I10 冲突不静默覆盖 | `detect_version_conflicts` |
 | 引用归因：`claim` 不许出编排层 | `check_citation_targets` |
 | 写入 trigger 与 payload 必须配对 | `check_write_payload` |
+| C7 提案级裁决必须列全 | `check_proposal_states` |
 | N2 裁剪顺序可复现 | `order_context_blocks` |
 """
 
@@ -17,8 +18,8 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
 from pmstudio.common.errors import ContractViolation
-from pmstudio.contracts.enums import CardKind, CitationTargetType, VersionTrigger
-from pmstudio.contracts.models.card import Card
+from pmstudio.contracts.enums import CardKind, CardStatus, CitationTargetType, VersionTrigger
+from pmstudio.contracts.models.card import Card, CardAnswer
 from pmstudio.contracts.models.citation import Citation
 from pmstudio.contracts.models.document import (
     ManualEditPayload,
@@ -49,6 +50,42 @@ def check_proposals_within_scope(card: Card, scope: Scope) -> None:
     for proposal in card.proposals:
         if not scope.covers(proposal.target_label):
             raise ContractViolation(f"提案落在选区外：{proposal.target_label}（I17：AI 不能写选区外的字段）")
+
+
+def check_proposal_states(card: Card, answer: CardAnswer) -> None:
+    """填充卡的提案级裁决必须**显式列全**（C7）。
+
+    "列全"要同时看卡片（有哪些提案）与回应（列了哪些），所以写在跨对象这一层——
+    `CardAnswer` 自己只拿得到 `card_id`。M9 收到用户回应时调它。
+
+    为什么必须显式：`Proposal.state` 的默认值是 `kept`，"忘了传 = 默认要"会把用户没要的
+    内容写进文档，那是这类流程里最贵的一种错。
+
+    三种情形分开：非填充卡不许带裁决；填充卡**还没决定**（`pending` / `skipped`）时也不许带；
+    只有 `answered` 才要求列全。
+    """
+    if card.kind is not CardKind.FILL:
+        if answer.proposal_states:
+            raise ContractViolation("只有填充卡才有提案级裁决——这张卡没有 proposals")
+        return
+
+    if answer.status is not CardStatus.ANSWERED:
+        if answer.proposal_states:
+            raise ContractViolation("还没回应、或者已经跳过，就不该有提案裁决")
+        return
+
+    expected = {proposal.proposal_id for proposal in card.proposals}
+    listed = set(answer.proposal_states)
+    missing = expected - listed
+    if missing:
+        raise ContractViolation(
+            f"填充卡 {card.card_id} 的提案裁决不完整，缺：{'、'.join(sorted(missing))}"
+        )
+    extra = listed - expected
+    if extra:
+        raise ContractViolation(
+            f"这些提案 id 不属于卡片 {card.card_id}：{'、'.join(sorted(extra))}"
+        )
 
 
 def check_citation_targets(citations: Sequence[Citation], *, allow_claim: bool) -> None:

@@ -87,6 +87,8 @@ class DocChangedPayload(ContractModel):
     seq: int = Field(ge=1)
     trigger: VersionTrigger
     block_ids: tuple[str, ...] = Field(default_factory=tuple)
+    round_id: str | None = None
+    """在哪一轮里改的。**用户手改不在一轮里**（§5.2），所以可空；轮内写入必须带。"""
 
     @model_validator(mode="after")
     def _check(self) -> "DocChangedPayload":
@@ -116,6 +118,8 @@ class MemoryUpdatedPayload(ContractModel):
     type: MemoryType
     status: MemoryStatus
     from_status: MemoryStatus | None = None
+    round_id: str | None = None
+    """触发这次变化的那一轮。由 `doc.changed` 驱动的失效要带，跨轮的整理可以不带。"""
 
     @model_validator(mode="after")
     def _check(self) -> "MemoryUpdatedPayload":

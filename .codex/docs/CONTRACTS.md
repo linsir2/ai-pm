@@ -1,10 +1,25 @@
 # PM Studio 公共契约
 
-- 版本：v0.18
-- 日期：2026-09-16
+- 版本：v0.19
+- 日期：2026-09-17
 - 对应：PRD v0.15
 
 ### 变更记录
+
+**v0.19**（2026-09-17）
+
+- **CR-002（C7）**：`CardAnswer` 加 `proposal_states`——填充卡的提案级「要 / 不要」原来没有传输通道：
+  M20 要取 `state = kept` 的提案，却没有任何接口能写 `Proposal.state`
+- **CR-003（C13）**：`doc.changed` / `memory.updated` 加 `round_id`——流水按 `round_id` 建索引，
+  没有它，"复盘这一轮改过哪些文档、哪些记忆失效"查不回来
+- **新增 I22（顶层字段唯一）**：同一个文档里，顶层块的 `schema_label` 必须唯一。M20 靠 label 定位块，
+  两个同名的顶层块会让"写到哪一块"没有唯一答案。**只约束顶层**：定位只发生在顶层
+- **C12 补两条生命周期规则**：① 终态相位与结束原因一对一（`completed` / `user_stopped` → `done`，
+  `failed` / `process_restart` → `failed`）；② 同一时刻只允许一个未结束的轮——`openRound` 拒绝顶掉
+  别人的轮，`dropRound` 拒绝在轮还没收尾时清理
+- **C7 补一条规则**：填充卡的 `proposal_states` 必须**列全**这张卡的每个提案，且只在 `answered` 时才有值
+  （`invariants.check_proposal_states`）。`Proposal.state` 的默认值是 `kept`，"忘了传 = 默认要"
+  会把用户没要的内容写进文档
 
 **v0.18**（2026-09-16）
 
@@ -324,6 +339,8 @@
 
 - AI 只能写 `selected_fields` 里的字段，**M20 强制**，不靠提示词自觉。
 - 有选区时，每条提案的 `target_label` 必须落在选区内。
+- **顶层字段唯一**（I22）：一个文档里，顶层块的 `schema_label` 不能重名——M20 靠它定位块，
+  重名会让"写到哪一块"没有唯一答案。校验在 `DocumentSnapshot` 与 `Ledger.create_document` 两头做。
 - **选区在轮内不变**。
 
 ### C2 Block / Document（文档）
@@ -545,10 +562,22 @@ claims: [
 
 **合格标准（可验收）**：复述里必须包含至少一个**只有读了文档才知道的信息**。做不到就说明 M13 的上下文没组装对，或者系统在复读。
 
+**用户回应的形状**（§5.3 `submitCards` 的 `answers[]` 项，一张卡一个回答）
+
+| 字段 | 作用 | 谁写 | 谁读 |
+|---|---|---|---|
+| `card_id` | 回应的是哪张卡 | 界面 | M9 |
+| `status` | `pending` 待回应 / `answered` 已回应 / `skipped` 跳过 | 用户 | 界面；M9 |
+| `answer` | 打字的回应（点按钮时可以留空） | 用户 | M20 写入；M17 提炼反馈 |
+| `proposal_states` | **只有填充卡用**：逐条列出每个 `proposal_id` 的 `kept` / `removed` | 用户 | M9 校验列全；M20 只写 `kept` 的那些 |
+
 **不变量**
 
 - **一张卡只针对一个议题**：一个冲突，或者一个独立的问题。不同领域、互不相干的疑问不合并到同一张卡上。
 - 用户回应的方式有两种：点按钮，或直接在输入框里打字。两者地位相同。
+- **填充卡的裁决必须列全**：`answered` 的填充卡，`proposal_states` 要覆盖这张卡的**每一个**
+  `proposal_id`，多一个少一个都拒（`invariants.check_proposal_states`）；`pending` / `skipped`
+  时不许带值。少一条会被当成默认的 `kept`——"忘了传 = 默认要"会把用户没要的内容写进文档。
 - 跳过的卡片不丢，落到文档的"待确认问题"分区。
 - 冲突要**暴露而不是抹平**：分歧卡必须把分歧点摆出来，不能只给一个被综合过的结论。
 - **确认理解卡不是填充卡**：它只对齐这一轮用户输入的意思，不写入任何内容。
@@ -691,6 +720,17 @@ claims: [
 | `phase` | `assembling` 组装 / `restating` 复述理解 / `working` 生成 / `awaiting_user` 等用户回应 / `drafting` 成稿 / `writing` 写入 / `done` / `failed` | 界面显示进度；失败时和 `generation.failed` 一起说清卡在哪一步（AC12） |
 | `ended_at` / `end_reason` | 什么时候结束、为什么结束（写完 / 用户叫停 / 失败 / **进程重启**——最后这个由启动恢复写上） | C11 trace；界面 |
 
+**`phase` 与 `end_reason` 一对一**（不是随便配的，两个值域是一对一）
+
+| `end_reason` | 唯一合法的 `phase` | 什么情况下出现 |
+|---|---|---|
+| `completed` | `done` | 这一轮干完了 |
+| `user_stopped` | `done` | 用户叫停——按用户的意思结束了，不是失败 |
+| `failed` | `failed` | 生成/写入失败 |
+| `process_restart` | `failed` | 上次进程没了，启动恢复时补上 |
+
+配对表在 `contracts/enums.py` 的 `PHASE_FOR_END_REASON`，**`round` 区块（C12）与 `round.updated`（C13）用同一张表**：两头不一致就会出现"库里写进去了、广播却构造不出来"（黑板是先提交后广播）。
+
 **`context` 区块的形状**
 
 | 字段 | 作用 | 谁读 |
@@ -725,6 +765,10 @@ claims: [
 - **`claims` 区块只有编排层能读**：其中装的是层内对象，§5.3 的 `read` 对它是例外。这条是**声明、不靠机器执行**——进程内没有身份边界，靠评审（守卫已撤）。其余区块的"谁读"是用途说明。
 - **区块里的正文是这一轮的快照，不是第二个家**：`context` 带着正文、`claims` 带着主张，都是为了这一轮马上要用（角色 prompt、M8 汇总）；轮末随区块一起删，长期正文仍以 C2 区块 / C5 材料 / C9 记忆为准。
 - **`round` 区块的家就是 `rounds` 表**：轮末删的是 `board_regions` 里那四个区块，`rounds` 那一行长期保留。
+- **同一时刻只允许一个未结束的轮**：`openRound` 发现别的轮还没收尾就拒绝——静默把它顶掉，那一轮的
+  `rounds` 行会永远停在半路（重启时还会被当成"进程挂了"，说假话）。同一个 `round_id` 重开是允许的
+  （重启恢复、轮内换阶段都要走这条路）。**轮末清理不等于收尾**：`dropRound` 在轮还没写成
+  `done` / `failed` 时拒绝——结束原因由编排层定（那是业务判断），L3 不代填。
 - **广播失败不回滚**：事件在事务**提交之后**发，提交已经完成，无从回滚。状态是权威的，通知是后手——广播出错会把异常抛给调用方，区块照旧留在库里。
 - **写即广播不去重**：值没变也发。要不要忽略是订阅者按 payload 判断的事（比如 `from_state == state` 就说明这次不是"刚变成"）。
 
@@ -750,9 +794,9 @@ claims: [
 |---|---|---|---|---|
 | `round.updated` | 轮次（C12 `round` 区块）、编排层 | 主闭环界面、讨论区界面 | `round_id` / `project_id` / `entry` / `phase` / `from_phase` / `end_reason` | 开轮时重置视图；干活期间显示卡在哪一步（`assembling` → `restating` → `working` → `drafting` → `writing` → `done`）；结束时收尾。**开轮就是第一次 `phase` 变化，不再单独发 `round.started`** |
 | `card_group.updated` | 卡片组（C8）、编排层 | 卡片界面、M20 文档写入 | `group_id` / `round_id` / `state` / `from_state` / `card_count` / `has_fill_card` | 界面重画卡片；M20 只在**刚变成** `state = confirmed`（`from_state ≠ confirmed`）且 `has_fill_card = true` 时回黑板读这一组并写文档——"用户确认了"就是 `state` 变成 `confirmed` **那一次**。不看 `from_state` 的话，事后任何一次对同一组的写都会把 M20 再触发一遍 |
-| `doc.changed` | 文档（C2 / C3）、M20 文档写入 | 编排层、记忆层、文档界面 | `doc_id` / `version_id` / `seq` / `trigger`（`submit` / `manual` / `rollback`）/ `block_ids[]` | 编排层：手里那份上下文过时了，下一轮重新组装；记忆层：按 `block_ids` 做引用失效；文档界面：正文和版本列表刷新。**AI 写入、用户手改、回退走同一个事件**，否则"手改之后记忆要不要失效"这种事就会漏 |
+| `doc.changed` | 文档（C2 / C3）、M20 文档写入 | 编排层、记忆层、文档界面 | `doc_id` / `version_id` / `seq` / `trigger`（`submit` / `manual` / `rollback`）/ `block_ids[]` / `round_id`（轮内写入必填；`manual` 手改不在一轮里，可空） | 编排层：手里那份上下文过时了，下一轮重新组装；记忆层：按 `block_ids` 做引用失效；文档界面：正文和版本列表刷新。**AI 写入、用户手改、回退走同一个事件**，否则"手改之后记忆要不要失效"这种事就会漏。**带 `round_id` 是为了复盘能按轮查回来**（流水按它建索引） |
 | `discussion.utterance_added` | 讨论轮（C14 `utterances`）、M7 讨论编排器 | 讨论区界面 | `round_id` / `role_id` / `packet_id` / `index` | 逐条把发言追加到界面上。讨论区是"一条一条冒出来"的，用增量，不必每次重画整轮 |
-| `memory.updated` | 记忆（C9）、M17 / M30 / 记忆层的失效判定 | M16 检索、M30 候选队列、界面 | `memory_id` / `project_id` / `type` / `status` / `from_status` | 更新检索索引；把新候选排进验证队列；记忆面板刷新。**候选产生、晋升、失效、退役都走它，不再单个 `memory.promoted`** |
+| `memory.updated` | 记忆（C9）、M17 / M30 / 记忆层的失效判定 | M16 检索、M30 候选队列、界面 | `memory_id` / `project_id` / `type` / `status` / `from_status` / `round_id`（由 `doc.changed` 驱动的失效要带；跨轮整理可空） | 更新检索索引；把新候选排进验证队列；记忆面板刷新。**候选产生、晋升、失效、退役都走它，不再单个 `memory.promoted`** |
 | `registry.updated` | 注册条目（C10）、M27 注册中心 | M7 / M10 / M23 / M28 | `id` / `kind` / `status` / `from_status` | 换掉手里那份定义：M7 按 skill 选编排策略、M10 按 `tags` 挑工具、M23 执行权限、M28 读模板字段——条目停用之后不能再用旧的。**M30 晋升 / 退役 skill 也走它** |
 | `tool.invoked` | 一次工具调用、工具层 | 界面 | `round_id` / `tool_id` / `status`（`started` / `finished`）/ `role_id`（**可空**——检索是记忆层在组装上下文时发起的，那种调用没有角色） | 联网、检索这类几秒到十几秒的操作，界面要显示"正在查什么"，否则看着像死了 |
 | `generation.failed` | 这一次生成、Harness（L6） | 界面、编排层 | `round_id` / `step` / `reason` / `retryable` | **三样必须都在**：失败在哪一步、人话的原因、能不能重试。界面展示原因并提供重试；编排层据此把这一轮标成 `phase = failed` |
@@ -1129,6 +1173,7 @@ M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长�
 | I19 | **黑板区块单写者**：`round` / `context` / `claims` / `card_group` / `confirmed` 只有编排层能写，其他层只读 | 一份状态有两个写者，就永远说不清"它现在是谁的意思" |
 | I20 | **跨层不碰对方的状态**：要给别的层东西就调它的接口，要让别的层知道变了就发事件 | 层与层互相改对方的内部状态，任何一层都别想单独改 |
 | I21 | **引用必须能定位**：每条引用都要指向真实存在的对象（`block` / `memory` / `material` / `idea` / `user_input` / `claim`） | 依据变成一句空话，AC3 的"可追溯"就无从验收 |
+| I22 | **顶层字段唯一**：同一个文档里，顶层块的 `schema_label` 不能重名 | M20 靠 label 定位块（写范围与提案的 `target_label` 都是字段名），重名时"写到哪一块"没有唯一答案 |
 
 ---
 

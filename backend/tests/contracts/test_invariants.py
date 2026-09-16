@@ -6,22 +6,25 @@ from pmstudio.common.errors import ContractViolation
 from pmstudio.contracts.enums import (
     BlockOpKind,
     CardKind,
+    CardStatus,
     CitationTargetType,
     ContextBlockSource,
     MemoryStatus,
     MemoryType,
+    ProposalState,
     VersionTrigger,
 )
 from pmstudio.contracts.invariants import (
     check_citation_targets,
     check_citations_resolvable,
+    check_proposal_states,
     check_proposals_within_scope,
     check_write_payload,
     detect_version_conflicts,
     is_memory_invalid,
     order_context_blocks,
 )
-from pmstudio.contracts.models.card import Card, Proposal
+from pmstudio.contracts.models.card import Card, CardAnswer, Proposal
 from pmstudio.contracts.models.citation import Citation
 from pmstudio.contracts.models.document import (
     BlockOp,
@@ -75,6 +78,77 @@ def test_empty_scope_puts_no_limit_on_placement() -> None:
 def test_non_fill_cards_have_nothing_to_place() -> None:
     card = Card(card_id="crd_1", kind=CardKind.QUESTION, prompt="上线时间要求是什么")
     check_proposals_within_scope(card, Scope(selected_fields=("功能清单",)))
+
+
+def _fill_answer(**states: ProposalState) -> CardAnswer:
+    return CardAnswer(card_id="crd_fill", status=CardStatus.ANSWERED, proposal_states=dict(states))
+
+
+def _two_proposal_card() -> Card:
+    """一张有两处改动的填充卡——"列全"只有在两条以上时才测得出部分缺漏。"""
+    return Card(
+        card_id="crd_fill",
+        kind=CardKind.FILL,
+        prompt="这次我打算改动 2 处",
+        proposals=(
+            Proposal(
+                proposal_id="prp_1",
+                target_label="功能清单",
+                op=BlockOpKind.APPEND,
+                content="支持讨论候选进主闭环",
+            ),
+            Proposal(
+                proposal_id="prp_2",
+                target_label="风险",
+                op=BlockOpKind.REPLACE,
+                content="外部模型限流是主要风险",
+            ),
+        ),
+    )
+
+
+def test_proposal_states_must_cover_every_proposal() -> None:
+    """填充卡：每条提案都要有明确的要/不要——"忘了传 = 默认要"会把用户没要的内容写进文档。"""
+    with pytest.raises(ContractViolation):
+        check_proposal_states(_two_proposal_card(), _fill_answer(prp_1=ProposalState.KEPT))
+
+    check_proposal_states(
+        _two_proposal_card(),
+        _fill_answer(prp_1=ProposalState.KEPT, prp_2=ProposalState.REMOVED),
+    )
+
+
+def test_proposal_states_reject_ids_that_are_not_on_the_card() -> None:
+    with pytest.raises(ContractViolation):
+        check_proposal_states(
+            _two_proposal_card(),
+            _fill_answer(prp_1=ProposalState.KEPT, prp_404=ProposalState.REMOVED),
+        )
+
+
+def test_an_undecided_fill_card_carries_no_decisions() -> None:
+    """跳过 = 我暂时不想决定（C7）：那张卡上不该出现任何提案裁决。"""
+    card = _fill_card("功能清单")
+    check_proposal_states(card, CardAnswer(card_id="crd_fill", status=CardStatus.SKIPPED))
+
+    with pytest.raises(ContractViolation):
+        check_proposal_states(
+            card,
+            CardAnswer(
+                card_id="crd_fill",
+                status=CardStatus.SKIPPED,
+                proposal_states={"prp_1": ProposalState.KEPT},
+            ),
+        )
+
+
+def test_non_fill_cards_must_carry_no_proposal_states() -> None:
+    """理解卡 / 提问卡没有提案，带裁决就是答错了题。"""
+    card = Card(card_id="crd_1", kind=CardKind.QUESTION, prompt="上线时间要求是什么")
+    check_proposal_states(card, CardAnswer(card_id="crd_1", status=CardStatus.SKIPPED))
+
+    with pytest.raises(ContractViolation):
+        check_proposal_states(card, _fill_answer(prp_1=ProposalState.KEPT))
 
 
 def test_claim_citations_are_rejected_outside_the_orchestration_layer() -> None:
