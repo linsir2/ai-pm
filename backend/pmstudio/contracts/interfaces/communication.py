@@ -30,13 +30,19 @@ class BoardWriter(Protocol):
     """黑板写句柄。**只有编排层拿得到它**（I19）。"""
 
     async def open_round(self, round_id: str) -> None:
-        """把这一轮设为黑板当前的轮，并清掉其它轮残留的区块（C12：用户开新一轮时再删）。"""
+        """把这一轮设为黑板当前的轮，并清掉其它轮残留的区块（C12：用户开新一轮时再删）。
+
+        有别的轮还没结束就拒绝——同一时刻只允许一个未结束的轮；同一个 `round_id` 重开允许。
+        """
         ...
 
     async def write(self, region: RegionName, value: RegionValue) -> None: ...
 
     async def drop_round(self) -> None:
-        """轮末清理：删掉当前轮的区块；`rounds` 那一行长期保留。"""
+        """轮末清理：删掉当前轮的区块；`rounds` 那一行长期保留。
+
+        只做清理、不代填收尾原因：这一轮还停在非终态就拒绝（收尾是编排层的一次显式写）。
+        """
         ...
 
 

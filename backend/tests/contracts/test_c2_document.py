@@ -52,6 +52,28 @@ def test_snapshot_rejects_duplicate_block_ids() -> None:
         )
 
 
+def test_snapshot_rejects_duplicate_top_level_labels() -> None:
+    """M20 靠 `schema_label` 定位块（I22）：两个同名的顶层块，让"写到哪一块"没有唯一答案。"""
+    with pytest.raises(ValidationError):
+        DocumentSnapshot(
+            blocks=(
+                Block(block_id="blk_1", schema_label="功能清单"),
+                Block(block_id="blk_2", schema_label="功能清单"),
+            )
+        )
+
+
+def test_nested_duplicate_labels_are_allowed() -> None:
+    """定的是**顶层**唯一：定位只发生在顶层，嵌套块的重名等 R2 引入加块时再谈。"""
+    snapshot = DocumentSnapshot(
+        blocks=(
+            Block(block_id="blk_features", schema_label="功能清单"),
+            Block(block_id="blk_sub", parent_id="blk_features", schema_label="功能清单"),
+        )
+    )
+    assert [block.block_id for block in snapshot.blocks] == ["blk_features", "blk_sub"]
+
+
 def test_block_op_uses_the_contract_field_name() -> None:
     """§5.3 payload 项写的是 `op`，不是 `kind`。"""
     op = BlockOp(block_id="blk_1", op=BlockOpKind.APPEND, content="加一条", expected_version=2)

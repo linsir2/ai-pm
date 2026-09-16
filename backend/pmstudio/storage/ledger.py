@@ -19,6 +19,7 @@ from pmstudio.contracts.models.document import (
     Document,
     DocumentSnapshot,
     DocumentVersion,
+    assert_unique_top_level_labels,
 )
 from pmstudio.contracts.models.project import Project, ProjectConfig
 from pmstudio.storage.db import Database
@@ -64,6 +65,8 @@ class Ledger:
     # ── 文档与块 ────────────────────────────────────────────
 
     def create_document(self, document: Document, blocks: Sequence[Block]) -> None:
+        # 先校验再动手：同名顶层字段会让 M20 的定位失去唯一答案（I22）
+        assert_unique_top_level_labels(blocks)
         with self._db.transaction() as conn:
             conn.execute(
                 "INSERT INTO documents (doc_id, project_id, template_id) VALUES (?, ?, ?)",

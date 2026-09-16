@@ -50,9 +50,22 @@ class Blackboard:
         return self._round_id
 
     async def open_round(self, round_id: str) -> None:
-        """设成当前轮，并清掉别的轮残留的区块（C12：用户开新一轮时再删）。"""
+        """设成当前轮，并清掉别的轮残留的区块（C12：用户开新一轮时再删）。
+
+        **同一时刻只允许有一个未结束的轮**：发现别的轮还没收尾就拒绝，而不是把它顶掉——
+        顶掉会让那一轮的 `rounds` 行永远停在半路（重启时还会被当成"进程挂了"，说假话）。
+        同一个 `round_id` 重开是允许的：重启恢复、轮内换阶段都走这条路。
+        """
         if not round_id:
             raise ContractViolation("round_id 不能为空")
+        unfinished = [
+            other for other in await self._store.unfinished_round_ids() if other != round_id
+        ]
+        if unfinished:
+            raise ContractViolation(
+                f"还有没结束的轮：{'、'.join(unfinished)}——先收尾"
+                "（写 phase=done/failed，或调 stop_round），再开新轮"
+            )
         await self._store.drop_other_regions(round_id)
         self._round_id = round_id
 
@@ -79,8 +92,19 @@ class Blackboard:
         await self._broadcast(region, value, previous)
 
     async def drop_round(self) -> None:
-        """轮末清理：删掉当前轮的区块；`rounds` 那一行长期保留。"""
+        """轮末清理：删掉当前轮的区块；`rounds` 那一行长期保留。
+
+        **不替编排层收尾**：还没写成 `done` / `failed` 就调这里，会留下"区块没了、行还停在半路"
+        的僵尸轮（下一次开轮会被拒，而报错指向一个工作台已经不存在的轮次）。收尾原因由编排层定，
+        所以这里只检查、不代填。
+        """
         round_id = self._require_round()
+        region = await self._store.read_round(round_id)
+        if region is not None and region.phase not in (RoundPhase.DONE, RoundPhase.FAILED):
+            raise ContractViolation(
+                f"轮 {round_id} 还停在 {region.phase.value}："
+                "先写 phase=done/failed 收尾，再 drop_round"
+            )
         await self._store.drop_regions(round_id)
         self._round_id = None
 

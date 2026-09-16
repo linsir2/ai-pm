@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from pmstudio.common.errors import VersionConflict
+from pmstudio.common.errors import ContractViolation, VersionConflict
 from pmstudio.contracts.enums import BlockOpKind, VersionTrigger
 from pmstudio.contracts.models.document import Block, BlockOp, Document
 from pmstudio.contracts.models.project import Project, ProjectConfig
@@ -76,6 +76,20 @@ def test_create_document_with_blocks(ledger: Ledger) -> None:
     assert document.project_id == "prj_1"
     labels = [b.schema_label for b in ledger.read_blocks("doc_1")]
     assert labels == ["目标", "功能清单"]
+
+
+def test_create_document_refuses_duplicate_labels_and_writes_nothing(ledger: Ledger) -> None:
+    """两个同名的顶层字段会让 M20 的定位失去唯一答案（I22）——拒绝，且一行都不写。"""
+    ledger.create_project(_project())
+
+    with pytest.raises(ContractViolation):
+        ledger.create_document(
+            Document(doc_id="doc_1", project_id="prj_1", template_id="reg_tpl_initial"),
+            [_block("blk_a", "功能清单"), _block("blk_b", "功能清单")],
+        )
+
+    assert ledger.read_document("doc_1") is None
+    assert ledger.read_blocks("doc_1") == []
 
 
 def test_write_blocks_bumps_version_and_records_source_card(ledger: Ledger) -> None:

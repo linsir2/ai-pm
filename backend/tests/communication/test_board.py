@@ -296,11 +296,57 @@ def test_reader_handle_has_no_write(bench: Bench) -> None:
 def test_drop_round_clears_regions_but_keeps_the_round_row(bench: Bench) -> None:
     asyncio.run(bench.writer.write(RegionName.ROUND, _round_region()))
     asyncio.run(bench.writer.write(RegionName.CONTEXT, _context_region()))
+    asyncio.run(
+        bench.writer.write(
+            RegionName.ROUND,
+            _round_region(phase=RoundPhase.DONE, ended_at=AT, end_reason=RoundEndReason.COMPLETED),
+        )
+    )
     asyncio.run(bench.writer.drop_round())
 
     assert asyncio.run(bench.board.read(RegionName.CONTEXT)) is None
     assert asyncio.run(bench.store.read_round("rnd_1")) is not None
     assert bench.blackboard.current_round_id is None
+
+
+def test_drop_round_refuses_while_the_round_is_unfinished(bench: Bench) -> None:
+    """轮还没写成 done/failed 就清理，会留下"区块没了、行还停在半路"的僵尸轮。
+
+    收尾要选 `end_reason`——那是编排层的业务判断，L3 不替它选。
+    """
+    asyncio.run(bench.writer.write(RegionName.ROUND, _round_region(phase=RoundPhase.WORKING)))
+    asyncio.run(bench.writer.write(RegionName.CONTEXT, _context_region()))
+
+    with pytest.raises(ContractViolation):
+        asyncio.run(bench.writer.drop_round())
+
+    assert bench.blackboard.current_round_id == "rnd_1"
+    assert asyncio.run(bench.board.read(RegionName.CONTEXT)) == _context_region()
+
+
+def test_opening_a_round_is_refused_while_another_round_is_unfinished(bench: Bench) -> None:
+    """同一时刻只能有一个未结束的轮：静默顶掉别人，那一轮的行会永远停在半路。"""
+    asyncio.run(bench.writer.write(RegionName.ROUND, _round_region(phase=RoundPhase.WORKING)))
+    asyncio.run(bench.writer.write(RegionName.CONTEXT, _context_region()))
+
+    with pytest.raises(ContractViolation):
+        asyncio.run(bench.writer.open_round("rnd_2"))
+
+    # 原样保留：区块没被清掉，当前轮也没换
+    assert asyncio.run(bench.board.read(RegionName.CONTEXT)) == _context_region()
+    assert bench.blackboard.current_round_id == "rnd_1"
+
+
+def test_reopening_the_same_unfinished_round_is_allowed(bench: Bench) -> None:
+    """重启恢复、轮内换阶段都要能重开同一轮——禁止的是"顶掉别人"，不是"重开自己"。"""
+    asyncio.run(bench.writer.write(RegionName.ROUND, _round_region(phase=RoundPhase.WORKING)))
+    asyncio.run(bench.writer.write(RegionName.CONTEXT, _context_region()))
+
+    asyncio.run(bench.writer.open_round("rnd_1"))
+
+    assert bench.blackboard.current_round_id == "rnd_1"
+    assert asyncio.run(bench.board.read(RegionName.ROUND)) == _round_region(phase=RoundPhase.WORKING)
+    assert asyncio.run(bench.board.read(RegionName.CONTEXT)) == _context_region()
 
 
 def test_opening_a_new_round_clears_the_leftovers(tmp_path: Path) -> None:

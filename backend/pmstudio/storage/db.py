@@ -2,6 +2,9 @@
 
 事务用 `BEGIN IMMEDIATE`：写入前就拿写锁，避免两个写入者互相读到旧值再覆盖（I10）。
 
+**事务可以嵌套**（内层用 `SAVEPOINT`）：`BoardStore` 与 `Ledger` 各自开事务，而 C12 要求
+"写工作台与写账本能在同一个事务里"——组合进同一个事务边界是硬要求，不能靠调用方绕开。
+
 **单实例锁**用 `flock`：进程死了操作系统自动放锁，不会留下"死锁文件让下次起不来"这种坑。
 粒度是**库级**（一个进程一个库）——所有项目都在同一个库里（directory.md §11）。
 """
@@ -30,6 +33,7 @@ class Database:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
         self._lock: IO[str] | None = None
+        self._depth = 0  # 事务嵌套深度：0 = 顶层（BEGIN IMMEDIATE），>0 = 内层（SAVEPOINT）
 
     @classmethod
     def open(cls, path: str | Path) -> "Database":
@@ -75,15 +79,34 @@ class Database:
 
     @contextmanager
     def transaction(self) -> Generator[sqlite3.Connection]:
-        """写事务。提交之后才能广播事件——见 directory.md §6.6。"""
-        self._connection.execute("BEGIN IMMEDIATE")
+        """写事务，可以嵌套。提交之后才能广播事件——见 directory.md §6.6。
+
+        语义与 SQL 的保存点一致：内层失败只回滚到自己的保存点，外层可以吞掉它继续提交；
+        最外层失败才是整批回滚。深度在 `finally` 里复位，异常路径也不会串味。
+        """
+        depth = self._depth
+        savepoint = f"pmstudio_sp_{depth}"
+        if depth == 0:
+            self._connection.execute("BEGIN IMMEDIATE")
+        else:
+            self._connection.execute(f"SAVEPOINT {savepoint}")
+        self._depth = depth + 1
         try:
             yield self._connection
         except BaseException:
-            self._connection.execute("ROLLBACK")
+            if depth == 0:
+                self._connection.execute("ROLLBACK")
+            else:
+                self._connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
             raise
         else:
-            self._connection.execute("COMMIT")
+            if depth == 0:
+                self._connection.execute("COMMIT")
+            else:
+                self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+        finally:
+            self._depth = depth
 
     def close(self) -> None:
         self._connection.close()

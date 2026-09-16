@@ -4,6 +4,8 @@
 回退产生新版本，不删不改历史（I8）。
 """
 
+from collections.abc import Sequence
+
 from pydantic import Field, model_validator
 
 from pmstudio.common.errors import ContractViolation
@@ -76,7 +78,29 @@ class DocumentSnapshot(ContractModel):
             if block.block_id in seen:
                 raise ContractViolation(f"同一份快照里出现了重复的 block_id：{block.block_id}")
             seen.add(block.block_id)
+        assert_unique_top_level_labels(self.blocks)
         return self
+
+
+def assert_unique_top_level_labels(blocks: Sequence[Block]) -> None:
+    """同一个文档里，**顶层**块的 `schema_label` 必须唯一（I22）。
+
+    M20 靠 label 定位块——C1 的写范围（`selected_fields`）与 C7 提案的 `target_label` 都是字段名；
+    两个同名的顶层块会让"写到哪一块"没有唯一答案。**只约束顶层**：定位只发生在顶层，
+    嵌套块的重名规则等 R2 引入"加块"时再定。
+
+    放在模块级而不是只写在 `DocumentSnapshot` 里，是因为写入路径（`Ledger.create_document`）
+    也要用同一条规则；而 `invariants.py` 会 import 本模块，把规则写在那边会绕成环。
+    """
+    seen: set[str] = set()
+    for block in blocks:
+        if block.parent_id is not None:
+            continue
+        if block.schema_label in seen:
+            raise ContractViolation(
+                f"同一个文档里有重复的顶层字段：{block.schema_label}——M20 靠它定位，必须唯一"
+            )
+        seen.add(block.schema_label)
 
 
 class DocumentVersion(ContractModel):
