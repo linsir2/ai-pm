@@ -117,7 +117,7 @@ def _bus(log: object, **kwargs: object) -> EventBus:
 
 @pytest.mark.parametrize("event_type", list(EventType), ids=lambda value: value.value)
 def test_every_event_can_be_published_and_subscribed(event_type: EventType) -> None:
-    """M0.3 的退出条件：8 个事件全部能发能订。"""
+    """R0.3 的退出条件：8 个事件全部能发能订。"""
 
     async def scenario() -> list[Event]:
         bus = _bus(RecordingLog())

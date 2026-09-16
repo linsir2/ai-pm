@@ -113,7 +113,7 @@ ClaimsValue = tuple[object, ...]
 """
 
 RegionValue = RoundRegion | ContextRegion | ClaimsValue | CardGroup | ConfirmedRegion
-"""任一区块的值。类型不匹配由黑板在写入时拒（M0.4）。"""
+"""任一区块的值。类型不匹配由黑板在写入时拒（R0.4）。"""
 
 
 REGION_VALUE_TYPES: Final = {

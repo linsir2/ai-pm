@@ -314,7 +314,7 @@ def test_opening_a_new_round_clears_the_leftovers(tmp_path: Path) -> None:
 
 
 def test_a_crashed_round_can_be_reopened_and_marked_failed(tmp_path: Path) -> None:
-    """M0.5 的那一步：把上次没跑完的轮标成 failed，五个区块留着。"""
+    """R0.5 的那一步：把上次没跑完的轮标成 failed，五个区块留着。"""
     harness = Bench(tmp_path)
     try:
         asyncio.run(harness.writer.write(RegionName.ROUND, _round_region(phase=RoundPhase.WORKING)))

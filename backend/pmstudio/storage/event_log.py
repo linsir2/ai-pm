@@ -37,7 +37,7 @@ class EventLog:
     def read_by_round(self, round_id: str) -> list[EventLogEntry]:
         """按轮次读，顺序就是落库顺序（rowid）。
 
-        消费者是复盘（M7 观测）与验收测试。查询投影 / 分页等留给真要用的时候再加。
+        消费者是复盘（R7 观测）与验收测试。查询投影 / 分页等留给真要用的时候再加。
         """
         rows = self._db._connection.execute(
             "SELECT * FROM events WHERE round_id = ? ORDER BY rowid", (round_id,)

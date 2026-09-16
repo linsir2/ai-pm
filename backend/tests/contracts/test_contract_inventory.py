@@ -1,4 +1,8 @@
-"""契约清点：16 个跨层契约都在（14 个在 `models/`，C12 / C13 在 `skeleton/`），C4 不在。"""
+"""契约清点：16 个跨层契约都在（14 个在 `models/`，C12 / C13 在 `skeleton/`），C4 不在。
+
+契约名下有哪些模型只有一个出处：`pmstudio/contracts/frozen.py` 的冻结表（R0.6）。
+"现实里有没有漏网的模型"从另一头核对，在 `tests/contracts/test_freeze.py`。
+"""
 
 import importlib
 import pkgutil
@@ -6,25 +10,16 @@ import pkgutil
 from pydantic import BaseModel
 
 import pmstudio.contracts.models as models_package
+from pmstudio.contracts.frozen import FROZEN_CONTRACTS
 from pmstudio.contracts.skeleton import board as board_module
 from pmstudio.contracts.skeleton import events as events_module
 
 # C1–C17 里除掉 C4（层内），剩下 16 个；其中 C12 / C13 是骨架，住在 skeleton/。
+SKELETON_CONTRACTS = {"C12", "C13"}
 CONTRACT_FAMILIES: dict[str, set[str]] = {
-    "C1": {"Scope"},
-    "C2": {"Block", "Document"},
-    "C3": {"DocumentVersion"},
-    "C5": {"MaterialPacket"},
-    "C6": {"IdeaCandidate"},
-    "C7": {"Card", "CardOption", "Proposal", "CardAnswer"},
-    "C8": {"CardGroup"},
-    "C9": {"Memory"},
-    "C10": {"RegistryEntry"},
-    "C11": {"Trace", "ClaimDigest"},
-    "C14": {"DiscussionRound", "Utterance"},
-    "C15": {"Citation"},
-    "C16": {"Project", "ProjectConfig"},
-    "C17": {"Message", "Summary"},
+    contract.contract_id: set(contract.models)
+    for contract in FROZEN_CONTRACTS
+    if contract.contract_id != "C4" and contract.contract_id not in SKELETON_CONTRACTS
 }
 
 # 层内契约不许出现在公共契约层（directory.md §3.1）。

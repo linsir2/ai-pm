@@ -9,7 +9,7 @@ from pmstudio.storage.db import SCHEMA_VERSION, Database
 
 
 def _make_v1_database(path: Path) -> None:
-    """造一个 M0.1 形态的库：只有 schema_meta 与 projects，版本停在 1。"""
+    """造一个 R0.1 形态的库：只有 schema_meta 与 projects，版本停在 1。"""
     connection = sqlite3.connect(str(path))
     connection.executescript(
         """

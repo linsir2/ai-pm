@@ -8,7 +8,7 @@
 3. **IO 一律 async**（P3）。纯计算（`contracts/invariants.py` 里的函数）是同步的。
 
 `L7 存储底座` **故意没有 Protocol**：文档里只写了"各实体的读写"，没有一条签名。谁先当消费者，
-谁就定自己需要的那一小块（M0.3 定流水、M0.4 定工作台、M1 定业务读写），见 directory.md §11。
+谁就定自己需要的那一小块（R0.3 定流水、R0.4 定工作台、R1 定业务读写），见 directory.md §11。
 
-**当前没有调用方的方法**（先声明、M1 评审时删）：`MemoryPort.retrieve`、`MemoryPort.invalidate`。
+**当前没有调用方的方法**（先声明、R1 评审时删）：`MemoryPort.retrieve`、`MemoryPort.invalidate`。
 """
