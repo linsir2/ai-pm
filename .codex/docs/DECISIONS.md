@@ -1,11 +1,19 @@
 # PM Studio 工程裁决记录
 
-- 版本：v0.13
+- 版本：v0.14
 - 日期：2026-09-15
 - 作用：记录**工程与契约层面的裁决**。产品级决策仍以 `PRD.md` 为准，字段级定义仍以 `CONTRACTS.md` 为准；本文件只回答"这条到底怎么定的、为什么"。
 - 纪律：只写**已经拍板**的事。没定的进最后一节，不写进正文。
 
 ### 变更记录
+
+**v0.14**（2026-09-17）
+
+- **新增 §19：R1.2 上下文组装与裁剪**。八条裁决（范围调整：M22 推到 R1.3；模型形状只放窗口；
+  token 用启发式且只有一处实现；缺失清单判据收紧成"逐模块落点"；M13 只做已有来源；
+  历史输入按 C17/M15 口径；空块带上；单块超预算保留第一块）＋ 六笔账
+- **`CR-005`（C10）**：补模型本体形状 `ModelBody`
+- **M13 / M24 落地**：`memory/context_assembler.py`、`harness/trimming.py`
 
 **v0.13**（2026-09-17）
 
@@ -504,3 +512,41 @@ R1 的第一刀：把"建项目"从测试里的手工拼装变成真实现——
 `tools/services/project_service.py`（建项目应用函数）、`seeds/template.initial.json`（9 字段）、
 `CR-004`（C10 模板形状）；`bootstrap` 灌种子并把 `registry` / `project_service` 交给运行时。
 测试 466 → 498；`ruff` 干净；冻结表 48 个模型两向对齐。
+
+---
+
+## 19. R1.2 上下文组装与裁剪（2026-09-17）
+
+R1 的第二刀：`assembleContext`（M13 说带什么）＋ `trim`（M24 说带多少）。退出条件是
+"一轮能拿到 `AssembleResult` 并按预算裁出 `TrimResult`"。
+
+| # | 问题 | 裁决 | 落地 |
+|---|---|---|---|
+| 1 | R1.2 的范围 | **M13 + M24**，**M22（模型接入）推到 R1.3**。§7.1 第 4–9 步一次模型调用都不需要；而接模型要同时定"元数据形状 + 真接入方式（HTTP 依赖）+ 密钥怎么放"三件事——挤进同一步，这一步就没有干净的验收线。M8 复述卡是模型的第一个真消费者，跟它一起做接口才有真实场景可测 | 本轮不动 `harness/` 的模型侧 |
+| 2 | 模型元数据形状 | **只放 `context_window_tokens`**（`CR-005`）。endpoint / 模型名 / 密钥来源等 M22 真正要用时再加（加字段兼容）；**密钥本身永不进条目**，只写"用哪个环境变量" | `ModelBody` + `seeds/model.default.json` |
+| 3 | token 怎么数 | **显式启发式**：宽字符（CJK / 全角）1 字 1 token、其余 4 字符 1 token。偏保守（真实 BPE 对常见中文约 0.6–1 token/字）——宁可少带也不超窗。真分词器按模型定，**封装成 `estimate_tokens` 一个函数**，唯一的调用点是 M24，替换成本一行 | `harness/trimming.py` |
+| 4 | 缺失清单的判据 | **从"包不存在"收紧成"逐模块落点文件不存在"**（并把背面也钉住：说做了的必须有文件）。原因：M13 落地后 `pmstudio.memory` 存在，继续按包判会把 M14–M17 / M22 / M23 / M25 / M26 一起冤判成"已实现" | `tests/bootstrap/test_missing_modules.py` 的两张表（含 20 个还没做的模块的计划落点） |
+| 5 | M13 组装哪些来源 | **只做已有数据的来源**（文档全文 + 本轮输入）。简报（M14）、历史（M15）、检索（M16）、记忆（M17）、讨论（R3）等落地时**给 M13 加构造参数**即可——`assembleContext` 的入参形状不变（只有 `round`），加来源不破坏调用方 | `memory/context_assembler.py`；今天产出 10 个块（9 文档 + 1 输入） |
+| 6 | 历史输入从哪来 | **C17（M15）**，不读 `rounds` 表。§7.1 第 5 行④原来写"任务至今各轮的 `user_input`"，而 `rounds` 归 L3——让 L4 去读会让 L4 依赖 L3（§5.2 没有这条边）；C17 才是"面向界面说过的话"的家（PRD：M15 管全量 vs 摘要） | CONTRACTS §7.1 ④ 已收口 |
+| 7 | 空块带不带 | **带上**。`base_versions` 必须覆盖全部顶层块——漏一个，用户手改一个当前为空的块就查不出来（I10）；空块几乎不耗 token | `test_empty_blocks_are_kept_so_the_snapshot_stays_complete` |
+| 8 | 单块就超预算 | **保留优先级最高的那一块**（`trim` 里 `kept` 非空才判超预算）。裁到空上下文比超一点预算更糟——复述只能靠猜（I14） | `test_the_first_block_survives_even_when_it_alone_exceeds_the_budget` |
+
+**优先级档位表**（数值属于 M13；表与理由已同步进 CONTRACTS C12）：本轮输入 100 ＞ 文档 80 ＞
+简报 70 ＞ 生效记忆 60（`decision` / `lesson` / `preference`）＞ 历史 50 ＞ 材料 40/35/30 ＞ 空档 20。
+`fact` 类记忆不进常驻，走 M16 检索以材料形式进来。
+
+**这一轮的账**
+
+| # | 欠账 | 什么时候必须定 |
+|---|---|---|
+| 1 | **M13 只有两个来源**（文档 + 本轮输入）：简报、记忆、检索、历史都还没有家 | 各自里程碑（M14/M15/M16/M17 → R4；讨论区 → R3）。接的时候只动 `ContextAssembler.__init__` 的依赖 |
+| 2 | **模型条目里没有 endpoint / 模型名 / 密钥来源** | R1.3（M22）。加字段是兼容的，但仍要走一条 CR；密钥走环境变量 |
+| 3 | **`estimate_tokens` 是启发式**（不是任何一个模型的真分词） | R1.3 接模型时换成那个模型的 tokenizer。差异大了只改这一处 |
+| 4 | **`ContextBlockSource.DISCUSSION` 目前没有生产者**：讨论区内容按 C5 的转换规则以 `material`（`credibility=low`）进来 | 与 §16.3 第 4 笔是同一件事（`ContextBlockSource.discussion` 与"转成 C5 材料包"两种表达重叠）；R3 讨论区落地前定死用哪一个 |
+| 5 | **缺失清单里的落点文件名是"计划"**：20 个还没做的模块各自写了一个语义名 | 第一次真的放错位置或改名时——同步改那张表（表就是承诺） |
+| 6 | **M13 还没做 C6 的消费标记**（"用户勾选的候选在组装时整批标 `consumed`"，§2/D4 定了写者是 M13） | R3（讨论区）。届时 M13 会有唯一的写动作 |
+
+**落地形态**：`memory/context_assembler.py`（M13）、`harness/trimming.py`（M24：`estimate_tokens` /
+`BudgetResolver` / `Trimmer`）、`seeds/model.default.json`、`CR-005`；`bootstrap` 把
+`context_assembler` 与 `trimmer` 交给运行时；端到端验收从"建项目"延伸到"上下文就绪"。
+测试 498 → 522；`ruff` 干净；冻结表 49 个模型两向对齐。
