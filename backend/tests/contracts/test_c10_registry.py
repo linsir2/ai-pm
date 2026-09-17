@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from pmstudio.contracts.enums import RegistryKind, RegistryOwner, RegistryStatus, RoundEntry
-from pmstudio.contracts.models.registry import RegistryEntry
+from pmstudio.contracts.models.registry import RegistryEntry, TemplateBody, TemplateField
 
 
 def _entry(**overrides: object) -> dict[str, object]:
@@ -102,3 +102,43 @@ def test_name_and_id_are_required() -> None:
         RegistryEntry(**_entry(id=""))
     with pytest.raises(ValidationError):
         RegistryEntry(**_entry(name="  "))
+
+
+def test_template_field_and_body_field_sets() -> None:
+    """模板的本体只有字段清单：`label` + `required`（consumer 是 M28，见 PRD 附录 B）。"""
+    assert set(TemplateField.model_fields) == {"label", "required"}
+    assert set(TemplateBody.model_fields) == {"fields"}
+
+
+def test_template_field_needs_a_label_and_the_flag() -> None:
+    with pytest.raises(ValidationError):
+        TemplateField(label="  ", required=True)
+    with pytest.raises(ValidationError):
+        TemplateField(label="目标")
+
+
+def test_template_body_keeps_order() -> None:
+    body = TemplateBody(
+        fields=(
+            TemplateField(label="目标", required=True),
+            TemplateField(label="风险", required=False),
+        )
+    )
+    assert [field.label for field in body.fields] == ["目标", "风险"]
+    assert [field.required for field in body.fields] == [True, False]
+
+
+def test_template_body_needs_at_least_one_field() -> None:
+    with pytest.raises(ValidationError):
+        TemplateBody(fields=())
+
+
+def test_template_rejects_duplicated_labels() -> None:
+    """模板里的字段名会变成块 label；重名会让 M20 的定位失去唯一答案（I22）。"""
+    with pytest.raises(ValidationError):
+        TemplateBody(
+            fields=(
+                TemplateField(label="目标", required=True),
+                TemplateField(label="目标", required=False),
+            )
+        )

@@ -75,3 +75,41 @@ class RegistryEntry(ContractModel):
         for value in ids or ():
             if not value:
                 raise ContractViolation(f"{name} 里不能有空 id")
+
+
+class TemplateField(ContractModel):
+    """模板里的一个字段分区（C10 `kind = template` 的 `content` 项）。"""
+
+    label: str
+    required: bool
+
+    @model_validator(mode="after")
+    def _check(self) -> "TemplateField":
+        if not self.label.strip():
+            raise ContractViolation("模板字段名不能为空——块 label 全是 M20 的定位依据")
+        return self
+
+
+class TemplateBody(ContractModel):
+    """模板的本体：一份**有序**的字段清单（C10 `kind = template` 的 `content`）。
+
+    只放 `label` + `required` 两样，理由各是"说得出消费者"：
+    `required` 的消费者是 M28——必填字段缺内容时该产补信息卡而不是编一个（PRD 附录 B）。
+    「依赖与边界设为常驻上下文」的消费者是 M13（R4）、字段之间的硬依赖提示的消费者是
+    M2 / M28（R1.2+）——它们真被读的时候再加，现在加就是没有消费者的字段。
+    """
+
+    fields: tuple[TemplateField, ...]
+
+    @model_validator(mode="after")
+    def _check(self) -> "TemplateBody":
+        if not self.fields:
+            raise ContractViolation("模板至少要有一个字段——空模板建出来的文档没有分区")
+        seen: set[str] = set()
+        for field in self.fields:
+            if field.label in seen:
+                raise ContractViolation(
+                    f"模板里有重复的字段名：{field.label}——块 label 必须唯一（I22）"
+                )
+            seen.add(field.label)
+        return self

@@ -62,7 +62,7 @@ from pmstudio.contracts.models.material import MaterialPacket
 from pmstudio.contracts.models.memory import Memory
 from pmstudio.contracts.models.project import Project, ProjectConfig
 from pmstudio.contracts.models.prompt import PromptMessage
-from pmstudio.contracts.models.registry import RegistryEntry
+from pmstudio.contracts.models.registry import RegistryEntry, TemplateBody, TemplateField
 from pmstudio.contracts.models.results import (
     AssembleResult,
     CreateProjectResult,
@@ -158,8 +158,18 @@ CHANGE_RECORDS: Final[tuple[ContractChange, ...]] = (
         doc_version="CONTRACTS.md v0.19",
         summary="C13 `doc.changed` / `memory.updated` 加 `round_id`：流水按 `round_id` 建索引，"
         "而这两个 payload 没有该字段 → 索引为 NULL → 复盘查不到「这一轮改过哪些文档、哪些记忆失效」。"
-        "可空，因为用户手改不在一轮里（§5.2）",
+            "可空，因为用户手改不在一轮里（§5.2）",
         contracts=("C13",),
+    ),
+    ContractChange(
+        record_id="CR-004",
+        date="2026-09-17",
+        doc_version="CONTRACTS.md v0.20",
+        summary="C10 补模板本体形状 `TemplateField` / `TemplateBody`：`RegistryEntry.content` 对"
+        "`kind = template` 原来只是一个不透明的 `JsonValue`，而 R1.1 的建项目要按它实例化 9 个字段块。"
+        "只放 `label` + `required`：`required` 的消费者是 M28；常驻上下文（M13，R4）与字段间依赖提示"
+        "（M2 / M28，R1.2+）等真被读时再加",
+        contracts=("C10",),
     ),
 )
 
@@ -202,7 +212,14 @@ FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
     ),
     FrozenContract("C8", "Card Group（卡片组）", "models/card_group.py", ("CardGroup",), "CR-001"),
     FrozenContract("C9", "Memory（记忆）", "models/memory.py", ("Memory",), "CR-001"),
-    FrozenContract("C10", "Registry Entry（注册条目）", "models/registry.py", ("RegistryEntry",), "CR-001"),
+    FrozenContract(
+        "C10",
+        "Registry Entry（注册条目）",
+        "models/registry.py",
+        ("RegistryEntry", "TemplateField", "TemplateBody"),
+        "CR-004",
+        note="CR-004 补了模板本体的形状（`kind = template` 的 `content`）",
+    ),
     FrozenContract("C11", "Trace（观测）", "models/trace.py", ("Trace", "ClaimDigest"), "CR-001"),
     FrozenContract(
         "C12",
@@ -348,6 +365,9 @@ CONTRACT_SHAPES: Final[dict[str, tuple[str, ...]]] = {
         "RegistryEntry.status: RegistryStatus = RegistryStatus.ACTIVE",
         "RegistryEntry.allowed_tools: tuple[str, ...] | None = None",
         "RegistryEntry.allowed_entries: tuple[RoundEntry, ...] | None = None",
+        "TemplateField.label: str",
+        "TemplateField.required: bool",
+        "TemplateBody.fields: tuple[TemplateField, ...]",
     ),
     "C11": (
         "Trace.trace_id: str",
@@ -527,6 +547,8 @@ CONTRACT_MODEL_TYPES: Final[dict[str, type[BaseModel]]] = {
         CardGroup,
         Memory,
         RegistryEntry,
+        TemplateField,
+        TemplateBody,
         Trace,
         ClaimDigest,
         RoundRegion,
