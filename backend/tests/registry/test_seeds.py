@@ -9,7 +9,7 @@ import pytest
 
 from pmstudio.common.errors import ContractViolation
 from pmstudio.contracts.enums import RegistryKind, RegistryOwner
-from pmstudio.contracts.models.registry import TemplateBody
+from pmstudio.contracts.models.registry import ModelBody, TemplateBody
 from pmstudio.contracts.skeleton.events import Event
 from pmstudio.registry.entries import InMemoryRegistry
 from pmstudio.registry.seeds import load_entries, seed
@@ -51,17 +51,36 @@ def _registry() -> InMemoryRegistry:
     return InMemoryRegistry(_Bus(), _Clock())  # type: ignore[arg-type]
 
 
-def test_seed_file_loads_the_initial_template() -> None:
-    entries = load_entries(SEEDS)
+def _entry(entry_id: str):
+    return next(item for item in load_entries(SEEDS) if item.id == entry_id)
 
-    assert [entry.id for entry in entries] == ["reg_tpl_initial"]
-    assert entries[0].kind is RegistryKind.TEMPLATE
-    assert entries[0].owner is RegistryOwner.PRESET
+
+def test_seed_files_are_loaded_in_file_name_order() -> None:
+    """装载顺序可复现：按文件名排（`model.default.json` 排在 `template.initial.json` 前）。"""
+    assert [entry.id for entry in load_entries(SEEDS)] == [
+        "reg_model_default",
+        "reg_tpl_initial",
+    ]
+
+
+def test_seed_file_loads_the_initial_template() -> None:
+    entry = _entry("reg_tpl_initial")
+
+    assert entry.kind is RegistryKind.TEMPLATE
+    assert entry.owner is RegistryOwner.PRESET
+
+
+def test_seed_file_includes_the_model_window() -> None:
+    """M24 预算算式的第一项：窗口只能在模型条目上（CR-005）。"""
+    entry = _entry("reg_model_default")
+
+    assert entry.kind is RegistryKind.MODEL
+    assert ModelBody.model_validate(entry.content).context_window_tokens == 65536
 
 
 def test_template_labels_match_prd_appendix_b() -> None:
     """模板内容与 PRD 附录 B 逐字同序——它是文档分区的唯一依据。"""
-    body = TemplateBody.model_validate(load_entries(SEEDS)[0].content)
+    body = TemplateBody.model_validate(_entry("reg_tpl_initial").content)
 
     assert [field.label for field in body.fields] == list(PRD_APPENDIX_B_LABELS)
     assert {field.label for field in body.fields if field.required} == PRD_APPENDIX_B_REQUIRED
@@ -80,7 +99,7 @@ def test_seeding_registers_every_entry() -> None:
 
     registered = asyncio.run(seed(registry, SEEDS))
 
-    assert registered == ("reg_tpl_initial",)
+    assert registered == ("reg_model_default", "reg_tpl_initial")
     assert asyncio.run(registry.resolve(RegistryKind.TEMPLATE, "reg_tpl_initial")).name
 
 

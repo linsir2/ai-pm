@@ -129,8 +129,23 @@ def test_a_whole_round_runs_end_to_end(runtime: Runtime) -> None:
 
     # ── 2. 开轮；context 区块不发事件（只有 round / card_group 写即广播）
     asyncio.run(writer.open_round("rnd_demo"))
-    asyncio.run(writer.write(RegionName.ROUND, _round_region(RoundPhase.ASSEMBLING, project_id)))
-    asyncio.run(writer.write(RegionName.CONTEXT, ContextRegion(assembled_at=AT)))
+    round_region = _round_region(RoundPhase.ASSEMBLING, project_id)
+    asyncio.run(writer.write(RegionName.ROUND, round_region))
+
+    # ── 2b. 组装上下文（M13）→ 按预算裁剪（M24）→ 写进 context 区块（R1.2）
+    assembled = asyncio.run(runtime.context_assembler.assemble_context(round_region))
+    assert len(assembled.blocks) == 10  # 9 个文档块 + 1 个本轮输入
+    assert set(assembled.base_versions) == {block.block_id for block in blocks}
+    trimmed = asyncio.run(
+        runtime.trimmer.trim(assembled.blocks, project_id, "reg_model_default")
+    )
+    assert trimmed.dropped == ()  # 默认模型窗口装得下
+    asyncio.run(
+        writer.write(
+            RegionName.CONTEXT,
+            ContextRegion(blocks=trimmed.blocks, dropped=trimmed.dropped, assembled_at=AT),
+        )
+    )
 
     # ── 3. 出一张填充卡（两处改动），等用户逐条裁决
     card = _fill_card()

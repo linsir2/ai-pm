@@ -17,6 +17,8 @@ from pmstudio.common.ids import IdGenerator, TimestampIdGenerator
 from pmstudio.communication.board import Blackboard, BoardReader
 from pmstudio.communication.event_bus import EventBus
 from pmstudio.contracts.interfaces.registry import RegistryPort
+from pmstudio.harness.trimming import BudgetResolver, Trimmer
+from pmstudio.memory.context_assembler import ContextAssembler
 from pmstudio.registry.entries import InMemoryRegistry
 from pmstudio.registry.seeds import seed
 from pmstudio.storage.board_store import BoardStore
@@ -42,6 +44,8 @@ class Runtime:
     board: BoardReader
     registry: RegistryPort
     project_service: ProjectService
+    context_assembler: ContextAssembler
+    trimmer: Trimmer
     recovered_rounds: tuple[str, ...] = field(default=())
 
     def close(self) -> None:
@@ -78,6 +82,8 @@ async def build_runtime(
             ids=resolved_ids,
             clock=resolved_clock,
         )
+        context_assembler = ContextAssembler(ledger)
+        trimmer = Trimmer(BudgetResolver(registry=registry, ledger=ledger))
     except BaseException:
         db.close()
         raise
@@ -92,6 +98,8 @@ async def build_runtime(
         board=BoardReader(blackboard),
         registry=registry,
         project_service=project_service,
+        context_assembler=context_assembler,
+        trimmer=trimmer,
         recovered_rounds=recovered,
     )
 

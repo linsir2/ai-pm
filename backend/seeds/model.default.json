@@ -1,0 +1,9 @@
+{
+  "id": "reg_model_default",
+  "kind": "model",
+  "name": "默认模型（R1.3 接真模型时按实际窗口改）",
+  "owner": "preset",
+  "content": {
+    "context_window_tokens": 65536
+  }
+}

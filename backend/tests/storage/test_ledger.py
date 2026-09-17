@@ -78,6 +78,17 @@ def test_create_document_with_blocks(ledger: Ledger) -> None:
     assert labels == ["目标", "功能清单"]
 
 
+def test_read_document_by_project(ledger: Ledger) -> None:
+    """一个项目一个文档（C2）：M13 组装上下文时只有 `project_id`，没有 `doc_id`。"""
+    _seed(ledger)
+
+    document = ledger.read_document_by_project("prj_1")
+
+    assert document is not None
+    assert document.doc_id == "doc_1"
+    assert ledger.read_document_by_project("prj_nope") is None
+
+
 def test_create_document_refuses_duplicate_labels_and_writes_nothing(ledger: Ledger) -> None:
     """两个同名的顶层字段会让 M20 的定位失去唯一答案（I22）——拒绝，且一行都不写。"""
     ledger.create_project(_project())

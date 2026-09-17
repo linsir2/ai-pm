@@ -85,6 +85,22 @@ class Ledger:
             template_id=row["template_id"],
         )
 
+    def read_document_by_project(self, project_id: str) -> Document | None:
+        """按项目取那一份文档（C2：一个项目一个文档，所以结果是唯一的）。
+
+        M13 组装上下文时要它——`round` 区块里只有 `project_id`，没有 `doc_id`。
+        """
+        row = self._db._connection.execute(
+            "SELECT * FROM documents WHERE project_id = ?", (project_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return Document(
+            doc_id=row["doc_id"],
+            project_id=row["project_id"],
+            template_id=row["template_id"],
+        )
+
     def read_blocks(self, doc_id: str) -> list[Block]:
         rows = self._db._connection.execute(
             "SELECT * FROM blocks WHERE doc_id = ? ORDER BY position", (doc_id,)

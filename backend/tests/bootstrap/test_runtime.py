@@ -22,6 +22,8 @@ from pmstudio.contracts.interfaces.registry import RegistryPort
 from pmstudio.contracts.interfaces.storage import BoardStorePort, EventLogPort
 from pmstudio.contracts.models.registry import TemplateBody
 from pmstudio.contracts.models.results import CreateProjectResult
+from pmstudio.contracts.models.scope import Scope
+from pmstudio.contracts.skeleton.board import RoundRegion
 from pmstudio.contracts.skeleton.events import Event, RoundUpdatedPayload
 
 NOW = datetime(2026, 9, 15, 10, 0, tzinfo=UTC)
@@ -72,6 +74,44 @@ def test_runtime_hands_out_the_project_service(runtime: object) -> None:
     assert isinstance(result, CreateProjectResult)
     assert runtime.ledger.read_project(result.project_id) is not None
     assert len(runtime.ledger.read_blocks(result.doc_id)) == 9
+
+
+def _created_round(runtime: object, project_id: str) -> RoundRegion:
+    return RoundRegion(
+        round_id="rnd_1",
+        project_id=project_id,
+        entry=RoundEntry.MAIN,
+        user_input="细化一下功能清单",
+        scope=Scope(selected_fields=("功能清单",)),
+        phase=RoundPhase.ASSEMBLING,
+    )
+
+
+def test_runtime_hands_out_the_context_assembler(runtime: object) -> None:
+    """M13：调用方拿它跑"这一轮该带什么"。"""
+    created = asyncio.run(runtime.project_service.create_project("reg_tpl_initial", "PM Studio"))
+
+    result = asyncio.run(
+        runtime.context_assembler.assemble_context(_created_round(runtime, created.project_id))
+    )
+
+    assert len(result.blocks) == 10  # 9 个文档块 + 1 个本轮输入
+    assert len(result.base_versions) == 9
+
+
+def test_runtime_hands_out_the_trimmer(runtime: object) -> None:
+    """M24：预算从模型条目与项目配置里算，调用方不传。"""
+    created = asyncio.run(runtime.project_service.create_project("reg_tpl_initial", "PM Studio"))
+    assembled = asyncio.run(
+        runtime.context_assembler.assemble_context(_created_round(runtime, created.project_id))
+    )
+
+    trimmed = asyncio.run(
+        runtime.trimmer.trim(assembled.blocks, created.project_id, "reg_model_default")
+    )
+
+    assert trimmed.dropped == ()  # 默认模型窗口足够大
+    assert len(trimmed.blocks) == 10
 
 
 def test_boards_store_is_wired_under_the_hood(runtime: object) -> None:

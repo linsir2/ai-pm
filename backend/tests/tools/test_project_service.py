@@ -9,6 +9,7 @@ import pytest
 
 from pmstudio.common.errors import ContractViolation
 from pmstudio.common.ids import TimestampIdGenerator
+from pmstudio.contracts.enums import RegistryKind
 from pmstudio.contracts.interfaces.tools import AppServicesPort
 from pmstudio.contracts.models.registry import TemplateBody
 from pmstudio.contracts.skeleton.events import Event
@@ -62,7 +63,7 @@ def db(tmp_path: Path):
 
 def _template_id() -> str:
     """模板 id 从种子文件读——不在代码里再写一遍（第二个出处就是第二个真相）。"""
-    return load_entries(SEEDS)[0].id
+    return next(entry.id for entry in load_entries(SEEDS) if entry.kind is RegistryKind.TEMPLATE)
 
 
 def _service(db: Database, ids: CountingIds | None = None) -> ProjectService:
@@ -105,7 +106,13 @@ def test_create_project_writes_project_document_and_nine_blocks(db: Database) ->
 def test_blocks_follow_the_template_order(db: Database) -> None:
     """`read_blocks` 按 `position` 返回——所以这条断言同时钉住顺序与落位。"""
     result = asyncio.run(_service(db).create_project(_template_id(), "PM Studio"))
-    body = TemplateBody.model_validate(load_entries(SEEDS)[0].content)
+    body = TemplateBody.model_validate(
+        next(
+            entry.content
+            for entry in load_entries(SEEDS)
+            if entry.kind is RegistryKind.TEMPLATE
+        )
+    )
 
     blocks = Ledger(db).read_blocks(result.doc_id)
 

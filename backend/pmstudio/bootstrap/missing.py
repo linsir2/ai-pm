@@ -5,8 +5,9 @@
 清单 + 已实现必须等于 PRD 附录 A 的 30 个模块编号。
 """
 
-# 已实现：L3 的两半（M11 黑板 / M12 事件流，都在 communication/）＋ L0 的注册中心（M27，registry/）。
-IMPLEMENTED_MODULES = frozenset({"M11", "M12", "M27"})
+# 已实现：L3 的两半（M11 黑板 / M12 事件流）＋ L0 注册中心（M27）＋ L4 上下文组装（M13）
+# ＋ L6 预算与裁剪（M24）。
+IMPLEMENTED_MODULES = frozenset({"M11", "M12", "M13", "M24", "M27"})
 
 MISSING_MODULES: dict[str, str] = {
     "M1": "项目容器（前端）",
@@ -19,7 +20,6 @@ MISSING_MODULES: dict[str, str] = {
     "M8": "共识生成器",
     "M9": "卡片组装",
     "M10": "工具调用决策",
-    "M13": "上下文组装器",
     "M14": "项目简报",
     "M15": "长对话管理",
     "M16": "检索",
@@ -30,7 +30,6 @@ MISSING_MODULES: dict[str, str] = {
     "M21": "导出",
     "M22": "模型接入",
     "M23": "角色权限",
-    "M24": "预算与裁剪",
     "M25": "观测",
     "M26": "重试与降级",
     "M28": "成稿器",

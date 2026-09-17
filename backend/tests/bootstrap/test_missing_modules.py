@@ -1,4 +1,11 @@
-"""缺失清单必须与实现对得上：列出来的都没做，做了的都没列。"""
+"""缺失清单必须与实现对得上：列出来的都没做，做了的都没列。
+
+**判据在 R1.2 收紧了一次**：
+
+- R0 按**包**判（`pmstudio.memory` 不存在 → M14–M17 都没做），这在"整层没开工"时够用；
+- R1.2 起按**模块的落点文件**判。因为 L4 的 M13 与 L6 的 M24 已经落地，包存在不再等于整层做完——
+  继续按包判会把 M14–M17 / M22 / M23 / M25 / M26 一起冤判成"已实现"。
+"""
 
 import importlib.util
 import re
@@ -12,56 +19,72 @@ BACKEND = Path(__file__).resolve().parents[2]
 # PRD 附录 A 的模块编号索引（30 个）。
 ALL_MODULE_NUMBERS = frozenset(f"M{index}" for index in [*range(1, 31)])
 
-MISSING_MODULE_PACKAGES = {
-    "M6": "pmstudio.orchestration",
-    "M7": "pmstudio.orchestration",
-    "M8": "pmstudio.orchestration",
-    "M9": "pmstudio.orchestration",
-    "M10": "pmstudio.orchestration",
-    "M13": "pmstudio.memory",
-    "M14": "pmstudio.memory",
-    "M15": "pmstudio.memory",
-    "M16": "pmstudio.memory",
-    "M17": "pmstudio.memory",
-    "M18": "pmstudio.tools",
-    "M19": "pmstudio.tools",
-    "M20": "pmstudio.tools",
-    "M21": "pmstudio.tools",
-    "M22": "pmstudio.harness",
-    "M23": "pmstudio.harness",
-    "M24": "pmstudio.harness",
-    "M25": "pmstudio.harness",
-    "M26": "pmstudio.harness",
+# 前端模块：它们的家在前端（D1），后端没有落点，所以不在这两张表里。
+FRONTEND_MODULES = frozenset({"M1", "M2", "M3", "M4", "M5"})
+
+# 已实现 → 落点文件必须存在。
+IMPLEMENTED_MODULE_FILES = {
+    "M11": "pmstudio/communication/board.py",
+    "M12": "pmstudio/communication/event_bus.py",
+    "M13": "pmstudio/memory/context_assembler.py",
+    "M24": "pmstudio/harness/trimming.py",
+    "M27": "pmstudio/registry/entries.py",
 }
 
-# 已经实现的模块，各自的落点。清单有两个方向："说没做的要真没做"（上面那张表）与
-# "说做了的要有落点"（这张表）——少了后一半，把 M27 移出清单就能骗过测试。
-IMPLEMENTED_MODULE_PACKAGES = {
-    "M11": "pmstudio.communication",
-    "M12": "pmstudio.communication",
-    "M27": "pmstudio.registry",
+# 还没做 → **计划落点**不许存在。表里写的名字就是"将来放哪儿"的承诺（语义名，D5）。
+MISSING_MODULE_FILES = {
+    "M6": "pmstudio/orchestration/roles.py",
+    "M7": "pmstudio/orchestration/discussion.py",
+    "M8": "pmstudio/orchestration/consensus.py",
+    "M9": "pmstudio/orchestration/cards.py",
+    "M10": "pmstudio/orchestration/tool_selection.py",
+    "M14": "pmstudio/memory/brief.py",
+    "M15": "pmstudio/memory/conversation.py",
+    "M16": "pmstudio/memory/retrieval.py",
+    "M17": "pmstudio/memory/feedback.py",
+    "M18": "pmstudio/tools/capabilities/web_search.py",
+    "M19": "pmstudio/tools/capabilities/ingest.py",
+    "M20": "pmstudio/tools/services/document_writer.py",
+    "M21": "pmstudio/tools/services/export.py",
+    "M22": "pmstudio/harness/model_gateway.py",
+    "M23": "pmstudio/harness/permissions.py",
+    "M25": "pmstudio/harness/tracing.py",
+    "M26": "pmstudio/harness/retry.py",
+    "M28": "pmstudio/orchestration/drafter.py",
+    "M29": "pmstudio/orchestration/idea_synthesis.py",
+    "M30": "pmstudio/orchestration/promotion.py",
 }
 
-# 包里可以存在、但**不属于任何缺失模块**的东西：应用函数不占 M 号（directory.md §3.1 把"建项目"
+# 包里可以存在、但**不属于任何模块**的东西：应用函数不占 M 号（directory.md §3.1 把"建项目"
 # 放在 L5 的 `tools/services/`，它不是 M1–M30 里的模块）。值指向唯一的证据文件。
-#
-# 这条登记的**局限**要说清楚：它只把例外点出来，不能证明同层的 M18 / M19 / M20 / M21 还没做。
-# 等 M20（文档写入）落地时，这里要收紧成"逐模块的实现文件"判据。
 NON_MODULE_IMPLEMENTATIONS = {
     "pmstudio.tools": "pmstudio/tools/services/project_service.py",
 }
 
 
-def test_every_missing_module_really_has_no_implementation() -> None:
-    """清单说没做，目录里就不该有它——没有桩、没有空壳（P8）。"""
-    for module_number, package in MISSING_MODULE_PACKAGES.items():
-        if module_number not in MISSING_MODULES:
-            continue
-        if package in NON_MODULE_IMPLEMENTATIONS:
-            continue  # 这个包里只有非模块的实现，缺失的模块本身还没做（见上面那张表）
-        assert importlib.util.find_spec(package) is None, (
-            f"{module_number} 还列在缺失清单里，但 {package} 已经存在——该更新清单了"
+def test_every_missing_module_has_no_implementation_file() -> None:
+    """清单说没做，那个落点文件就不该存在——没有桩、没有空壳（P8）。"""
+    for module_number, path in MISSING_MODULE_FILES.items():
+        assert module_number in MISSING_MODULES, f"{module_number} 已经落地了，该从这张表里挪走"
+        assert not (BACKEND / path).exists(), (
+            f"{module_number} 还列在缺失清单里，但 {path} 已经存在——该更新清单了"
         )
+
+
+def test_every_implemented_module_has_its_file() -> None:
+    """另一头：说做了的，得有落点。少了这一半，把模块移出清单就能骗过测试。"""
+    for module_number, path in IMPLEMENTED_MODULE_FILES.items():
+        assert module_number in IMPLEMENTED_MODULES, f"{module_number} 还在缺失清单里？"
+        assert (BACKEND / path).exists(), f"{module_number} 说已实现，但 {path} 不在"
+
+
+def test_the_two_tables_cover_every_backend_module() -> None:
+    """30 = 前端 5 ＋ 后端已实现 ＋ 后端没做，不重不漏；两张表与 `missing.py` 保持一致。"""
+    covered = FRONTEND_MODULES | set(IMPLEMENTED_MODULE_FILES) | set(MISSING_MODULE_FILES)
+    assert covered == ALL_MODULE_NUMBERS
+    assert set(IMPLEMENTED_MODULE_FILES) == set(IMPLEMENTED_MODULES)
+    assert set(MISSING_MODULE_FILES) == set(MISSING_MODULES) - FRONTEND_MODULES
+    assert set(MISSING_MODULES) >= FRONTEND_MODULES
 
 
 def test_non_module_implementations_are_registered_and_real() -> None:
@@ -75,15 +98,6 @@ def test_non_module_implementations_are_registered_and_real() -> None:
 
 def test_implemented_modules_are_not_listed_as_missing() -> None:
     assert IMPLEMENTED_MODULES & set(MISSING_MODULES) == set()
-
-
-def test_implemented_modules_really_exist() -> None:
-    """另一头：说做了的，得有落点。"""
-    assert set(IMPLEMENTED_MODULE_PACKAGES) == set(IMPLEMENTED_MODULES)
-    for module_number, package in IMPLEMENTED_MODULE_PACKAGES.items():
-        assert importlib.util.find_spec(package) is not None, (
-            f"{module_number} 说已实现，但 {package} 不在"
-        )
 
 
 def test_the_list_covers_all_thirty_modules() -> None:
