@@ -118,10 +118,21 @@ class TemplateBody(ContractModel):
 class ModelBody(ContractModel):
     """模型的本体：M24 算预算要的那个窗口（C10 `kind = model` 的 `content`）。
 
-    只放窗口。预算是 `窗口 − 输出预留 − 系统开销`：后两项来自 C16 的项目配置，
+    预算是 `窗口 − 输出预留 − 系统开销`：后两项来自 C16 的项目配置，
     第一项只能在模型上——所以它是 M24 唯一的模型侧输入。
-    R1.3 接模型时会需要 endpoint / 模型名 / 密钥来源，那时再加字段（给契约加字段是兼容的）；
-    **密钥本身永远不进这里**，条目里只写"用哪个环境变量"。
+    模型名 / 密钥变量名是 M22 接模型时真正要用到的；**密钥本身永远不进这里**，
+    条目里只写"用哪个环境变量"。
     """
 
+    model: str
+    api_key_env: str
     context_window_tokens: int = Field(gt=0)
+    timeout_seconds: int = Field(gt=0, default=60)
+
+    @model_validator(mode="after")
+    def _check(self) -> "ModelBody":
+        if not self.model.strip():
+            raise ContractViolation("模型条目必须写 provider 模型名（如 dashscope/qwen3.8-flash）")
+        if not self.api_key_env.strip():
+            raise ContractViolation("模型条目必须写 api_key_env——密钥只从环境变量取，条目里不放密钥")
+        return self

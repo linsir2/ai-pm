@@ -6,3 +6,6 @@ __pycache__/
 
 .ruff_cache/
 *.egg-info/
+
+# 本地密钥（只活在环境变量里，不进仓库）
+backend/.env

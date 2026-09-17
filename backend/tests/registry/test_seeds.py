@@ -71,11 +71,14 @@ def test_seed_file_loads_the_initial_template() -> None:
 
 
 def test_seed_file_includes_the_model_window() -> None:
-    """M24 预算算式的第一项：窗口只能在模型条目上（CR-005）。"""
+    """M24 预算算式的第一项：窗口只能在模型条目上（CR-006）。"""
     entry = _entry("reg_model_default")
 
     assert entry.kind is RegistryKind.MODEL
-    assert ModelBody.model_validate(entry.content).context_window_tokens == 65536
+    body = ModelBody.model_validate(entry.content)
+    assert body.context_window_tokens == 32768
+    assert body.model == "dashscope/qwen3.8-flash"
+    assert body.api_key_env == "DASHSCOPE_API_KEY"
 
 
 def test_template_labels_match_prd_appendix_b() -> None:

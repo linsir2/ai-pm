@@ -1,9 +1,12 @@
 {
   "id": "reg_model_default",
   "kind": "model",
-  "name": "默认模型（R1.3 接真模型时按实际窗口改）",
+  "name": "Qwen3.8 Flash (DashScope)",
   "owner": "preset",
   "content": {
-    "context_window_tokens": 65536
+    "model": "dashscope/qwen3.8-flash",
+    "api_key_env": "DASHSCOPE_API_KEY",
+    "context_window_tokens": 32768,
+    "timeout_seconds": 60
   }
 }

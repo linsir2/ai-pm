@@ -59,7 +59,11 @@ def env(tmp_path: Path):
                 kind=RegistryKind.MODEL,
                 name="小窗口模型（测试用）",
                 owner=RegistryOwner.PRESET,
-                content={"context_window_tokens": SMALL_WINDOW},
+                content={
+                    "model": "test/small-model",
+                    "api_key_env": "TEST_KEY",
+                    "context_window_tokens": SMALL_WINDOW,
+                },
             )
         )
     )
@@ -131,8 +135,8 @@ def test_budget_is_window_minus_both_reserves(env) -> None:
     resolver = _resolver(registry, ledger)
 
     assert asyncio.run(resolver.budget_for("prj_1", SMALL_MODEL)) == SMALL_BUDGET
-    # 默认模型是种子里的 65536：65536 − 10 − 10
-    assert asyncio.run(resolver.budget_for("prj_1", "reg_model_default")) == 65536 - RESERVE - OVERHEAD
+    # 默认模型是种子里的 32768：32768 − 10 − 10
+    assert asyncio.run(resolver.budget_for("prj_1", "reg_model_default")) == 32768 - RESERVE - OVERHEAD
 
 
 def test_everything_that_fits_is_kept_in_priority_order(env) -> None:
@@ -179,7 +183,11 @@ def test_the_first_block_survives_even_when_it_alone_exceeds_the_budget(env) -> 
         kind=RegistryKind.MODEL,
         name="极小窗口模型（测试用）",
         owner=RegistryOwner.PRESET,
-        content={"context_window_tokens": 25},  # 25 − 10 − 10 = 5
+        content={
+            "model": "test/tiny-model",
+            "api_key_env": "TEST_KEY",
+            "context_window_tokens": 25,
+        },  # 25 − 10 − 10 = 5
     )
     asyncio.run(registry.register(tiny))
     trimmer = Trimmer(_resolver(registry, ledger))

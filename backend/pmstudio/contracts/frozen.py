@@ -186,6 +186,15 @@ CHANGE_RECORDS: Final[tuple[ContractChange, ...]] = (
         "模型名 / 密钥来源（加字段兼容）。密钥本身永远不进条目",
         contracts=("C10",),
     ),
+    ContractChange(
+        record_id="CR-006",
+        date="2026-09-17",
+        doc_version="CONTRACTS.md v0.22",
+        summary="C10 `ModelBody` 加 `model` / `api_key_env` / `timeout_seconds`："
+        "M22 需要模型名调 litellm、需要环境变量名取密钥（密钥本身不进条目）、"
+        "需要超时值供 M26 判定重试。三个字段都有明确消费者，没有「将来可能需要」的占位字段",
+        contracts=("C10",),
+    ),
 )
 
 FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
@@ -232,8 +241,8 @@ FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
         "Registry Entry（注册条目）",
         "models/registry.py",
         ("RegistryEntry", "TemplateField", "TemplateBody", "ModelBody"),
-        "CR-005",
-        note="CR-004 补了模板本体的形状（`kind = template`）；CR-005 补了模型本体的形状（`kind = model`）",
+        "CR-006",
+        note="CR-004 补了模板本体；CR-005 补了模型本体；CR-006 给 ModelBody 加了 model/api_key_env/timeout_seconds",
     ),
     FrozenContract("C11", "Trace（观测）", "models/trace.py", ("Trace", "ClaimDigest"), "CR-001"),
     FrozenContract(
@@ -383,7 +392,10 @@ CONTRACT_SHAPES: Final[dict[str, tuple[str, ...]]] = {
         "TemplateField.label: str",
         "TemplateField.required: bool",
         "TemplateBody.fields: tuple[TemplateField, ...]",
+        "ModelBody.model: str",
+        "ModelBody.api_key_env: str",
         "ModelBody.context_window_tokens: int [Gt(gt=0)]",
+        "ModelBody.timeout_seconds: int [Gt(gt=0)] = 60",
     ),
     "C11": (
         "Trace.trace_id: str",

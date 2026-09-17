@@ -150,13 +150,42 @@ def test_template_rejects_duplicated_labels() -> None:
 
 
 def test_model_body_field_set() -> None:
-    """模型的本体只放 M24 要的那个窗口（预算算式的第一项）。"""
-    assert set(ModelBody.model_fields) == {"context_window_tokens"}
+    """模型本体：M22 要的模型名/密钥变量名 + M24 要的窗口 + M26 要的超时。"""
+    assert set(ModelBody.model_fields) == {
+        "model",
+        "api_key_env",
+        "context_window_tokens",
+        "timeout_seconds",
+    }
 
 
 def test_model_body_needs_a_positive_window() -> None:
-    assert ModelBody(context_window_tokens=65536).context_window_tokens == 65536
+    body = ModelBody(
+        model="dashscope/qwen3.8-flash",
+        api_key_env="DASHSCOPE_API_KEY",
+        context_window_tokens=32768,
+    )
+    assert body.context_window_tokens == 32768
+    assert body.timeout_seconds == 60  # 默认值
     with pytest.raises(ValidationError):
-        ModelBody(context_window_tokens=0)
+        ModelBody(
+            model="dashscope/qwen3.8-flash",
+            api_key_env="DASHSCOPE_API_KEY",
+            context_window_tokens=0,
+        )
     with pytest.raises(ValidationError):
-        ModelBody(context_window_tokens=-1)
+        ModelBody(
+            model="dashscope/qwen3.8-flash",
+            api_key_env="DASHSCOPE_API_KEY",
+            context_window_tokens=-1,
+        )
+
+
+def test_model_body_rejects_blank_model_or_env_and_non_positive_timeout() -> None:
+    """model / api_key_env 必填；timeout_seconds 必须 > 0。"""
+    with pytest.raises(ValidationError):
+        ModelBody(model="", api_key_env="KEY", context_window_tokens=32768)
+    with pytest.raises(ValidationError):
+        ModelBody(model="m", api_key_env="  ", context_window_tokens=32768)
+    with pytest.raises(ValidationError):
+        ModelBody(model="m", api_key_env="KEY", context_window_tokens=32768, timeout_seconds=0)

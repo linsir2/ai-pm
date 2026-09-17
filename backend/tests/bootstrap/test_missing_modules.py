@@ -24,10 +24,14 @@ FRONTEND_MODULES = frozenset({"M1", "M2", "M3", "M4", "M5"})
 
 # 已实现 → 落点文件必须存在。
 IMPLEMENTED_MODULE_FILES = {
+    "M8": "pmstudio/orchestration/consensus.py",
+    "M9": "pmstudio/orchestration/cards.py",
     "M11": "pmstudio/communication/board.py",
     "M12": "pmstudio/communication/event_bus.py",
     "M13": "pmstudio/memory/context_assembler.py",
+    "M22": "pmstudio/harness/model_gateway.py",
     "M24": "pmstudio/harness/trimming.py",
+    "M26": "pmstudio/harness/retry.py",
     "M27": "pmstudio/registry/entries.py",
 }
 
@@ -35,8 +39,6 @@ IMPLEMENTED_MODULE_FILES = {
 MISSING_MODULE_FILES = {
     "M6": "pmstudio/orchestration/roles.py",
     "M7": "pmstudio/orchestration/discussion.py",
-    "M8": "pmstudio/orchestration/consensus.py",
-    "M9": "pmstudio/orchestration/cards.py",
     "M10": "pmstudio/orchestration/tool_selection.py",
     "M14": "pmstudio/memory/brief.py",
     "M15": "pmstudio/memory/conversation.py",
@@ -46,10 +48,8 @@ MISSING_MODULE_FILES = {
     "M19": "pmstudio/tools/capabilities/ingest.py",
     "M20": "pmstudio/tools/services/document_writer.py",
     "M21": "pmstudio/tools/services/export.py",
-    "M22": "pmstudio/harness/model_gateway.py",
     "M23": "pmstudio/harness/permissions.py",
     "M25": "pmstudio/harness/tracing.py",
-    "M26": "pmstudio/harness/retry.py",
     "M28": "pmstudio/orchestration/drafter.py",
     "M29": "pmstudio/orchestration/idea_synthesis.py",
     "M30": "pmstudio/orchestration/promotion.py",

@@ -5,6 +5,8 @@ description = "PM Studio —— 把产品构思逐步收口成可确认的产品
 requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2.12",
+    "litellm>=1.100",
+    "python-dotenv>=1.0",
 ]
 
 [tool.pytest.ini_options]

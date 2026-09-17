@@ -14,11 +14,17 @@ from pathlib import Path
 
 from pmstudio.common.clock import Clock, SystemClock
 from pmstudio.common.ids import IdGenerator, TimestampIdGenerator
-from pmstudio.communication.board import Blackboard, BoardReader
+from pmstudio.communication.board import Blackboard, BoardEditor, BoardReader
 from pmstudio.communication.event_bus import EventBus
+from pmstudio.contracts.interfaces.harness import HarnessPort
 from pmstudio.contracts.interfaces.registry import RegistryPort
+from pmstudio.harness.model_gateway import ModelGateway
+from pmstudio.harness.retry import RetryingHarness
 from pmstudio.harness.trimming import BudgetResolver, Trimmer
 from pmstudio.memory.context_assembler import ContextAssembler
+from pmstudio.orchestration.cards import CardAssembler
+from pmstudio.orchestration.consensus import ConsensusGenerator
+from pmstudio.orchestration.round_driver import RoundDriver
 from pmstudio.registry.entries import InMemoryRegistry
 from pmstudio.registry.seeds import seed
 from pmstudio.storage.board_store import BoardStore
@@ -46,6 +52,8 @@ class Runtime:
     project_service: ProjectService
     context_assembler: ContextAssembler
     trimmer: Trimmer
+    harness: HarnessPort
+    round_driver: RoundDriver
     recovered_rounds: tuple[str, ...] = field(default=())
 
     def close(self) -> None:
@@ -83,7 +91,32 @@ async def build_runtime(
             clock=resolved_clock,
         )
         context_assembler = ContextAssembler(ledger)
-        trimmer = Trimmer(BudgetResolver(registry=registry, ledger=ledger))
+        budget_resolver = BudgetResolver(registry=registry, ledger=ledger)
+        trimmer = Trimmer(budget_resolver)
+
+        # L6 Harness: M22 gateway → M26 retry wrapper
+        gateway = ModelGateway(registry)
+        harness = RetryingHarness(
+            gateway=gateway,
+            board=BoardReader(blackboard),
+            bus=event_bus,
+            clock=resolved_clock,
+            trimmer=trimmer,
+        )
+
+        # L2 Orchestration: M8 + M9 + 轮次状态机
+        consensus = ConsensusGenerator(harness, resolved_ids)
+        cards = CardAssembler(resolved_ids)
+        round_driver = RoundDriver(
+            writer=BoardEditor(blackboard),
+            board=BoardReader(blackboard),
+            consensus=consensus,
+            cards=cards,
+            clock=resolved_clock,
+            ids=resolved_ids,
+            context_assembler=context_assembler,
+            harness=harness,
+        )
     except BaseException:
         db.close()
         raise
@@ -100,6 +133,8 @@ async def build_runtime(
         project_service=project_service,
         context_assembler=context_assembler,
         trimmer=trimmer,
+        harness=harness,
+        round_driver=round_driver,
         recovered_rounds=recovered,
     )
 
