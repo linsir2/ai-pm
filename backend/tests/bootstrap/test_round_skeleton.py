@@ -36,8 +36,7 @@ from pmstudio.contracts.enums import (
 from pmstudio.contracts.invariants import check_proposal_states
 from pmstudio.contracts.models.card import Card, CardAnswer, Proposal
 from pmstudio.contracts.models.card_group import CardGroup
-from pmstudio.contracts.models.document import Block, BlockOp, Document
-from pmstudio.contracts.models.project import Project, ProjectConfig
+from pmstudio.contracts.models.document import BlockOp
 from pmstudio.contracts.models.scope import Scope
 from pmstudio.contracts.skeleton.board import ContextRegion, RoundRegion
 from pmstudio.contracts.skeleton.events import (
@@ -75,11 +74,13 @@ def runtime(tmp_path: Path):
     built.close()
 
 
-def _round_region(phase: RoundPhase, reason: RoundEndReason | None = None) -> RoundRegion:
+def _round_region(
+    phase: RoundPhase, project_id: str, reason: RoundEndReason | None = None
+) -> RoundRegion:
     finished = phase in (RoundPhase.DONE, RoundPhase.FAILED)
     return RoundRegion(
         round_id="rnd_demo",
-        project_id="prj_demo",
+        project_id=project_id,
         entry=RoundEntry.MAIN,
         user_input="细化一下功能清单",
         scope=Scope(selected_fields=("功能清单",)),
@@ -119,38 +120,23 @@ def test_a_whole_round_runs_end_to_end(runtime: Runtime) -> None:
     writer = BoardEditor(blackboard)
     board = BoardReader(blackboard)
 
-    # ── 1. 建项目：项目 + 文档 + 9 个字段块，一次事务（R1 必修 1）
-    with runtime.db.transaction():
-        ledger.create_project(
-            Project(
-                project_id="prj_demo",
-                name="PM Studio Demo",
-                template_id=TEMPLATE,
-                config=ProjectConfig(output_reserve_tokens=4096, system_overhead_tokens=512),
-                created_at=AT,
-            )
-        )
-        ledger.create_document(
-            Document(doc_id="doc_demo", project_id="prj_demo", template_id=TEMPLATE),
-            [
-                Block(block_id=f"blk_{position}", schema_label=label)
-                for position, label in enumerate(NINE_FIELDS)
-            ],
-        )
-    blocks = ledger.read_blocks("doc_demo")
+    # ── 1. 建项目：项目 + 文档 + 9 个字段块，一次事务（R1.1 起走真实现）
+    created = asyncio.run(runtime.project_service.create_project(TEMPLATE, "PM Studio Demo"))
+    project_id, doc_id = created.project_id, created.doc_id
+    blocks = ledger.read_blocks(doc_id)
     assert [block.schema_label for block in blocks] == list(NINE_FIELDS)
     assert all(block.version == 1 and not block.is_ai_written for block in blocks)
 
     # ── 2. 开轮；context 区块不发事件（只有 round / card_group 写即广播）
     asyncio.run(writer.open_round("rnd_demo"))
-    asyncio.run(writer.write(RegionName.ROUND, _round_region(RoundPhase.ASSEMBLING)))
+    asyncio.run(writer.write(RegionName.ROUND, _round_region(RoundPhase.ASSEMBLING, project_id)))
     asyncio.run(writer.write(RegionName.CONTEXT, ContextRegion(assembled_at=AT)))
 
     # ── 3. 出一张填充卡（两处改动），等用户逐条裁决
     card = _fill_card()
     group = CardGroup(group_id="grp_1", cards=(card,), round_id="rnd_demo")
     asyncio.run(writer.write(RegionName.CARD_GROUP, group))
-    asyncio.run(writer.write(RegionName.ROUND, _round_region(RoundPhase.AWAITING_USER)))
+    asyncio.run(writer.write(RegionName.ROUND, _round_region(RoundPhase.AWAITING_USER, project_id)))
 
     # ── 4. 逐条裁决：要 prp_1、不要 prp_2（CR-002）；少列一条必须被拒
     answer = CardAnswer(
@@ -183,9 +169,7 @@ def test_a_whole_round_runs_end_to_end(runtime: Runtime) -> None:
 
     # ── 5. 写文档：按 label 定位顶层块（I22 保证唯一），整批一个版本
     by_label = {
-        block.schema_label: block
-        for block in ledger.read_blocks("doc_demo")
-        if block.parent_id is None
+        block.schema_label: block for block in ledger.read_blocks(doc_id) if block.parent_id is None
     }
     ops = [
         BlockOp(
@@ -196,8 +180,8 @@ def test_a_whole_round_runs_end_to_end(runtime: Runtime) -> None:
         )
         for proposal in kept
     ]
-    version = ledger.write_blocks("doc_demo", ops, VersionTrigger.SUBMIT, group_id="grp_1")
-    written = {block.schema_label: block for block in ledger.read_blocks("doc_demo")}
+    version = ledger.write_blocks(doc_id, ops, VersionTrigger.SUBMIT, group_id="grp_1")
+    written = {block.schema_label: block for block in ledger.read_blocks(doc_id)}
     assert written["功能清单"].content == "支持把讨论候选带进主闭环"
     assert written["功能清单"].version == 2
     assert written["风险"].content == ""  # 用户删掉的那条，一个字都不该进文档
@@ -208,7 +192,7 @@ def test_a_whole_round_runs_end_to_end(runtime: Runtime) -> None:
             Event(
                 type=EventType.DOC_CHANGED,
                 payload=DocChangedPayload(
-                    doc_id="doc_demo",
+                    doc_id=doc_id,
                     version_id=version.version_id,
                     seq=version.seq,
                     trigger=VersionTrigger.SUBMIT,
@@ -226,7 +210,7 @@ def test_a_whole_round_runs_end_to_end(runtime: Runtime) -> None:
                 type=EventType.MEMORY_UPDATED,
                 payload=MemoryUpdatedPayload(
                     memory_id="mry_1",
-                    project_id="prj_demo",
+                    project_id=project_id,
                     type=MemoryType.LESSON,
                     status=MemoryStatus.INVALID,
                     from_status=MemoryStatus.ACTIVE,
@@ -239,13 +223,13 @@ def test_a_whole_round_runs_end_to_end(runtime: Runtime) -> None:
     )
 
     # ── 7. 轮末：先收尾、再清理（R1 必修 2 的后半）；未收尾就清理会被拒
-    asyncio.run(writer.write(RegionName.ROUND, _round_region(RoundPhase.WORKING)))
+    asyncio.run(writer.write(RegionName.ROUND, _round_region(RoundPhase.WORKING, project_id)))
     with pytest.raises(ContractViolation):
         asyncio.run(writer.drop_round())
     asyncio.run(
         writer.write(
             RegionName.ROUND,
-            _round_region(RoundPhase.DONE, RoundEndReason.COMPLETED),
+            _round_region(RoundPhase.DONE, project_id, RoundEndReason.COMPLETED),
         )
     )
     asyncio.run(writer.drop_round())

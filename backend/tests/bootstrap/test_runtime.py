@@ -8,9 +8,20 @@ import pytest
 
 from pmstudio.bootstrap.runtime import build_runtime, build_runtime_sync
 from pmstudio.common.errors import SingleInstanceViolation
-from pmstudio.contracts.enums import EventType, ProducerIdentity, RegionName, RoundEntry, RoundPhase
+from pmstudio.contracts.enums import (
+    EventType,
+    ProducerIdentity,
+    RegionName,
+    RegistryKind,
+    RegistryOwner,
+    RoundEntry,
+    RoundPhase,
+)
 from pmstudio.contracts.interfaces.communication import Board
+from pmstudio.contracts.interfaces.registry import RegistryPort
 from pmstudio.contracts.interfaces.storage import BoardStorePort, EventLogPort
+from pmstudio.contracts.models.registry import TemplateBody
+from pmstudio.contracts.models.results import CreateProjectResult
 from pmstudio.contracts.skeleton.events import Event, RoundUpdatedPayload
 
 NOW = datetime(2026, 9, 15, 10, 0, tzinfo=UTC)
@@ -42,7 +53,25 @@ def runtime(tmp_path: Path):
 def test_runtime_parts_satisfy_their_ports(runtime: object) -> None:
     assert isinstance(runtime.event_log, EventLogPort)
     assert isinstance(runtime.board, Board)
+    assert isinstance(runtime.registry, RegistryPort)
     assert runtime.ledger is not None
+
+
+def test_runtime_seeds_the_registry_at_startup(runtime: object) -> None:
+    """R1.1：模板 schema 归注册中心（M27），种子每次启动灌进去（DECISIONS v0.5 / §14）。"""
+    entry = asyncio.run(runtime.registry.resolve(RegistryKind.TEMPLATE, "reg_tpl_initial"))
+
+    assert entry.owner is RegistryOwner.PRESET
+    assert len(TemplateBody.model_validate(entry.content).fields) == 9
+
+
+def test_runtime_hands_out_the_project_service(runtime: object) -> None:
+    """建项目是应用函数：调用方拿服务对象，不自己拼 Ledger 与注册中心。"""
+    result = asyncio.run(runtime.project_service.create_project("reg_tpl_initial", "PM Studio"))
+
+    assert isinstance(result, CreateProjectResult)
+    assert runtime.ledger.read_project(result.project_id) is not None
+    assert len(runtime.ledger.read_blocks(result.doc_id)) == 9
 
 
 def test_boards_store_is_wired_under_the_hood(runtime: object) -> None:
