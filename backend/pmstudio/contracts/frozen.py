@@ -62,7 +62,12 @@ from pmstudio.contracts.models.material import MaterialPacket
 from pmstudio.contracts.models.memory import Memory
 from pmstudio.contracts.models.project import Project, ProjectConfig
 from pmstudio.contracts.models.prompt import PromptMessage
-from pmstudio.contracts.models.registry import RegistryEntry, TemplateBody, TemplateField
+from pmstudio.contracts.models.registry import (
+    ModelBody,
+    RegistryEntry,
+    TemplateBody,
+    TemplateField,
+)
 from pmstudio.contracts.models.results import (
     AssembleResult,
     CreateProjectResult,
@@ -171,6 +176,16 @@ CHANGE_RECORDS: Final[tuple[ContractChange, ...]] = (
         "（M2 / M28，R1.2+）等真被读时再加",
         contracts=("C10",),
     ),
+    ContractChange(
+        record_id="CR-005",
+        date="2026-09-17",
+        doc_version="CONTRACTS.md v0.21",
+        summary="C10 补模型本体形状 `ModelBody`：M24 的预算是「模型窗口 − 输出预留 − 系统开销」，"
+        "后两项在 C16 的项目配置里，窗口只能在模型上——而 `RegistryEntry.content` 对 `kind = model` "
+        "原来只是不透明的 `JsonValue`。只放 `context_window_tokens`；R1.3 接模型时再加 endpoint / "
+        "模型名 / 密钥来源（加字段兼容）。密钥本身永远不进条目",
+        contracts=("C10",),
+    ),
 )
 
 FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
@@ -216,9 +231,9 @@ FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
         "C10",
         "Registry Entry（注册条目）",
         "models/registry.py",
-        ("RegistryEntry", "TemplateField", "TemplateBody"),
-        "CR-004",
-        note="CR-004 补了模板本体的形状（`kind = template` 的 `content`）",
+        ("RegistryEntry", "TemplateField", "TemplateBody", "ModelBody"),
+        "CR-005",
+        note="CR-004 补了模板本体的形状（`kind = template`）；CR-005 补了模型本体的形状（`kind = model`）",
     ),
     FrozenContract("C11", "Trace（观测）", "models/trace.py", ("Trace", "ClaimDigest"), "CR-001"),
     FrozenContract(
@@ -368,6 +383,7 @@ CONTRACT_SHAPES: Final[dict[str, tuple[str, ...]]] = {
         "TemplateField.label: str",
         "TemplateField.required: bool",
         "TemplateBody.fields: tuple[TemplateField, ...]",
+        "ModelBody.context_window_tokens: int [Gt(gt=0)]",
     ),
     "C11": (
         "Trace.trace_id: str",
@@ -549,6 +565,7 @@ CONTRACT_MODEL_TYPES: Final[dict[str, type[BaseModel]]] = {
         RegistryEntry,
         TemplateField,
         TemplateBody,
+        ModelBody,
         Trace,
         ClaimDigest,
         RoundRegion,

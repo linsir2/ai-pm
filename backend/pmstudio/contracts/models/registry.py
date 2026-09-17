@@ -113,3 +113,15 @@ class TemplateBody(ContractModel):
                 )
             seen.add(field.label)
         return self
+
+
+class ModelBody(ContractModel):
+    """模型的本体：M24 算预算要的那个窗口（C10 `kind = model` 的 `content`）。
+
+    只放窗口。预算是 `窗口 − 输出预留 − 系统开销`：后两项来自 C16 的项目配置，
+    第一项只能在模型上——所以它是 M24 唯一的模型侧输入。
+    R1.3 接模型时会需要 endpoint / 模型名 / 密钥来源，那时再加字段（给契约加字段是兼容的）；
+    **密钥本身永远不进这里**，条目里只写"用哪个环境变量"。
+    """
+
+    context_window_tokens: int = Field(gt=0)

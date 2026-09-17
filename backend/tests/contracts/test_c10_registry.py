@@ -4,7 +4,12 @@ import pytest
 from pydantic import ValidationError
 
 from pmstudio.contracts.enums import RegistryKind, RegistryOwner, RegistryStatus, RoundEntry
-from pmstudio.contracts.models.registry import RegistryEntry, TemplateBody, TemplateField
+from pmstudio.contracts.models.registry import (
+    ModelBody,
+    RegistryEntry,
+    TemplateBody,
+    TemplateField,
+)
 
 
 def _entry(**overrides: object) -> dict[str, object]:
@@ -142,3 +147,16 @@ def test_template_rejects_duplicated_labels() -> None:
                 TemplateField(label="目标", required=False),
             )
         )
+
+
+def test_model_body_field_set() -> None:
+    """模型的本体只放 M24 要的那个窗口（预算算式的第一项）。"""
+    assert set(ModelBody.model_fields) == {"context_window_tokens"}
+
+
+def test_model_body_needs_a_positive_window() -> None:
+    assert ModelBody(context_window_tokens=65536).context_window_tokens == 65536
+    with pytest.raises(ValidationError):
+        ModelBody(context_window_tokens=0)
+    with pytest.raises(ValidationError):
+        ModelBody(context_window_tokens=-1)
