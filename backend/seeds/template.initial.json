@@ -1,0 +1,19 @@
+{
+  "id": "reg_tpl_initial",
+  "kind": "template",
+  "name": "初版产品共识文档",
+  "owner": "preset",
+  "content": {
+    "fields": [
+      {"label": "项目是什么", "required": true},
+      {"label": "目标", "required": true},
+      {"label": "用户与场景", "required": true},
+      {"label": "功能清单", "required": true},
+      {"label": "依赖与边界", "required": true},
+      {"label": "风险", "required": false},
+      {"label": "验收条件", "required": true},
+      {"label": "待确认问题", "required": false},
+      {"label": "开放问题", "required": false}
+    ]
+  }
+}

@@ -1,12 +1,12 @@
-"""缺失清单：R0 结束时**还没有实现**的模块。
+"""缺失清单：**还没有实现**的模块。
 
 "不建桩、不建空壳"（P8）的另一半是这条：没做的东西要能被列出来、并且列的是真的。
 `tests/bootstrap/test_missing_modules.py` 拿它对现实：清单里每个模块都不许有实现，
 清单 + 已实现必须等于 PRD 附录 A 的 30 个模块编号。
 """
 
-# 已实现：L3 的两半。M11 黑板（communication/board.py）、M12 事件流（communication/event_bus.py）。
-IMPLEMENTED_MODULES = frozenset({"M11", "M12"})
+# 已实现：L3 的两半（M11 黑板 / M12 事件流，都在 communication/）＋ L0 的注册中心（M27，registry/）。
+IMPLEMENTED_MODULES = frozenset({"M11", "M12", "M27"})
 
 MISSING_MODULES: dict[str, str] = {
     "M1": "项目容器（前端）",
@@ -33,7 +33,6 @@ MISSING_MODULES: dict[str, str] = {
     "M24": "预算与裁剪",
     "M25": "观测",
     "M26": "重试与降级",
-    "M27": "资产注册中心",
     "M28": "成稿器",
     "M29": "思路整理器",
     "M30": "复利验证器",
