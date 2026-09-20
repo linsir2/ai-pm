@@ -27,6 +27,7 @@ from pmstudio.contracts.models.card_group import CardGroup
 from pmstudio.contracts.models.document import BlockOp
 from pmstudio.contracts.models.scope import Scope
 from pmstudio.contracts.skeleton.board import RoundRegion
+from pmstudio.harness.fake import FakeHarness
 
 AT = datetime(2026, 9, 18, 10, 0, tzinfo=UTC)
 
@@ -54,7 +55,7 @@ def _make_fill_card() -> Card:
 
 def _setup_round_with_fill_card(tmp_path: Path, scope: Scope | None = None):
     """建项目 + 开轮 + 写填充卡，返回 (runtime, project_id, doc_id)。"""
-    r = build_runtime_sync(tmp_path / "test.sqlite3", clock=FixedClock())
+    r = build_runtime_sync(tmp_path / "test.sqlite3", clock=FixedClock(), harness=FakeHarness())
     p = asyncio.run(r.project_service.create_project("reg_tpl_initial", "Test"))
 
     # 开轮（完整 11 步）
@@ -99,7 +100,7 @@ def test_submit_writes_document_and_creates_version(tmp_path: Path) -> None:
 
 def test_submit_removes_rejected_proposals(tmp_path: Path) -> None:
     """用户删掉的提案（state=removed）不该写入文档。"""
-    r = build_runtime_sync(tmp_path / "test.sqlite3", clock=FixedClock())
+    r = build_runtime_sync(tmp_path / "test.sqlite3", clock=FixedClock(), harness=FakeHarness())
     p = asyncio.run(r.project_service.create_project("reg_tpl_initial", "Test"))
 
     rid = asyncio.run(r.round_driver.start_round(
@@ -213,7 +214,7 @@ def test_submit_detects_version_conflict(tmp_path: Path) -> None:
 
 def test_submit_understanding_card_confirm_creates_fill_card(tmp_path: Path) -> None:
     """确认理解卡 → M28 生成填充卡 → 写回 card_group。"""
-    r = build_runtime_sync(tmp_path / "test.sqlite3", clock=FixedClock())
+    r = build_runtime_sync(tmp_path / "test.sqlite3", clock=FixedClock(), harness=FakeHarness())
     p = asyncio.run(r.project_service.create_project("reg_tpl_initial", "Test"))
 
     # 开轮（会产生理解卡，停在 awaiting_user）
@@ -240,5 +241,89 @@ def test_submit_understanding_card_confirm_creates_fill_card(tmp_path: Path) -> 
     assert new_cg.state is CardGroupState.ANSWERING
     assert new_cg.cards[0].kind is CardKind.FILL
     assert len(new_cg.cards[0].proposals) > 0
+
+    r.close()
+
+
+def test_submit_stamps_source_card_id_for_traceability(tmp_path: Path) -> None:
+    """I3：确认填充卡写入后，块带 source_card_id = 卡片 id（审计可回溯）。
+
+    M20 写入时把填充卡的 card_id 透传进 BlockOp → Ledger 落到 Block.source_card_id，
+    读出来 `is_ai_written` 为真（AI 写的都能追到一次用户确认，CONTRACTS milestone 28）。
+    """
+    r, project_id, doc_id, rid = _setup_round_with_fill_card(tmp_path)
+
+    answer = CardAnswer(
+        card_id="crd_fill",
+        verdict="confirm",
+        status=CardStatus.ANSWERED,
+        proposal_states={"prp_1": ProposalState.KEPT},
+    )
+
+    asyncio.run(r.round_driver.submit_cards("grp_1", [answer]))
+
+    blocks = r.ledger.read_blocks(doc_id)
+    func_block = next(b for b in blocks if b.schema_label == "功能清单")
+    assert func_block.source_card_id == "crd_fill"
+    assert func_block.is_ai_written is True
+
+    r.close()
+
+
+def test_understanding_card_passess_real_evidence_blocks_to_drafter(tmp_path: Path) -> None:
+    """确认理解卡后，Drafter 收到的是 CONTEXT 区块里证据编号过的真实块（I21）。
+
+    M28 生成填充卡要引用证据——而证据号是 M13 组装时发的（E1..En）。
+    RoundDriver 必须把 `CONTEXT` 区（组装时写入、含 evidence_id）传给 Drafter，
+    不能传空数组，否则引用归因在真实链路里断了。
+    """
+    r = build_runtime_sync(tmp_path / "test.sqlite3", clock=FixedClock(), harness=FakeHarness())
+    p = asyncio.run(r.project_service.create_project("reg_tpl_initial", "Test"))
+
+    rid = asyncio.run(r.round_driver.start_round(
+        p.project_id, RoundEntry.MAIN, "细化功能清单", Scope(),
+    ))
+
+    # 记录 Drafter 实际收到的 blocks
+    captured: dict = {}
+
+    async def _spy_draft(self, round_region, blocks):
+        captured["blocks"] = list(blocks)
+        from pmstudio.contracts.models.card import Proposal
+
+        return Card(
+            card_id="crd_fill",
+            kind=CardKind.FILL,
+            prompt="这次我打算改动 1 处",
+            proposals=(
+                Proposal(
+                    proposal_id="prp_1",
+                    target_label="功能清单",
+                    op=BlockOpKind.APPEND,
+                    content="支持把讨论候选带进主闭环",
+                ),
+            ),
+        )
+
+    r.round_driver._drafter = type(
+        "_SpyDrafter", (), {"draft_fill_card": _spy_draft}
+    )()
+
+    cg = asyncio.run(r.round_driver._board.read(RegionName.CARD_GROUP))
+    understanding_card = cg.cards[0]
+    answer = CardAnswer(
+        card_id=understanding_card.card_id,
+        verdict="confirm",
+        status=CardStatus.ANSWERED,
+    )
+    asyncio.run(r.round_driver.submit_cards(cg.group_id, [answer]))
+
+    # CONTEXT 区里的真实块必须原样传给 Drafter，且带 evidence_id
+    ctx = asyncio.run(r.round_driver._board.read(RegionName.CONTEXT))
+    assert ctx is not None and ctx.blocks
+    assert len(captured["blocks"]) == len(ctx.blocks)
+    assert all(b.evidence_id is not None for b in captured["blocks"]), (
+        "Drafter 必须收到证据编号过的块（I21：引用只能来自编号清单）"
+    )
 
     r.close()

@@ -14,8 +14,17 @@ from pmstudio.contracts.skeleton.board import ContextBlock
 class HarnessPort(Protocol):
     """模型接入（M22）、权限（M23）、预算与裁剪（M24）、观测（M25）的对外面。"""
 
-    async def complete(self, model_ref: str, messages: Sequence[PromptMessage]) -> str:
-        """一次模型调用；重试与降级在里面（M26）。"""
+    async def complete(
+        self,
+        model_ref: str,
+        messages: Sequence[PromptMessage],
+        response_format: dict | None = None,
+    ) -> str:
+        """一次模型调用；重试与降级在里面（M26）。
+
+        `response_format`: 可选，传 JSON Schema 强制模型输出结构化数据
+        （例：`{"type": "json_object", "schema": ...}`）。M8 共识生成用它。
+        """
         ...
 
     async def can_use(self, role_id: str, tool_id: str) -> Permission:

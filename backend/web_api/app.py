@@ -31,14 +31,20 @@ from web_api.sse import event_stream
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    app.state.runtime = await build_runtime(app.state.db_path)
+    app.state.runtime = await build_runtime(app.state.db_path, harness=app.state.harness)
     yield
     app.state.runtime.close()
 
 
-def create_app(db_path: str) -> FastAPI:
+def create_app(db_path: str, *, harness: object | None = None) -> FastAPI:
+    """建 FastAPI 应用。
+
+    `harness`: 透传给 `build_runtime`。测试与本地 demo 注入 `FakeHarness`，
+    避免未配置 API Key 时全链路跑不起来（P0 可运行闭环）。
+    """
     app = FastAPI(title="PM Studio", lifespan=lifespan)
     app.state.db_path = db_path
+    app.state.harness = harness
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

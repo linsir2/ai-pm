@@ -48,6 +48,8 @@ class ContextBlock(ContractModel):
     content: str = ""
     priority: int = Field(ge=0)
     credibility: Credibility | None = None
+    evidence_id: str | None = None
+    ref_version: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _check(self) -> "ContextBlock":
@@ -59,6 +61,15 @@ class ContextBlock(ContractModel):
                 raise ContractViolation("材料块的 credibility 继承自 C5，不能缺")
         elif self.credibility is not None:
             raise ContractViolation("credibility 只有材料块有")
+
+        # C15：文档块可带 ref_version（作为 BLOCK 引用时必须有版本，I6）。不带是合法的——
+        # 不是所有上下文块都会被引用；"要引用就必须有版本"由 Drafter 转 Citation 时强制。
+        if self.source is ContextBlockSource.DOCUMENT:
+            if self.ref_version is not None and self.ref_version < 1:
+                raise ContractViolation("ref_version 必须 ≥ 1")
+        # 只有 BLOCK 引用有版本；其余来源的块带 ref_version 没有意义。
+        elif self.source is not ContextBlockSource.DOCUMENT and self.ref_version is not None:
+            raise ContractViolation(f"ref_version 只有文档块有，{self.source.value} 块带它没有意义")
         return self
 
 

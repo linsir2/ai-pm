@@ -15,6 +15,7 @@ import pytest
 from pmstudio.bootstrap.runtime import build_runtime
 from pmstudio.contracts.enums import RoundEntry
 from pmstudio.contracts.models.scope import Scope
+from pmstudio.harness.fake import FakeHarness
 from web_api.sse import event_stream
 
 
@@ -55,7 +56,7 @@ async def _collect_sse_events(runtime, round_id: str | None = None, max_events: 
 async def runtime():
     tmpdir = tempfile.mkdtemp()
     db_path = Path(tmpdir) / "test.db"
-    r = await build_runtime(db_path)
+    r = await build_runtime(db_path, harness=FakeHarness())
     yield r
     r.close()
 

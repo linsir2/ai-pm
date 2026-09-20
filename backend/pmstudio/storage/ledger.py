@@ -136,7 +136,12 @@ class Ledger:
                     if edit.op is BlockOpKind.APPEND
                     else edit.content
                 )
-                updated = block.model_copy(update={"content": content, "version": block.version + 1})
+                updated = block.model_copy(update={
+                    "content": content,
+                    "version": block.version + 1,
+                    # I3：AI 写入带 source_card_id（审计留痕）；manual op 不带 → 保持原值（通常为 None）
+                    "source_card_id": edit.source_card_id,
+                })
                 current[edit.block_id] = updated
                 self._update_block(conn, doc_id, updated)
 

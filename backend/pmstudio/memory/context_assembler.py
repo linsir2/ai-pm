@@ -66,6 +66,9 @@ class ContextAssembler:
                     ref=block.block_id,
                     content=block.content,
                     priority=PRIORITY_DOCUMENT,
+                    # 证据编号 + 引用版本：Drafter 组装 prompt 时把编号清单给模型，
+                    # 模型返回的 citations 只能从这个集合里取（I21）。ref_version 供 I6 失效判定。
+                    ref_version=block.version,
                 )
             )
             # 快照覆盖全部顶层块——包括当前还空着的：漏一个，那次手改就查不出来
@@ -79,4 +82,10 @@ class ContextAssembler:
                 priority=PRIORITY_CURRENT_INPUT,
             )
         )
-        return AssembleResult(blocks=tuple(blocks), base_versions=base_versions)
+
+        # 给每个块编连续唯一的证据号（引用归因的前提：引用只指得到这些证据）
+        numbered = tuple(
+            block.model_copy(update={"evidence_id": f"E{index}"})
+            for index, block in enumerate(blocks, start=1)
+        )
+        return AssembleResult(blocks=numbered, base_versions=base_versions)

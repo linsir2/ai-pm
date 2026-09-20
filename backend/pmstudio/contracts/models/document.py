@@ -58,12 +58,17 @@ class Document(ContractModel):
 
 
 class BlockOp(ContractModel):
-    """一次写入里对某个块的操作（CONTRACTS §5.3 `writeDocument` 的 payload 项）。"""
+    """一次写入里对某个块的操作（CONTRACTS §5.3 `writeDocument` 的 payload 项）。
+
+    `source_card_id`：这次写入的出处——AI 写入带填充卡的 `card_id`（I3 审计留痕），
+    manual 留空（I3：手写的块没有来源卡）。
+    """
 
     block_id: str
     op: BlockOpKind
     content: str
     expected_version: int = Field(ge=1)
+    source_card_id: str | None = None
 
 
 class DocumentSnapshot(ContractModel):

@@ -132,7 +132,15 @@ def test_context_region_field_set_matches_contract() -> None:
 
 
 def test_context_block_field_set_matches_contract() -> None:
-    assert set(ContextBlock.model_fields) == {"source", "ref", "content", "priority", "credibility"}
+    assert set(ContextBlock.model_fields) == {
+        "source",
+        "ref",
+        "content",
+        "priority",
+        "credibility",
+        "evidence_id",
+        "ref_version",
+    }
 
 
 def test_context_block_must_point_back_at_something() -> None:

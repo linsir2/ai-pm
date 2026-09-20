@@ -204,6 +204,24 @@ CHANGE_RECORDS: Final[tuple[ContractChange, ...]] = (
         "verdict = correct 时 answer 必填；verdict = confirm 时 answer 可空",
         contracts=("C7",),
     ),
+    ContractChange(
+        record_id="CR-008",
+        date="2026-09-20",
+        doc_version="CONTRACTS.md v0.23",
+        summary="C12 `ContextBlock` 加 `evidence_id` / `ref_version`：引用归因的前提是"
+        "M13 组装上下文时给可引用块编连续唯一证据号（E1..En），Drafter 把编号清单放进 prompt，"
+        "模型返回的 citations 只能从这个集合取（I21）。`ref_version` 供 BLOCK 引用带 target_version（I6）",
+        contracts=("C12",),
+    ),
+    ContractChange(
+        record_id="CR-009",
+        date="2026-09-20",
+        doc_version="CONTRACTS.md v0.24",
+        summary="C3 `BlockOp` 加 `source_card_id`：M20 写入时要给 `Block.source_card_id` 留痕（I3），"
+        "但写入链路（BlockOp → Ledger）没有传输通道。AI 写入在构造 op 时透传填充卡的 card_id，"
+        "manual 留空——`is_ai_written` 因此成立（AI 写的都能追到一次用户确认，CONTRACTS milestone 28）",
+        contracts=("C3",),
+    ),
 )
 
 FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
@@ -220,8 +238,9 @@ FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
         "Document Version（文档版本）",
         "models/document.py",
         ("DocumentVersion", "SubmitPayload", "ManualEditPayload", "RollbackPayload", "BlockOp"),
-        "CR-001",
-        note="含 §5.3 `writeDocument` 的三种入参形状（`WritePayload` 的三个成员）",
+        "CR-009",
+        note="含 §5.3 `writeDocument` 的三种入参形状（`WritePayload` 的三个成员）。"
+        "CR-009 给 `BlockOp` 加 `source_card_id`（I3 留痕透传）",
     ),
     FrozenContract(
         "C4",
@@ -262,8 +281,9 @@ FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
         "Blackboard（黑板）",
         "skeleton/board.py",
         ("RoundRegion", "ContextRegion", "ContextBlock", "ConfirmedRegion"),
-        "CR-001",
-        note="`claims` 区块不装形状，所以这里没有它的模型",
+        "CR-008",
+        note="`claims` 区块不装形状，所以这里没有它的模型；"
+        "CR-008 给 `ContextBlock` 加了 evidence_id/ref_version（引用归因）",
     ),
     FrozenContract(
         "C13",
@@ -337,6 +357,7 @@ CONTRACT_SHAPES: Final[dict[str, tuple[str, ...]]] = {
         "BlockOp.op: BlockOpKind",
         "BlockOp.content: str",
         "BlockOp.expected_version: int [Ge(ge=1)]",
+        "BlockOp.source_card_id: str | None = None",
     ),
     "C5": (
         "MaterialPacket.material_id: str",
@@ -441,6 +462,8 @@ CONTRACT_SHAPES: Final[dict[str, tuple[str, ...]]] = {
         "ContextBlock.content: str = ''",
         "ContextBlock.priority: int [Ge(ge=0)]",
         "ContextBlock.credibility: Credibility | None = None",
+        "ContextBlock.evidence_id: str | None = None",
+        "ContextBlock.ref_version: int | None [Ge(ge=1)] = None",
         "ConfirmedRegion.card_group_ids: tuple[str, ...] = ()",
         "ConfirmedRegion.memory_ids: tuple[str, ...] = ()",
     ),

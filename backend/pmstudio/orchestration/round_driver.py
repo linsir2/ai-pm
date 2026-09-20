@@ -10,7 +10,18 @@ from pmstudio.common.clock import Clock
 from pmstudio.common.errors import ContractViolation
 from pmstudio.common.ids import IdGenerator
 from pmstudio.communication.board import BoardEditor, BoardReader
-from pmstudio.contracts.enums import RegionName, RoundEntry, RoundPhase
+from pmstudio.contracts.enums import (
+    CardGroupState,
+    CardKind,
+    RegionName,
+    RoundEndReason,
+    RoundEntry,
+    RoundPhase,
+    VersionTrigger,
+)
+from pmstudio.contracts.models.card import CardAnswer
+from pmstudio.contracts.models.card_group import CardGroup
+from pmstudio.contracts.models.document import SubmitPayload
 from pmstudio.contracts.models.scope import Scope
 from pmstudio.contracts.skeleton.board import ContextRegion, RoundRegion
 from pmstudio.orchestration.cards import CardAssembler
@@ -121,10 +132,15 @@ class RoundDriver:
     async def submit_cards(
         self,
         group_id: str,
-        answers: Sequence,  # Sequence[CardAnswer]
-    ) -> object:  # CardGroup
-        """用户提交一组卡片。确认后整组冻结，card_group 区块写即广播。"""
-        from pmstudio.contracts.models.card import CardKind
+        answers: Sequence[CardAnswer],
+    ) -> CardGroup:
+        """用户提交一组卡片。确认后整组冻结，card_group 区块写即广播。
+
+        v2（D1 修正）：裁决合并走聚合领域行为 `CardGroup.apply_answer`，
+        M20 调用严格两参 `write_document(trigger, payload)`——payload 只带
+        `group_id`，其余信息 M20 自己去黑板读。
+        """
+        from pmstudio.contracts.invariants import check_proposal_states
 
         # 1. 读当前轮 + card_group
         round_region = await self._board.read(RegionName.ROUND)
@@ -134,38 +150,41 @@ class RoundDriver:
         group = await self._board.read(RegionName.CARD_GROUP)
         if group is None:
             raise ContractViolation(f"找不到卡片组 {group_id}")
+        if group.group_id != group_id:
+            raise ContractViolation(
+                f"提交指名的卡片组 {group_id} 与黑板当前组 {group.group_id} 不一致"
+            )
 
-        # 2. 更新每张卡的 answer + status
-        updated_cards = list(group.cards)
+        # 2. 领域行为：逐条合并回应（answer / status / 提案 kept-removed）
+        updated = group
         for answer in answers:
-            for idx, card in enumerate(updated_cards):
-                if card.card_id == answer.card_id:
-                    updated_cards[idx] = card.model_copy(update={
-                        "answer": answer.answer,
-                        "status": answer.status,
-                    })
-                    break
+            card = next(
+                (c for c in updated.cards if c.card_id == answer.card_id), None
+            )
+            if card is None:
+                raise ContractViolation(
+                    f"卡片组里没有 card_id = {answer.card_id} 的卡"
+                )
+            if card.kind is CardKind.FILL:
+                check_proposal_states(card, answer)
+            updated = updated.apply_answer(answer)
 
-        # 3. 判断卡片类型
-        card = updated_cards[0]
+        # 3. 按卡片类型分派
+        card = updated.cards[0]
         if card.kind is CardKind.UNDERSTANDING:
             return await self._handle_understanding_card(
-                round_region, group, updated_cards, answers[0],
+                round_region, updated, answers[0],
             )
-        elif card.kind is CardKind.FILL:
-            return await self._handle_fill_card(
-                round_region, group, updated_cards, answers[0],
-            )
-        else:
-            raise ContractViolation(f"R1.4 不支持 {card.kind.value} 卡的提交")
+        if card.kind is CardKind.FILL:
+            return await self._handle_fill_card(round_region, updated)
+        raise ContractViolation(f"R1.4 不支持 {card.kind.value} 卡的提交")
 
     async def _handle_understanding_card(
         self,
         round_region: RoundRegion,
-        group: object,
-        updated_cards: list,
-        answer,  # CardAnswer
-    ) -> object:  # CardGroup
+        group: CardGroup,
+        answer: CardAnswer,
+    ) -> CardGroup:
         """确认理解卡 → M28 生成填充卡。"""
         if answer.verdict == "correct":
             raise ContractViolation(
@@ -176,7 +195,11 @@ class RoundDriver:
         if self._drafter is None:
             raise ContractViolation("Drafter 未注入")
 
-        fill_card = await self._drafter.draft_fill_card(round_region, [])  # type: ignore[attr-defined]
+        # 取 CONTEXT 区的真实证据块（M13 组装时编号过：E1..En）。
+        # 不能传空数组——引用归因的前提是 Drafter 只能引用编号清单里的证据（I21）。
+        context = await self._board.read(RegionName.CONTEXT)
+        evidence_blocks = context.blocks if context is not None else ()
+        fill_card = await self._drafter.draft_fill_card(round_region, evidence_blocks)  # type: ignore[attr-defined]
 
         # 打包新的 card_group（填充卡单独成批，I16）
         new_group = self._cards.assemble((fill_card,), round_id=round_region.round_id)
@@ -191,37 +214,23 @@ class RoundDriver:
     async def _handle_fill_card(
         self,
         round_region: RoundRegion,
-        group: object,
-        updated_cards: list,
-        answer,  # CardAnswer
-    ) -> object:  # CardGroup
+        group: CardGroup,
+    ) -> CardGroup:
         """确认填充卡 → M20 写入文档。"""
         if self._document_writer is None or self._ledger is None:
             raise ContractViolation("DocumentWriter / Ledger 未注入")
 
-        # 冻结整组
-        from pmstudio.contracts.enums import CardGroupState
-        confirmed = group.model_copy(update={"state": CardGroupState.CONFIRMED})  # type: ignore[attr-defined]
+        # 冻结整组（裁决已由 apply_answer 合并进卡片组）
+        confirmed = group.model_copy(update={"state": CardGroupState.CONFIRMED})
         await self._writer.write(RegionName.CARD_GROUP, confirmed)
 
-        # M20 写入
-        from pmstudio.contracts.enums import VersionTrigger
-        from pmstudio.contracts.models.document import SubmitPayload
-
-        doc_id = self._get_doc_id(round_region.project_id)
+        # M20 写入：严格两参（v2 契约），M20 自己去黑板读这一组
         await self._document_writer.write_document(  # type: ignore[attr-defined]
             trigger=VersionTrigger.SUBMIT,
             payload=SubmitPayload(group_id=group.group_id),
-            group=confirmed,
-            base_versions=round_region.scope.base_versions,
-            scope=round_region.scope,
-            round_id=round_region.round_id,
-            doc_id=doc_id,
-            answers=[answer],
         )
 
         # phase=writing → done
-        from pmstudio.contracts.enums import RoundEndReason
         round_region = round_region.model_copy(update={"phase": RoundPhase.WRITING})
         await self._writer.write(RegionName.ROUND, round_region)
         round_region = round_region.model_copy(update={

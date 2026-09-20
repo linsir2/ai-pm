@@ -69,8 +69,13 @@ async def build_runtime(
     clock: Clock | None = None,
     ids: IdGenerator | None = None,
     seeds_dir: Path | None = None,
+    harness: HarnessPort | None = None,
 ) -> Runtime:
-    """开库、拿锁、恢复、灌种子、装配。"""
+    """开库、拿锁、恢复、灌种子、装配。
+
+    `harness`: 可选注入的模型接入。默认走真实链路（M22 → M26）；
+    测试与无 API Key 的本地 demo 传 `FakeHarness`（P0 可运行闭环）。
+    """
     resolved_clock = clock or SystemClock()
     resolved_ids = ids or TimestampIdGenerator()
 
@@ -96,9 +101,9 @@ async def build_runtime(
         budget_resolver = BudgetResolver(registry=registry, ledger=ledger)
         trimmer = Trimmer(budget_resolver)
 
-        # L6 Harness: M22 gateway → M26 retry wrapper
+        # L6 Harness: M22 gateway → M26 retry wrapper（可注入 FakeHarness）
         gateway = ModelGateway(registry)
-        harness = RetryingHarness(
+        resolved_harness = harness or RetryingHarness(
             gateway=gateway,
             board=BoardReader(blackboard),
             bus=event_bus,
@@ -107,14 +112,16 @@ async def build_runtime(
         )
 
         # L2 Orchestration: M8 + M9 + 轮次状态机
-        consensus = ConsensusGenerator(harness, resolved_ids)
+        consensus = ConsensusGenerator(resolved_harness, resolved_ids)
         cards = CardAssembler(resolved_ids)
 
-        # L5 DocumentWriter (M20)
-        document_writer = DocumentWriter(ledger, event_bus, resolved_clock)
+        # L5 DocumentWriter (M20)：v2 注入只读黑板句柄（D1 修正——M20 自己读卡片组）
+        document_writer = DocumentWriter(
+            ledger, event_bus, resolved_clock, BoardReader(blackboard)
+        )
 
         # L2 Drafter (M28)
-        drafter = Drafter(harness, resolved_ids, ledger)
+        drafter = Drafter(resolved_harness, resolved_ids, ledger)
 
         round_driver = RoundDriver(
             writer=BoardEditor(blackboard),
@@ -127,7 +134,7 @@ async def build_runtime(
             clock=resolved_clock,
             ids=resolved_ids,
             context_assembler=context_assembler,
-            harness=harness,
+            harness=resolved_harness,
         )
     except BaseException:
         db.close()
@@ -145,7 +152,7 @@ async def build_runtime(
         project_service=project_service,
         context_assembler=context_assembler,
         trimmer=trimmer,
-        harness=harness,
+        harness=resolved_harness,
         round_driver=round_driver,
         recovered_rounds=recovered,
     )

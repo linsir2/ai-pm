@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from pmstudio.harness.fake import FakeHarness
 from web_api.app import create_app
 
 
@@ -13,7 +14,7 @@ from web_api.app import create_app
 def client():
     tmpdir = tempfile.mkdtemp()
     db_path = Path(tmpdir) / "test.db"
-    app = create_app(db_path)
+    app = create_app(db_path, harness=FakeHarness())
     with TestClient(app) as c:
         yield c
 
