@@ -195,6 +195,15 @@ CHANGE_RECORDS: Final[tuple[ContractChange, ...]] = (
         "需要超时值供 M26 判定重试。三个字段都有明确消费者，没有「将来可能需要」的占位字段",
         contracts=("C10",),
     ),
+    ContractChange(
+        record_id="CR-007",
+        date="2026-09-18",
+        doc_version="CONTRACTS.md v0.22",
+        summary="C7 `CardAnswer` 加 `verdict` 字段（`confirm` / `correct`）："
+        "确认/纠正必须有显式标记，不允许隐式推断。"
+        "verdict = correct 时 answer 必填；verdict = confirm 时 answer 可空",
+        contracts=("C7",),
+    ),
 )
 
 FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
@@ -231,8 +240,8 @@ FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
         "Card（卡片）",
         "models/card.py",
         ("Card", "CardOption", "Proposal", "CardAnswer"),
-        "CR-002",
-        note="CR-002 给 `CardAnswer` 加了 `proposal_states`（填充卡的逐条裁决）",
+        "CR-007",
+        note="CR-002 加 proposal_states；CR-007 加 verdict（确认/纠正显式标记）",
     ),
     FrozenContract("C8", "Card Group（卡片组）", "models/card_group.py", ("CardGroup",), "CR-001"),
     FrozenContract("C9", "Memory（记忆）", "models/memory.py", ("Memory",), "CR-001"),
@@ -242,7 +251,10 @@ FROZEN_CONTRACTS: Final[tuple[FrozenContract, ...]] = (
         "models/registry.py",
         ("RegistryEntry", "TemplateField", "TemplateBody", "ModelBody"),
         "CR-006",
-        note="CR-004 补了模板本体；CR-005 补了模型本体；CR-006 给 ModelBody 加了 model/api_key_env/timeout_seconds",
+        note=(
+            "CR-004 补了模板本体；CR-005 补了模型本体；"
+            "CR-006 给 ModelBody 加了 model/api_key_env/timeout_seconds"
+        ),
     ),
     FrozenContract("C11", "Trace（观测）", "models/trace.py", ("Trace", "ClaimDigest"), "CR-001"),
     FrozenContract(
@@ -359,6 +371,7 @@ CONTRACT_SHAPES: Final[dict[str, tuple[str, ...]]] = {
         "Proposal.state: ProposalState = ProposalState.KEPT",
         "Proposal.citations: tuple[Citation, ...] = ()",
         "CardAnswer.card_id: str",
+        "CardAnswer.verdict: str",
         "CardAnswer.status: CardStatus",
         "CardAnswer.answer: str | None = None",
         "CardAnswer.proposal_states: dict[str, ProposalState] = {}",

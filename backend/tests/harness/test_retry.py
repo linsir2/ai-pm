@@ -72,7 +72,9 @@ class _FailGateway:
         self._retryable = retryable
         self.attempts = 0
 
-    async def complete(self, model_ref: str, messages: list[PromptMessage]) -> str:
+    async def complete(
+        self, model_ref: str, messages: list[PromptMessage], response_format: dict | None = None,
+    ) -> str:
         self.attempts += 1
         if self.attempts <= self._fail_times:
             raise GenerationFailure(

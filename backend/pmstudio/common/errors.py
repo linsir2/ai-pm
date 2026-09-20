@@ -26,7 +26,7 @@ class GenerationFailure(PmStudioError):
         super().__init__(f"[{step}] {reason} (retryable={retryable})")
 
 
-class VersionConflict(PmStudioError):
+class VersionConflict(ContractViolation):
     """写入时目标块的版本对不上——用户手改过，不许静默覆盖（I10）。"""
 
 

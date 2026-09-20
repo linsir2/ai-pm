@@ -125,13 +125,17 @@ def test_missing_secret_reports_the_variable_name(monkeypatch: pytest.MonkeyPatc
     assert "DASHSCOPE_API_KEY" in str(exc_info.value)
 
 
-def test_reasoning_block_is_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """模型可能返回 thinking…正文 — 剥掉思考过程只留正文。"""
+def test_response_format_is_passed_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """response_format 参数应透传给 litellm。"""
     import litellm
 
+    received: dict = {}
+
     async def fake_completion(**kwargs: object) -> object:
+        received.update(kwargs)
+
         class _Msg:
-            content = "  thinking\n思考过程\n正文内容"
+            content = "复述文本"
 
         class _Choice:
             message = _Msg()
@@ -149,9 +153,12 @@ def test_reasoning_block_is_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
 
     asyncio.run(_register_model(registry))
     gateway = ModelGateway(registry)
-    result = asyncio.run(gateway.complete("reg_model_default", _messages()))
 
-    assert result == "正文内容"
+    rf = {"type": "json_object", "schema": {"type": "array"}}
+    asyncio.run(gateway.complete("reg_model_default", _messages(), response_format=rf))
+
+    assert received["response_format"] == rf
+    assert received["enable_json_schema_validation"] is True
 
 
 def test_empty_completion_is_a_retryable_failure(monkeypatch: pytest.MonkeyPatch) -> None:

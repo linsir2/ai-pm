@@ -29,10 +29,12 @@ IMPLEMENTED_MODULE_FILES = {
     "M11": "pmstudio/communication/board.py",
     "M12": "pmstudio/communication/event_bus.py",
     "M13": "pmstudio/memory/context_assembler.py",
+    "M20": "pmstudio/tools/services/document_writer.py",
     "M22": "pmstudio/harness/model_gateway.py",
     "M24": "pmstudio/harness/trimming.py",
     "M26": "pmstudio/harness/retry.py",
     "M27": "pmstudio/registry/entries.py",
+    "M28": "pmstudio/orchestration/drafter.py",
 }
 
 # 还没做 → **计划落点**不许存在。表里写的名字就是"将来放哪儿"的承诺（语义名，D5）。
@@ -46,11 +48,9 @@ MISSING_MODULE_FILES = {
     "M17": "pmstudio/memory/feedback.py",
     "M18": "pmstudio/tools/capabilities/web_search.py",
     "M19": "pmstudio/tools/capabilities/ingest.py",
-    "M20": "pmstudio/tools/services/document_writer.py",
     "M21": "pmstudio/tools/services/export.py",
     "M23": "pmstudio/harness/permissions.py",
     "M25": "pmstudio/harness/tracing.py",
-    "M28": "pmstudio/orchestration/drafter.py",
     "M29": "pmstudio/orchestration/idea_synthesis.py",
     "M30": "pmstudio/orchestration/promotion.py",
 }

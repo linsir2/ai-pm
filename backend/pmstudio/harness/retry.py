@@ -36,13 +36,16 @@ class RetryingHarness:
         self._trimmer = trimmer
         self._max_attempts = max_attempts
 
-    async def complete(self, model_ref: str, messages: Sequence[PromptMessage]) -> str:
+    async def complete(
+        self, model_ref: str, messages: Sequence[PromptMessage],
+        response_format: dict | None = None,
+    ) -> str:
         """带重试的模型调用。"""
         last_error: GenerationFailure | None = None
 
-        for attempt in range(self._max_attempts):
+        for _attempt in range(self._max_attempts):
             try:
-                return await self._gateway.complete(model_ref, messages)  # type: ignore[attr-defined]
+                return await self._gateway.complete(model_ref, messages, response_format=response_format)  # type: ignore[attr-defined]
             except GenerationFailure as error:
                 last_error = error
                 if not error.retryable:

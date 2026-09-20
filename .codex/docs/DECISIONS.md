@@ -1,11 +1,24 @@
 # PM Studio 工程裁决记录
 
-- 版本：v0.14
-- 日期：2026-09-15
+- 版本：v0.15
+- 日期：2026-09-18
 - 作用：记录**工程与契约层面的裁决**。产品级决策仍以 `PRD.md` 为准，字段级定义仍以 `CONTRACTS.md` 为准；本文件只回答"这条到底怎么定的、为什么"。
 - 纪律：只写**已经拍板**的事。没定的进最后一节，不写进正文。
 
 ### 变更记录
+
+**v0.15**（2026-09-18）
+
+- **新增 §20：R1.3 接模型与 R1.4 写文档**
+- **F3 裁决（确认 vs 纠正）**：采用方案 (A) — **显式 `verdict` 字段**（`CardAnswer.verdict: "confirm" | "correct"`）。
+  理由：交互上"确认 + 顺口补充一句"很常见，只有显式字段能表达；隐式"空=确认"约定将来必须推翻
+- **R1.4 范围**：`submit_cards`（确认路径）、M20 事务写入、M28 结构化成稿（模型返回 JSON 对齐冻结 Schema）、
+  `phase = done` 收尾。**纠正路径留 R2**
+- **M28 成稿契约**：模型返回 JSON 数组，每条对齐 `Proposal` 冻结 Schema（`target_label` / `op` / `content`），
+  `Proposal.model_validate()` 校验后构造填充卡。**不允许返回纯文本** — 目录规则 §3 "接口只能是契约对象"
+- **CR-007（C7）**：`CardAnswer` 加 `verdict` 字段
+- **R1.3 已落地**：`harness/model_gateway.py`、`harness/retry.py`、`orchestration/consensus.py`、
+  `orchestration/cards.py`、`orchestration/round_driver.py`（`start_round`）
 
 **v0.14**（2026-09-17）
 
@@ -550,3 +563,49 @@ R1 的第二刀：`assembleContext`（M13 说带什么）＋ `trim`（M24 说带
 `BudgetResolver` / `Trimmer`）、`seeds/model.default.json`、`CR-005`；`bootstrap` 把
 `context_assembler` 与 `trimmer` 交给运行时；端到端验收从"建项目"延伸到"上下文就绪"。
 测试 498 → 522；`ruff` 干净；冻结表 49 个模型两向对齐。
+
+---
+
+## 20. R1.3 接模型与 R1.4 写文档（2026-09-18）
+
+R1 的第三刀（R1.3）和第四刀（R1.4）：模型接入 + 写文档。
+
+### R1.3 接模型（已落地）
+
+**退出条件**：一轮能从"用户输入"跑到"理解卡等待用户"，调一次真模型。
+
+| # | 问题 | 裁决 |
+|---|---|---|
+| 1 | 模型选择规则 | **解析规则（L2 内部 `_resolve_model_ref()`）**：注册中心里 `kind=model` 且 `status=active` 的唯一一条即默认；0 条或 ≥2 条报错。**不加契约字段**；角色级模型记成账、到 M6 落地时再定 |
+| 2 | `generation.failed` 的 `step` 谁来填 | **M26 读黑板当前轮**拿 `round_id` + `phase`（= step），据此上报；不在轮里调模型直接报错且不发事件 |
+| 3 | 密钥缺失时的行为 | **惰性读**（第一次要调模型时才读），不是启动 fail-fast |
+
+**落地形态**：`harness/model_gateway.py`（M22）、`harness/retry.py`（M26）、
+`orchestration/consensus.py`（M8）、`orchestration/cards.py`（M9）、
+`orchestration/round_driver.py`（`start_round`）；`contracts/models/registry.py` 加 `ModelBody` 三个字段
+（CR-006）；`seeds/model.default.json` 同步；端到端验收从"上下文就绪"延伸到"理解卡等待用户"。
+测试 522 → 541；`ruff` 干净；冻结表 49 → 50 个模型（ModelBody 加 3 行）。
+
+### R1.4 写文档（本次）
+
+**退出条件**："确认 → 填充卡 → 确认 → 写入 → 轮次完成"整条链跑通，文档多一个版本。
+
+| # | 问题 | 裁决 |
+|---|---|---|
+| 1 | F3 确认 vs 纠正 | **方案 (A)：显式 `verdict` 字段**（`CardAnswer.verdict: "confirm" \| "correct"`）。理由：交互上"确认 + 顺口补充一句"很常见，只有显式字段能表达；隐式"空=确认"约定将来必须推翻 |
+| 2 | M28 成稿返回类型 | **模型返回 JSON 数组，每条对齐 `Proposal` 冻结 Schema**（`target_label` / `op` / `content`）。`Proposal.model_validate()` 校验后构造填充卡。**不允许返回纯文本**（目录规则 §3） |
+| 3 | 纠正路径范围 | **留 R2**：R1.4 只做确认路径（`verdict = "confirm"` → 继续 → M28 → M20 → 写入），纠正路径 R2 做 |
+| 4 | `expected_version` 用哪个版本 | **用快照版本**（`base_versions[block_id]`），不是当前版本。这是 I10 冲突检测的核心 |
+| 5 | M20 越界写 | **I17 强制**：submit 路径从 scope 校验，每条 proposal 的 `target_label` 必须落在 `selected_fields` 内（有选区时） |
+
+**落地形态**：`tools/services/document_writer.py`（M20）、`orchestration/drafter.py`（M28）、
+`orchestration/round_driver.py`（`submit_cards`）；C7 `CardAnswer` 加 `verdict` 字段（CR-007）；
+端到端验收从"理解卡等待用户"延伸到"文档多一个版本、轮次完成"。
+
+**这一轮的账**（R1.4 不做、触发条件明确）：
+
+| # | 事 | 触发条件 |
+|---|---|---|
+| 1 | 纠正路径（`verdict = "correct"` → 重新组装 → 复述） | R2 卡片机制补全 |
+| 2 | 角色级模型（`C10 Role` 加 `model_ref`） | M6 角色注册表落地时（R2+） |
+| 3 | 多模型/每项目选模型（C16 `ProjectConfig.model_ref`） | 有消费者时 |

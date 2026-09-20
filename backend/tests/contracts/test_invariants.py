@@ -81,7 +81,9 @@ def test_non_fill_cards_have_nothing_to_place() -> None:
 
 
 def _fill_answer(**states: ProposalState) -> CardAnswer:
-    return CardAnswer(card_id="crd_fill", status=CardStatus.ANSWERED, proposal_states=dict(states))
+    return CardAnswer(
+        card_id="crd_fill", verdict="confirm", status=CardStatus.ANSWERED, proposal_states=dict(states),
+    )
 
 
 def _two_proposal_card() -> Card:
@@ -129,13 +131,16 @@ def test_proposal_states_reject_ids_that_are_not_on_the_card() -> None:
 def test_an_undecided_fill_card_carries_no_decisions() -> None:
     """跳过 = 我暂时不想决定（C7）：那张卡上不该出现任何提案裁决。"""
     card = _fill_card("功能清单")
-    check_proposal_states(card, CardAnswer(card_id="crd_fill", status=CardStatus.SKIPPED))
+    check_proposal_states(
+        card, CardAnswer(card_id="crd_fill", verdict="confirm", status=CardStatus.SKIPPED),
+    )
 
     with pytest.raises(ContractViolation):
         check_proposal_states(
             card,
             CardAnswer(
                 card_id="crd_fill",
+                verdict="confirm",
                 status=CardStatus.SKIPPED,
                 proposal_states={"prp_1": ProposalState.KEPT},
             ),
@@ -145,7 +150,9 @@ def test_an_undecided_fill_card_carries_no_decisions() -> None:
 def test_non_fill_cards_must_carry_no_proposal_states() -> None:
     """理解卡 / 提问卡没有提案，带裁决就是答错了题。"""
     card = Card(card_id="crd_1", kind=CardKind.QUESTION, prompt="上线时间要求是什么")
-    check_proposal_states(card, CardAnswer(card_id="crd_1", status=CardStatus.SKIPPED))
+    check_proposal_states(
+        card, CardAnswer(card_id="crd_1", verdict="confirm", status=CardStatus.SKIPPED),
+    )
 
     with pytest.raises(ContractViolation):
         check_proposal_states(card, _fill_answer(prp_1=ProposalState.KEPT))

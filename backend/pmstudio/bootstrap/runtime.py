@@ -24,6 +24,7 @@ from pmstudio.harness.trimming import BudgetResolver, Trimmer
 from pmstudio.memory.context_assembler import ContextAssembler
 from pmstudio.orchestration.cards import CardAssembler
 from pmstudio.orchestration.consensus import ConsensusGenerator
+from pmstudio.orchestration.drafter import Drafter
 from pmstudio.orchestration.round_driver import RoundDriver
 from pmstudio.registry.entries import InMemoryRegistry
 from pmstudio.registry.seeds import seed
@@ -31,6 +32,7 @@ from pmstudio.storage.board_store import BoardStore
 from pmstudio.storage.db import Database
 from pmstudio.storage.event_log import EventLog
 from pmstudio.storage.ledger import Ledger
+from pmstudio.tools.services.document_writer import DocumentWriter
 from pmstudio.tools.services.project_service import ProjectService
 
 # 种子目录：`backend/seeds/`（数据不是代码，directory.md §2）。默认值按仓库布局推出来；
@@ -107,11 +109,21 @@ async def build_runtime(
         # L2 Orchestration: M8 + M9 + 轮次状态机
         consensus = ConsensusGenerator(harness, resolved_ids)
         cards = CardAssembler(resolved_ids)
+
+        # L5 DocumentWriter (M20)
+        document_writer = DocumentWriter(ledger, event_bus, resolved_clock)
+
+        # L2 Drafter (M28)
+        drafter = Drafter(harness, resolved_ids, ledger)
+
         round_driver = RoundDriver(
             writer=BoardEditor(blackboard),
             board=BoardReader(blackboard),
             consensus=consensus,
             cards=cards,
+            drafter=drafter,
+            document_writer=document_writer,
+            ledger=ledger,
             clock=resolved_clock,
             ids=resolved_ids,
             context_assembler=context_assembler,

@@ -5,7 +5,6 @@
 
 import os
 
-from pmstudio.common.errors import ContractViolation
 from pmstudio.contracts.enums import PromptRole, RegistryKind
 from pmstudio.contracts.models.prompt import PromptMessage
 from pmstudio.contracts.models.registry import ModelBody
@@ -30,8 +29,15 @@ class ModelGateway:
     def __init__(self, registry: object) -> None:
         self._registry = registry
 
-    async def complete(self, model_ref: str, messages: list[PromptMessage]) -> str:
-        """调一次模型，返回文本。失败抛 GenerationFailure。"""
+    async def complete(
+        self, model_ref: str, messages: list[PromptMessage],
+        response_format: dict | None = None,
+    ) -> str:
+        """调一次模型，返回文本。失败抛 GenerationFailure。
+        
+        response_format: 可选，传入 JSON Schema 强制模型输出结构化数据。
+        例：{"type": "json_object", "schema": MyModel.model_json_schema()}
+        """
         if litellm is None:
             raise GenerationFailure(
                 "litellm 未安装 — pip install litellm", retryable=False
@@ -48,19 +54,23 @@ class ModelGateway:
             )
 
         try:
-            response = await litellm.acompletion(
+            kwargs: dict = dict(
                 model=body.model,
                 messages=self._to_litellm_messages(messages),
                 api_key=key,
                 timeout=body.timeout_seconds,
             )
+            if response_format is not None:
+                kwargs["response_format"] = response_format
+                kwargs["enable_json_schema_validation"] = True
+            response = await litellm.acompletion(**kwargs)
         except Exception as error:  # noqa: BLE010 — litellm 的错误类型不稳定
             raise GenerationFailure(
                 f"模型调用失败: {error}", retryable=_is_retryable(error)
             ) from error
 
         text = response.choices[0].message.content or ""
-        text = self._strip_thinking(text).strip()
+        text = text.strip()
 
         if not text:
             raise GenerationFailure("模型返回了空文本", retryable=True)
@@ -76,34 +86,6 @@ class ModelGateway:
             PromptRole.ASSISTANT: "assistant",
         }
         return [{"role": role_map[m.role], "content": m.text} for m in messages]
-
-    @staticmethod
-    def _strip_thinking(text: str) -> str:
-        """剥掉 thinking … 或 <think>…</think> 的思考过程。
-
-        两种格式都处理：
-        - "thinking\\n思考内容\\n正文" → 取 "正文"
-        - "<think>思考内容</think>正文" → 取 "正文"
-        """
-        for tag in ("<think>", "<thinking>"):
-            if tag in text:
-                text = text.split(tag, 1)[-1]
-        for tag in ("</think>", "</thinking>"):
-            if tag in text:
-                text = text.split(tag, 1)[0]
-                return text
-
-        # "thinking" 作为行首标记 → 剥掉标记行 + 紧跟的思考内容行
-        if "thinking" in text:
-            after_marker = text.split("thinking", 1)[-1]
-            # 跳过标记行的剩余部分 + 紧跟的一行思考内容
-            lines = after_marker.split("\n")
-            # lines[0] = 标记行剩余（通常为空）, lines[1] = 思考内容, lines[2:] = 正文
-            remaining = lines[2:] if len(lines) > 2 else []
-            text = "\n".join(remaining)
-
-        return text
-
 
 def _is_retryable(error: Exception) -> bool:
     """判断一条 litellm 错误值不值得重试。"""

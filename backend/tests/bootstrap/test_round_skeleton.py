@@ -156,6 +156,7 @@ def test_a_whole_round_runs_end_to_end(runtime: Runtime) -> None:
     # ── 4. 逐条裁决：要 prp_1、不要 prp_2（CR-002）；少列一条必须被拒
     answer = CardAnswer(
         card_id="crd_fill",
+        verdict="confirm",
         status=CardStatus.ANSWERED,
         proposal_states={"prp_1": ProposalState.KEPT, "prp_2": ProposalState.REMOVED},
     )
@@ -165,6 +166,7 @@ def test_a_whole_round_runs_end_to_end(runtime: Runtime) -> None:
             card,
             CardAnswer(
                 card_id="crd_fill",
+                verdict="confirm",
                 status=CardStatus.ANSWERED,
                 proposal_states={"prp_1": ProposalState.KEPT},
             ),

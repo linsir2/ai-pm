@@ -59,9 +59,13 @@ class CardAnswer(ContractModel):
     **填充卡的"要 / 不要"落在 `proposal_states`**：逐条列出这张卡上每个提案的决定。
     这里只判"有没有回应"；"每条提案是不是都给了决定"要看得见卡片本身，所以那条规则在
     `invariants.check_proposal_states` 里（M9 收到用户回应时调它）。
+
+    **`verdict` 是显式标记**（CR-007）：`confirm` 确认 / `correct` 纠正。
+    `verdict = "correct"` 时 `answer` 必填；`verdict = "confirm"` 时 `answer` 可空。
     """
 
     card_id: str
+    verdict: str
     status: CardStatus
     answer: str | None = None
     proposal_states: dict[str, ProposalState] = Field(default_factory=dict)
@@ -70,15 +74,15 @@ class CardAnswer(ContractModel):
     def _check(self) -> "CardAnswer":
         if not self.card_id:
             raise ContractViolation("回应的 card_id 不能为空")
+        if self.verdict not in ("confirm", "correct"):
+            raise ContractViolation(
+                f"verdict 必须是 confirm 或 correct，收到 '{self.verdict}'"
+            )
+        if self.verdict == "correct" and not (self.answer or "").strip():
+            raise ContractViolation("verdict = 'correct' 时 answer 必填——纠正必须有内容")
         for proposal_id in self.proposal_states:
             if not proposal_id.strip():
                 raise ContractViolation("提案裁决里出现了空的 proposal_id")
-        if (
-            self.status is CardStatus.ANSWERED
-            and not (self.answer or "").strip()
-            and not self.proposal_states
-        ):
-            raise ContractViolation("标成已回应就必须有回应内容：打字，或填充卡的提案裁决")
         return self
 
 

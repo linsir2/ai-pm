@@ -1,10 +1,18 @@
 # PM Studio 公共契约
 
-- 版本：v0.21
-- 日期：2026-09-17
-- 对应：PRD v0.15
+- 版本：v0.22
+- 日期：2026-09-18
+- 对应：PRD v0.16
 
 ### 变更记录
+
+**v0.22**（2026-09-18）
+
+- **CR-007（C7）**：`CardAnswer` 加 `verdict` 字段（`confirm` / `correct`）。原来靠"空=确认"的隐式约定无法表达
+  "确认 + 顺口补充一句"，且 F3 已裁决必须用显式字段。`verdict = "confirm"` 时 `answer` 可空，
+  `verdict = "correct"` 时 `answer` 必填（纠正必须有内容）
+- **R1.4 范围确认**：`submit_cards`（确认路径）、M20 事务写入、M28 结构化成稿（返回 JSON 对齐冻结 Schema）。
+  纠正路径（`verdict = "correct"`）留 R2 实现，本文件只定字段、不定纠正流程
 
 **v0.21**（2026-09-17）
 
@@ -592,14 +600,17 @@ claims: [
 | 字段 | 作用 | 谁写 | 谁读 |
 |---|---|---|---|
 | `card_id` | 回应的是哪张卡 | 界面 | M9 |
+| `verdict` | **`confirm` 确认 / `correct` 纠正**（显式标记，F3 裁决） | 用户 | L2 决定走确认路径还是纠正路径 |
 | `status` | `pending` 待回应 / `answered` 已回应 / `skipped` 跳过 | 用户 | 界面；M9 |
-| `answer` | 打字的回应（点按钮时可以留空） | 用户 | M20 写入；M17 提炼反馈 |
+| `answer` | 打字的回应（确认时可空，纠正时必填） | 用户 | M20 写入；M17 提炼反馈 |
 | `proposal_states` | **只有填充卡用**：逐条列出每个 `proposal_id` 的 `kept` / `removed` | 用户 | M9 校验列全；M20 只写 `kept` 的那些 |
 
 **不变量**
 
 - **一张卡只针对一个议题**：一个冲突，或者一个独立的问题。不同领域、互不相干的疑问不合并到同一张卡上。
 - 用户回应的方式有两种：点按钮，或直接在输入框里打字。两者地位相同。
+- **`verdict` 是显式标记**：`confirm` 或 `correct`，不允许隐式推断。`verdict = "correct"` 时 `answer` 必填
+  （纠正必须有内容）；`verdict = "confirm"` 时 `answer` 可空（确认时可能顺口补充一句）
 - **填充卡的裁决必须列全**：`answered` 的填充卡，`proposal_states` 要覆盖这张卡的**每一个**
   `proposal_id`，多一个少一个都拒（`invariants.check_proposal_states`）；`pending` / `skipped`
   时不许带值。少一条会被当成默认的 `kept`——"忘了传 = 默认要"会把用户没要的内容写进文档。
@@ -1126,7 +1137,7 @@ M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长�
 | 接口 | 入参 | 返回 | 契约 |
 |---|---|---|---|
 | `startRound(project_id, entry, user_input, scope)` | 项目、入口、本轮用户输入、这一轮选的字段 | `round_id` | 入 C1；出 C12 `round` 区块 + `round.updated` |
-| `submitCards(group_id, answers[])` | 每张卡的 `card_id` + 用户回应（按钮或打字）+ `pending/answered/skipped` | 卡片组新状态 | 入 C7；出 C8（更新）+ `card_group.updated`（`state = confirmed`） |
+| `submitCards(group_id, answers[])` | 每张卡的 `card_id` + `verdict`（`confirm`/`correct`）+ `answer` + `proposal_states` | 卡片组新状态 | 入 C7；出 C8（更新）+ `card_group.updated`（`state = confirmed`） |
 | `runDiscussion(project_id, user_input)` | 项目、用户输入 | C14 | C14 |
 | `summarizeDiscussion(discussion_round_id)` | 哪一轮讨论 | C6 数组 | C6 |
 | `selectIdeas(idea_ids[], discarded_ids[])` | 用户勾选结果 | — | C6 的 `status` |
@@ -1269,8 +1280,9 @@ M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长�
 | 9 | L2 → L3 | 写 `context` 区块：`blocks` / `dropped` / `assembled_at` | C12 |
 | 10 | L2 → L6 `complete`（复述理解） | 产出 C7：`card_id`（新）/ `kind = understanding` / `prompt`（**必须含至少一条只有读了文档才知道的信息**）/ `status = pending` | C7 |
 | 11 | L2 → L3 → L1 | 写 `card_group`：`group_id`（新）/ `round_id` / `cards: [上面那张]` / `state = answering`；发 `card_group.updated {group_id, round_id, state: answering, card_count}` | C8、C13 |
-| 12 | 用户 → L1 → L2 `submitCards` | 每张卡：`card_id` + `answer`（点按钮或打字）+ `status` | C7 |
-| 13 | 用户纠正时 | L2 把 `answer` 并进 `user_input` → 回第 4 步**重新组装**（纠正可能改变该读什么）→ 直接生成，**不再出第二张理解卡** | C7 不变量 |
+| 12 | 用户 → L1 → L2 `submitCards` | 每张卡：`card_id` + `verdict`（`confirm`/`correct`）+ `answer` + `proposal_states` | C7 |
+| 13 | `verdict = "correct"` 时 | L2 把 `answer` 并进 `user_input` → 回第 4 步**重新组装**（纠正可能改变该读什么）→ 直接生成，**不再出第二张理解卡**。**R1.4 范围外，留 R2 实现** | C7 不变量 |
+| 13a | `verdict = "confirm"`（理解卡） → M28 成稿 | L2 → M28：内容候选 + 模板 + C1 + 相关 C2 → **C7 `kind=fill`**，`proposals[]` 每条含 `proposal_id` / `target_label` / `op` / `content` / `state` / `citations`。**模型返回 JSON，校验对齐冻结 Schema** | C7、C10、C15 |
 | 14 | L2 → L6 | 逐角色：`canUse(role_id, tool_id)` → `allow` / `deny`；角色本体来自 C10（`kind = 角色`，挂着自己的 prompt / skill） | C10、M23 |
 | 15 | L2 → L6 `complete` | 角色产出 C4：`packet_id` / `round_id` / `role_id` / `claims[]`；每条 claim：`claim_id` / `statement` / `kind`（`proposal` / `challenge`）/ `target_label` / `citations` | C4、C15 |
 | 16 | 角色要用工具时 | L2 → L5 工具 → C5 → 由编排层追加进 `context` 区块（工具只管吐材料包，I7）；工具层发 `tool.invoked {round_id, role_id, tool_id, status: started/finished}` | C5、C12、C13 |
