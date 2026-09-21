@@ -10,7 +10,6 @@
 
 import pytest
 
-from pmstudio.common.errors import ContractViolation
 from pmstudio.communication.board import BoardEditor, BoardReader
 from pmstudio.communication.event_bus import EventBus
 from pmstudio.contracts.interfaces.communication import Board, BoardWriter
@@ -24,7 +23,6 @@ from pmstudio.harness.retry import RetryingHarness
 from pmstudio.memory.context_assembler import ContextAssembler
 from pmstudio.orchestration.round_driver import RoundDriver
 from pmstudio.registry.entries import InMemoryRegistry
-from pmstudio.tools.services.document_writer import DocumentWriter
 from pmstudio.tools.services.project_service import ProjectService
 
 # 端口 → (实现类, 当前已实现的方法集合)

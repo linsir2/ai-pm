@@ -8,7 +8,7 @@ import pytest
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
-from pmstudio.common.ids import IdGenerator, TimestampIdGenerator
+from pmstudio.common.ids import TimestampIdGenerator
 from pmstudio.contracts.enums import CardKind, ContextBlockSource, RoundEntry, RoundPhase
 from pmstudio.contracts.models.card import Card
 from pmstudio.contracts.models.prompt import PromptMessage

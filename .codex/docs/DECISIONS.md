@@ -1,11 +1,20 @@
 # PM Studio 工程裁决记录
 
-- 版本：v0.15
-- 日期：2026-09-18
+- 版本：v0.16
+- 日期：2026-09-21
 - 作用：记录**工程与契约层面的裁决**。产品级决策仍以 `PRD.md` 为准，字段级定义仍以 `CONTRACTS.md` 为准；本文件只回答"这条到底怎么定的、为什么"。
 - 纪律：只写**已经拍板**的事。没定的进最后一节，不写进正文。
 
 ### 变更记录
+
+**v0.16**（2026-09-21）
+
+- **新增 §21：R1.5 / R1.5.1 落地留痕与 R1.6 契约追平**。这两次提交（`94c5246` / `bd2bdbc`）当时
+  只留了 commit message，没进本文件、也没进 `CONTRACTS.md`——本版补记，并加三条机器钉防止再次发生
+- **新增 §22：待拍板（`docs/redesign` 与现行目录结构的取舍、默认模型提供商）**。按"没定的不进正文"
+  的纪律单开一节，拍板后并入正文
+- **R1.6 趁真链路冒烟修掉一个静默失效**：M28 收模型输出时"落不了位"原来会产出一张 `proposals=()`
+  的空填充卡，把裸 `ValidationError` 甩给上层；现在大声失败并映射 503（详见 §21.3）
 
 **v0.15**（2026-09-18）
 
@@ -609,3 +618,108 @@ R1 的第三刀（R1.3）和第四刀（R1.4）：模型接入 + 写文档。
 | 1 | 纠正路径（`verdict = "correct"` → 重新组装 → 复述） | R2 卡片机制补全 |
 | 2 | 角色级模型（`C10 Role` 加 `model_ref`） | M6 角色注册表落地时（R2+） |
 | 3 | 多模型/每项目选模型（C16 `ProjectConfig.model_ref`） | 有消费者时 |
+
+---
+
+## 21. R1.5 / R1.5.1 落地留痕与 R1.6 契约追平（2026-09-20 / 09-21）
+
+这两步的代码在 09-20 就落地并提交了（`94c5246` / `bd2bdbc`），但**只留了 commit message**：
+契约变了六处、工程口径变了四处，`CONTRACTS.md` 与本文都没有记。本章补记，
+并把"文档面不许落后机器面"变成机器会红的三条用例（§21.3 第 1 条）。
+
+### 21.1 R1.5 API 层（`94c5246`）
+
+**退出条件**：前端能用 HTTP 跑完"建项目 → 开轮 → 提交卡片 → 读文档与版本 → 订阅事件"。
+
+| # | 事 | 结果 |
+|---|---|---|
+| 1 | HTTP 入口（不占 M 号） | `backend/web_api/`：`app.py` 五组路由 + `GET /events/stream`（SSE） |
+| 2 | 视图投影 | `dto.py` 显式只暴露前端要的字段（`base_versions` / `dropped` / `parent_id` / `snapshot` 不外露） |
+| 3 | 事件推送 | `sse.py`：先回放 `event_log.read_by_round` 的历史，再 0.5s 轮询增量 |
+| 4 | 错误映射 | `errors.py`：`ContractViolation → 400`、`ValueError → 422`（503 在 R1.6 补，见 §21.3） |
+| 5 | 依赖与测试路径 | `pyproject` 加 fastapi / uvicorn / httpx；`conftest.py` 把 `backend/` 放上 `sys.path` |
+| 6 | 顺带修的读口 | `event_log.read_by_round(None)` 可读全部事件（复盘界面要用） |
+
+### 21.2 R1.5.1 引用归因与 DDD 收尾（`bd2bdbc`）
+
+| # | 事 | 结果 | 契约 |
+|---|---|---|---|
+| 1 | **引用归因（I21）** | M13 组装时给可引用块编连续证据号 `E1..En`；M28 把编号清单放进 prompt，模型返回的 `citations` 只能从这个集合里取，再反查成真实 `Citation`（BLOCK 带版本 / USER_INPUT 带 round_id） | **CR-008**（C12） |
+| 2 | **I3 审计留痕** | `BlockOp` 加 `source_card_id`：M20 从填充卡取 `card_id` 透传，Ledger 落到 `Block.source_card_id`，`is_ai_written` 因此成立 | **CR-009**（C3） |
+| 3 | **D1 修正** | `write_document(trigger, payload)` 收敛为严格两参：M20 自己回黑板读卡片组与轮次；`CardGroup` 收进领域行为（`apply_answer` / `kept_proposals`） | — |
+| 4 | **端口签名锁（P0）** | `contracts/signature_lock.py`：`inspect.signature` 严格比对协议与实现（含负例），配 `test_port_implementations.py` 的"声明面 vs 实现面"映射表 | — |
+| 5 | **无密钥可跑（P0）** | `harness/fake.py` 的 `FakeHarness`：M8→M28→M20 全闭环不打网络 | — |
+| 6 | **数据流修复** | 确认理解卡后，RoundDriver 把 `CONTEXT` 区块里**带证据号的真实块**传给 Drafter——传空数组会让引用归因在真实链路里断掉 | — |
+| 7 | 设计稿落地 | `docs/redesign/`（DDD + TDD 重设计，状态：待评审） | — |
+
+**留痕缺口**（R1.6 追平）：`CR-001` / `CR-006` 从未写进 `CONTRACTS.md`；`CR-008` / `CR-009` 只进了 `frozen.py`；
+`C3` / `C10` / `C12` 的字段表没跟着更新；`CONTRACTS.md` 头部还停在 v0.22。
+
+### 21.3 R1.6 契约追平与真链路修复（`refactor/ddd-redesign` 工作区）
+
+| # | 问题 | 裁决 | 落地 |
+|---|---|---|---|
+| 1 | **文档面 ↔ 机器面没人钉**：全仓没有一个用例读 `.codex/docs/`，字段集靠人工抄写，所以"改了锁不写文档"能藏两周 | **加三条用例**：每条 CR 都要在文档里查得到；头部版本号 = 最新 CR 的 `doc_version`；CR 加的字段必须写进对应契约章节的正文 | `tests/contracts/test_freeze.py`；`CONTRACTS.md` 补 v0.23 / v0.24 与 CR-001 / CR-006 留痕、C3 的 `BlockOp` 字段表、C10 的 `ModelBody` 补充字段、C12 的 `evidence_id` / `ref_version` |
+| 2 | **进度段与缺清单脱钩**：README 说"R1 未开工"，而 R1.1–R1.5.1 已经落地 | README 的"已实现 / 未实现"逐号列出（不写区间），用例对着 `missing.py` 核；README 承诺的 `pytest` / `pytest-asyncio` / `ruff` 必须真在依赖里 | `tests/bootstrap/test_repo_docs.py`；`pyproject` 的 `[dependency-groups] dev`（原来只声明了 httpx，`uv run pytest` 跑不起来） |
+| 3 | **密钥通道是假的**：`.env.example` 说"复制成 `backend/.env` 填密钥"，而 `python-dotenv` 声明了**没有消费者** | 补唯一消费者：HTTP 入口启动时读一次 `backend/.env`（不覆盖已有环境变量；文件不在不是错误） | `web_api/env.py` + `app.py`；`tests/api/test_env.py` |
+| 4 | **真链路冒烟发现 M28 静默产空卡**：模型返回的 JSON 一条都落不了位时，旧实现把每条 `continue` 掉，构造出 `proposals=()` 的填充卡；而 C7 要求填充卡必须有提案，于是用户拿到的是裸 `ValidationError`（500），既不知道卡在哪一步、也不知道能不能重试（AC12） | **大声失败**：落不了位就抛 `GenerationFailure(retryable=True)`，报错带上"允许的字段 + 模型实际给的 key"；同时收三种形态（字段名对象 / 提案数组 / 包一层 `{"proposals": [...]}`），模型给的 `op` 不再被静默丢掉 | `orchestration/drafter.py`；`tests/orchestration/test_drafter.py` 五条新用例 |
+| 5 | **两个同名 `GenerationFailure`**：`common/errors.py` 有一个（带 step/reason/retryable，但从未被抛）、`harness/model_gateway.py` 自己又定义了一个（签名不同、基类不同） | **合到一处**：家在 `common/errors.py`（错误是 `common/` 允许的三样之一），L6 从这里 import（老路径继续可用）；HTTP 层据此映射 **503**，兑现 P0 承诺 | `common/errors.py`、`harness/model_gateway.py`、`web_api/errors.py`；`tests/api/test_error_mapping.py` |
+
+**这一轮的账**（每条带触发条件，别让它们变成没人知道的坑）：
+
+| # | 欠账 | 什么时候必须定 |
+|---|---|---|
+| 1 | **"输出格式错误 → 自动重试"没做**：重试只发生在 M26 包着的一次 `complete` 内，而 M28 的解析失败在它外面——PRD §5.1 第 4 条要的是"校验 + 重试" | R2（把校验挪进 harness，或让 M26 包住 M28 那一步） |
+| 2 | **模型输出问题的异常类型两处不一致**：非法 JSON → `ContractViolation`（400）；落不了位 → `GenerationFailure`（503） | 同上，一并统一成 `GenerationFailure` |
+| 3 | **M28 忽略 `required`**：必填字段（模板里 `required = true`）缺内容时应该产**补信息卡**（PRD 附录 B / C10），现在照样产填充卡 | R2（补信息卡那条链） |
+| 4 | **`待确认问题` / `开放问题` 不是给 AI 填的**（PRD 附录 B），但无选区时 M28 会把它们当可填字段——`selected` 来自文档顶层 label，而模板里没有"AI 可否填"的标志 | R2（跳过卡落"待确认问题"时一起定） |
+| 5 | **真链路冒烟不是回归测试**：模型输出不确定，它只回答"这条链现在通不通" | 一直如此；要变成回归就得先有确定性替身（M22 的录制回放） |
+
+### 21.4 核验（2026-09-21，`refactor/ddd-redesign`）
+
+- 全量测试：**627 → 649 项**（648 passed + 1 skipped；跳过的是真链路冒烟——不给密钥是正常状态）
+- `ruff check .`：**21 处 → 0**（其中 `tests/harness/test_model_gateway.py` 的 `F821` 是真缺陷：
+  注解里引用了未定义的名字，补上模块级 import）
+- `python -m pmstudio.contracts.frozen`：形状锁与代码一致；49 个模型在锁里，不多不少
+- 真链路（DeepSeek）：`DEEPSEEK_API_KEY=... uv run pytest tests/bootstrap/test_live_model_smoke.py -v -s`
+  跑通"输入 → 理解卡 → 填充卡（9 条提案，带 `[E10]` 引用归因）→ M20 事务写入 → 文档一版 → 轮次 `done`"
+
+---
+
+## 22. 待拍板（没定的事放这里，不进正文）
+
+### 22.1 `docs/redesign` 与现行目录结构：迁还是不迁
+
+`docs/redesign/` 是 DDD + TDD 的重设计稿（状态：设计稿 v1 · 待评审）。它和现行实现有三处**落点不同，
+语义一致**：
+
+| 项 | redesign 写的是 | 现行实现 | 差在哪 |
+|---|---|---|---|
+| 包结构 | `domain / application / ports / infrastructure / api / bootstrap` | `contracts / communication / orchestration / memory / tools / harness / storage / registry / bootstrap` + `web_api` | P0 的"迁移包结构"没做；但 DDD 的目的（行为收进聚合根、不变量有唯一的家）已就近落地，如 `CardGroup.apply_answer` / `kept_proposals` |
+| 端口位置 | `ports/`，签名锁测试叫 `test_port_signatures.py` | `contracts/interfaces/` + `contracts/signature_lock.py` | 机制已落地且更严（严格相等 + 负例）；只是位置与文件名不同 |
+| API 路径 | `POST /rounds/{id}/cards` | `POST /card-groups/{group_id}/submit` | 路由按"卡片组"组织，与 C8 的模型一致 |
+
+**两条路**：
+
+- **(A) 文档跟代码（推荐）**：只改 `docs/redesign/02-contracts.md` 与 `04-milestones.md` 里对落点的描述，
+  把"已落地但落点不同"标出来；不迁目录。代价：几处文档编辑。收益：零回归风险，而 redesign 的三条
+  承诺（聚合行为、端口签名锁、无密钥可跑）都已经成立。
+- **(B) 代码跟文档**：把包结构迁成 redesign 的分层。代价：动 60+ 文件的 import、全部测试、以及
+  **冻结的 `directory.md` §3** 与 P2；收益：分层名与设计稿字面一致。
+
+判断：**(A)**。迁移前先回答一个问题——**现在的目录让哪个具体的开发任务变难了？** 答不上来就不迁。
+
+### 22.2 默认模型提供商（`seeds/model.default.json`）
+
+种子里的默认模型现在是 `dashscope/qwen3.8-flash` + `DASHSCOPE_API_KEY`。换成 DeepSeek 要动三处：
+
+- `backend/seeds/model.default.json`：`model` → `deepseek/deepseek-chat`、`api_key_env` → `DEEPSEEK_API_KEY`
+- `backend/.env.example`：把示例变量名换掉
+- **两处测试断言跟着数据走**：`tests/registry/test_seeds.py:80-81`（钉了 model / api_key_env）；
+  `tests/harness/test_trimming.py:139`（钉了窗口 32768——**保持 32768 就不用改这条**）
+
+口径上没问题：`ModelBody` 的形状不变（C10 的字段早在 CR-005/CR-006 定完），换的是**数据**；
+"注册中心里唯一一条 active 的 model 条目 = 默认模型"这条解析规则也不受影响。
+
+R1.6 的做法是**保守的**：种子不动，冒烟用例在运行时换条目（`remove` + `register`）验证真链路。
+要不要把默认换成 DeepSeek，说一声就改——那两行断言不是"为迁就代码而改测试"，是数据本身换了。

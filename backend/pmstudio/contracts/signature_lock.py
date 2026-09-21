@@ -57,14 +57,17 @@ def _return_type_compatible(proto: object, impl: object) -> bool:
     # union：实现的每个分支都要能在协议分支里找到等价或子类型
     proto_args = get_args(proto)
     impl_args = get_args(impl)
-    if proto_args and impl_args and get_origin(proto) in (Union, types.UnionType) and get_origin(impl) in (Union, types.UnionType):
+    proto_is_union = get_origin(proto) in (Union, types.UnionType)
+    impl_is_union = get_origin(impl) in (Union, types.UnionType)
+    if proto_args and impl_args and proto_is_union and impl_is_union:
         return all(
             any(_return_type_compatible(p, i) for p in proto_args)
             for i in impl_args
         )
 
     # 泛型别名：origin 相同 + 参数逐位等价（如 tuple[X, ...]）
-    if proto_args and impl_args and get_origin(proto) is get_origin(impl) and len(proto_args) == len(impl_args):
+    same_origin = get_origin(proto) is get_origin(impl)
+    if proto_args and impl_args and same_origin and len(proto_args) == len(impl_args):
         return all(
             _return_type_compatible(p, i)
             for p, i in zip(proto_args, impl_args, strict=True)
@@ -141,8 +144,11 @@ def _assert_single_method(
 
     proto_return = proto_hints.get("return")
     impl_return = impl_hints.get("return")
-    if proto_return is not None and impl_return is not None:
-        if not _return_type_compatible(proto_return, impl_return):
-            raise ContractViolation(
-                f"{where}：返回类型不一致——协议 {proto_return}，实现 {impl_return}"
-            )
+    if (
+        proto_return is not None
+        and impl_return is not None
+        and not _return_type_compatible(proto_return, impl_return)
+    ):
+        raise ContractViolation(
+            f"{where}：返回类型不一致——协议 {proto_return}，实现 {impl_return}"
+        )

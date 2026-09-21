@@ -1,9 +1,6 @@
 """M9 卡片组装器：把卡片打包为 CardGroup。"""
 
-import asyncio
 from datetime import UTC, datetime
-
-import pytest
 
 from pmstudio.common.ids import TimestampIdGenerator
 from pmstudio.contracts.enums import CardGroupState, CardKind

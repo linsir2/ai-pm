@@ -4,7 +4,9 @@
 这里只做一件事：拿锁对现实。对不上时不只说"错了"，而是把改契约的顺序摆出来。
 """
 
+import re
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -165,3 +167,89 @@ def test_the_human_entry_point_reports_clean(capsys: pytest.CaptureFixture[str])
     output = capsys.readouterr().out
     assert "形状锁与代码一致" in output
     assert "覆盖对齐" in output
+
+
+# --- 文档面同步 ---------------------------------------------------------------
+#
+# 契约有三层：**文档面**（`CONTRACTS.md`，人读）、**机器面**（`frozen.py` 的形状锁）、
+# **实现面**（`contracts/` 里的模型）。机器面 ↔ 实现面由形状锁用例钉着；
+# 而文档面 ↔ 机器面**原来一条用例都没有**——CR-008 / CR-009 就是这样只进了锁、没进文档，
+# 于是"文档里的字段集是不是最新的"只能靠人记。
+#
+# 下面三条把这条缝补上。判据只碰结构化行（头部版本号、CR 编号、契约章节），
+# 不解析表格排版——文档改个写法不该让测试红。
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CONTRACTS_DOC = REPO_ROOT / ".codex" / "docs" / "CONTRACTS.md"
+
+# 机器面加了字段、文档面必须跟着写：`(契约, 模型) -> 那次 CR 新加的字段`。
+# 新写一条 CR 时往这张表补一行——这是"文档面不许落后"的显式账本。
+DOCUMENTED_FIELD_ADDITIONS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("C3", "BlockOp"): ("source_card_id",),
+    ("C10", "ModelBody"): ("model", "api_key_env", "timeout_seconds"),
+    ("C12", "ContextBlock"): ("evidence_id", "ref_version"),
+}
+
+
+def _contracts_doc_text() -> str:
+    assert CONTRACTS_DOC.exists(), (
+        f"找不到契约的文档面：{CONTRACTS_DOC}——它是字段级的唯一真相源，不该缺席"
+    )
+    return CONTRACTS_DOC.read_text(encoding="utf-8")
+
+
+def _doc_version_token(record: frozen.ContractChange) -> str:
+    """`CONTRACTS.md v0.24` → `v0.24`。"""
+    return record.doc_version.rsplit(" ", 1)[-1]
+
+
+def _version_key(record: frozen.ContractChange) -> tuple[int, ...]:
+    return tuple(int(part) for part in _doc_version_token(record).lstrip("v").split("."))
+
+
+def test_every_change_record_is_recorded_in_the_contracts_doc() -> None:
+    """变更记录不能只活在代码里：每条 CR 都要在 `CONTRACTS.md` 里查得到。"""
+    text = _contracts_doc_text()
+    missing = [
+        f"{record.record_id}（{record.doc_version}）"
+        for record in CHANGE_RECORDS
+        if record.record_id not in text or _doc_version_token(record) not in text
+    ]
+    assert not missing, (
+        "这些变更记录没同步到 CONTRACTS.md：" + "、".join(missing) + "\n"
+        "冻结的口径是「先写变更记录、文档同步一条」（CONTRACTS.md §0.2）："
+        "记录追加进 frozen.py 之后，本文档的变更记录也要跟着写一行"
+    )
+
+
+def test_contracts_doc_header_version_matches_the_latest_record() -> None:
+    """头部版本号 = 最新一条记录的 doc_version——两处各说各话，就没人知道该信哪个。"""
+    text = _contracts_doc_text()
+    header = re.search(r"^- 版本：(v\d+\.\d+)", text, re.MULTILINE)
+    assert header, "CONTRACTS.md 头部少了 `- 版本：vX.Y` 这一行"
+
+    latest = max(CHANGE_RECORDS, key=_version_key)
+    assert header.group(1) == _doc_version_token(latest), (
+        f"文档头写 {header.group(1)}，最新变更记录是 {latest.record_id} 的 "
+        f"{_doc_version_token(latest)}"
+    )
+
+
+@pytest.mark.parametrize(("contract_id", "model"), sorted(DOCUMENTED_FIELD_ADDITIONS))
+def test_fields_added_by_recent_changes_are_documented(contract_id: str, model: str) -> None:
+    """CR 加的字段必须在那个契约的正文里看得见——锁里有、文档里没有，等于没写。"""
+    shape = CONTRACT_SHAPES[contract_id]
+    assert any(line.startswith(f"{model}.") for line in shape), f"{model} 不在 {contract_id} 的形状锁里"
+
+    text = _contracts_doc_text()
+    start = text.find(f"### {contract_id} ")
+    assert start >= 0, f"CONTRACTS.md 里找不到 {contract_id} 的章节"
+    end = text.find("\n### ", start + 1)
+    section = text[start : end if end > 0 else len(text)]
+
+    undocumented = [
+        field for field in DOCUMENTED_FIELD_ADDITIONS[(contract_id, model)] if field not in section
+    ]
+    assert not undocumented, (
+        f"{contract_id} 的 {model} 在形状锁里，但文档章节里没写这些字段：{undocumented}"
+    )

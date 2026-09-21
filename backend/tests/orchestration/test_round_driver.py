@@ -25,7 +25,6 @@ from pmstudio.orchestration.consensus import ConsensusGenerator
 from pmstudio.orchestration.round_driver import RoundDriver
 from pmstudio.storage.board_store import BoardStore
 from pmstudio.storage.db import Database
-from pmstudio.storage.event_log import EventLog
 
 AT = datetime(2026, 9, 17, 10, 0, tzinfo=UTC)
 
@@ -74,7 +73,6 @@ def driver_setup(tmp_path: Path):
     store = BoardStore(db)
     bus = _FakeBus()
     clock = FixedClock()
-    event_log = EventLog(db)
 
     blackboard = Blackboard(store, bus, clock)
     board_reader = BoardReader(blackboard)

@@ -4,7 +4,6 @@ P0 核心防御机制。负例测试保证「故意引入漂移必须被抓」�
 这正是 D1（write_document 实现比协议多 6 个参数）教训的回归防线。
 """
 
-import inspect
 from typing import Protocol, runtime_checkable
 
 import pytest

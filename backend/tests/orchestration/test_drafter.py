@@ -9,7 +9,7 @@ import pytest
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
-from pmstudio.common.errors import ContractViolation
+from pmstudio.common.errors import ContractViolation, GenerationFailure
 from pmstudio.contracts.enums import BlockOpKind, CardKind, ContextBlockSource, RoundEntry, RoundPhase
 from pmstudio.contracts.models.card import Card
 from pmstudio.contracts.models.prompt import PromptMessage
@@ -111,8 +111,6 @@ def test_scope_filters_fields() -> None:
 
 
 def _evidence_block(evidence_id: str, ref: str, content: str = "依据内容", ref_version: int = 1):
-    from pmstudio.contracts.skeleton.board import ContextBlock
-
     return ContextBlock(
         source=ContextBlockSource.DOCUMENT,
         ref=ref,
@@ -201,3 +199,83 @@ def test_citation_claim_target_is_rejected_for_fill_card() -> None:
 
     with pytest.raises(ContractViolation, match="证据"):
         asyncio.run(drafter.draft_fill_card(_round_region(), evidence))
+
+
+# --- 真实模型输出的形态容差 + "不静默产空卡" -------------------------------------
+#
+# 这五条来自 R1.6 的真链路冒烟：同一段 prompt，DeepSeek 一次返回了以字段名为 key 的对象
+# （9 条提案，正常），另一次返回的 key 一个都落不进允许字段，旧实现把它们全部 `continue`
+# 掉，最后构造出 `proposals=()` 的填充卡——而 C7 要求填充卡**必须有提案数组**，
+# 于是用户看到的是裸 `ValidationError`（500）：既不知道卡在哪一步，也不知道能不能重试（AC12）。
+
+
+def test_proposal_array_shape_is_accepted() -> None:
+    """模型按 DECISIONS §20 的原始口径返回**提案数组** → 一样能成稿。
+
+    prompt 里要的是"以字段名为 key 的对象"，但换一家模型就可能给数组。
+    能不能落位取决于**每条提案有没有字段名与内容**，而不是模型长什么样。
+    """
+    raw = json.dumps(
+        [
+            {"target_label": "功能清单", "op": "append", "content": "支持讨论候选"},
+            {"target_label": "目标", "content": "做一个好工具"},
+        ],
+        ensure_ascii=False,
+    )
+    drafter = Drafter(_FakeHarness(raw), _FakeIds())
+
+    card = asyncio.run(drafter.draft_fill_card(_round_region(), []))
+
+    assert [proposal.target_label for proposal in card.proposals] == ["功能清单", "目标"]
+    assert card.proposals[0].op is BlockOpKind.APPEND
+
+
+def test_wrapped_proposal_array_is_unwrapped() -> None:
+    """模型自己包一层 `{"proposals": [...]}` → 也要认，不许当成"不认识的 key"丢掉。"""
+    raw = json.dumps(
+        {"proposals": [{"target_label": "功能清单", "content": "包了一层"}]},
+        ensure_ascii=False,
+    )
+    drafter = Drafter(_FakeHarness(raw), _FakeIds())
+
+    card = asyncio.run(drafter.draft_fill_card(_round_region(), []))
+
+    assert [proposal.target_label for proposal in card.proposals] == ["功能清单"]
+
+
+def test_replace_op_from_the_model_is_honored() -> None:
+    """模型说 `replace` 就 `replace`——`op` 不许被静默丢掉再当成 `append`。"""
+    raw = json.dumps(
+        [{"target_label": "目标", "op": "replace", "content": "整段替换"}],
+        ensure_ascii=False,
+    )
+    drafter = Drafter(_FakeHarness(raw), _FakeIds())
+
+    card = asyncio.run(drafter.draft_fill_card(_round_region(), []))
+
+    assert card.proposals[0].op is BlockOpKind.REPLACE
+
+
+def test_keys_outside_the_allowed_fields_are_a_loud_generation_failure() -> None:
+    """模型返回了 JSON，但 key 一个都不在允许字段里 → **大声失败**，不产空卡。
+
+    这就是真链路上那次失败：报错要带上模型实际给的 key，否则查不出是哪一步坏、该怎么调 prompt。
+    """
+    raw = json.dumps({"分析结果": "我先想了想，但没给字段名"}, ensure_ascii=False)
+    drafter = Drafter(_FakeHarness(raw), _FakeIds())
+
+    with pytest.raises(GenerationFailure) as exc_info:
+        asyncio.run(drafter.draft_fill_card(_round_region(selected=["功能清单"]), []))
+
+    assert exc_info.value.retryable is True
+    assert "分析结果" in str(exc_info.value)
+    assert "功能清单" in str(exc_info.value), "报错要说清允许哪些字段"
+
+
+def test_nothing_usable_is_a_loud_generation_failure() -> None:
+    """全空白内容、空对象 → 同样算生成失败：填充卡不可能"一条提案都没有"。"""
+    for raw in ('{"功能清单": "   ", "目标": ""}', "{}"):
+        drafter = Drafter(_FakeHarness(raw), _FakeIds())
+        with pytest.raises(GenerationFailure) as exc_info:
+            asyncio.run(drafter.draft_fill_card(_round_region(), []))
+        assert exc_info.value.retryable is True

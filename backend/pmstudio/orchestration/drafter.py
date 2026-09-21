@@ -1,7 +1,11 @@
 """M28 成稿器（R1.4）：用户确认理解后，生成填充卡。
 
 使用 response_format=json_object 强制 JSON 输出。
-模型返回 {字段名: 内容} 映射，Drafter 转为 Proposal 冻结 Schema。
+
+**模型返回的 JSON 收三种形态**（判据是"内容能不能落位"，不是"模型长什么样"）：
+以字段名为 key 的对象（prompt 里要的）、提案数组（`DECISIONS.md` §20 的原始口径）、
+模型自己包一层 `{"proposals": [...]}`。一条都落不了位时**大声失败**（`GenerationFailure`），
+绝不静默产一张空填充卡——C7 的填充卡必须有提案数组。
 
 **引用归因（v2）**：M13 组装上下文时给每个可引用块编了 `evidence_id`（E1..En）。
 Drafter 把编号证据清单放进 prompt，模型引用时只能从这里面取（I21）；
@@ -12,7 +16,7 @@ Drafter 把编号证据清单放进 prompt，模型引用时只能从这里面�
 import json
 from collections.abc import Sequence
 
-from pmstudio.common.errors import ContractViolation
+from pmstudio.common.errors import ContractViolation, GenerationFailure
 from pmstudio.contracts.enums import BlockOpKind, CardKind, CitationTargetType, ContextBlockSource, PromptRole
 from pmstudio.contracts.models.card import Card, Proposal
 from pmstudio.contracts.models.citation import Citation
@@ -40,6 +44,79 @@ def _format_evidence_list(blocks: Sequence[ContextBlock]) -> str:
         content = block.content.strip() or "(空)"
         lines.append(f"[{block.evidence_id}] {source} {block.ref}{version}: {content}")
     return "\n".join(lines)
+
+
+# 提案对象里"字段名"可能用的 key：契约叫 `target_label`，模型常写 `label`。
+_LABEL_KEYS = ("target_label", "label")
+
+
+def _op_of(value: object) -> BlockOpKind:
+    """模型给的 `op`（可选）。认不出来就按 `append`——追加不会覆盖已有内容，是安全的默认。"""
+    raw_op = value.get("op") if isinstance(value, dict) else None
+    if isinstance(raw_op, str):
+        try:
+            return BlockOpKind(raw_op.strip().lower())
+        except ValueError:
+            return BlockOpKind.APPEND
+    return BlockOpKind.APPEND
+
+
+def _proposal_entry(item: object) -> tuple[str, object]:
+    """提案数组里的一项 → `(字段名, value)`。"""
+    if not isinstance(item, dict):
+        raise ContractViolation(f"提案数组里每一项都必须是对象，收到 {type(item).__name__}")
+    for key in _LABEL_KEYS:
+        label = item.get(key)
+        if isinstance(label, str) and label.strip():
+            return label.strip(), item
+    raise ContractViolation(f"提案缺少 target_label（收到 {sorted(item)}）")
+
+
+def _proposal_entries(data: object) -> list[tuple[str, object]]:
+    """把模型返回的 JSON 归一成 `[(字段名, value)]`。
+
+    收三种形态：
+
+    ① 以字段名为 key 的对象（prompt 里要的形态）：`{"功能清单": "…"}`；
+    ② 提案数组：`[{"target_label": …, "op": …, "content": …, "citations": [...]}]`
+       （`DECISIONS.md` §20 记的原始口径就是数组）；
+    ③ 模型自己包一层：`{"proposals": [提案, ...]}`（只有一个 key、值是非空对象数组）。
+
+    归一不了就抛 `ContractViolation`——**绝不返回空**（空数组要由调用方说清是什么失败）。
+    """
+    if isinstance(data, list):
+        return [_proposal_entry(item) for item in data]
+    if isinstance(data, dict):
+        if "content" in data and any(key in data for key in _LABEL_KEYS):
+            return [_proposal_entry(data)]
+        single_list = _unwrap_single_list(data)
+        if single_list is not None:
+            return [_proposal_entry(item) for item in single_list]
+        return list(data.items())
+    raise ContractViolation(f"模型返回的 JSON 必须是对象或提案数组，收到 {type(data).__name__}")
+
+
+def _unwrap_single_list(data: dict) -> list | None:
+    """`{"proposals": [...]}` 这类只有一层包装的对象 → 取出里面的数组。"""
+    if len(data) != 1:
+        return None
+    (only_value,) = data.values()
+    if (
+        isinstance(only_value, list)
+        and only_value
+        and all(isinstance(item, dict) for item in only_value)
+    ):
+        return only_value
+    return None
+
+
+def _json_keys(data: object) -> str:
+    """报错时告诉人"模型到底给了什么"——不然只能靠猜该改 prompt 还是换模型。"""
+    if isinstance(data, dict):
+        return "、".join(str(key) for key in data) or "(空对象)"
+    if isinstance(data, list):
+        return f"数组 {len(data)} 项"
+    return type(data).__name__
 
 
 class Drafter:
@@ -117,12 +194,16 @@ class Drafter:
         selected: list[str],
         evidence: dict[str, ContextBlock],
     ) -> list[Proposal]:
-        """解析模型返回的 JSON 对象 → Proposal 列表。
+        """解析模型返回的 JSON → Proposal 列表（形态容差见 `_proposal_entries`）。
 
         value 两种形态：
         - 字符串：内容本身，无引用（向后兼容）；
-        - `{"content": str, "citations": [证据号, ...]}`：内容 + 引用归因。
+        - `{"content": str, "citations": [证据号, ...], "op": str}`：内容 + 引用归因 + 落位方式。
         citations 必须是证据集合里的（I21），Drafter 反查成真实 Citation。
+
+        **一条都落不了位时大声失败**：C7 要求填充卡必须带提案数组，"0 条提案"永远不是一张
+        合法卡片；静默返回空只会让上层拿到裸 `ValidationError`，用户既不知道卡在哪一步、
+        也不知道能不能重试（AC12）。
         """
         text = raw.strip()
         if text.startswith("```"):
@@ -136,11 +217,8 @@ class Drafter:
                 f"模型返回的不是合法 JSON（M28 要求 JSON 对齐冻结 Schema）：{error}"
             ) from error
 
-        if not isinstance(data, dict):
-            raise ContractViolation(f"模型返回的 JSON 必须是对象，收到 {type(data).__name__}")
-
         proposals: list[Proposal] = []
-        for idx, (label, value) in enumerate(data.items()):
+        for idx, (label, value) in enumerate(_proposal_entries(data)):
             if selected and label not in selected:
                 continue
 
@@ -151,13 +229,21 @@ class Drafter:
                 proposal = Proposal(
                     proposal_id=self._ids.new_id("prp"),  # type: ignore[attr-defined]
                     target_label=label,
-                    op=BlockOpKind.APPEND,
+                    op=_op_of(value),
                     content=content.strip(),
                     citations=citations,
                 )
                 proposals.append(proposal)
             except (ContractViolation, ValueError) as error:
                 raise ContractViolation(f"第 {idx + 1} 条提案校验失败：{error}") from error
+
+        if not proposals:
+            raise GenerationFailure(
+                "模型返回的 JSON 一条提案都落不了位——"
+                f"允许的字段：{selected or '不限'}；模型给的 key：{_json_keys(data)}",
+                retryable=True,
+                step="drafting",
+            )
 
         return proposals
 

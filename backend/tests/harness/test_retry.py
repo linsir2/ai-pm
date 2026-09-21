@@ -20,7 +20,7 @@ from pmstudio.contracts.enums import (
 from pmstudio.contracts.models.prompt import PromptMessage
 from pmstudio.contracts.models.scope import Scope
 from pmstudio.contracts.skeleton.board import RoundRegion
-from pmstudio.harness.model_gateway import GenerationFailure, ModelGateway
+from pmstudio.harness.model_gateway import GenerationFailure
 from pmstudio.harness.retry import RetryingHarness
 
 AT = datetime(2026, 9, 17, 10, 0, tzinfo=UTC)

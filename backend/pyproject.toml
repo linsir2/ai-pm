@@ -11,9 +11,15 @@ dependencies = [
     "uvicorn>=0.30",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
+# 开发工具：**必须在依赖里声明**，否则 README 的 `uv run pytest` / `uv run ruff` 跑不起来
+# （原来只声明了 httpx，pytest / ruff 是"文档里承诺、环境里没有"）。
+# `uv sync` 默认就把 dev 组装上；见 tests/bootstrap/test_repo_docs.py 的钉。
 dev = [
     "httpx>=0.27",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
 ]
 
 [tool.pytest.ini_options]

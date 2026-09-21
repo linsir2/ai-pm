@@ -25,12 +25,17 @@ from web_api.dto import (
     round_to_dto,
     version_to_dto,
 )
+from web_api.env import load_env_file
 from web_api.errors import map_exception
 from web_api.sse import event_stream
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # 启动时读一次 `backend/.env`：这是本地开发的密钥通道（条目里只写变量名，
+    # 值只活在环境变量 / `.env` 里）。M22 是惰性读密钥的，所以放前放后都行；
+    # 放这里是为了"进进程就生效"，不用等到第一次调模型。
+    load_env_file()
     app.state.runtime = await build_runtime(app.state.db_path, harness=app.state.harness)
     yield
     app.state.runtime.close()

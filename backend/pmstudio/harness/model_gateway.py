@@ -5,6 +5,10 @@
 
 import os
 
+# `GenerationFailure` 的家在 `common/errors.py`——L2（成稿器）、L6（模型网关）、HTTP 层都要用它，
+# 它必须住在跨层那一层。这里 import 进来再抛，顺带让
+# `pmstudio.harness.model_gateway.GenerationFailure` 这条老 import 路径继续可用。
+from pmstudio.common.errors import GenerationFailure
 from pmstudio.contracts.enums import PromptRole, RegistryKind
 from pmstudio.contracts.models.prompt import PromptMessage
 from pmstudio.contracts.models.registry import ModelBody
@@ -13,14 +17,6 @@ try:
     import litellm
 except ImportError:  # pragma: no cover — 开发期可选依赖未安装时仍能 import 包
     litellm = None  # type: ignore[assignment]
-
-
-class GenerationFailure(Exception):
-    """一次模型调用失败。`retryable` 告诉调用方值不值得重试。"""
-
-    def __init__(self, message: str, *, retryable: bool) -> None:
-        super().__init__(message)
-        self.retryable = retryable
 
 
 class ModelGateway:

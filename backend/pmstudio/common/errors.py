@@ -16,10 +16,16 @@ class ContractViolation(PmStudioError, ValueError):
 class GenerationFailure(PmStudioError):
     """一次生成失败。
 
-    C13 要求 `generation.failed` 必须带三样：失败在哪一步、人话的原因、能不能重试。
+    C13 要求 `generation.failed` 必须带三样：失败在哪一步（`step`）、人话的原因（`reason`）、
+    能不能重试（`retryable`）。
+
+    **它是跨层的错误类型**：L6 的模型网关抛它、L2 的成稿器抛它、HTTP 层据此映射 503
+    （docs/redesign/02-contracts.md §2.5），所以家安在这里——`common/` 允许的三样里就有"错误"。
+    `harness/model_gateway.py` 从这里 import，不再自己定义同名类：两个同名类各带一套构造函数，
+    就是"同一件事两个说法"。
     """
 
-    def __init__(self, step: str, reason: str, retryable: bool) -> None:
+    def __init__(self, reason: str, *, retryable: bool, step: str = "generation") -> None:
         self.step = step
         self.reason = reason
         self.retryable = retryable

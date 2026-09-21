@@ -26,7 +26,6 @@ from pmstudio.contracts.models.card import Card, CardAnswer, Proposal
 from pmstudio.contracts.models.card_group import CardGroup
 from pmstudio.contracts.models.document import BlockOp
 from pmstudio.contracts.models.scope import Scope
-from pmstudio.contracts.skeleton.board import RoundRegion
 from pmstudio.harness.fake import FakeHarness
 
 AT = datetime(2026, 9, 18, 10, 0, tzinfo=UTC)
@@ -195,7 +194,14 @@ def test_submit_detects_version_conflict(tmp_path: Path) -> None:
     func_block = next(b for b in blocks if b.schema_label == "功能清单")
     r.ledger.write_blocks(
         doc_id,
-        [BlockOp(block_id=func_block.block_id, op=BlockOpKind.APPEND, content="手改内容", expected_version=1)],
+        [
+            BlockOp(
+                block_id=func_block.block_id,
+                op=BlockOpKind.APPEND,
+                content="手改内容",
+                expected_version=1,
+            )
+        ],
         VersionTrigger.MANUAL,
     )
 
@@ -218,12 +224,11 @@ def test_submit_understanding_card_confirm_creates_fill_card(tmp_path: Path) -> 
     p = asyncio.run(r.project_service.create_project("reg_tpl_initial", "Test"))
 
     # 开轮（会产生理解卡，停在 awaiting_user）
-    rid = asyncio.run(r.round_driver.start_round(
+    asyncio.run(r.round_driver.start_round(
         p.project_id, RoundEntry.MAIN, "细化功能清单", Scope(),
     ))
 
     # 读理解卡
-    rr = asyncio.run(r.round_driver._board.read(RegionName.ROUND))
     cg = asyncio.run(r.round_driver._board.read(RegionName.CARD_GROUP))
     understanding_card = cg.cards[0]
     assert understanding_card.kind is CardKind.UNDERSTANDING
@@ -280,7 +285,7 @@ def test_understanding_card_passess_real_evidence_blocks_to_drafter(tmp_path: Pa
     r = build_runtime_sync(tmp_path / "test.sqlite3", clock=FixedClock(), harness=FakeHarness())
     p = asyncio.run(r.project_service.create_project("reg_tpl_initial", "Test"))
 
-    rid = asyncio.run(r.round_driver.start_round(
+    asyncio.run(r.round_driver.start_round(
         p.project_id, RoundEntry.MAIN, "细化功能清单", Scope(),
     ))
 

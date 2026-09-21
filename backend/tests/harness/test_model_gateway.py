@@ -8,11 +8,11 @@ import pytest
 # 禁用 litellm 联网拉取价目表（测试环境无网络）
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
-from pmstudio.common.errors import ContractViolation  # noqa: E402
 from pmstudio.contracts.enums import PromptRole, RegistryKind, RegistryOwner  # noqa: E402
 from pmstudio.contracts.models.prompt import PromptMessage  # noqa: E402
 from pmstudio.contracts.models.registry import RegistryEntry  # noqa: E402
 from pmstudio.harness.model_gateway import GenerationFailure, ModelGateway  # noqa: E402
+from pmstudio.registry.entries import InMemoryRegistry  # noqa: E402
 
 AT = datetime(2026, 9, 17, 10, 0, tzinfo=UTC)
 
@@ -28,8 +28,6 @@ class _Clock:
 
 
 def _make_registry() -> "InMemoryRegistry":
-    from pmstudio.registry.entries import InMemoryRegistry
-
     return InMemoryRegistry(_Bus(), _Clock())
 
 

@@ -1,13 +1,29 @@
 # PM Studio 公共契约
 
-- 版本：v0.22
-- 日期：2026-09-18
+- 版本：v0.24
+- 日期：2026-09-20
 - 对应：PRD v0.16
 
 ### 变更记录
 
+**v0.24**（2026-09-20）
+
+- **CR-009（C3）**：`BlockOp` 加 `source_card_id`。M20 写入时要给 `Block.source_card_id` 留痕（I3），
+  而写入链路（`BlockOp` → `Ledger`）原来没有传输通道：AI 写入在构造 op 时透传填充卡的 `card_id`，
+  `manual` 留空——`is_ai_written` 因此成立。字段表见 §3 C3
+
+**v0.23**（2026-09-20）
+
+- **CR-008（C12）**：`ContextBlock` 加 `evidence_id` / `ref_version`。引用归因（I21）的前提是
+  **M13 组装上下文时给可引用块编连续唯一证据号**（`E1..En`），M28 把编号清单放进 prompt，
+  模型返回的 `citations` 只能从这个集合里取，再反查成真实 `Citation`；`ref_version` 供
+  `target_type = block` 的引用带上 `target_version`（I6 的失效判定要用）。字段表见 §3 C12
+- **口径**：证据号是**这一轮的**编号，随 `context` 区块在轮末一起消失，它不是长期标识
+
 **v0.22**（2026-09-18）
 
+- **CR-006（C10）**：`ModelBody` 加 `model` / `api_key_env` / `timeout_seconds`——M22 要模型名调
+  litellm、要环境变量名取密钥（**密钥本身永远不进条目**）、要超时值供 M26 判重试。字段表见 §3 C10
 - **CR-007（C7）**：`CardAnswer` 加 `verdict` 字段（`confirm` / `correct`）。原来靠"空=确认"的隐式约定无法表达
   "确认 + 顺口补充一句"，且 F3 已裁决必须用显式字段。`verdict = "confirm"` 时 `answer` 可空，
   `verdict = "correct"` 时 `answer` 必填（纠正必须有内容）
@@ -66,6 +82,8 @@
 
 **v0.17**（2026-09-15）
 
+- **CR-001（C1–C17）**：首版冻结。C1–C17 的形状就是 R0.2–R0.5 落地出来的那一版，
+  含 v0.9–v0.16 的全部修订；此后每改一处契约，先追加一条记录
 - **R0.6 契约冻结落地**：17 个契约（C1–C17）挂"已冻结"标记，规则写进 §0.2。
   载体是代码——`backend/pmstudio/contracts/frozen.py`（冻结标记 ＋ 形状锁 ＋ 变更记录），
   本文档只写规则与指路，不复制形状：形状只有一处，就不会出现两份说法
@@ -422,6 +440,21 @@
 - 三种 trigger 各自对应一次改动：`submit` = 一次卡片组确认（整组一次事务，改几处也只有一版）；`manual` = **一次显式保存**；`rollback` = 一次回退动作。
 - 因为 `submit` 版本上带 `group_id`，"撤销某次 AI 写入"是可表达的：查到该 `group_id` 产生的版本，回退到它之前那一版。
 
+**写入命令 `BlockOp`**（§5.3 `writeDocument(trigger = manual, payload = {block_ops[]})` 里的每一项）
+
+| 字段 | 作用 | 谁写 | 谁读 |
+|---|---|---|---|
+| `block_id` | 写哪个块 | 界面 | M20 定位 |
+| `op` | `replace` 改写 / `append` 追加 | 界面 | M20 |
+| `content` | 写什么（`append` 装增量，`replace` 装整段） | 界面 | M20 |
+| `expected_version` | 期望的块版本，对不上就报冲突（I10） | 界面 | M20 比对 |
+| `source_card_id` | **这一笔是谁写的**：AI 写入透传填充卡的 `card_id`，`manual` 留空（I3 留痕，CR-009） | M20 | 审计；`is_ai_written` 由它成立 |
+
+- 三个 payload 成员（`SubmitPayload` / `ManualEditPayload` / `RollbackPayload`）与 `BlockOp` 同属 C3，
+  形状锁在 `frozen.py` 的 `CONTRACT_SHAPES["C3"]`
+- **`source_card_id` 是透传字段**：M20 从填充卡取 `card_id` 填进每个 op，Ledger 落到 `Block.source_card_id`。
+  它存在的唯一理由是能回答"这个块是不是 AI 写的、由哪次确认产生"（AC2 / I3）
+
 ### C4 Agent Packet（信息包）
 
 角色输出的统一形态。它是**编排层内部的通用语**——不对外，但因为要跨 agent 传（M8 汇总、M28 成稿都要读），形态必须固定。
@@ -720,16 +753,19 @@ claims: [
 - **只有这两样**。"依赖与边界设为常驻上下文"的消费者是 M13（R4）；字段之间的硬依赖提示的消费者是
   M2 / M28（R1.2+）——它们真被读的时候再加，现在加就是没有消费者的字段。
 
-**模型的本体**（`kind = model` 的 `content`，CR-005）
+**模型的本体**（`kind = model` 的 `content`，CR-005 / CR-006）
 
 | 字段 | 作用 | 谁写 | 谁读 |
 |---|---|---|---|
 | `context_window_tokens` | 这个模型的上下文窗口（`> 0`） | M27（初始数据来自 `backend/seeds/`） | M24 算预算；M22 接模型时的校验 |
+| `model` | **调模型时用的 provider 模型名**（`provider/模型`，如 `deepseek/deepseek-chat`） | M27 | M22 把它交给 litellm |
+| `api_key_env` | **密钥所在的环境变量名**（如 `DEEPSEEK_API_KEY`） | M27 | M22 用它取密钥——**密钥本身永不进条目** |
+| `timeout_seconds` | 单次调用的超时（`> 0`） | M27 | M22 传给 litellm；M26 据此判"超时能不能重试" |
 
 - 预算是 `窗口 − 输出预留 − 系统开销`：后两项来自 C16 的项目配置，**窗口只能来自模型**——所以它是
   M24 唯一的模型侧输入。
-- **只放窗口**。endpoint / 模型名 / 密钥来源等 M22（R1.3）真正要用的时候再加（给契约加字段是兼容的）。
-  **密钥本身永远不进条目**：条目里只写"用哪个环境变量"。
+- **只放这四样**。endpoint / 温度 / 每项目选模型等真被读时再加（给契约加字段是兼容的）。
+  **密钥本身永远不进条目**：条目里只写"用哪个环境变量"（`api_key_env`），值只活在环境变量里。
 
 ### C11 Trace（观测）
 
@@ -806,6 +842,12 @@ claims: [
 | `content` | 带进来的正文 | 角色 prompt |
 | `priority` | 优先级，**`≥ 0` 的整数，越大越先保留**；同值按 `(source, ref)` 排序，保证同一份上下文每次裁出同一个结果 | M13 给数值；M24 只按它排序并裁，不做语义判断 |
 | `credibility` | 只有材料有（继承 C5） | M28 判断能不能单独当依据 |
+| `evidence_id` | **证据号 `E1..En`**（CR-008）：M13 组装完 `blocks` 后按顺序编号，同一轮内唯一 | M28 把编号清单放进 prompt；模型返回的 `citations` 只能从这个集合里取（I21） |
+| `ref_version` | `source = document` 时那个块的版本（CR-008）；其它来源为空 | M28 生成 `target_type = block` 的引用时填 `target_version`；M17 靠它判失效（I6） |
+
+> **证据号怎么发**：M13 编号、M28 消费，两端都只认这个号——模型说不出"依据"时不许瞎指（I21）。
+> 编号是**这一轮的坐标**，随 `context` 区块在轮末一起消失，不是长期标识；两个字段都可空
+> （编不出号时为空，此时不许被引用）。
 
 > 上下文块**不是新契约**，它是"这一轮按优先级带上来的东西"的容器：每个块的 `content` 都来自某个已有契约的对象，`ref` 指回那个对象。
 
@@ -1184,7 +1226,7 @@ M15 的家。消息是"面向界面说过的话"，滚动摘要是"历史太长�
 | trigger | payload | 说明 |
 |---|---|---|
 | `submit` | `{group_id}` | M20 自己去黑板读这一组，取 `state = kept` 的提案 |
-| `manual` | `{block_ops[]}`，每项 `{block_id, op: replace \| append, content, expected_version}` | 一次**显式保存** = 一版 |
+| `manual` | `{block_ops[]}`，每项 `{block_id, op: replace \| append, content, expected_version, source_card_id}`（字段表见 §3 C3） | 一次**显式保存** = 一版 |
 | `rollback` | `{target_version_id}` | 用目标版本的 `snapshot` 写一次，产生新版本 |
 
 **L6 Harness**
