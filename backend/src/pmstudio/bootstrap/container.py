@@ -10,6 +10,7 @@ from pmstudio.api.app import ApiServices, create_app
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.seat import SeatReviewer
+from pmstudio.application.ports import ModelGateway
 from pmstudio.application.use_cases import (
     ConfirmDraft,
     CreateProject,
@@ -65,7 +66,15 @@ class Container:
         self.app = app
 
 
-def build_container(settings: Settings) -> Container:
+def build_container(settings: Settings, *, gateway: ModelGateway | None = None) -> Container:
+    """唯一组装点。
+
+    `gateway` 是**唯一**给测试用的注入口（端到端测试注入脚本化网关）。
+    生产路径（`build_app`）永远自己 new 真网关，不提供"用假模型"的开关——
+    这一点由 `tests/architecture/test_no_fakes_in_production.py` 与
+    `tests/bootstrap/test_container.py::test_container_has_no_fake_model_switch` 守着。
+    """
+
     connection = database.connect(settings.db_path)
     clock = SystemClock()
     ids = UuidIdGenerator()
@@ -78,9 +87,10 @@ def build_container(settings: Settings) -> Container:
     uow = SqliteUnitOfWork(connection)
 
     prompts = FilePromptLibrary(PROMPTS_DIR)
-    gateway = LiteLLMGateway(
-        model=settings.model, api_key=settings.api_key, api_base=settings.api_base
-    )
+    if gateway is None:
+        gateway = LiteLLMGateway(
+            model=settings.model, api_key=settings.api_key, api_base=settings.api_base
+        )
     catalog = TomlSeatCatalog(SEATS_DIR)
     assigner = EvidenceAssigner()
     analyzer = ClaimAnalyzer(model=gateway, prompts=prompts)
