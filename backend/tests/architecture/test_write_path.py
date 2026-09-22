@@ -2,8 +2,7 @@ from tests.architecture.guards import SRC, iter_sources, uses_symbol
 
 WRITE_CAPABILITY = "DocumentWriter"
 # 白名单从一开始就是空的：每加一个都必须改这个常量，评审时一眼可见。
-# Task 11 会把它改成 {"pmstudio/domain/services/committer.py"}。
-ALLOWED: set[str] = set()
+ALLOWED: set[str] = {"pmstudio/domain/services/committer.py"}
 
 
 def test_guard_flags_import_site():
