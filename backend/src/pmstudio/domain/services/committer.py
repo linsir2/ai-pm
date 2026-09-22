@@ -111,12 +111,22 @@ class ProposalCommitter:
             raise UntraceableContent(proposal_id=proposal.proposal_id, reason=result.reason)
 
     def _to_instruction(self, proposal: Proposal) -> WriteInstruction:
-        return WriteInstruction(
-            instruction_id=str(proposal.proposal_id),
-            entry_id=proposal.entry_id,
-            op=proposal.op,
-            target=proposal.target,
-            text=proposal.text,
-            refs=proposal.origin.refs,
-            kind=proposal.kind,
-        )
+        return to_write_instruction(proposal)
+
+
+def to_write_instruction(proposal: Proposal) -> WriteInstruction:
+    """Proposal（round 上下文）→ WriteInstruction（authoring 上下文）。
+
+    两个上下文因此不必互相 import；这也是"草案落卡前干跑"与"确认写入"共用的唯一翻译
+    （计划 P2 §3.1 ④）。
+    """
+
+    return WriteInstruction(
+        instruction_id=str(proposal.proposal_id),
+        entry_id=proposal.entry_id,
+        op=proposal.op,
+        target=proposal.target,
+        text=proposal.text,
+        refs=proposal.origin.refs,
+        kind=proposal.kind,
+    )

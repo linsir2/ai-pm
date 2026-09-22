@@ -3,9 +3,13 @@
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pmstudio.application.events import Event
+from pmstudio.domain.shared.ids import DocumentId, ProjectId, RoundId
+
+if TYPE_CHECKING:
+    from pmstudio.application.dto import ProjectSummaryView
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,3 +78,27 @@ class EventPublisher(Protocol):
 @runtime_checkable
 class EventStream(Protocol):
     def subscribe(self) -> AsyncIterator[Event]: ...
+
+
+@runtime_checkable
+class WorkspaceIndex(Protocol):
+    """只读查询投影：项目摘要、项目列表、某项目最新一轮。
+
+    它不是第二份真相源——数据仍来自 documents / rounds 两张表，这里只是查询入口，
+    因为 `DocumentReader` / `RoundReader` 是聚合入口，不该长出"列全部项目"这种查询。
+    """
+
+    def summary(self, project_id: ProjectId) -> "ProjectSummaryView": ...
+    def list_summaries(self) -> tuple["ProjectSummaryView", ...]: ...
+    def latest_round_id(self, project_id: ProjectId) -> RoundId | None: ...
+
+
+@runtime_checkable
+class ProjectFactory(Protocol):
+    """建项目：造一份 13 章空骨架文档 + 空账本并落库。
+
+    它与 `DocumentWriter` 是两回事：它**只能造空文档**，改已有文档仍然只有
+    `ProposalCommitter` 一条路（"AI 不写文档"这条不变式靠这个划分保住）。
+    """
+
+    def create(self, *, project_id: ProjectId, title: str, now: datetime) -> DocumentId: ...
