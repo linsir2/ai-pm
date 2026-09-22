@@ -146,6 +146,12 @@ class Round:
         return frozenset(self._authorized)
 
     @property
+    def authorized_feature_basis(self) -> dict[FeatureSlug, EvidenceId]:
+        """功能授权的依据编号（持久化与追溯要用；`authorized_new_features` 只给 slug）。"""
+
+        return dict(self._authorized)
+
+    @property
     def failure(self) -> Failure | None:
         return self._failure
 
