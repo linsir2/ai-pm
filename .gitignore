@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+
+# 前端
+node_modules/
+dist/
+
+# 本地环境
+.env
+*.sqlite3
