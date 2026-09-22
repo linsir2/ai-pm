@@ -1,0 +1,101 @@
+"""造领域对象的测试构造器。只造对象，不做断言。"""
+
+from dataclasses import replace
+from datetime import UTC, datetime
+
+from pmstudio.application.ports import SeatDefinition
+from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.authoring.instruction import WriteInstruction
+from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
+from pmstudio.domain.provenance.ledger import EvidenceLedger
+from pmstudio.domain.round.claim import Claim
+from pmstudio.domain.round.round import Round
+from pmstudio.domain.shared.ids import (
+    DocumentId,
+    EntryId,
+    EvidenceId,
+    FeatureSlug,
+    ProjectId,
+    RoundId,
+)
+from pmstudio.domain.shared.label import ClaimLabel
+from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.writing import BlockKind, WriteOp
+
+NOW = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
+PROJECT = ProjectId("p1")
+ROUND_ID = RoundId("r1")
+SEAT = "seat.data_scale"
+
+
+def make_document(*, title: str = "订单中台") -> Document:
+    return Document.new(document_id=DocumentId("doc1"), project_id=PROJECT, title=title, now=NOW)
+
+
+def make_claim(
+    *,
+    text: str = "要做一个订单导出功能",
+    raw_span: str = "想做个订单导出的功能",
+    label: ClaimLabel = ClaimLabel.NEED,
+    target: Target | None = None,
+    eid: EvidenceId | None = None,
+) -> Claim:
+    return Claim(
+        claim_id="c1",
+        text=text,
+        label=label,
+        target=target or Target.body("s5"),
+        raw_span=raw_span,
+        eid=eid,
+    )
+
+
+def make_round(*, seats: tuple[str, ...] = (SEAT,)) -> Round:
+    round_ = Round.start(
+        round_id=ROUND_ID, project_id=PROJECT, user_input="想做个订单导出的功能", now=NOW
+    )
+    round_.attach_claims((make_claim(eid=EvidenceId("E1")),))
+    round_.submit_opening(seats=seats)
+    return round_
+
+
+def make_seat(seat_id: str = SEAT, *, title: str = "数据规模与性能") -> SeatDefinition:
+    return SeatDefinition(
+        seat_id=seat_id, title=title, focus="量级、性能上限与同步异步的分界"
+    )
+
+
+def document_with_feature(*, one_liner: str = "把订单导出成表格") -> Document:
+    document = make_document()
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i1",
+                entry_id=EntryId("en-bootstrap"),
+                op=WriteOp.ADD,
+                target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+                text=one_liner,
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.TEXT,
+            )
+        ],
+        now=NOW,
+        summary="干跑",
+        authorized_new_features=frozenset({FeatureSlug("order-export")}),
+    )
+    return document
+
+
+def seed_user_input(ledger: EvidenceLedger, claims: tuple[Claim, ...]) -> tuple[Claim, ...]:
+    """把主张写进账本并盖编号——等价于 EvidenceAssigner.assign_claims 的结果。"""
+
+    assigned: list[Claim] = []
+    for claim in claims:
+        eid = ledger.record(
+            kind=EvidenceKind.USER_INPUT,
+            text=claim.text,
+            source=EvidenceSource(round_id=ROUND_ID, raw_span=claim.raw_span),
+            now=NOW,
+        )
+        assigned.append(replace(claim, eid=eid))
+    return tuple(assigned)
