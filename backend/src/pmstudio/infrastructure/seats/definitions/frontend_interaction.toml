@@ -1,0 +1,5 @@
+seat_id = "seat.frontend_interaction"
+title = "前端交互"
+focus = "入口、反馈、加载与失败态、多端覆盖"
+always_on = true
+trigger_keywords = []

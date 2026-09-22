@@ -1,0 +1,5 @@
+seat_id = "seat.notification"
+title = "通知与触达"
+focus = "触达渠道、频率、模板、退订与失败重试"
+always_on = false
+trigger_keywords = ["通知", "提醒", "短信", "邮件", "推送", "订阅"]

@@ -1,0 +1,5 @@
+seat_id = "seat.permissions"
+title = "权限与角色"
+focus = "谁能看、谁能做、数据外流口径、审计留痕"
+always_on = true
+trigger_keywords = []

@@ -1,0 +1,5 @@
+seat_id = "seat.export_import"
+title = "导出与导入"
+focus = "导出范围、格式、大文件、脱敏、幂等与重复导入"
+always_on = false
+trigger_keywords = ["导出", "导入", "Excel", "excel", "CSV", "csv", "报表", "下载"]

@@ -1,0 +1,5 @@
+seat_id = "seat.business_rules"
+title = "业务规则"
+focus = "状态流转、筛选口径、边界条件、异常处理"
+always_on = true
+trigger_keywords = []
