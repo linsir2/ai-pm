@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PM Studio 设计系统预览</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#1B1A17; --paper:#FCFBF8; --app-bg:#F3F2EE; --surface:#FFFFFF; --border:#E3E0D8;
+  --primary:#2F5D50; --primary-ink:#FFFFFF;
+  --gap:#B4690E; --conflict:#A93B2C; --open:#5A6470; --empty:#9A958B;
+  --muted:#6E6A61;
+  --sans:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI","PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;
+  --serif:"Instrument Serif","Noto Serif SC",Georgia,"Songti SC",serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+html[data-theme="dark"]{
+  --ink:#E9E7E1; --paper:#1D1C20; --app-bg:#17161A; --surface:#201F24; --border:#33313A;
+  --primary:#7FB3A1; --primary-ink:#12161A;
+  --gap:#D08A3C; --conflict:#D2685A; --open:#98A1AC; --empty:#6A6672;
+  --muted:#9A958C;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--app-bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:28px 32px 12px}
+h1{font-family:var(--serif);font-size:34px;font-weight:500;margin:0;letter-spacing:.01em}
+header p{margin:4px 0 0;color:var(--muted);max-width:52em}
+button{font-family:inherit;font-size:13px;padding:6px 12px;border:1px solid var(--border);background:var(--surface);color:var(--ink);border-radius:6px;cursor:pointer}
+main{max-width:1180px;margin:0 auto;padding:0 32px 64px}
+section{margin:32px 0}
+h2{font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+.grid{display:grid;gap:16px}
+.cols-2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.cols-3{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px}
+.spec-zh{font-size:20px;line-height:1.75}
+.spec-lat{font-size:16px;color:var(--muted)}
+.spec-serif{font-family:var(--serif);font-size:26px;font-weight:500}
+.spec-mono{font-family:var(--mono);font-size:13px}
+.sw{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:12px}
+.dot{width:26px;height:26px;border-radius:6px;border:1px solid var(--border);flex:none}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface)}
+.chip i{width:8px;height:8px;border-radius:50%;display:inline-block}
+.pin{font-family:var(--mono);font-size:11px;padding:1px 5px;border-radius:4px;background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--primary);border:1px solid color-mix(in srgb,var(--primary) 28%,transparent);cursor:pointer;vertical-align:1px}
+.btn-primary{background:var(--primary);color:var(--primary-ink);border-color:transparent}
+.app{display:grid;grid-template-columns:200px 1fr 380px;min-height:520px;background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.nav{background:var(--app-bg);border-right:1px solid var(--border);padding:16px 0}
+.nav h3{font-size:12px;color:var(--muted);padding:0 16px;margin:0 0 8px;letter-spacing:.06em;text-transform:uppercase}
+.nav a{display:flex;align-items:center;gap:8px;padding:6px 16px;color:var(--ink);text-decoration:none;font-size:13px}
+.nav a .st{width:7px;height:7px;border-radius:50%;flex:none}
+.nav a.on{background:color-mix(in srgb,var(--primary) 10%,transparent)}
+.doc{background:var(--paper);padding:28px 32px;overflow:auto}
+.doc h4{font-family:var(--serif);font-size:26px;font-weight:500;margin:0 0 4px}
+.doc .meta{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:20px}
+.doc h5{font-family:var(--serif);font-size:19px;font-weight:500;margin:26px 0 8px}
+.doc p{margin:0 0 12px;max-width:34em;line-height:1.75}
+.doc ul{max-width:34em;padding-left:18px;margin:0 0 12px}
+.feature{border-left:2px solid var(--border);padding-left:14px;margin:12px 0 20px}
+.feature .tag{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.cards{border-left:1px solid var(--border);padding:16px;background:var(--surface);overflow:auto}
+.card{border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px}
+.card .kh{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);margin-bottom:8px}
+.card h6{margin:0 0 6px;font-size:14px;font-weight:600}
+.card .why{font-size:12px;color:var(--muted);margin:0 0 10px}
+.opt{display:flex;align-items:center;gap:8px;font-size:13px;padding:5px 0}
+.opts{display:flex;flex-wrap:wrap;gap:4px 18px}
+.action{display:flex;gap:8px;margin-top:12px}
+.note{font-size:12px;color:var(--muted);margin-top:10px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>PM Studio</h1>
+    <p>把零散想法整理成可交付的产品文档。AI 只出草案，你确认后才写入。</p>
+  </div>
+  <button id="tg">切换明暗</button>
+</header>
+
+<main>
+  <section>
+    <h2>字体：中英混排的四条分工</h2>
+    <div class="grid cols-2">
+      <div class="panel">
+        <div style="font-size:12px;color:var(--muted)">UI 与正文（Geist + PingFang SC / Noto Sans SC）</div>
+        <p class="spec-zh">导出要快，最好 1 秒内返回，但数据有几十万条。</p>
+        <div class="spec-lat">Evidence E12 · version v0.4 · feature#order-export</div>
+      </div>
+      <div class="panel">
+        <div style="font-size:12px;color:var(--muted)">文档标题（Instrument Serif + Noto Serif SC）</div>
+        <div class="spec-serif">第五章 · 功能需求</div>
+        <div class="spec-mono">E12&nbsp; v0.4&nbsp; feat-a1b2</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>颜色：一个主色，四个状态色</h2>
+    <div class="grid cols-3">
+      <div class="panel">
+        <div class="grid" style="gap:10px">
+          <div class="sw"><span class="dot" style="background:#2F5D50"></span>primary #2F5D50</div>
+          <div class="sw"><span class="dot" style="background:#1B1A17"></span>ink #1B1A17</div>
+          <div class="sw"><span class="dot" style="background:#FCFBF8"></span>paper #FCFBF8</div>
+          <div class="sw"><span class="dot" style="background:#E3E0D8"></span>border #E3E0D8</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="grid" style="gap:10px">
+          <div class="sw"><span class="dot" style="background:#B4690E"></span>缺口 #B4690E</div>
+          <div class="sw"><span class="dot" style="background:#A93B2C"></span>矛盾 #A93B2C</div>
+          <div class="sw"><span class="dot" style="background:#5A6470"></span>开放问题 #5A6470</div>
+          <div class="sw"><span class="dot" style="background:#9A958B"></span>空 #9A958B</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="chips">
+          <span class="chip"><i style="background:var(--gap)"></i>有缺口</span>
+          <span class="chip"><i style="background:var(--conflict)"></i>待裁决</span>
+          <span class="chip"><i style="background:var(--open)"></i>开放问题</span>
+          <span class="chip"><i style="background:var(--empty)"></i>空</span>
+          <span class="chip"><i style="background:var(--primary)"></i>已确认</span>
+        </div>
+        <div class="action">
+          <button class="btn-primary">交卷</button>
+          <button>先提交已答的</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>真实界面：三栏工作台</h2>
+    <div class="app">
+      <nav class="nav">
+        <h3>文档</h3>
+        <a href="#"><span class="st" style="background:var(--empty)"></span>背景与问题</a>
+        <a href="#"><span class="st" style="background:var(--gap)"></span>目标与非目标</a>
+        <a href="#"><span class="st" style="background:var(--primary)"></span>用户与受众</a>
+        <a href="#"><span class="st" style="background:var(--open)"></span>范围与边界</a>
+        <a href="#" class="on"><span class="st" style="background:var(--gap)"></span>功能需求</a>
+        <a href="#"><span class="st" style="background:var(--empty)"></span>业务流程与交互</a>
+        <a href="#"><span class="st" style="background:var(--empty)"></span>数据与接口</a>
+        <a href="#"><span class="st" style="background:var(--gap)"></span>非功能需求</a>
+        <a href="#"><span class="st" style="background:var(--empty)"></span>技术方案与约束</a>
+        <a href="#"><span class="st" style="background:var(--empty)"></span>假设、约束与依赖</a>
+        <a href="#"><span class="st" style="background:var(--open)"></span>风险与开放问题</a>
+        <a href="#"><span class="st" style="background:var(--empty)"></span>上线、验收与迭代</a>
+      </nav>
+
+      <div class="doc">
+        <h4>订单批量导出</h4>
+        <div class="meta">v0.4 · 草稿 · 2026-09-21</div>
+
+        <h5>第五章 · 功能需求</h5>
+        <div class="feature">
+          <div class="tag">feature#order-export · P0</div>
+          <p>运营在订单列表一次性导出当前筛选条件下的全部订单，不必逐页复制。
+             <span class="pin" title="跳回原文">E1</span></p>
+          <p style="color:var(--muted);font-size:13px">目标：单次导出时间从约 120 分钟降到 5 分钟以内
+             <span class="pin">E6</span></p>
+          <ul>
+            <li>主流程：设筛选条件 → 点导出 → 生成文件 → 下载 → 保留最近一次记录 <span class="pin">E3</span></li>
+            <li>异常与边界：0 条时提示无数据且不生成文件；超过 5 万条提示分批
+                <span style="color:var(--gap)">（量级未经证实 <span class="pin">E4</span>）</span></li>
+            <li>验收标准 AC-1：5 万条以内，点击导出后 60 秒内可下载完整文件</li>
+          </ul>
+        </div>
+        <p style="color:var(--open)">开放问题：去年峰值季的导出量级是多少？<span class="pin">Q9</span></p>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <div class="kh"><span>补充信息 · s8 非功能需求</span><span class="chip"><i style="background:var(--gap)"></i>缺口</span></div>
+          <h6>单次导出的最大行数大概是多少？</h6>
+          <p class="why">1 万行可以同步导出；10 万行以上必须走异步任务加文件存储，是两套实现。</p>
+          <div class="opts">
+            <label class="opt"><input type="radio" name="q3"> 少于 1 万</label>
+            <label class="opt"><input type="radio" name="q3"> 1 万 – 10 万</label>
+            <label class="opt"><input type="radio" name="q3"> 超过 10 万</label>
+            <label class="opt"><input type="radio" name="q3"> 不确定</label>
+          </div>
+          <div class="note">不答的后果：s5 主流程与 s8 性能上限只能留空。</div>
+        </div>
+
+        <div class="card">
+          <div class="kh"><span>矛盾 · s4 范围与边界</span><span class="chip"><i style="background:var(--conflict)"></i>待裁决</span></div>
+          <h6>“每天定时导出”和你上次定的“不做定时导出”冲突，改哪个？</h6>
+          <p class="why">
+            A：第 3 轮输入说“运营每天固定时间导出” <span class="pin">E17</span><br>
+            B：s4 本期不做里写着“本版不做定时导出” <span class="pin">E22</span>
+          </p>
+          <div class="opts">
+            <label class="opt"><input type="radio" name="q7"> 改非目标，本版做</label>
+            <label class="opt"><input type="radio" name="q7"> 维持不做</label>
+            <label class="opt"><input type="radio" name="q7"> 暂不决定</label>
+          </div>
+          <div class="action"><button class="btn-primary">交卷</button><button>先提交已答的</button></div>
+        </div>
+        <div class="note">本批 2 / 5 张。提交前可改，提交后整批冻结。</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>草案卡（收尾那一张）</h2>
+    <div class="panel" style="max-width:560px">
+      <div class="card" style="margin:0">
+        <div class="kh"><span>确认内容 · 提案 3 条</span><span class="chip"><i style="background:var(--primary)"></i>待确认</span></div>
+        <h6>【功能需求】追加 · feature#order-export</h6>
+        <p class="why">验收标准 AC-1：5 万条以内，点击导出后 60 秒内可下载完整文件 <span class="pin">E31</span></p>
+        <div class="action"><button class="btn-primary">要</button><button>不要</button></div>
+        <div class="note">卡片里不改文案；想改就在文档里改，或者再说一轮。</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const root=document.documentElement, tg=document.getElementById('tg');
+tg.onclick=()=>{root.dataset.theme = root.dataset.theme==='dark' ? '' : 'dark';};
+</script>
+</body>
+</html>
