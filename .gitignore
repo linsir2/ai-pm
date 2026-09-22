@@ -1,15 +1,87 @@
-# Python
+# ============================================================
+# 提交什么、不提交什么
+#   提交：设计文档（.codex/docs、docs）、AGENTS.md、DESIGN.md、backend/ 源码与测试
+#   不提交：构建产物、缓存、本地数据库、密钥、编辑器与系统垃圾
+# 加规则前先想清楚：这条会不会顺手把"真相源"也挡在外面。
+# ============================================================
+
+# ── Python ──────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.venv/
+venv/
+env/
 .pytest_cache/
 .ruff_cache/
-.venv/
-*.egg-info/
+.mypy_cache/
+.pytype/
+.tox/
+.nox/
+.hypothesis/
+.ipynb_checkpoints/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
-# 前端
-node_modules/
-dist/
+# backend/.python-version 是有意提交的（钉住 Python 3.13）
+!backend/.python-version
 
-# 本地环境
+# ── 密钥与本地配置（设计里明令：模型配置只从环境变量读）──
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+*.secret
+
+# ── 本项目数据（单用户本地 SQLite，绝不入库）─────────────
+*.sqlite
 *.sqlite3
+*.sqlite3-journal
+*.db
+*.db-journal
+backend/data/
+
+# ── 前端（P2 起）───────────────────────────────────────
+node_modules/
+dist-ssr/
+.vite/
+*.local
+.history/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── 日志与临时文件 ──────────────────────────────────────
+*.log
+tmp/
+.tmp/
+*.orig
+*.rej
+*.bak
+*.tmp
+
+# ── 编辑器 / 操作系统 ───────────────────────────────────
+.idea/
+.vscode/
+.fleet/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ── Codex 本地状态（只留 .codex/docs 这份设计真相源）────
+.codex/memory.txt
+.codex/sessions/
+.codex/log/
+.codex/cache/
+.codex/history*
