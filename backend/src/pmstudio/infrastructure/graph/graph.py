@@ -6,15 +6,13 @@
 - 节点与路由器**必须 async**（同步版本在这个 langgraph 上会挂死）。
 """
 
-from dataclasses import dataclass
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from pmstudio.application.commands import RoundCommand
 from pmstudio.application.dto import RoundView
 from pmstudio.application.use_cases import (
-    AnswerInput,
-    ClaimEdit,
     ConfirmDraft,
     GetRound,
     IntegrateRound,
@@ -27,19 +25,7 @@ from pmstudio.application.use_cases import (
 from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.ids import ProjectId, RoundId
 
-
-@dataclass(frozen=True, slots=True)
-class RoundCommand:
-    kind: str  # start | submit_opening | submit_answers | confirm | retry
-    project_id: str | None = None
-    round_id: str | None = None
-    user_input: str = ""
-    seats: tuple[str, ...] = ()
-    claim_edits: tuple[ClaimEdit, ...] = ()
-    answers: tuple[AnswerInput, ...] = ()
-    skipped: tuple[str, ...] = ()
-    form_id: str = ""
-    accepted: tuple[str, ...] = ()
+__all__ = ["RESUME_ROUTES", "RoundCommand", "RoundRunner", "RoundState", "build_graph"]
 
 
 class RoundState(TypedDict, total=False):

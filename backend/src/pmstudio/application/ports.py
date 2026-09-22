@@ -9,7 +9,8 @@ from pmstudio.application.events import Event
 from pmstudio.domain.shared.ids import DocumentId, ProjectId, RoundId
 
 if TYPE_CHECKING:
-    from pmstudio.application.dto import ProjectSummaryView
+    from pmstudio.application.commands import RoundCommand
+    from pmstudio.application.dto import ProjectSummaryView, RoundView
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,3 +103,13 @@ class ProjectFactory(Protocol):
     """
 
     def create(self, *, project_id: ProjectId, title: str, now: datetime) -> DocumentId: ...
+
+
+@runtime_checkable
+class RoundOrchestrator(Protocol):
+    """图的入口（实现是 infrastructure 里的 `RoundRunner`）。
+
+    `api` 只认这个协议，所以它不必 import infrastructure——分层守卫因此能保持全绿。
+    """
+
+    async def run(self, command: "RoundCommand") -> "RoundView": ...

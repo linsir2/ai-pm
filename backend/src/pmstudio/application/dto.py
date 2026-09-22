@@ -161,7 +161,9 @@ def round_view(
         seats=tuple(round_.seats),
         nominated_seats=_suggestions(round_, catalog=catalog, seat_titles=seat_titles),
         claims=tuple(_claim_view(claim) for claim in round_.claims),
-        seat_packets=_seat_packets(round_, seat_titles=seat_titles, ledger=ledger),
+        seat_packets=_seat_packets(
+            round_, seat_titles=seat_titles, ledger=ledger, catalog=catalog
+        ),
         questions=_question_views(round_),
         list_items=tuple(item.text for item in (questionnaire.list_items if questionnaire else ())),
         draft=draft_view,
@@ -231,11 +233,21 @@ def _claim_view(claim) -> ClaimView:  # type: ignore[no-untyped-def]
 
 
 def _seat_packets(
-    round_: Round, *, seat_titles: Mapping[str, str], ledger: EvidenceLedger | None = None
+    round_: Round,
+    *,
+    seat_titles: Mapping[str, str],
+    ledger: EvidenceLedger | None = None,
+    catalog: SeatCatalog | None = None,
 ) -> tuple[SeatPacketView, ...]:
     by_seat = {review.seat_id: review for review in round_.current_reviews}
+    # 还没选席位时（开场卡阶段）显示被提名的席位，状态是"待启动"——
+    # 界面在开场卡上就要看到"接下来谁会跑"。
+    seat_ids = round_.seats or tuple(
+        seat.seat_id
+        for seat in (catalog.nominate(user_input=round_.user_input) if catalog else ())
+    )
     packets: list[SeatPacketView] = []
-    for seat_id in round_.seats:
+    for seat_id in seat_ids:
         review = by_seat.get(seat_id)
         opinions = (
             tuple(

@@ -3,10 +3,10 @@
 from copy import deepcopy
 from typing import Any
 
+from pmstudio.application.errors import UnknownProject, UnknownRound
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
-from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import ProjectId, RoundId
 
 
@@ -36,7 +36,7 @@ class InMemoryDocumentRepository(_InMemoryRepository):
     def get(self, project_id: ProjectId) -> Document:
         document = self._items.get(project_id)
         if document is None:
-            raise ShapeError("项目还没有文档", project_id=str(project_id))
+            raise UnknownProject(project_id)
         return deepcopy(document)
 
     def save(self, document: Document) -> None:
@@ -54,7 +54,7 @@ class InMemoryRoundRepository(_InMemoryRepository):
     def get(self, round_id: RoundId) -> Round:
         round_ = self._items.get(round_id)
         if round_ is None:
-            raise ShapeError("找不到这一轮", round_id=str(round_id))
+            raise UnknownRound(round_id)
         return deepcopy(round_)
 
     def save(self, round_: Round) -> None:
@@ -72,7 +72,7 @@ class InMemoryEvidenceRepository(_InMemoryRepository):
     def get(self, project_id: ProjectId) -> EvidenceLedger:
         ledger = self._items.get(project_id)
         if ledger is None:
-            raise ShapeError("项目还没有出处账本", project_id=str(project_id))
+            raise UnknownProject(project_id)
         return deepcopy(ledger)
 
     def save(self, ledger: EvidenceLedger) -> None:
