@@ -19,6 +19,9 @@ $skipped
 ## 文档里已有的条目（要改 / 要删旧内容时用它给的 entry id）
 $entry_ids
 
+## 功能字段表（field 只能从这里选）
+$feature_fields
+
 ## 硬规矩
 $limits
 

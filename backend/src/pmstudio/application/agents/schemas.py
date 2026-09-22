@@ -55,9 +55,20 @@ class SeatPacket(BaseModel):
 
 class TargetDraft(BaseModel):
     zone: Zone = "body"
-    section_id: str | None = None
-    feature_slug: str | None = None
-    field: str | None = None
+    section_id: str | None = Field(
+        default=None, description="章节 id，如 s5；写功能字段时必须是 s5"
+    )
+    feature_slug: str | None = Field(
+        default=None,
+        description="功能标识，如 order-export；**给了 field 就必须给 feature_slug**",
+    )
+    field: str | None = Field(
+        default=None,
+        description=(
+            "功能字段名，只能取功能字段表里的名字（如 acceptance / exceptions / one_liner）；"
+            "必须与 feature_slug 一起给；章节级内容不要给 field"
+        ),
+    )
 
 
 class OptionDraft(BaseModel):
@@ -134,3 +145,23 @@ def target_of(draft: TargetDraft) -> Target:
     if draft.feature_slug is not None:
         return Target.body(section, feature_slug=FeatureSlug(draft.feature_slug))
     return Target.body(section)
+
+
+def normalize_claim_target(draft: TargetDraft) -> Target:
+    """主张的"归位建议"规范化：套用领域规则，而不是把模型的笔误变成整轮失败。
+
+    规则（真模型冒烟实测出来的，见汇报）：
+    - 有 `feature_slug` ⇒ 章节必然是 s5（功能子树只长在 s5，D3）；模型写成 s12 也纠正过来；
+    - 有 `field` 但没 `feature_slug` ⇒ 丢掉 field（字段必须挂在功能下，留着没意义）；
+    - 偏好 ⇒ 偏好区。
+
+    注意这里**不丢内容**：主张文本、原话、标签都照旧，用户在开场卡上还能改去处。
+    章节 id 本身不认识（比如 s99）仍然报错——那是幻觉，不能猜。
+    """
+
+    if draft.zone == "preference":
+        return Target.preference()
+    if draft.feature_slug:
+        return Target.feature_field(FeatureSlug(draft.feature_slug), draft.field) if draft.field \
+            else Target.body(FEATURE_HOME, feature_slug=FeatureSlug(draft.feature_slug))
+    return Target.body(SectionId(draft.section_id) if draft.section_id else FEATURE_HOME)

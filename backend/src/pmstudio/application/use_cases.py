@@ -306,7 +306,14 @@ class RunSeatRound:
                 round_id=round_id,
                 reason=f"席位失败：{reason}",
             )
-            raise failures[0][1]
+            first_error = failures[0][1]
+            if isinstance(first_error, DomainError):
+                # 领域校验不通过也要报成"模型输出不可用"（502），别漏成 409——
+                # 这条是真模型冒烟实测出来的：某条意见缺依据时曾以 409 漏出去。
+                raise PacketParseError(
+                    f"席位失败：{reason}", purpose="seat_review"
+                ) from first_error
+            raise first_error
 
         # 汇合点：席位齐了才编号（按席位顺序，且幂等——重进这里不会重复占号）
         round_ = self._rounds.get(round_id)

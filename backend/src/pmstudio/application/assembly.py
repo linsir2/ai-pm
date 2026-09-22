@@ -215,7 +215,13 @@ def _target(draft: schemas.TargetDraft) -> Target:
     try:
         return schemas.target_of(draft)
     except DomainError as error:
-        raise PacketParseError(f"去处不合法：{error.message}", purpose=PURPOSE) from error
+        # 把模型给的原样 target 带回给它：重装一次时它得看得见自己错在哪，
+        # 否则只会重犯同一处（真模型冒烟实测过这一条）。
+        raise PacketParseError(
+            f"去处不合法：{error.message}；你给的是 {draft.model_dump_json(exclude_none=True)}",
+            purpose=PURPOSE,
+            target=draft.model_dump(),
+        ) from error
 
 
 def _refs(raw: Sequence[str], *, known: frozenset[EvidenceId]) -> tuple[EvidenceId, ...]:

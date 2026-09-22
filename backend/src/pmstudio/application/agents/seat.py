@@ -15,6 +15,7 @@ from pmstudio.application.ports import (
     SeatDefinition,
 )
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
+from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import EvidenceId
 
 PURPOSE = "seat_review"
@@ -74,6 +75,22 @@ class SeatReviewer:
 def review_from_packet(
     packet: schemas.SeatPacket, *, seat_id: str, known_eids: frozenset[EvidenceId]
 ) -> SeatReview:
+    """把席位报文变成领域对象。**滑一跤不判死整轮，没理由的"无意见"才判死**（L2）。
+
+    真模型冒烟实测出来的三条规则：
+    - 既没意见也没说读了什么 ⇒ `PacketParseError`（这正是 L2 要防的静默缺口）；
+    - 有意见但没写 basis ⇒ 标注"模型未说明读了什么"后继续（内容还在，界面看得见）；
+    - 某条意见既没依据编号也没写 why ⇒ 按"它提议的"处理（最低权威，默认不勾），
+      并在 basis_note 里写明这是模型没给依据——**不伪装成有依据的判断**（AG1 的实质）。
+    """
+
+    if not packet.opinions and not packet.basis.strip():
+        raise PacketParseError(
+            "席位既没给意见、也没说读了什么（空意见必须给理由）",
+            purpose=PURPOSE,
+            seat_id=seat_id,
+        )
+    basis = packet.basis.strip() or "（模型未说明读了什么，意见照收，请在草案卡上核对）"
     opinions: list[Opinion] = []
     seen: set[str] = set()
     for index, draft in enumerate(packet.opinions, start=1):
@@ -92,15 +109,33 @@ def review_from_packet(
                 seat_id=seat_id,
                 local_id=local_id,
             )
-        opinions.append(
-            Opinion(
-                local_id=local_id,
-                form=OpinionForm(draft.form),
-                about=draft.about,
-                claim=draft.claim,
-                because=draft.because,
-                evidence_refs=refs,
-                basis_note=draft.basis_note,
+        note = (draft.basis_note or "").strip() or None
+        if not refs and note is None:
+            note = "（模型没给依据：按纯专业判断处理，草案里会归到「它提议的」）"
+        try:
+            opinions.append(
+                Opinion(
+                    local_id=local_id,
+                    form=OpinionForm(draft.form),
+                    about=draft.about,
+                    claim=draft.claim,
+                    because=draft.because,
+                    evidence_refs=refs,
+                    basis_note=note,
+                )
             )
-        )
-    return SeatReview(seat_id=seat_id, basis=packet.basis, opinions=tuple(opinions))
+        except DomainError as error:
+            raise PacketParseError(
+                f"席位意见过不了领域校验：{error.message}",
+                purpose=PURPOSE,
+                seat_id=seat_id,
+                local_id=local_id,
+            ) from error
+    try:
+        return SeatReview(seat_id=seat_id, basis=basis, opinions=tuple(opinions))
+    except DomainError as error:
+        raise PacketParseError(
+            f"席位交回的内容过不了领域校验：{error.message}",
+            purpose=PURPOSE,
+            seat_id=seat_id,
+        ) from error

@@ -6,6 +6,7 @@
 import json
 
 from pmstudio.application.agents import schemas
+from pmstudio.application.context import FEATURE_FIELDS_TEXT
 from pmstudio.application.ports import ModelGateway, ModelMessage, ModelRequest, PromptLibrary
 
 PURPOSE = "integration"
@@ -16,7 +17,11 @@ LIMITS_TEXT = "\n".join(
         "- 每条提案必须带 evidence_refs，只能引用清单里已有的编号（如 E9）",
         "- 不许新建功能子树：席位想建新功能时，出一道具，kind=decision，"
         "选项 id 用 new_feature_yes / new_feature_no",
-        "- target 必须落在 13 章内；功能字段只能落在 s5 的既有功能下（feature_slug + field）",
+        "- target 必须落在 13 章内。两种写法别混：",
+        "  ① 章节级：{zone: body, section_id: s8}（配 kind，如 nfr）",
+        "  ② 功能字段级：{zone: body, section_id: s5, feature_slug: order-export, "
+        "field: acceptance}——**给了 field 就必须给 feature_slug，且 section_id 必须是 s5**",
+        "- field 只能从「功能字段表」里选；不在表里的名字一律不许用",
         "- 与文档已有内容或历史答案重复的不要再提",
         "- 与文档既有结论冲突时出一道具，kind=conflict，why 里写清两侧立场",
         "- 每条内容候选一句一件事；不确定的别写进提案，去出题",
@@ -35,6 +40,7 @@ class Integrator:
         "skipped",
         "entry_ids",
         "limits",
+        "feature_fields",
         "schema_json",
         "validation_error",
     )
@@ -64,6 +70,7 @@ class Integrator:
             skipped=skipped,
             entry_ids=entry_ids,
             limits=LIMITS_TEXT,
+            feature_fields=FEATURE_FIELDS_TEXT,
             schema_json=json.dumps(schema, ensure_ascii=False),
             validation_error=validation_error,
         )

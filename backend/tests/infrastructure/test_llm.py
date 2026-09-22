@@ -29,6 +29,7 @@ def test_prompt_library_renders_slots_and_reports_missing():
         user_input="想做个导出",
         labels="- need（需求）：要做出来的能力",
         sections="- s5 功能需求",
+        feature_fields="- acceptance（验收标准，acceptance，可多条，必填）",
         schema_json="{}",
     )
     assert "# 文档" in text

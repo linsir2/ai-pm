@@ -144,3 +144,60 @@ async def test_seat_reviewer_empty_opinions_still_needs_basis():
     )
     assert review.opinions == ()
     assert "本领域没有需要补的" in review.basis
+
+
+async def test_seat_reviewer_opinion_without_any_basis_is_marked_as_proposed():
+    """既没依据编号、也没写 why ⇒ 按"它提议的"处理并写明原因，**不伪装成有依据**。
+
+    （真模型冒烟实测：某个席位漏写 basis_note，AG1 直接把整轮判死、还漏成 409。
+    现在改成降级到最低权威那一档，界面与草案卡上都看得见。）
+    """
+
+    reply = json.dumps(
+        {
+            "basis": "读了 s1–s13 与 E1",
+            "opinions": [
+                {
+                    "local_id": "O1",
+                    "form": "judgment",
+                    "about": "导出文件保留时长",
+                    "claim": "导出文件保留 30 天",
+                    "because": "同类系统常见做法",
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    reviewer = SeatReviewer(model=gateway_for(reply), prompts=RecordingPrompts())
+
+    review = await reviewer.review(
+        seat=make_seat(),
+        document_state="# 文档",
+        claims="…",
+        opinions_so_far="…",
+        answered="…",
+        known_eids=KNOWN,
+    )
+
+    opinion = review.opinions[0]
+    assert opinion.evidence_refs == ()
+    assert "模型没给依据" in (opinion.basis_note or "")
+    assert opinion.kind_if_judgment.value == "agent_proposed"
+
+
+async def test_seat_reviewer_bad_empty_opinions_without_basis_is_a_packet_error():
+    """既没意见也没说读了什么 ⇒ 失败（L2：静默缺口必须变成失败）。"""
+
+    reply = json.dumps({"basis": "   ", "opinions": []}, ensure_ascii=False)
+    reviewer = SeatReviewer(model=gateway_for(reply), prompts=RecordingPrompts())
+
+    with pytest.raises(PacketParseError) as exc:
+        await reviewer.review(
+            seat=make_seat(),
+            document_state="# 文档",
+            claims="…",
+            opinions_so_far="…",
+            answered="…",
+            known_eids=KNOWN,
+        )
+    assert "空意见必须给理由" in exc.value.message

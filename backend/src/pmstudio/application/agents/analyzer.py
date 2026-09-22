@@ -3,7 +3,7 @@
 import json
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.context import LABELS_TEXT, SECTIONS_TEXT
+from pmstudio.application.context import FEATURE_FIELDS_TEXT, LABELS_TEXT, SECTIONS_TEXT
 from pmstudio.application.errors import PacketParseError
 from pmstudio.application.ports import ModelGateway, ModelMessage, ModelRequest, PromptLibrary
 from pmstudio.domain.round.claim import Assumption, Claim
@@ -22,7 +22,14 @@ def normalize(text: str) -> str:
 class ClaimAnalyzer:
     PURPOSE = PURPOSE
     PROMPT = "analyzer"
-    PROMPT_SLOTS = ("document_state", "user_input", "labels", "sections", "schema_json")
+    PROMPT_SLOTS = (
+        "document_state",
+        "user_input",
+        "labels",
+        "sections",
+        "feature_fields",
+        "schema_json",
+    )
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
         self._model = model
@@ -36,6 +43,7 @@ class ClaimAnalyzer:
             user_input=user_input,
             labels=LABELS_TEXT,
             sections=SECTIONS_TEXT,
+            feature_fields=FEATURE_FIELDS_TEXT,
             schema_json=json.dumps(schema, ensure_ascii=False),
         )
         reply = await self._model.complete(
@@ -68,7 +76,7 @@ def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tupl
                     claim_id=claim_id,
                     text=draft.text.strip(),
                     label=ClaimLabel(draft.label),
-                    target=schemas.target_of(draft),
+                    target=schemas.normalize_claim_target(draft),
                     raw_span=draft.raw_span,
                     assumption=(
                         Assumption(

@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 
 from pmstudio.domain.authoring.blocks import Entry
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.views import BlockView, DocumentView
 from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.opinion import OpinionForm, SeatReview
@@ -43,6 +44,13 @@ LABELS_TEXT = "\n".join(
     f"- {label.value}（{LABEL_TITLES[label]}）：{LABEL_HINTS[label]}" for label in ClaimLabel
 )
 SECTIONS_TEXT = "\n".join(f"- {spec.section_id} {spec.title}" for spec in SECTIONS)
+
+# 功能字段表：从 `authoring/schema.py` 生成（结构的唯一真相源），不许手抄。
+FEATURE_FIELDS_TEXT = "\n".join(
+    f"- {spec.name}（{spec.title}，{spec.kind.value}"
+    f"{'，可多条' if spec.multiple else ''}{'，必填' if spec.required else ''}）"
+    for spec in FEATURE_FIELDS
+)
 
 
 def _entry_line(entry: Entry) -> str:

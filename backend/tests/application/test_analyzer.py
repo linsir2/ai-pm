@@ -107,7 +107,13 @@ async def test_analyzer_bad_raw_span_must_appear_in_input():
     assert exc.value.details["purpose"] == "claims"
 
 
-async def test_analyzer_bad_preference_target_may_not_carry_section():
+async def test_analyzer_normalizes_preference_target_that_also_carries_a_section():
+    """归位只是"建议"：偏好带 section 不再判整轮失败，而是按领域规则落进偏好区。
+
+    （原测试断言这里是 PacketParseError——那是"归位必须严格合法"的旧规则。
+    真模型冒烟表明这类笔误会把整轮判死，代价太大；改规则的记录见汇报。）
+    """
+
     reply = json.dumps(
         {
             "basis": "读了文档",
@@ -126,8 +132,10 @@ async def test_analyzer_bad_preference_target_may_not_carry_section():
     gateway = ScriptedModelGateway(replies={"claims": reply})
     analyzer = ClaimAnalyzer(model=gateway, prompts=RecordingPrompts())
 
-    with pytest.raises(PacketParseError):
-        await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    claims = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert claims[0].target == Target.preference()  # 偏好区胜出，内容照旧
+    assert claims[0].text == "登录页太丑"
 
 
 def test_claims_from_packet_requires_at_least_one_claim():

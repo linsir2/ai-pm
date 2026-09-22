@@ -13,6 +13,9 @@ $labels
 ## 十三章骨架（section_id 只能从这里选）
 $sections
 
+## 功能字段表（field 只能从这里选；不在表里的名字一律不许用）
+$feature_fields
+
 ## 硬规矩
 1. 切分：一条主张只讲一件事；不要替他合并成一句总结。
 2. raw_span 必须逐字摘自上面的用户输入（可以跨标点，但不许改写、不许补字）。
@@ -21,7 +24,10 @@ $sections
    决定必须给 decided_by。
 4. 归位：功能相关的内容落到 s5，并给 feature_slug（小写连字符，如 order-export）——
    用户点名的新功能也给，它会被当作新建子树的授权。不指向具体功能字段的章节级内容，
-   只给 section_id。
+   只给 section_id。**要指定字段时必须同时给 feature_slug，且 field 只能取上面表里的名字**；
+   拿不准落在哪个字段上，就只给 section_id 交给后面的整合环节。
+   注意：**给了 feature_slug 就不要再写别的章节**（功能子树只长在 s5）；
+   时间、上线、合规这类约束属于 s10 / s12，给 section_id 就够了，不要挂 feature_slug。
 5. 不要发明用户没说的功能；不要替用户做业务口径决定；拿不准的用 guess 标出来。
 6. 输出必须符合下面的 JSON Schema，除了这个 JSON 不要输出任何别的东西。
 
