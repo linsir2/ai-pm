@@ -20,10 +20,12 @@
 ## 现在到哪一步了
 
 设计已完成一轮并被工程评审过（评审记录在 `.codex/docs/过程记录/07-工程评审与修正.md`），
-**代码尚未开始**。P1（领域层）的 tasks 级计划已经写好：
-`docs/plans/2026-09-22-P1-领域层.md`。它开头 §3 列了 **6 处需要作者拍板**的地方
-（写范围的松紧、P0 拆分、端口位置、跨上下文传参规则、block 类型由谁定、6 个小项），
-拍完就按该计划逐任务执行（本会话内分批，`executing-plans`）。
+**P1（领域层）已完成**：`backend/src/pmstudio/domain/` + `backend/tests/`，
+141 条测试全绿、`ruff check` 无告警、四道结构性守卫全绿。
+计划与执行记录见 `docs/plans/2026-09-22-P1-领域层.md`（§3 的 6 处决策已按建议拍板并写回设计文档）。
+
+**下一步：P2**（application 用例 + SQLite 仓储 + LiteLLM 网关 + LangGraph 图 + API/SSE + 前端最小集）；
+开工前按 `writing-plans` 产出 P2 的 tasks 级计划。
 
 当前状态与下一步看：`.codex/docs/上下文/checkpoint.md`
 可复用的经验与坑看：`.codex/docs/上下文/learnings.md`

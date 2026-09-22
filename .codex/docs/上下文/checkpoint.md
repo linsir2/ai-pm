@@ -88,6 +88,8 @@
 
 ## 9. P1 计划已就绪（2026-09-22）
 
+> **2026-09-22 更新：P1 已完成。** 见本节末尾"执行结果"；下一站是 P2 计划。
+
 - 计划：`docs/plans/2026-09-22-P1-领域层.md`，13 个任务。
 - 覆盖：`Document` 聚合、`EvidenceLedger`、`Round` 聚合、四个领域服务
   （Traceability / Assigner / ScopeGuard / Committer）、四道结构性守卫
@@ -103,3 +105,22 @@
   ⑥ `Round` 缺席位编制约束（计划里补了 R7）。
 - 早先的 4+3 个选择已收敛：存储 SQLite、模型 LiteLLM、前端 React、开发方式 DDD；
   假实现只在测试里（本次定）。它们都进了 P1 计划的 §3 决策表。
+
+### 执行结果（2026-09-22，P1 已完成）
+
+- 代码：`backend/src/pmstudio/domain/`（shared / authoring / provenance / round / services / ports）
+  + `backend/tests/`（architecture / domain / support）。
+- 验证：`cd backend && python3 -m pytest -q` → **141 passed**；`python3 -m ruff check .` → 无告警。
+- 四道守卫全绿：domain 无外部依赖（白名单式，`sqlite3` 也会被拦）、三上下文互不 import、
+  全项目只有 `services/committer.py` 持有 `DocumentWriter`、`src/` 下无 fake/mock/stub 标识符。
+- 不变量矩阵：22 个码（D1–D6 / E1–E4 / R1–R7 / LB1–LB3 / AG1 / GB1）逐个有正例与反例，
+  由 `tests/domain/test_invariant_matrix.py` 扫测试名强制。
+- 案例 A 领域走查：`tests/domain/test_case_a_walkthrough.py`（8 条主张 → 4 席位 → 5 题问卷 →
+  答题+跳过 → 缩编席位轮 → 草案三组 → 确认写入 v2 → 逐条回溯校验）。
+- 执行中发现并修掉的**计划缺陷**（详见最终汇报）：
+  ① 守卫实现"允许全部标准库"与它自己的测试矛盾（`sqlite3` 必须被拦）→ 改显式白名单；
+  ② `Origin` 与 `Proposal` 的双重 refs 校验互斥 → R5 落在 `Proposal`，GB1 落在 `Entry/WriteInstruction/Claim`；
+  ③ `EvidenceKind` 放 provenance 会让 round 反向 import → 移到 `shared/evidence_kind.py`；
+  ④ `DraftId` 在 Task 1 类型清单里漏了 → 补进 `shared/ids.py`；
+  ⑤ 若干测试里 `authorized=` 写错位置、`len(assignments)` 数错 → 按"测试错就修测试"的原则修正。
+- 下一步：写 P2 计划（application 用例 + SQLite 仓储 + LiteLLM 网关 + LangGraph + API/SSE + 前端最小集）。
