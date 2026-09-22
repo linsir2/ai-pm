@@ -1,6 +1,6 @@
 """Round 聚合：一轮怎么推进，全在这里。LangGraph 的 state 只放 round_id 与 step。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from pmstudio.domain.round.claim import Claim
@@ -203,7 +203,50 @@ class Round:
         self._require_step(Step.SEATS_RUNNING)
         if review.seat_id not in self._seats:
             raise UnknownSeat(seat_id=review.seat_id)
-        self._seat_reviews = self._seat_reviews + (review,)
+        self._seat_reviews = self._seat_reviews + (
+            replace(review, pass_index=self._seat_round_count),
+        )
+
+    @property
+    def current_reviews(self) -> tuple[SeatReview, ...]:
+        """当前这次席位轮交回的意见。整合者与闭环区只看这个，历史意见留在 seat_reviews。"""
+
+        return tuple(
+            review for review in self._seat_reviews if review.pass_index == self._seat_round_count
+        )
+
+    @property
+    def pending_seats(self) -> tuple[str, ...]:
+        """这一轮还没交回意见的席位。崩了重进只补这些，不重跑已交回的（计划 §3.11）。"""
+
+        done = {review.seat_id for review in self.current_reviews}
+        return tuple(seat for seat in self._seats if seat not in done)
+
+    def revise_claims(self, claims: tuple[Claim, ...] | list[Claim]) -> None:
+        """开场卡纠正：只改标签 / 去处 / 假设 / 决策者，不改文本、原话片段与编号。"""
+
+        self._require_step(Step.CLAIMS_READY)
+        self._require_waiting(WaitingOn.OPENING)
+        revised = tuple(claims)
+        ids = [item.claim_id for item in revised]
+        if len(set(ids)) != len(ids):
+            raise ShapeError("同一主张不能在复述卡里出现两次", claim_ids=ids)
+        before = {item.claim_id: item for item in self._claims}
+        if set(ids) != set(before):
+            raise ShapeError(
+                "纠正必须覆盖且只覆盖原有主张",
+                before=sorted(before),
+                after=sorted(ids),
+            )
+        for item in revised:
+            old = before[item.claim_id]
+            if item.eid != old.eid:
+                raise ShapeError("纠正标签与去处不能改出处编号", claim_id=item.claim_id)
+            if item.text != old.text or item.raw_span != old.raw_span:
+                raise ShapeError(
+                    "卡片里不能改内容（改文案请重新输入一轮）", claim_id=item.claim_id
+                )
+        self._claims = revised
 
     def integrate(
         self, *, questionnaire: Questionnaire | None = None, draft: Draft | None = None

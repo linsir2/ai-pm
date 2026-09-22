@@ -24,6 +24,7 @@ class EvidenceSource:
     raw_span: str | None = None
     question_id: QuestionId | None = None
     seat_id: str | None = None
+    local_id: str | None = None  # 这条出处来自哪个席位的哪条意见（形状：f"p{pass}:{O1}"）
     derived_from: tuple[EvidenceId, ...] = ()
     rationale: str | None = None
     external_ref: str | None = None

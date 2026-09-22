@@ -45,7 +45,10 @@ class SeatReview:
     seat_id: str
     basis: str
     opinions: tuple[Opinion, ...] = ()
+    pass_index: int = 1  # 属于第几次席位轮；由 Round.attest 盖真值
 
     def __post_init__(self) -> None:
         if not self.basis.strip():
             raise EmptyBasis(subject=f"席位 {self.seat_id}")
+        if self.pass_index < 1:
+            raise ShapeError("席位轮序号从 1 开始", seat_id=self.seat_id)

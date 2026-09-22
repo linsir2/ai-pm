@@ -121,3 +121,13 @@ def test_opinion_kind_hint_follows_basis():
     )
     assert with_basis.kind_if_judgment is EvidenceKind.AGENT_DERIVED
     assert without_basis.kind_if_judgment is EvidenceKind.AGENT_PROPOSED
+
+
+def test_seat_review_pass_index_defaults_to_one():
+    review = SeatReview(seat_id="seat.data_scale", basis="读了 s5 与本轮 E1–E8")
+    assert review.pass_index == 1
+
+
+def test_seat_review_bad_pass_index_must_be_positive():
+    with pytest.raises(ShapeError):
+        SeatReview(seat_id="seat.data_scale", basis="读了 s5", pass_index=0)

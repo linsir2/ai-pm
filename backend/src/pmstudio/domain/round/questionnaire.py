@@ -21,6 +21,12 @@ class QuestionType(StrEnum):
     TEXT = "text"
 
 
+class QuestionKind(StrEnum):
+    GAP = "gap"  # 缺一个只有用户知道的信息
+    CONFLICT = "conflict"  # 与本轮输入或文档里的既有结论冲突
+    DECISION = "decision"  # 需要用户拍一个口径（含"这是不是独立功能"）
+
+
 @dataclass(frozen=True, slots=True)
 class Option:
     option_id: str
@@ -42,8 +48,14 @@ class Question:
     options: tuple[Option, ...] = ()
     evidence_refs: tuple[EvidenceId, ...] = ()
     asked_by: tuple[str, ...] = ()
+    kind: QuestionKind = QuestionKind.GAP
 
     def __post_init__(self) -> None:
+        if not isinstance(self.kind, QuestionKind):
+            raise ShapeError(
+                "题目类型必须是 gap / conflict / decision",
+                question_id=str(self.question_id),
+            )
         for value, message in (
             (self.title, "题目必须写清问什么"),
             (self.why, "题目必须写为什么问"),

@@ -9,6 +9,7 @@ from pmstudio.domain.round.questionnaire import (
     ListItem,
     Option,
     Question,
+    QuestionKind,
     Questionnaire,
     QuestionType,
 )
@@ -188,4 +189,44 @@ def test_draft_rejects_duplicate_proposal_ids():
             draft_id=DraftId("d1"),
             round_id=ROUND,
             proposals=(proposal("p1", origin), proposal("p1", origin)),
+        )
+
+
+def test_question_kind_defaults_to_gap():
+    question = Question(
+        question_id=QuestionId("q1"),
+        target=Target.body("s8"),
+        type=QuestionType.SINGLE,
+        title="单次导出最大行数？",
+        why="量级决定同步还是异步",
+        consequence_if_skipped="按同步实现，超时风险由 PM 承担",
+        options=(Option("a", "少于 1 万"), Option("b", "1 万–10 万")),
+    )
+    assert question.kind is QuestionKind.GAP
+
+
+def test_question_kind_conflict_is_preserved():
+    question = Question(
+        question_id=QuestionId("q6"),
+        target=Target.body("s4"),
+        type=QuestionType.SINGLE,
+        title="你上轮定过「不做定时导出」，这轮要「每天定时导出」，改哪个？",
+        why="本轮输入与 s4 的既有非目标冲突",
+        consequence_if_skipped="维持原文，两处结论并存到交付",
+        options=(Option("change_scope", "改非目标，本版做"), Option("keep", "维持不做")),
+        kind=QuestionKind.CONFLICT,
+    )
+    assert question.kind is QuestionKind.CONFLICT
+
+
+def test_question_bad_unknown_kind_is_rejected():
+    with pytest.raises(ShapeError):
+        Question(
+            question_id=QuestionId("q1"),
+            target=Target.body("s8"),
+            type=QuestionType.TEXT,
+            title="t",
+            why="w",
+            consequence_if_skipped="c",
+            kind="debate",  # type: ignore[arg-type]
         )

@@ -121,5 +121,14 @@ class EvidenceLedger:
     def superseded_by(self, eid: EvidenceId) -> EvidenceId | None:
         return self._superseded_by.get(eid)
 
+    def find_by_local(self, *, seat_id: str, local_id: str) -> Evidence | None:
+        """按"哪个席位的哪条意见"找已记的出处——幂等重放的依据（计划 §3.1 ⑤）。"""
+
+        for evidence in self._by_id.values():
+            source = evidence.source
+            if source.seat_id == seat_id and source.local_id == local_id:
+                return evidence
+        return None
+
     def is_superseded(self, eid: EvidenceId) -> bool:
         return eid in self._superseded_by

@@ -62,12 +62,25 @@ class EvidenceAssigner:
                 seen.add(opinion.local_id)
                 if opinion.form is OpinionForm.QUESTION:
                     continue
+                key = f"p{review.pass_index}:{opinion.local_id}"
+                existing = ledger.find_by_local(seat_id=review.seat_id, local_id=key)
+                if existing is not None:  # 幂等：重试时复用第一次的编号，不占新号
+                    assignments.append(
+                        OpinionAssignment(
+                            seat_id=review.seat_id,
+                            local_id=opinion.local_id,
+                            eid=existing.eid,
+                            kind=existing.kind,
+                        )
+                    )
+                    continue
                 kind = opinion.kind_if_judgment
                 eid = ledger.record(
                     kind=kind,
                     text=opinion.claim,
                     source=EvidenceSource(
                         seat_id=review.seat_id,
+                        local_id=key,
                         derived_from=opinion.evidence_refs,
                         rationale=opinion.because,
                     ),

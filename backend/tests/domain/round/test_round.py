@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -367,3 +368,57 @@ def test_authorize_new_feature_twice_raises():
     assert round_.authorized_new_features == frozenset({FeatureSlug("order-export")})
     with pytest.raises(FeatureAlreadyAuthorized):
         round_.authorize_new_feature(FeatureSlug("order-export"), basis=REF)
+
+
+def test_R3_ok_current_reviews_isolates_seat_pass():
+    round_ = round_with_seats()  # 第 1 次席位轮
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 s5 与 E1"))
+    answer_round(round_, "f1")  # 交卷 → 第 2 次席位轮
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 q1 的答案"))
+
+    assert [review.pass_index for review in round_.seat_reviews] == [1, 2]
+    assert len(round_.current_reviews) == 1
+    assert round_.current_reviews[0].basis == "读了 q1 的答案"
+
+
+def test_R3_ok_pending_seats_shrinks_as_seats_attest():
+    round_ = round_with_claims()
+    round_.submit_opening(seats=(SEAT, "seat.permissions"))
+
+    assert round_.pending_seats == (SEAT, "seat.permissions")
+
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 s5 与 E1"))
+
+    assert round_.pending_seats == ("seat.permissions",)
+    assert len(round_.current_reviews) == 1  # 已交回的那条还在，重进不会重跑
+
+
+def test_opening_ok_revise_claims_changes_label_and_target():
+    round_ = round_with_claims()
+    revised = replace(claim(), label=ClaimLabel.GOAL, target=Target.body("s2"))
+    round_.revise_claims((revised,))
+
+    assert round_.claims[0].label is ClaimLabel.GOAL
+    assert round_.claims[0].target == Target.body("s2")
+    assert round_.step is Step.CLAIMS_READY
+    assert round_.waiting_on is WaitingOn.OPENING
+
+
+def test_opening_bad_revise_claims_must_cover_the_same_ids():
+    round_ = round_with_claims()
+    with pytest.raises(ShapeError):
+        round_.revise_claims(())
+
+
+def test_opening_bad_revise_claims_cannot_change_eid_or_text():
+    round_ = round_with_claims()
+    with pytest.raises(ShapeError):
+        round_.revise_claims((replace(claim(), eid=EvidenceId("E99")),))
+    with pytest.raises(ShapeError):
+        round_.revise_claims((replace(claim(), text="换个说法"),))
+
+
+def test_opening_bad_revise_claims_after_seat_round_started():
+    round_ = round_with_seats()
+    with pytest.raises(IllegalStepTransition):
+        round_.revise_claims((claim(),))

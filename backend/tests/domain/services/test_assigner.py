@@ -180,3 +180,40 @@ def test_opinion_referencing_unknown_evidence_fails_loudly():
     )
     with pytest.raises(UnknownEvidence):
         EvidenceAssigner().assign_opinions((review,), ledger=ledger, round_id=ROUND, now=NOW)
+
+
+def test_assign_opinions_is_idempotent_under_retry():
+    """同一批意见被赋两次号：第二次复用第一次的编号，账本不增长（计划 §3.1 ⑤）。"""
+
+    from pmstudio.domain.provenance.evidence import EvidenceSource
+
+    ledger = new_ledger()
+    user = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做订单导出",
+        source=EvidenceSource(round_id=ROUND, raw_span="想做个订单导出"),
+        now=NOW,
+    )
+    review = SeatReview(
+        seat_id="seat.data_scale",
+        basis="读了 s5 与 E1",
+        opinions=(
+            Opinion(
+                local_id="O1",
+                form=OpinionForm.JUDGMENT,
+                about="性能上限",
+                claim="60 秒内完成",
+                because="同类做法",
+                evidence_refs=(user,),
+            ),
+        ),
+    )
+    assigner = EvidenceAssigner()
+
+    first = assigner.assign_opinions((review,), ledger=ledger, round_id=ROUND, now=NOW)
+    size = len(ledger)
+    second = assigner.assign_opinions((review,), ledger=ledger, round_id=ROUND, now=NOW)
+
+    assert [str(item.eid) for item in first] == [str(item.eid) for item in second]
+    assert len(ledger) == size
+    assert ledger.find_by_local(seat_id="seat.data_scale", local_id="p1:O1") is not None
