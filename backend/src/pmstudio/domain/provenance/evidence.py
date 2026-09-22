@@ -1,29 +1,21 @@
-"""出处条目。六类来源，形状随 kind 变，形状不对直接拒收。"""
+"""出处条目。六类来源，形状随 kind 变，形状不对直接拒收。
+
+`EvidenceKind` 的定义在 `shared/evidence_kind.py`（共享词汇表），这里再导出一次，
+让"出处"这个概念只有一个入口。
+"""
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
 
 from pmstudio.domain.shared.errors import (
     DerivedFromRequired,
     EvidenceSourceShape,
     ShapeError,
 )
+from pmstudio.domain.shared.evidence_kind import TERMINAL_KINDS, EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, QuestionId, RoundId
 
-
-class EvidenceKind(StrEnum):
-    USER_INPUT = "user_input"  # 用户在哪一轮说的（带原话片段）
-    CARD_ANSWER = "card_answer"  # 用户答的哪道题
-    AGENT_DERIVED = "agent_derived"  # 席位判断，有依据
-    AGENT_PROPOSED = "agent_proposed"  # 席位判断，无依据
-    SYSTEM_DEFAULT = "system_default"  # 系统按结构规则补的（如跳过的题落开放问题）
-    EXTERNAL = "external"  # 外部材料（v1 留位，暂无生产者）
-
-
-TERMINAL_KINDS: frozenset[EvidenceKind] = frozenset(
-    {EvidenceKind.USER_INPUT, EvidenceKind.CARD_ANSWER}
-)
+__all__ = ["TERMINAL_KINDS", "Evidence", "EvidenceKind", "EvidenceSource"]
 
 
 @dataclass(frozen=True, slots=True)
