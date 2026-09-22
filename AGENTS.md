@@ -47,6 +47,22 @@
 | 前端开发 | `npm run dev` |
 | 前端类型检查 | `npx tsc --noEmit` |
 
+**不留痕跑法（作者要求：仓库里只出现源码与文档，不出现生成物）**：
+
+| 用途 | 命令 |
+|------|------|
+| 后端测试 | `cd backend && PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider` |
+| 后端 lint | `cd backend && python3 -m ruff check --no-cache .` |
+
+`__pycache__` / `.pytest_cache` / `.ruff_cache` 都在 `.gitignore` 里，但**忽略不等于不生成**：
+用上面这两条跑才不会在磁盘上留下它们。发现又冒出来时清一次：
+
+```bash
+cd /home/linsir365/projects/ai-pm
+find . -path ./.git -prune -o -type d \
+  \( -name "__pycache__" -o -name ".pytest_cache" -o -name ".ruff_cache" \) -exec rm -rf {} +
+```
+
 > 目前这些命令还没有对应的代码，属于**先约定后实现**。实现时如与约定不同，
 > 以实际为准并回来改这一节。
 
