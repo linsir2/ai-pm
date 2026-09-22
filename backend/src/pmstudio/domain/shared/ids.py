@@ -13,6 +13,7 @@ RoundId = NewType("RoundId", str)
 FormId = NewType("FormId", str)
 QuestionId = NewType("QuestionId", str)
 ProposalId = NewType("ProposalId", str)
+DraftId = NewType("DraftId", str)
 
 EVIDENCE_PREFIX = "E"
 PREFERENCE_AREA_ID = BlockId("preference-area")
