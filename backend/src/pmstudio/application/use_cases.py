@@ -6,18 +6,37 @@
 
 import asyncio
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.seat import SeatReviewer
+from pmstudio.application.assembly import (
+    NEW_FEATURE_YES,
+    assemble,
+    draft_of,
+    open_question_proposals,
+    questionnaire_of,
+)
 from pmstudio.application.context import (
     render_answers,
     render_claims,
     render_document,
+    render_existing_entries,
     render_reviews,
 )
-from pmstudio.application.errors import ApplicationError
+from pmstudio.application.dto import (
+    ProjectSummaryView,
+    RoundView,
+    WorkspaceView,
+    round_view,
+    workspace_view,
+)
+from pmstudio.application.errors import ApplicationError, PacketParseError
 from pmstudio.application.events import (
+    DOC_CHANGED,
     GENERATION_FAILED,
     PACKET_EMITTED,
     ROUND_UPDATED,
@@ -27,10 +46,13 @@ from pmstudio.application.ports import (
     Clock,
     EventPublisher,
     IdGenerator,
+    ProjectFactory,
     SeatCatalog,
     SeatDefinition,
+    WorkspaceIndex,
 )
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.ports import (
     DocumentReader,
     EvidenceReader,
@@ -39,13 +61,32 @@ from pmstudio.domain.ports import (
     RoundWriter,
     UnitOfWork,
 )
+from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
+from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
+from pmstudio.domain.round.draft import Proposal
+from pmstudio.domain.round.questionnaire import (
+    Answer,
+    AnswerSet,
+    Question,
+    QuestionKind,
+)
 from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.step import Step
 from pmstudio.domain.services.assigner import EvidenceAssigner
-from pmstudio.domain.shared.errors import ShapeError
+from pmstudio.domain.services.committer import (
+    CommitResult,
+    ProposalCommitter,
+    to_write_instruction,
+)
+from pmstudio.domain.shared.errors import DomainError, NotAwaitingAnswers, ShapeError
 from pmstudio.domain.shared.ids import (
+    DraftId,
     EvidenceId,
+    FormId,
     ProjectId,
+    ProposalId,
+    QuestionId,
     RoundId,
 )
 from pmstudio.domain.shared.label import ClaimLabel
@@ -339,6 +380,422 @@ class RunSeatRound:
 
 
 # —— 用例之间共用的小工具 ——
+
+
+MAX_INTEGRATION_ATTEMPTS = 2
+
+
+class IntegrateRound:
+    """整合 → 干跑 →（失败就重装一次）→ 一个事务里出问卷或草案。"""
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        documents: DocumentReader,
+        evidence: EvidenceReader,
+        evidence_writer: EvidenceWriter,
+        uow: UnitOfWork,
+        integrator: Integrator,
+        catalog: SeatCatalog,
+        clock: Clock,
+        ids: IdGenerator,
+        events: EventPublisher,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._documents = documents
+        self._evidence = evidence
+        self._evidence_writer = evidence_writer
+        self._uow = uow
+        self._integrator = integrator
+        self._catalog = catalog
+        self._clock = clock
+        self._ids = ids
+        self._events = events
+
+    async def __call__(self, *, round_id: RoundId) -> None:
+        assembled, gaps = await self._integrate_with_repair(round_id=round_id)
+
+        with self._uow:
+            round_ = self._rounds.get(round_id)
+            ledger = self._evidence.get(round_.project_id)
+            now = self._clock.now()
+            proposals = list(assembled.proposals)
+            system_defaults = _system_defaults(round_, ledger=ledger, now=now)
+            proposals += list(
+                open_question_proposals(
+                    round_, system_defaults=system_defaults, start_index=len(proposals) + 1
+                )
+            )
+            questionnaire = questionnaire_of(
+                round_id,
+                FormId(self._ids.new("f")),
+                assembled.questions,
+                assembled.list_items,
+            )
+            if questionnaire is not None:
+                round_.integrate(questionnaire=questionnaire)
+            else:
+                draft = draft_of(round_id, DraftId(self._ids.new("d")), proposals, gaps)
+                if draft is None:
+                    raise ShapeError("整合既没有给出题目也没有给出提案")
+                round_.integrate(draft=draft)
+            self._evidence_writer.save(ledger)
+            self._round_writer.save(round_)
+        _publish(self._events, self._clock, round_)
+
+    async def _integrate_with_repair(self, *, round_id: RoundId):  # type: ignore[no-untyped-def]
+        validation_error = ""
+        titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
+        for attempt in range(1, MAX_INTEGRATION_ATTEMPTS + 1):
+            round_ = self._rounds.get(round_id)
+            document = self._documents.get(round_.project_id)
+            ledger = self._evidence.get(round_.project_id)
+            answered, _, skipped = render_answers(round_).partition("--")
+            try:
+                packet = await self._integrator.integrate(
+                    document_state=render_document(document.view()),
+                    claims=render_claims(round_.claims),
+                    opinions=render_reviews(round_.current_reviews, titles=titles),
+                    answered=answered,
+                    skipped=skipped,
+                    entry_ids=render_existing_entries(document),
+                    validation_error=validation_error,
+                )
+            except ApplicationError as error:
+                fail_round(
+                    rounds=self._rounds,
+                    round_writer=self._round_writer,
+                    uow=self._uow,
+                    events=self._events,
+                    clock=self._clock,
+                    round_id=round_id,
+                    reason=error.message,
+                )
+                raise
+            try:
+                assembled = assemble(packet, round_=round_, document=document, ledger=ledger)
+                gaps = dry_run(
+                    document, assembled.proposals, round_=round_, now=self._clock.now()
+                )
+            except (PacketParseError, DomainError) as error:
+                message = getattr(error, "message", str(error))
+                if attempt == MAX_INTEGRATION_ATTEMPTS:
+                    reason = f"整合两次都过不了校验：{message}"
+                    fail_round(
+                        rounds=self._rounds,
+                        round_writer=self._round_writer,
+                        uow=self._uow,
+                        events=self._events,
+                        clock=self._clock,
+                        round_id=round_id,
+                        reason=reason,
+                    )
+                    raise PacketParseError(reason, purpose="integration") from error
+                validation_error = message
+                continue
+            return assembled, gaps
+        raise AssertionError("不可能走到这里")
+
+
+class SubmitAnswers:
+    """答案落账本（card_answer + question_id）→ 回到席位轮。
+
+    答案**不是**被消费掉就完：它进账本，图接着回到席位轮重新判断（`02` §2 要点 2）。
+    """
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        evidence: EvidenceReader,
+        evidence_writer: EvidenceWriter,
+        uow: UnitOfWork,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._evidence = evidence
+        self._evidence_writer = evidence_writer
+        self._uow = uow
+        self._clock = clock
+        self._events = events
+
+    async def __call__(
+        self,
+        *,
+        round_id: RoundId,
+        form_id: str,
+        answers: Sequence[AnswerInput],
+        skipped: Sequence[str] = (),
+    ) -> None:
+        with self._uow:
+            round_ = self._rounds.get(round_id)
+            ledger = self._evidence.get(round_.project_id)
+            questionnaire = round_.questionnaire
+            if questionnaire is None:
+                raise NotAwaitingAnswers(step=round_.step)
+            by_id = {str(question.question_id): question for question in questionnaire.questions}
+            now = self._clock.now()
+            answer_set = AnswerSet(
+                form_id=FormId(form_id),
+                answers=tuple(
+                    Answer(
+                        question_id=QuestionId(item.question_id),
+                        text=item.text,
+                        selected=tuple(item.selected),
+                    )
+                    for item in answers
+                ),
+                answered_at=now,
+                skipped=tuple(QuestionId(item) for item in skipped),
+            )
+            round_.submit_answers(answer_set)  # 先让领域把关（R6）
+            for answer in answer_set.answers:
+                question = by_id[str(answer.question_id)]
+                eid = ledger.record(
+                    kind=EvidenceKind.CARD_ANSWER,
+                    text=_answer_text(question, answer),
+                    source=EvidenceSource(round_id=round_id, question_id=answer.question_id),
+                    now=now,
+                )
+                slug = question.target.feature_slug
+                if (
+                    question.kind is QuestionKind.DECISION
+                    and slug is not None
+                    and NEW_FEATURE_YES in answer.selected
+                    and slug not in round_.authorized_new_features
+                ):
+                    round_.authorize_new_feature(slug, basis=eid)
+            self._evidence_writer.save(ledger)
+            self._round_writer.save(round_)
+        _publish(self._events, self._clock, round_)
+
+
+class ConfirmDraft:
+    """唯一写入路径的入口。编排层、席位、整合者都拿不到 `DocumentWriter`。"""
+
+    def __init__(
+        self,
+        *,
+        committer: ProposalCommitter,
+        rounds: RoundReader,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._committer = committer
+        self._rounds = rounds
+        self._clock = clock
+        self._events = events
+
+    async def __call__(self, *, round_id: RoundId, accepted: Sequence[str]) -> CommitResult:
+        result = self._committer.commit(
+            round_id=round_id,
+            accepted=tuple(ProposalId(item) for item in accepted),
+            now=self._clock.now(),
+        )
+        round_ = self._rounds.get(round_id)
+        self._events.publish(
+            Event(
+                name=DOC_CHANGED,
+                project_id=str(round_.project_id),
+                round_id=str(round_id),
+                payload={
+                    "version_no": result.version.version_no,
+                    "written_block_ids": [
+                        str(block_id) for block_id in result.written_block_ids
+                    ],
+                    "summary": result.version.summary,
+                },
+                occurred_at=self._clock.now(),
+            )
+        )
+        _publish(self._events, self._clock, round_)
+        return result
+
+
+class RetryRound:
+    """**继续这一轮**：失败就先 `resume`；没失败就直接接着跑。
+
+    为什么允许对"没失败"的轮调用：关页面 / 进程崩了以后，轮停在 `seats_running`，
+    它不是 failed 状态，但同样需要接着跑（计划 §3.7）。两种场面收在一个动作里，
+    界面就只有一个"继续"按钮。
+    """
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        uow: UnitOfWork,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._uow = uow
+        self._clock = clock
+        self._events = events
+
+    async def __call__(self, *, round_id: RoundId) -> None:
+        with self._uow:
+            round_ = self._rounds.get(round_id)
+            if round_.step is Step.FAILED:
+                round_.resume()
+                self._round_writer.save(round_)
+        _publish(self._events, self._clock, round_)
+
+
+class CreateProject:
+    """建项目 = 建一份空骨架文档（计划 §3.5：v1 不建 Project 聚合）。"""
+
+    def __init__(
+        self,
+        *,
+        factory: ProjectFactory,
+        index: WorkspaceIndex,
+        clock: Clock,
+        ids: IdGenerator,
+    ) -> None:
+        self._factory = factory
+        self._index = index
+        self._clock = clock
+        self._ids = ids
+
+    async def __call__(self, *, title: str) -> ProjectSummaryView:
+        project_id = ProjectId(self._ids.new("p"))
+        self._factory.create(project_id=project_id, title=title, now=self._clock.now())
+        return self._index.summary(project_id)
+
+
+class GetWorkspace:
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        rounds: RoundReader,
+        evidence: EvidenceReader,
+        index: WorkspaceIndex,
+        catalog: SeatCatalog,
+    ) -> None:
+        self._documents = documents
+        self._rounds = rounds
+        self._evidence = evidence
+        self._index = index
+        self._catalog = catalog
+
+    async def __call__(self, *, project_id: ProjectId) -> WorkspaceView:
+        document = self._documents.get(project_id)
+        round_id = self._index.latest_round_id(project_id)
+        titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
+        round_ = None if round_id is None else self._rounds.get(round_id)
+        ledger = None if round_ is None else self._evidence.get(project_id)
+        return workspace_view(
+            project=self._index.summary(project_id),
+            document=document.view(),
+            round_=round_,
+            seat_titles=titles,
+            catalog=self._catalog,
+            ledger=ledger,
+        )
+
+
+class ListProjects:
+    def __init__(self, *, index: WorkspaceIndex) -> None:
+        self._index = index
+
+    async def __call__(self) -> tuple[ProjectSummaryView, ...]:
+        return self._index.list_summaries()
+
+
+class GetRound:
+    def __init__(
+        self, *, rounds: RoundReader, evidence: EvidenceReader, catalog: SeatCatalog
+    ) -> None:
+        self._rounds = rounds
+        self._evidence = evidence
+        self._catalog = catalog
+
+    async def __call__(self, *, round_id: RoundId) -> RoundView:
+        titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
+        round_ = self._rounds.get(round_id)
+        return round_view(
+            round_,
+            seat_titles=titles,
+            catalog=self._catalog,
+            ledger=self._evidence.get(round_.project_id),
+        )
+
+
+class GetDocument:
+    def __init__(self, *, documents: DocumentReader) -> None:
+        self._documents = documents
+
+    async def __call__(self, *, project_id: ProjectId) -> DocumentView:
+        return self._documents.get(project_id).view()
+
+
+def dry_run(
+    document: Document,
+    proposals: Sequence[Proposal],
+    *,
+    round_: Round,
+    now: datetime,
+) -> tuple[str, ...]:
+    """在内存深拷贝上跑一次 apply：预校验 + 算出"写入后还剩哪些必填缺口"。
+
+    真是唯一真相源：干跑用的是 `Document.apply` 本尊，不是第二套规则。
+    """
+
+    probe = deepcopy(document)
+    if proposals:
+        probe.apply(
+            tuple(to_write_instruction(proposal) for proposal in proposals),
+            now=now,
+            summary="干跑：不落库",
+            authorized_new_features=round_.authorized_new_features,
+        )
+    return tuple(f"{gap.feature_slug}·{gap.title} 仍然为空" for gap in probe.gaps())
+
+
+def _system_defaults(
+    round_: Round, *, ledger: EvidenceLedger, now: datetime
+) -> dict[QuestionId, EvidenceId]:
+    """给跳过的题补一条 system_default 出处（编号在账本里，proposal 才有东西可引用）。"""
+
+    questionnaire = round_.questionnaire
+    if questionnaire is None:
+        return {}
+    by_id = {question.question_id: question for question in questionnaire.questions}
+    defaults: dict[QuestionId, EvidenceId] = {}
+    for answer_set in round_.answer_sets:
+        for question_id in answer_set.skipped:
+            question = by_id.get(question_id)
+            if question is None or question_id in defaults:
+                continue
+            defaults[question_id] = ledger.record(
+                kind=EvidenceKind.SYSTEM_DEFAULT,
+                text=f"{question.title}（跳过，未决定）",
+                source=EvidenceSource(
+                    round_id=round_.round_id,
+                    rationale="跳过的题按题面写明的后果落成开放问题",
+                ),
+                now=now,
+            )
+    return defaults
+
+
+def _answer_text(question: Question, answer: Answer) -> str:
+    chosen = "、".join(
+        option.text for option in question.options if option.option_id in answer.selected
+    )
+    head = f"{question.title} → {chosen or answer.text.strip() or '（空答）'}"
+    note = answer.text.strip()
+    return f"{head}；备注：{note}" if chosen and note else head
 
 
 def authorize_named_features(
