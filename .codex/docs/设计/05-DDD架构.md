@@ -41,6 +41,8 @@
 **Project**（聚合根，最外层容器）
 字段：`project_id`、`name`、`document_id`、`preference_area`（偏好区）。
 不变量：项目名非空；偏好区只存偏好，不混正文。
+（2026-09-22 定：`Project` 聚合推迟到 P2；偏好区实际存在 `Document` 里，随文档版本化，
+但不进 13 章正文。）
 
 **Document**（聚合根，含版本）
 字段：`document_id`、`meta`、`blocks[]`、`versions[]`。
@@ -85,6 +87,7 @@
 | R4 | 一批问卷最多 5 题，超出降级成清单项 |
 | R5 | 草案只能由整合结果产生，且每条提案必须带 refs |
 | R6 | 答案必须带 question_id，且只能回答本轮的问题 |
+| R7 | 席位轮只接受开场卡编制内的席位 |
 
 方法：`start(input)`、`attest(packet)`（席位交回）、`integrate(result)`、
 `answer(formId, answers)`、`produceDraft(draft)`、`advance(step)`。
@@ -100,18 +103,19 @@
 
 ## 5. 端口（Ports）
 
-领域只声明接口，实现在 infrastructure。
+领域只声明接口，实现在 infrastructure。**声明位置**见最后一列（2026-09-22 定：仓储与事务端口
+放 `domain/ports.py`，否则领域服务 `ProposalCommitter` 就得反向 import `application/`）。
 
-| 端口 | 关键方法 | 实现 |
-|------|---------|------|
-| `DocumentRepository` | `get(projectId)` / `save(document)` | SQLite |
-| `RoundRepository` | `get(roundId)` / `save(round)` | SQLite |
-| `EvidenceRepository` | `get(projectId)` / `append(...)` / `chain(eid)` | SQLite |
-| `UnitOfWork` | `commit()` / `rollback()`，一个用例一个事务 | SQLite |
-| `ModelGateway` | `complete(messages, response_format)` | **LiteLLM** |
-| `SeatCatalog` | `all()` / `match(input)` | 静态定义（JSON/YAML） |
-| `EventPublisher` | `publish(event)` | 进程内 → SSE |
-| `Clock` / `IdGenerator` | `now()` / `newId(prefix)` | 系统实现 |
+| 端口 | 关键方法 | 实现 | 声明位置 |
+|------|---------|------|---------|
+| `DocumentReader` / `DocumentWriter` | `get(project_id)` / `save(document)` | SQLite | `domain/ports.py` |
+| `RoundReader` / `RoundWriter` | `get(round_id)` / `save(round)` | SQLite | `domain/ports.py` |
+| `EvidenceReader` / `EvidenceWriter` | `get(project_id) -> EvidenceLedger` / `save(ledger)` | SQLite | `domain/ports.py` |
+| `UnitOfWork` | 上下文管理器：正常退出即提交，抛异常即回滚 | SQLite | `domain/ports.py` |
+| `ModelGateway` | `complete(messages, response_format)` | **LiteLLM** | `application/ports.py`（P2） |
+| `SeatCatalog` | `all()` / `match(input)` | 静态定义（JSON/YAML） | `application/ports.py`（P2） |
+| `EventPublisher` | `publish(event)` | 进程内 → SSE | `application/ports.py`（P2） |
+| `Clock` / `IdGenerator` | `now()` / `newId(prefix)` | 系统实现 | `application/ports.py`（P2；P1 用显式 `now` 参数，不建桩） |
 
 ## 6. 应用服务（一个用例一个入口）
 
@@ -151,11 +155,12 @@
 ```
 backend/src/pmstudio/
 ├── domain/
-│   ├── authoring/    document.py blocks.py version.py invariants.py
+│   ├── ports.py      仓储与事务端口（P1 只声明，实现只在测试里）
+│   ├── authoring/    document.py blocks.py schema.py version.py instruction.py views.py
 │   ├── provenance/   ledger.py evidence.py
-│   ├── round/        round.py claim.py opinion.py questionnaire.py draft.py
+│   ├── round/        round.py step.py claim.py opinion.py questionnaire.py draft.py
 │   ├── services/     traceability.py committer.py scope_guard.py assigner.py
-│   └── shared/       ids.py errors.py target.py label.py
+│   └── shared/       ids.py errors.py invariants.py target.py label.py sections.py writing.py
 ├── application/      use_cases.py ports.py dto.py
 ├── infrastructure/
 │   ├── sqlite/       schema.sql repositories.py unit_of_work.py
@@ -170,9 +175,16 @@ tests/                domain/ application/ infrastructure/
 ```
 
 **依赖方向**：`api → application → domain`；
-`infrastructure` 实现 `application/ports.py` 里的协议，被 bootstrap 注入；
+`infrastructure` 实现端口协议，被 bootstrap 注入；
 **`domain` 不 import 任何外部包**（不 import fastapi / langgraph / litellm / sqlite3）。
 这条用测试守：扫 `domain/` 的 import，出现外部包即失败。
+
+**domain 内部的三条依赖规矩**（同样由 `tests/architecture/` 扫 AST 守）：
+
+1. 三个上下文（authoring / provenance / round）**互不 import**，只能通过 `shared/` 与 `services/` 协作；
+2. domain 内一律**绝对导入**（相对导入会让上下文守卫失效）；
+3. **写能力单独拆成 `DocumentWriter`**，全项目只有 `domain/services/committer.py` 能持有它——
+   `DocumentReader` 谁都能拿，`DocumentWriter` 不行。
 
 ## 9. 事务与一致性
 
