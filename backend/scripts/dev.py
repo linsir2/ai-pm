@@ -65,6 +65,14 @@ def main() -> int:
 
     loaded = load_env_file(ENV_FILE)
 
+    venv = BACKEND_ROOT / ".venv"
+    if venv.is_dir() and Path(sys.prefix) != venv:
+        print(
+            f"注意：现在用的是 {sys.executable}，不是仓库自己的 {venv}/bin/python。\n"
+            "      想用虚拟环境就跑：uv run python scripts/dev.py",
+            file=sys.stderr,
+        )
+
     missing = [name for name in REQUIRED if os.environ.get(name, "").strip() == ""]
     if missing:
         print(f"缺配置：{'、'.join(missing)}", file=sys.stderr)

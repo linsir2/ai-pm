@@ -47,17 +47,19 @@
 
 | 用途 | 命令 |
 |------|------|
-| 后端依赖 | `cd backend && uv sync`（依赖已经在系统 Python 里时跳过） |
+| 后端依赖 | `cd backend && uv sync`（建 `.venv` 并锁版本；`uv.lock` 进库，`.venv` 不进库） |
 | 后端配置 | `cd backend && cp .env.example .env` 然后填 key |
-| **后端起服务** | `cd backend && python3 scripts/dev.py`（默认 8000；`--port 8010`、`--no-reload` 可选） |
-| 后端测试 | `cd backend && python3 -m pytest`（需要 `src` 在路径上，pytest 配置里已经配好） |
+| **后端起服务** | `cd backend && uv run python scripts/dev.py`（端口读 `.env`；`--port`、`--no-reload` 可选） |
+| 后端测试 | `cd backend && uv run pytest`（`src` 在路径上，pytest 配置里已经配好） |
+| 后端 lint | `cd backend && uv run ruff check --no-cache .` |
 | 前端依赖 | `npm install`（在 `frontend/`） |
 | **前端开发** | `cd frontend && npm run dev`（5173，`/api` 代理到 `frontend/.env` 里的后端地址） |
 | 前端类型检查 | `npx tsc --noEmit` |
 | 前端单测（纯函数） | `npx vitest run`（在 `frontend/`） |
 
 `scripts/dev.py` 起服务前会打一行"模型 / key / 库在哪"，配置缺了直接退出码 2——
-省得等到第一次调模型才发现 key 没填。后端换端口时记得两边一起改：
+省得等到第一次调模型才发现 key 没填；它还会提醒你"现在用的是系统 Python 还是 `.venv`"。
+后端换端口时记得两边一起改：
 `backend/.env` 的 `PMSTUDIO_PORT` 与 `frontend/.env` 的 `PMSTUDIO_API_TARGET`。
 
 **不留痕跑法（作者要求：仓库里只出现源码与文档，不出现生成物）**：
