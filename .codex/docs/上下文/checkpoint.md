@@ -106,6 +106,21 @@
 - 早先的 4+3 个选择已收敛：存储 SQLite、模型 LiteLLM、前端 React、开发方式 DDD；
   假实现只在测试里（本次定）。它们都进了 P1 计划的 §3 决策表。
 
+### 执行结果（2026-09-23，P2 后端主闭环已完成）
+
+- 代码：`backend/src/pmstudio/{domain(六处小改),application,infrastructure,api,bootstrap}`
+  + `backend/tests/{architecture,domain,application,infrastructure,api,bootstrap,e2e}`。
+- 验证：`cd backend && PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -p no:cacheprovider`
+  → **306 passed**（含 7 条 e2e：两条闭环路径 + 断点续传两条 + 席位/模型失败两条）；
+  `python3 -m ruff check --no-cache .` → 无告警；仓库零生成物。
+- **真模型证据**（qwen3.8-flash via DashScope，`backend/scripts/smoke.py`）：
+  `OK version=2 round=r-5afdc9ed project=p-8bc02359` —— 12 条主张 → 6 个席位（3 轮席位轮）
+  → 3 轮问卷共 15 题 → 草案 17 条（带 E19/E20/E21 出处）→ 确认写入 v2，
+  有内容的章节 s5/s6/s8/s9/s10/s11，缺口与写范围提示都在草案卡上显形。
+- 真模型暴露并已修掉 8 类问题，其中两处是**漏实现的规格**（到席位轮上限强制出草案；
+  答案必须带 E 编号进上下文）与一处**状态码漏成 409 的 bug**；详见 `learnings.md` L9/L10。
+- 还没做：Task 22–25 前端（`frontend/` 尚未创建）、Task 26 的文档同步与浏览器手测。
+
 ### 执行结果（2026-09-22，P1 已完成）
 
 - 代码：`backend/src/pmstudio/domain/`（shared / authoring / provenance / round / services / ports）
