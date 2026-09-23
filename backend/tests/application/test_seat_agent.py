@@ -128,6 +128,44 @@ async def test_seat_reviewer_bad_unknown_evidence_ref_is_rejected():
     assert "E99" in exc.value.message
 
 
+async def test_seat_reviewer_translates_question_ids_into_evidence_ids():
+    """模型把题号（q3）当出处编号写时，翻译成那条答案的 E 编号。
+
+    （真模型冒烟实测：席位引用了 q3 → 整轮 502。设计里答案是有 E 编号的，
+    翻译过去才是它想表达的意思。）
+    """
+
+    reply = json.dumps(
+        {
+            "basis": "读了 s1–s13、主张与答案",
+            "opinions": [
+                {
+                    "local_id": "O1",
+                    "form": "judgment",
+                    "about": "脱敏口径",
+                    "claim": "手机号强制掩码",
+                    "because": "用户选的就是脱敏",
+                    "evidence_refs": ["q3"],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    reviewer = SeatReviewer(model=gateway_for(reply), prompts=RecordingPrompts())
+
+    review = await reviewer.review(
+        seat=make_seat(),
+        document_state="# 文档",
+        claims="…",
+        opinions_so_far="…",
+        answered="- q3 敏感字段怎么办 → 必须脱敏〔E8〕",
+        known_eids=frozenset({EvidenceId("E8")}),
+        answer_eids={"q3": "E8"},
+    )
+
+    assert review.opinions[0].evidence_refs == (EvidenceId("E8"),)
+
+
 async def test_seat_reviewer_empty_opinions_still_needs_basis():
     reply = json.dumps(
         {"basis": "读了全文，本领域没有需要补的", "opinions": []}, ensure_ascii=False

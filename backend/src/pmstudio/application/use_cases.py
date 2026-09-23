@@ -22,6 +22,7 @@ from pmstudio.application.assembly import (
     questionnaire_of,
 )
 from pmstudio.application.context import (
+    answer_eids,
     render_answers,
     render_claims,
     render_document,
@@ -269,7 +270,8 @@ class RunSeatRound:
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
         document_state = render_document(document.view())
         claims_text = render_claims(round_.claims)
-        answered_text = render_answers(round_)
+        answered_text = render_answers(round_, ledger=ledger)
+        answer_refs = answer_eids(ledger=ledger)
         previous = render_reviews(round_.seat_reviews, titles=titles)
         known_eids = frozenset(evidence.eid for evidence in ledger.evidences())
 
@@ -283,6 +285,7 @@ class RunSeatRound:
                     opinions_so_far=previous,
                     answered=answered_text,
                     known_eids=known_eids,
+                    answer_eids=answer_refs,
                 )
                 for seat in pending
             ),
@@ -342,6 +345,7 @@ class RunSeatRound:
         opinions_so_far: str,
         answered: str,
         known_eids: frozenset[EvidenceId],
+        answer_eids: dict[str, str] | None = None,
     ) -> None:
         """一个席位：调模型（事务外）→ 交回就落库。`with uow` 里没有 await（守卫会拦）。"""
 
@@ -352,6 +356,7 @@ class RunSeatRound:
             opinions_so_far=opinions_so_far,
             answered=answered,
             known_eids=known_eids,
+            answer_eids=answer_eids or {},
         )
         with self._uow:
             round_ = self._rounds.get(round_id)
@@ -484,7 +489,9 @@ class IntegrateRound:
             round_ = self._rounds.get(round_id)
             document = self._documents.get(round_.project_id)
             ledger = self._evidence.get(round_.project_id)
-            answered, _, skipped = render_answers(round_).partition("--")
+            answered, _, skipped = render_answers(
+                round_, ledger=self._evidence.get(round_.project_id)
+            ).partition("--")
             try:
                 packet = await self._integrator.integrate(
                     document_state=render_document(document.view()),

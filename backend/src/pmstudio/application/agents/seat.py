@@ -4,6 +4,7 @@
 """
 
 import json
+from collections.abc import Mapping
 
 from pmstudio.application.agents import schemas
 from pmstudio.application.errors import PacketParseError
@@ -47,6 +48,7 @@ class SeatReviewer:
         opinions_so_far: str,
         answered: str,
         known_eids: frozenset[EvidenceId],
+        answer_eids: Mapping[str, str] | None = None,
     ) -> SeatReview:
         schema = schemas.SeatPacket.model_json_schema()
         prompt = self._prompts.render(
@@ -69,11 +71,20 @@ class SeatReviewer:
             )
         )
         packet = schemas.parse_packet(reply.text, schemas.SeatPacket, purpose=self.PURPOSE)
-        return review_from_packet(packet, seat_id=seat.seat_id, known_eids=known_eids)
+        return review_from_packet(
+            packet,
+            seat_id=seat.seat_id,
+            known_eids=known_eids,
+            answer_eids=answer_eids or {},
+        )
 
 
 def review_from_packet(
-    packet: schemas.SeatPacket, *, seat_id: str, known_eids: frozenset[EvidenceId]
+    packet: schemas.SeatPacket,
+    *,
+    seat_id: str,
+    known_eids: frozenset[EvidenceId],
+    answer_eids: Mapping[str, str] | None = None,
 ) -> SeatReview:
     """把席位报文变成领域对象。**滑一跤不判死整轮，没理由的"无意见"才判死**（L2）。
 
@@ -100,7 +111,10 @@ def review_from_packet(
                 f"同一席位里 local_id 重复：{local_id}", purpose=PURPOSE, seat_id=seat_id
             )
         seen.add(local_id)
-        refs = tuple(EvidenceId(ref) for ref in draft.evidence_refs)
+        # 机械翻译：模型有时把问卷题号（q3）当出处编号写；答案的出处编号是 E 编号。
+        # 翻译过去才是它想表达的意思（不翻译就是整轮失败——真模型冒烟实测过一次）。
+        mapping = answer_eids or {}
+        refs = tuple(EvidenceId(mapping.get(ref, ref)) for ref in draft.evidence_refs)
         unknown = [str(ref) for ref in refs if ref not in known_eids]
         if unknown:
             raise PacketParseError(

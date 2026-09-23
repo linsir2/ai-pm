@@ -13,9 +13,11 @@ from pmstudio.domain.authoring.blocks import Entry
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.views import BlockView, DocumentView
+from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.opinion import OpinionForm, SeatReview
 from pmstudio.domain.round.round import Round
+from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.sections import SECTIONS
 from pmstudio.domain.shared.writing import BlockKind
@@ -122,8 +124,13 @@ def render_reviews(reviews: Sequence[SeatReview], *, titles: Mapping[str, str]) 
     return "\n\n".join(blocks) or "（没有席位意见）"
 
 
-def render_answers(round_: Round) -> str:
-    """已答 / 跳过两段，用 `--` 分隔（整合者要分别用它们）。"""
+def render_answers(round_: Round, *, ledger: EvidenceLedger | None = None) -> str:
+    """已答 / 跳过两段，用 `--` 分隔（整合者要分别用它们）。
+
+    **每条答案要带上它自己的出处编号**（形如 E8）：答案进账本时就拿到了编号，
+    席位想引用"用户答过的那句话"必须引 E 编号。只给题号（q1）会诱导模型把题号
+    当编号引用——真模型冒烟实测过一次，整轮因此失败。
+    """
 
     questionnaire = round_.questionnaire
     if questionnaire is None:
@@ -138,7 +145,11 @@ def render_answers(round_: Round) -> str:
             chosen = "、".join(answer.selected)
             free = answer.text.strip()
             detail = " / ".join(part for part in (chosen, free) if part)
-            answered_lines.append(f"- {answer.question_id} {title} → {detail or '（空答）'}")
+            eid = _answer_eid(ledger, answer.question_id)
+            answered_lines.append(
+                f"- {answer.question_id} {title} → {detail or '（空答）'}"
+                + (f"〔{eid}〕" if eid else "")
+            )
         for question_id in answer_set.skipped:
             question = by_id.get(question_id)
             if question is None:
@@ -149,8 +160,31 @@ def render_answers(round_: Round) -> str:
                 f"（跳过后果：{question.consequence_if_skipped}）"
             )
     answered = "\n".join(answered_lines) or "（这一轮还没有答过题）"
+    if answered_lines:
+        answered += "\n（引用用户的回答请用它的 E 编号，题号 q1 不是出处编号）"
     skipped = "\n".join(skipped_lines) or "（没有跳过的题）"
     return f"{answered}\n--\n{skipped}"
+
+
+def answer_eids(*, ledger: EvidenceLedger) -> dict[str, str]:
+    """题号 → 这条答案的出处编号（给席位做 `q3 → E8` 的引用翻译）。"""
+
+    mapping: dict[str, str] = {}
+    for evidence in ledger.evidences():
+        question_id = evidence.source.question_id
+        if question_id is None or evidence.kind is not EvidenceKind.CARD_ANSWER:
+            continue
+        mapping.setdefault(str(question_id), str(evidence.eid))
+    return mapping
+
+
+def _answer_eid(ledger: EvidenceLedger | None, question_id: object) -> str | None:
+    if ledger is None:
+        return None
+    for evidence in ledger.evidences():
+        if evidence.source.question_id == question_id:
+            return str(evidence.eid)
+    return None
 
 
 def render_existing_entries(document: Document) -> str:
