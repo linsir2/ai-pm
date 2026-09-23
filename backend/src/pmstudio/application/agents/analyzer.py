@@ -19,6 +19,50 @@ def normalize(text: str) -> str:
     return " ".join(text.split())
 
 
+MIN_SPAN_CHARS = 6
+MIN_SPAN_RATIO = 0.5
+
+
+def longest_common_substring(left: str, right: str) -> str:
+    """两串的最长公共连续子串（输入都很短，DP 足够）。"""
+
+    best = ""
+    best_len = 0
+    previous = [0] * (len(right) + 1)
+    for i in range(1, len(left) + 1):
+        current = [0] * (len(right) + 1)
+        for j in range(1, len(right) + 1):
+            if left[i - 1] != right[j - 1]:
+                continue
+            current[j] = previous[j - 1] + 1
+            if current[j] > best_len:
+                best_len = current[j]
+                best = left[i - best_len : i]
+        previous = current
+    return best
+
+
+def grounded_span(raw_span: str, source: str) -> str | None:
+    """把 raw_span 对齐到原文里**真实存在**的一段，返回它；对不上就返回 None。
+
+    真模型实测：它会把两段不连续的原话拼成一句（"运营每天都要用，顺便改一下"），
+    严格子串匹配会把整轮判死。这里的规则是——逐字命中最好；命不中就在原文里取
+    **最长的那段连续匹配**（够长才算），因为 raw_span 的用途是"点编号跳回原文"，
+    跳到一段真实存在的原话就达到了目的。纯粹编造（对不上任何一段）仍然失败。
+    """
+
+    normalized_source = normalize(source)
+    candidate = normalize(raw_span)
+    if not candidate:
+        return None
+    if candidate in normalized_source:
+        return candidate
+    best = longest_common_substring(candidate, normalized_source)
+    if len(best) >= MIN_SPAN_CHARS and len(best) >= MIN_SPAN_RATIO * len(candidate):
+        return best
+    return None
+
+
 class ClaimAnalyzer:
     PURPOSE = PURPOSE
     PROMPT = "analyzer"
@@ -59,11 +103,11 @@ class ClaimAnalyzer:
 
 
 def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tuple[Claim, ...]:
-    haystack = normalize(user_input)
     claims: list[Claim] = []
     for index, draft in enumerate(packet.claims, start=1):
         claim_id = f"c{index}"
-        if normalize(draft.raw_span) not in haystack:
+        span = grounded_span(draft.raw_span, user_input)
+        if span is None:
             raise PacketParseError(
                 "主张里的原话片段在用户输入里找不到（复述必须能跳回原文）",
                 purpose=PURPOSE,
@@ -77,7 +121,7 @@ def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tupl
                     text=draft.text.strip(),
                     label=ClaimLabel(draft.label),
                     target=schemas.normalize_claim_target(draft, label=draft.label),
-                    raw_span=draft.raw_span,
+                    raw_span=span,
                     assumption=(
                         Assumption(
                             failure_consequence=draft.assumption.failure_consequence,

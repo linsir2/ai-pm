@@ -107,6 +107,61 @@ async def test_analyzer_bad_raw_span_must_appear_in_input():
     assert exc.value.details["purpose"] == "claims"
 
 
+async def test_analyzer_realigns_recombined_raw_span_to_a_real_fragment():
+    """模型把两段不连续的原话拼成一句时，取原文里最长的那段真实片段，而不是判死整轮。
+
+    （真模型冒烟实测：raw_span="运营每天都要用，顺便改一下" 是拼接出来的，
+    严格子串匹配把整轮判死了。raw_span 的用途是跳回原文，跳到真实的一段就够。）
+    """
+
+    reply = json.dumps(
+        {
+            "basis": "读了文档",
+            "claims": [
+                {
+                    "text": "运营每天都要用，另外登录页要改",
+                    "raw_span": "运营每天都要用，顺便改一下",
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"claims": reply})
+    analyzer = ClaimAnalyzer(model=gateway, prompts=RecordingPrompts())
+
+    claims = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    span = claims[0].raw_span
+    assert span in INPUT  # 一定是原文里真实存在的一段
+    assert len(span) >= 6
+
+
+async def test_analyzer_still_rejects_invented_spans():
+    reply = json.dumps(
+        {
+            "basis": "读了文档",
+            "claims": [
+                {
+                    "text": "要做订单导出",
+                    "raw_span": "帮我搞个导出吧",
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"claims": reply})
+    analyzer = ClaimAnalyzer(model=gateway, prompts=RecordingPrompts())
+
+    with pytest.raises(PacketParseError):
+        await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+
 async def test_analyzer_normalizes_preference_target_that_also_carries_a_section():
     """归位只是"建议"：偏好带 section 不再判整轮失败，而是按领域规则落进偏好区。
 
