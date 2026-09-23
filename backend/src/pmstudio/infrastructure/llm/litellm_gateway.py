@@ -4,6 +4,7 @@
 失败必须是失败，不静默返回空串（learnings L2）。
 """
 
+import asyncio
 import json
 import os
 
@@ -13,6 +14,25 @@ from litellm import acompletion  # noqa: E402
 
 from pmstudio.application.errors import ModelCallFailed
 from pmstudio.application.ports import ModelReply, ModelRequest
+
+# 只重试"明显是抖动"的错误：连接失败、超时、限流、5xx。认证/参数类错误立刻失败。
+# 失败语义不变：重试到上限仍然失败 → ModelCallFailed → 整轮失败、可重试。
+TRANSIENT_HINTS = (
+    "connection",
+    "timeout",
+    "timed out",
+    "internalservererror",
+    "service unavailable",
+    "server error",
+    "rate limit",
+    "429",
+    "500",
+    "502",
+    "503",
+    "504",
+)
+MAX_ATTEMPTS = 3
+BACKOFF_SECONDS = (1.0, 3.0)
 
 
 class LiteLLMGateway:
@@ -42,15 +62,24 @@ class LiteLLMGateway:
             kwargs["api_key"] = self._api_key
         if self._api_base:
             kwargs["api_base"] = self._api_base
-        try:
-            response = await acompletion(**kwargs)
-        except Exception as error:  # noqa: BLE001 —— 供应商异常类型太多，统一转译
-            raise ModelCallFailed(
-                f"模型调用失败：{type(error).__name__}",
-                purpose=request.purpose,
-                cause=str(error),
-                model=self._model,
-            ) from error
+        response = None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                response = await acompletion(**kwargs)
+                break
+            except Exception as error:  # noqa: BLE001 —— 供应商异常类型太多，统一转译
+                if is_transient(error) and attempt < MAX_ATTEMPTS:
+                    await asyncio.sleep(BACKOFF_SECONDS[attempt - 1])
+                    continue
+                raise ModelCallFailed(
+                    f"模型调用失败：{type(error).__name__}"
+                    + (f"（重试 {attempt - 1} 次后仍失败）" if attempt > 1 else ""),
+                    purpose=request.purpose,
+                    cause=str(error),
+                    model=self._model,
+                    attempts=attempt,
+                ) from error
+        assert response is not None
         raw = (response.choices[0].message.content or "").strip()
         if not raw:
             raise ModelCallFailed(
@@ -87,3 +116,10 @@ def _is_json(text: str) -> bool:
     except json.JSONDecodeError:
         return False
     return True
+
+
+def is_transient(error: BaseException) -> bool:
+    """这次失败值不值得重试：连接抖动、超时、限流、5xx 值得；认证与参数错误不值得。"""
+
+    text = f"{type(error).__name__} {error}".lower()
+    return any(hint in text for hint in TRANSIENT_HINTS)

@@ -138,7 +138,7 @@ async def test_gateway_strips_markdown_fence_around_json(monkeypatch):
 
 async def test_gateway_turns_provider_errors_into_model_call_failed(monkeypatch):
     async def boom(**kwargs):
-        raise RuntimeError("connection reset")
+        raise RuntimeError("invalid api key")  # 非抖动错误：立刻失败，不许重试
 
     monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", boom)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
@@ -153,7 +153,85 @@ async def test_gateway_turns_provider_errors_into_model_call_failed(monkeypatch)
             )
         )
     assert exc.value.details["purpose"] == "seat_review"
-    assert "connection reset" in exc.value.details["cause"]
+    assert "invalid api key" in exc.value.details["cause"]
+    assert exc.value.details["attempts"] == 1
+
+
+async def test_gateway_retries_transient_errors_then_succeeds(monkeypatch):
+    """连接抖动 / 5xx / 限流要重试（真模型冒烟时被一次 connection error 打断过整轮）。"""
+
+    calls = {"count": 0}
+    slept: list[float] = []
+
+    async def flaky(**kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("Connection error.")
+
+        class _Message:
+            content = '{"ok": true}'
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "m"
+            usage = {}
+
+        return _Response()
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(
+        "pmstudio.infrastructure.llm.litellm_gateway.acompletion", flaky
+    )
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.asyncio.sleep", fake_sleep)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+
+    reply = await gateway.complete(
+        ModelRequest(
+            purpose="claims",
+            messages=(ModelMessage(role="user", content="x"),),
+            schema_name="ClaimsPacket",
+            response_schema={"type": "object"},
+        )
+    )
+
+    assert reply.text == '{"ok": true}'
+    assert calls["count"] == 2
+    assert slept == [1.0]
+
+
+async def test_gateway_gives_up_after_max_attempts_on_transient_errors(monkeypatch):
+    calls = {"count": 0}
+
+    async def always_flaky(**kwargs):
+        calls["count"] += 1
+        raise RuntimeError("503 Service Unavailable")
+
+    async def fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "pmstudio.infrastructure.llm.litellm_gateway.acompletion", always_flaky
+    )
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.asyncio.sleep", fake_sleep)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+
+    with pytest.raises(ModelCallFailed) as exc:
+        await gateway.complete(
+            ModelRequest(
+                purpose="seat_review",
+                messages=(ModelMessage(role="user", content="x"),),
+                schema_name="SeatPacket",
+                response_schema={"type": "object"},
+            )
+        )
+    assert calls["count"] == 3
+    assert exc.value.details["attempts"] == 3
+    assert "重试 2 次后仍失败" in exc.value.message
 
 
 async def test_gateway_rejects_content_that_is_not_json(monkeypatch):
