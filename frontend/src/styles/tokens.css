@@ -1,0 +1,64 @@
+/* 设计令牌 —— 唯一真相源是 DESIGN.md。值一个都不许在这里改，
+   要改先去改 DESIGN.md，再回来同步这一份。 */
+:root {
+  --ink: #1b1a17;
+  --paper: #fcfbf8;
+  --app-bg: #f3f2ee;
+  --surface: #ffffff;
+  --border: #e3e0d8;
+  --primary: #2f5d50;
+  --gap: #b4690e;
+  --conflict: #a93b2c;
+  --open: #5a6470;
+  --empty: #9a958b;
+
+  --font-ui: Geist, system-ui, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-doc: "Noto Serif SC", "Instrument Serif", "Songti SC", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --step-1: 12px;
+  --step-2: 13px;
+  --step-3: 14px;
+  --step-4: 16px;
+  --step-5: 20px;
+  --step-6: 26px;
+  --step-7: 34px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --radius-tag: 4px;
+  --radius-input: 6px;
+  --radius-card: 8px;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.55, 0, 1, 0.45);
+  --dur-micro: 80ms;
+  --dur-short: 160ms;
+  --dur-mid: 240ms;
+
+  /* 衍生值：只为排版服务，不是新颜色 */
+  --hairline: 1px solid var(--border);
+  --tint-primary: color-mix(in srgb, var(--primary) 8%, transparent);
+  --tint-warn: color-mix(in srgb, var(--gap) 10%, transparent);
+  --tint-danger: color-mix(in srgb, var(--conflict) 9%, transparent);
+}
+
+/* 暗色：重做表面，不反相（DESIGN.md） */
+[data-theme="dark"] {
+  --ink: #e9e7e1;
+  --paper: #1d1c20;
+  --app-bg: #17161a;
+  --surface: #22212a;
+  --border: #2f2e36;
+  --primary: #7fb3a1;
+  --gap: color-mix(in srgb, #b4690e 85%, #e9e7e1);
+  --conflict: color-mix(in srgb, #a93b2c 80%, #e9e7e1);
+  --open: #9aa3ad;
+  --empty: #6f6a63;
+}

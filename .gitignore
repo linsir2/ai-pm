@@ -53,6 +53,7 @@ backend/data/
 node_modules/
 dist-ssr/
 .vite/
+*.tsbuildinfo
 *.local
 .history/
 npm-debug.log*
