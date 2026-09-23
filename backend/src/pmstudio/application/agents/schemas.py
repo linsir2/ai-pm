@@ -147,19 +147,20 @@ def target_of(draft: TargetDraft) -> Target:
     return Target.body(section)
 
 
-def normalize_claim_target(draft: TargetDraft) -> Target:
+def normalize_claim_target(draft: TargetDraft, *, label: str) -> Target:
     """主张的"归位建议"规范化：套用领域规则，而不是把模型的笔误变成整轮失败。
 
     规则（真模型冒烟实测出来的，见汇报）：
+    - **标签优先**：`label=preference` ⇒ 偏好区（LB1 说"偏好不进正文"，标签才是权威分类，
+      `zone` 只是它的复述——模型两处写不一致时以标签为准）；
     - 有 `feature_slug` ⇒ 章节必然是 s5（功能子树只长在 s5，D3）；模型写成 s12 也纠正过来；
     - 有 `field` 但没 `feature_slug` ⇒ 丢掉 field（字段必须挂在功能下，留着没意义）；
-    - 偏好 ⇒ 偏好区。
 
     注意这里**不丢内容**：主张文本、原话、标签都照旧，用户在开场卡上还能改去处。
     章节 id 本身不认识（比如 s99）仍然报错——那是幻觉，不能猜。
     """
 
-    if draft.zone == "preference":
+    if label == "preference" or draft.zone == "preference":
         return Target.preference()
     if draft.feature_slug:
         return Target.feature_field(FeatureSlug(draft.feature_slug), draft.field) if draft.field \

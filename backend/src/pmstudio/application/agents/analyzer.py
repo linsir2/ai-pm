@@ -76,7 +76,7 @@ def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tupl
                     claim_id=claim_id,
                     text=draft.text.strip(),
                     label=ClaimLabel(draft.label),
-                    target=schemas.normalize_claim_target(draft),
+                    target=schemas.normalize_claim_target(draft, label=draft.label),
                     raw_span=draft.raw_span,
                     assumption=(
                         Assumption(
