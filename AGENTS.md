@@ -39,19 +39,26 @@
 `01-规格.md`（要做什么）/ `02-编排与数据.md`（怎么跑）/ `03-案例与验收.md`（怎么算对）/
 `04-未决.md`（还没定的）/ `05-DDD架构.md`（怎么实现）/ `06-前端.md`（界面与怎么接后端）。
 
-## 命令（约定，代码建立后生效）
+## 环境（一次装好，之后不用再 export 一堆变量）
 
-后端在 `backend/`（Python 3.13 + FastAPI + pydantic），前端在 `frontend/`（React + Vite）。
+后端配置只从环境变量读（`bootstrap/settings.py` 明令：缺 key 或模型名必须起不来）。
+写法是**文件**：`backend/.env`（本地、不进库，模板 `.env.example` 进库），
+由 `backend/scripts/dev.py` 读；前端那条代理目标放 `frontend/.env`（同样有 `.env.example`）。
 
 | 用途 | 命令 |
 |------|------|
-| 后端依赖 | `uv sync`（在 `backend/`） |
-| 后端测试 | `uv run pytest` |
-| 后端起服务 | `uv run uvicorn pmstudio.api.app:app --reload` |
+| 后端依赖 | `cd backend && uv sync`（依赖已经在系统 Python 里时跳过） |
+| 后端配置 | `cd backend && cp .env.example .env` 然后填 key |
+| **后端起服务** | `cd backend && python3 scripts/dev.py`（默认 8000；`--port 8010`、`--no-reload` 可选） |
+| 后端测试 | `cd backend && python3 -m pytest`（需要 `src` 在路径上，pytest 配置里已经配好） |
 | 前端依赖 | `npm install`（在 `frontend/`） |
-| 前端开发 | `npm run dev`（后端起在别的端口时：`PMSTUDIO_API_TARGET=http://127.0.0.1:8010 npm run dev`） |
+| **前端开发** | `cd frontend && npm run dev`（5173，`/api` 代理到 `frontend/.env` 里的后端地址） |
 | 前端类型检查 | `npx tsc --noEmit` |
 | 前端单测（纯函数） | `npx vitest run`（在 `frontend/`） |
+
+`scripts/dev.py` 起服务前会打一行"模型 / key / 库在哪"，配置缺了直接退出码 2——
+省得等到第一次调模型才发现 key 没填。后端换端口时记得两边一起改：
+`backend/.env` 的 `PMSTUDIO_PORT` 与 `frontend/.env` 的 `PMSTUDIO_API_TARGET`。
 
 **不留痕跑法（作者要求：仓库里只出现源码与文档，不出现生成物）**：
 

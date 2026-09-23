@@ -63,9 +63,10 @@ export function TopBar({
       <span className="topbar__spacer" />
 
       <span className={`conn conn--${connection}`}>
-        <span className="conn__dot" />
-        <span className="sr-only">{connectionText}</span>
-        <span className="muted small">{connectionText}</span>
+        <span className="conn__dot" aria-hidden="true" />
+        <span className="muted small" role="status">
+          {connectionText}
+        </span>
       </span>
       <button
         type="button"
