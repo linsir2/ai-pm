@@ -73,7 +73,8 @@ async def run(client: httpx.AsyncClient) -> int:
         )
     show("integrate", f"waiting_on={body['waiting_on']}，题目 {len(body['questions'])} 道")
 
-    if body["waiting_on"] == "questionnaire":
+    # 一轮里可能问不止一次（最多 3 次席位轮）：一直答到出草案卡为止
+    while body["waiting_on"] == "questionnaire":
         answers = []
         for question in body["questions"]:
             options = question["options"]

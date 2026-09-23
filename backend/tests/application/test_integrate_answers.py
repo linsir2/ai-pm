@@ -279,3 +279,47 @@ async def test_submit_answers_authorizes_new_feature_when_user_says_yes():
 
     round_ = harness.rounds.get(round_id)
     assert round_.authorized_new_features == frozenset({FeatureSlug("order-export")})
+
+
+async def test_integrate_round_at_seat_limit_forces_a_draft_instead_of_asking_again():
+    """`02` §7：到席位轮上限仍有缺口 → 全部显式化，不再追问。
+
+    真模型冒烟实测：第二轮整合又出了一轮问卷；如果没有这条规则，用户会被卡在
+    "回答 → 又问 → 回答 → 撞上限报错"的死循环里。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [questionnaire_packet(), questionnaire_packet(), questionnaire_packet()],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+
+    for index in range(2):  # 前两轮正常出问卷、答卷、回到席位轮
+        await harness.integrate_round()(round_id=round_id)
+        round_ = harness.rounds.get(round_id)
+        assert round_.step is Step.AWAITING_ANSWERS
+        await harness.submit_answers()(
+            round_id=round_id, form_id=f"f{index + 1}", answers=(), skipped=("q1",)
+        )
+        await harness.run_seat_round()(round_id=round_id)
+
+    assert harness.rounds.get(round_id).seat_round_count == 3  # 到了上限
+
+    await harness.integrate_round()(round_id=round_id)  # 第 3 次整合：模型还想问
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.AWAITING_CONFIRM
+    assert round_.waiting_on is WaitingOn.DRAFT
+    assert round_.draft is not None
+    downgraded = [
+        proposal
+        for proposal in round_.draft.proposals
+        if proposal.origin.type.value == "system_default"
+        and "上限" in (proposal.origin.rationale or "")
+    ]
+    assert downgraded
+    assert all(str(item.target.section_id) == "s11" for item in downgraded)
+    assert any("不再追问" in gap for gap in round_.draft.gaps)

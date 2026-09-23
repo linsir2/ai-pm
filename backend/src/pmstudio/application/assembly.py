@@ -188,24 +188,72 @@ def open_question_proposals(
 
     proposals: list[Proposal] = []
     for offset, (question, eid) in enumerate(pairs):
-        index = start_index + offset
         proposals.append(
-            Proposal(
-                proposal_id=ProposalId(f"p{index:02d}"),
-                entry_id=EntryId(f"{round_.round_id}#open{index:02d}"),
-                op=WriteOp.ADD,
-                target=Target.body(OPEN_QUESTION_HOME),
-                text=(
-                    f"{question.title}（未决定，待决人：PM；"
-                    f"跳过后果：{question.consequence_if_skipped}）"
-                ),
-                origin=Origin(
-                    OriginType.SYSTEM_DEFAULT, (eid,), "跳过的题按题面后果落开放问题"
-                ),
-                kind=BlockKind.QUESTION,
+            open_question_proposal(
+                question,
+                eid=eid,
+                index=start_index + offset,
+                round_id=round_.round_id,
+                rationale="跳过的题按题面后果落开放问题",
             )
         )
     return tuple(proposals)
+
+
+def downgraded_question_proposals(
+    questions: Sequence[Question],
+    *,
+    system_defaults: Mapping[QuestionId, EvidenceId],
+    start_index: int,
+    round_id: RoundId,
+) -> tuple[Proposal, ...]:
+    """到席位轮上限时，把"还想问的题"降级成 s11 开放问题（不再追问）。
+
+    `02` §7 / `04-未决.md` C7：到上限仍有缺口就**全部显式化**——用户永远能走到草案卡，
+    不会被系统卡在无限提问里。（这条是 P2 真模型冒烟才暴露出来漏实现的规格。）
+    """
+
+    proposals: list[Proposal] = []
+    for offset, question in enumerate(questions):
+        eid = system_defaults.get(question.question_id)
+        if eid is None:
+            raise PacketParseError(
+                "降级的题目缺少 system_default 出处编号",
+                purpose=PURPOSE,
+                question_id=str(question.question_id),
+            )
+        proposals.append(
+            open_question_proposal(
+                question,
+                eid=eid,
+                index=start_index + offset,
+                round_id=round_id,
+                rationale="到席位轮上限，不再追问，转为开放性记录",
+            )
+        )
+    return tuple(proposals)
+
+
+def open_question_proposal(
+    question: Question,
+    *,
+    eid: EvidenceId,
+    index: int,
+    round_id: RoundId,
+    rationale: str,
+) -> Proposal:
+    return Proposal(
+        proposal_id=ProposalId(f"p{index:02d}"),
+        entry_id=EntryId(f"{round_id}#open{index:02d}"),
+        op=WriteOp.ADD,
+        target=Target.body(OPEN_QUESTION_HOME),
+        text=(
+            f"{question.title}（未决定，待决人：PM；"
+            f"跳过后果：{question.consequence_if_skipped}）"
+        ),
+        origin=Origin(OriginType.SYSTEM_DEFAULT, (eid,), rationale),
+        kind=BlockKind.QUESTION,
+    )
 
 
 # —— 内部 ——

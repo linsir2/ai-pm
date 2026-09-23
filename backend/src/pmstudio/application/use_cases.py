@@ -16,6 +16,7 @@ from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.assembly import (
     NEW_FEATURE_YES,
     assemble,
+    downgraded_question_proposals,
     draft_of,
     open_question_proposals,
     questionnaire_of,
@@ -72,7 +73,7 @@ from pmstudio.domain.round.questionnaire import (
     QuestionKind,
 )
 from pmstudio.domain.round.round import Round
-from pmstudio.domain.round.step import Step
+from pmstudio.domain.round.step import MAX_SEAT_ROUNDS, Step
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import (
     CommitResult,
@@ -436,11 +437,34 @@ class IntegrateRound:
                     round_, system_defaults=system_defaults, start_index=len(proposals) + 1
                 )
             )
+            questions = assembled.questions
+            gaps = list(gaps)
+            if questions and round_.seat_round_count >= MAX_SEAT_ROUNDS:
+                # 到席位轮上限：不再追问，把题目降级成 s11 开放问题，直接出草案（02 §7）
+                for question in questions:
+                    system_defaults[question.question_id] = ledger.record(
+                        kind=EvidenceKind.SYSTEM_DEFAULT,
+                        text=f"{question.title}（到席位轮上限，未决定）",
+                        source=EvidenceSource(
+                            round_id=round_id,
+                            rationale="到席位轮上限，不再追问，转为开放性记录",
+                        ),
+                        now=now,
+                    )
+                proposals += list(
+                    downgraded_question_proposals(
+                        questions,
+                        system_defaults=system_defaults,
+                        start_index=len(proposals) + 1,
+                        round_id=round_id,
+                    )
+                )
+                gaps += [
+                    f"未决（已到席位轮上限，不再追问）：{item.title}" for item in questions
+                ]
+                questions = ()
             questionnaire = questionnaire_of(
-                round_id,
-                FormId(self._ids.new("f")),
-                assembled.questions,
-                assembled.list_items,
+                round_id, FormId(self._ids.new("f")), questions, assembled.list_items
             )
             if questionnaire is not None:
                 round_.integrate(questionnaire=questionnaire)
