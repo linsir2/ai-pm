@@ -7,6 +7,7 @@ from pmstudio.api.schemas import (
     AnswersRequest,
     ConfirmRequest,
     CreateProjectRequest,
+    EditEntryRequest,
     OpeningRequest,
     StartRoundRequest,
 )
@@ -16,6 +17,7 @@ from pmstudio.application.use_cases import AnswerInput, ClaimEdit
 from pmstudio.domain.shared.ids import ProjectId, RoundId
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.writing import WriteOp
 
 router = APIRouter()
 
@@ -52,6 +54,20 @@ async def get_workspace(request: Request, project_id: str):  # type: ignore[no-u
 async def get_document(request: Request, project_id: str):  # type: ignore[no-untyped-def]
     view = await services_of(request).get_document(project_id=ProjectId(project_id))
     return as_json(view)
+
+
+@router.post("/projects/{project_id}/edits")
+async def edit_entry(request: Request, project_id: str, body: EditEntryRequest):  # type: ignore[no-untyped-def]
+    """用户手改文档。一次改动一版，改过的块之后 AI 不能再动。"""
+
+    result = await services_of(request).edit_entry(
+        project_id=ProjectId(project_id),
+        op=WriteOp(body.op),
+        entry_id=body.entry_id,
+        block_id=body.block_id,
+        text=body.text,
+    )
+    return as_json(result)
 
 
 @router.post("/projects/{project_id}/rounds")

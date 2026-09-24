@@ -34,6 +34,7 @@ export function useEvents(
     let timer: number | undefined;
     let attempts = 0;
     let wasLost = false;
+    let lostAt = 0;
     let stopped = false;
 
     const connect = () => {
@@ -43,14 +44,17 @@ export function useEvents(
       source.onopen = () => {
         attempts = 0;
         setConnection("open");
-        if (wasLost) {
+        // 只补"真的断过一会儿"的重读：连接抖一下就整份重读，会把用户正在打的字顶掉。
+        if (wasLost && Date.now() - lostAt > 3_000) {
           wasLost = false;
           afterReconnect.current?.();
         }
+        wasLost = false;
       };
 
       source.onerror = () => {
         wasLost = true;
+        lostAt = Date.now();
         setConnection("lost");
         // EventSource 自己会重连；只有它放弃了（CLOSED）才由我们退避重来。
         if (source?.readyState === EventSource.CLOSED && !stopped) {

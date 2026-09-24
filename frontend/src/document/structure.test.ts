@@ -14,6 +14,7 @@ function block(partial: Partial<BlockView> & { block_id: string; kind: string })
     field: null,
     feature_slug: null,
     manually_edited: false,
+    multiple: true,
     ...partial,
   };
 }

@@ -1,6 +1,10 @@
 import json
 
 from pmstudio.api.app import ApiServices, create_app
+from pmstudio.domain.authoring.instruction import WriteInstruction
+from pmstudio.domain.shared.ids import EntryId, EvidenceId, ProjectId
+from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.api_client import async_client
 from tests.support.harness import Harness
 
@@ -183,6 +187,62 @@ async def test_unknown_round_is_404():
         response = await client.get("/api/rounds/r404")
     assert response.status_code == 404
     assert response.json()["code"] == "unknown_round"
+
+
+async def test_manual_edit_over_http_bumps_the_version_and_returns_the_document():
+    """手改一条：返回新版本号 + 改完的文档，界面一次往返就能刷新。"""
+
+    app, harness = make_client()
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+
+        # 先给文档铺一条可改的内容（走完整闭环太慢，这不是被测对象）
+        document = harness.documents.get(ProjectId(project_id))
+        document.apply(
+            [
+                WriteInstruction(
+                    instruction_id="seed",
+                    entry_id=EntryId("en-1"),
+                    op=WriteOp.ADD,
+                    target=Target.body("s2"),
+                    text="把想法整理成能交付的文档",
+                    refs=(EvidenceId("E1"),),
+                    kind=BlockKind.TEXT,
+                )
+            ],
+            now=harness.clock.now(),
+            summary="铺一条",
+        )
+        harness.documents.seed(document)
+        before = harness.documents.get(ProjectId(project_id))
+
+        response = await client.post(
+            f"/api/projects/{project_id}/edits",
+            json={"op": "replace", "entry_id": "en-1", "text": "把想法整理成一份能交付的文档"},
+        )
+        bad = await client.post(
+            f"/api/projects/{project_id}/edits",
+            json={"op": "replace", "entry_id": "nope", "text": "x"},
+        )
+        missing = await client.post(
+            f"/api/projects/{project_id}/edits", json={"op": "add", "text": "x"}
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version_no"] == before.current_version.version_no + 1
+    assert body["written_block_ids"]
+
+    blocks = [block for section in body["document"]["sections"] for block in section["blocks"]]
+    entries = [entry for block in blocks for entry in block["entries"]]
+    assert [entry["text"] for entry in entries] == ["把想法整理成一份能交付的文档"]
+    assert len(entries[0]["refs"]) == 2  # 原来的出处 + 手改那一条
+    assert [block["manually_edited"] for block in blocks] == [True]
+
+    assert bad.status_code == 422
+    assert missing.status_code == 422
 
 
 async def test_bad_body_is_422():

@@ -45,3 +45,12 @@ class AnswersRequest(BaseModel):
 
 class ConfirmRequest(BaseModel):
     accepted: list[str] = Field(default_factory=list)
+
+
+class EditEntryRequest(BaseModel):
+    """手改文档：改一条 / 加一条 / 删一条（`op` 决定要带哪些字段）。"""
+
+    op: Literal["add", "replace", "remove"]
+    entry_id: str | None = None
+    block_id: str | None = None
+    text: str = ""

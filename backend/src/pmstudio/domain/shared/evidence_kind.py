@@ -14,8 +14,11 @@ class EvidenceKind(StrEnum):
     AGENT_PROPOSED = "agent_proposed"  # 席位判断，无依据
     SYSTEM_DEFAULT = "system_default"  # 系统按结构规则补的（如跳过的题落开放问题）
     EXTERNAL = "external"  # 外部材料（v1 留位，暂无生产者）
+    MANUAL = "manual"  # 用户自己在文档里改的（手改也要有自己的出处，见 04-未决 D1）
 
 
+# 可追溯链的终点：人能直接为这条内容负责的两种（三种）来源。
+# manual 也算终点——那是用户自己敲进去的字，和"他说的""他答的"是同一件事。
 TERMINAL_KINDS: frozenset[EvidenceKind] = frozenset(
-    {EvidenceKind.USER_INPUT, EvidenceKind.CARD_ANSWER}
+    {EvidenceKind.USER_INPUT, EvidenceKind.CARD_ANSWER, EvidenceKind.MANUAL}
 )

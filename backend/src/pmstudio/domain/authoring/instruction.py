@@ -21,6 +21,8 @@ class WriteInstruction:
     text: str
     refs: tuple[EvidenceId, ...]
     kind: BlockKind | None = None
+    # 这条指令是人写的（手改文档）：落到的块要留痕，之后 AI 不能静默覆盖它。
+    manual: bool = False
 
     def __post_init__(self) -> None:
         if not self.text.strip():

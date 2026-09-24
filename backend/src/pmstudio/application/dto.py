@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
-from pmstudio.application.ports import SeatCatalog
+from pmstudio.application.ports import SeatCatalog, SeatDefinition
 from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Proposal
@@ -21,11 +21,18 @@ SEAT_PENDING = "pending"
 
 @dataclass(frozen=True, slots=True)
 class SeatSuggestionView:
-    """开场卡上的一个席位提名：为什么请它 = 它的 focus。"""
+    """开场卡上的一个席位提名。
+
+    "为什么请它"由两部分说清：`focus`（它管什么）+ 提名来源——
+    `always_on`（常驻席位，每轮都请）与 `matched_keywords`（你这轮的话里命中了它的关键词）。
+    两者都是**机械判定**，不是模型判断；界面照实说明，用户才好做减法。
+    """
 
     seat_id: str
     title: str
     focus: str
+    always_on: bool = False
+    matched_keywords: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,16 +208,26 @@ def _suggestions(
 
     if catalog is not None and not round_.seats:
         return tuple(
-            SeatSuggestionView(seat_id=seat.seat_id, title=seat.title, focus=seat.focus)
+            _suggestion(seat, user_input=round_.user_input)
             for seat in catalog.nominate(user_input=round_.user_input)
         )
     return tuple(
-        SeatSuggestionView(
-            seat_id=seat_id,
-            title=seat_titles.get(seat_id, seat_id),
-            focus=catalog.by_id(seat_id).focus if catalog is not None else "",
-        )
+        _suggestion(catalog.by_id(seat_id), user_input=round_.user_input)
+        if catalog is not None
+        else SeatSuggestionView(seat_id=seat_id, title=seat_titles.get(seat_id, seat_id), focus="")
         for seat_id in round_.seats
+    )
+
+
+def _suggestion(seat: SeatDefinition, *, user_input: str) -> SeatSuggestionView:
+    return SeatSuggestionView(
+        seat_id=seat.seat_id,
+        title=seat.title,
+        focus=seat.focus,
+        always_on=seat.always_on,
+        matched_keywords=tuple(
+            keyword for keyword in seat.trigger_keywords if keyword in user_input
+        ),
     )
 
 

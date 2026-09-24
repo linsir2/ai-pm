@@ -161,6 +161,23 @@ def test_unit_of_work_rolls_back_on_exception(repos):
         documents.get(PROJECT)  # 回滚干净：库里没有这个项目
 
 
+def test_unit_of_work_is_reentrant_within_one_use_case(repos):
+    """用例里调领域服务不算新事务：内层不再 BEGIN，成败由最外层定。
+
+    手改文档就是这条路径（`EditEntry` → `ProposalCommitter.apply_manual`）。
+    """
+
+    documents, _, _, _, uow = repos
+    with pytest.raises(RuntimeError):
+        with uow:
+            with uow:  # 领域服务的那一层
+                documents.save(make_document())
+            raise RuntimeError("用例后半段炸了")
+
+    with pytest.raises(UnknownProject):
+        documents.get(PROJECT)  # 整段回滚
+
+
 def test_summary_updated_at_comes_from_the_database(repos):
     documents, _, _, index, uow = repos
     with uow:

@@ -30,12 +30,24 @@ export function SeatPacketCard({
 
       {!pending && (
         <>
-          <p className="packet__basis">依据：{packet.basis.trim() === "" ? "它没写读了什么" : packet.basis}</p>
-          <p className="packet__counts">
-            <span>判断 {packet.judgment_count} 条</span>
-            <span>疑问 {packet.question_count} 个</span>
-            <span className="muted">第 {packet.pass_index} 轮</span>
+          {/* 它是真的有话说，还是交了个空——这一行要说清楚，别只丢两个 0 出来 */}
+          <p className="packet__basis">
+            {packet.basis.trim() === "" ? "它没写自己读了什么。" : packet.basis}
           </p>
+
+          {packet.opinions.length === 0 ? (
+            <p className="packet__counts packet__counts--none">
+              这个席位这一轮没有要补的（交回空意见，理由就是上面那段）
+              <span className="muted"> · 第 {packet.pass_index} 轮</span>
+            </p>
+          ) : (
+            <p className="packet__counts">
+              {packet.judgment_count > 0 && <span>判断 {packet.judgment_count} 条</span>}
+              {packet.question_count > 0 && <span>疑问 {packet.question_count} 个</span>}
+              <span className="muted">第 {packet.pass_index} 轮</span>
+            </p>
+          )}
+
           <ul className="opinions">
             {packet.opinions.map((opinion) => (
               <li

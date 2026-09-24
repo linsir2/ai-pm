@@ -11,6 +11,7 @@ from pmstudio.application.errors import ApplicationError
 from pmstudio.application.ports import EventStream, RoundOrchestrator
 from pmstudio.application.use_cases import (
     CreateProject,
+    EditEntry,
     GetDocument,
     GetRound,
     GetWorkspace,
@@ -27,6 +28,7 @@ class ApiServices:
     list_projects: ListProjects
     get_round: GetRound
     get_document: GetDocument
+    edit_entry: EditEntry
     stream: EventStream
     model_name: str
 

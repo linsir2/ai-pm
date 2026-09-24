@@ -7,6 +7,7 @@ EXPECTED_PATHS = {
     "/api/projects",
     "/api/projects/{project_id}/workspace",
     "/api/projects/{project_id}/document",
+    "/api/projects/{project_id}/edits",
     "/api/projects/{project_id}/rounds",
     "/api/rounds/{round_id}",
     "/api/rounds/{round_id}/opening",

@@ -29,6 +29,9 @@ class BlockView:
     field: str | None = None
     feature_slug: FeatureSlug | None = None
     manually_edited: bool = False
+    # 这一块"能不能有多条"。单值字段（名称、一句话描述、优先级、用户故事）只能改写；
+    # 其余（清单、验收标准、章节正文）可以加与删。来自字段表，界面据此决定给哪些按钮。
+    multiple: bool = True
 
 
 @dataclass(frozen=True, slots=True)

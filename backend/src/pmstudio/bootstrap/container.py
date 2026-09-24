@@ -14,6 +14,7 @@ from pmstudio.application.ports import ModelGateway
 from pmstudio.application.use_cases import (
     ConfirmDraft,
     CreateProject,
+    EditEntry,
     GetDocument,
     GetRound,
     GetWorkspace,
@@ -183,6 +184,16 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         list_projects=ListProjects(index=index),
         get_round=get_round,
         get_document=GetDocument(documents=documents),
+        edit_entry=EditEntry(
+            documents=documents,
+            evidence=evidences,
+            evidence_writer=evidences,
+            committer=committer,
+            uow=uow,
+            clock=clock,
+            ids=ids,
+            events=bus,
+        ),
         stream=bus,
         model_name=settings.model,
     )

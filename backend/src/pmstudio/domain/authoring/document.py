@@ -4,6 +4,7 @@
 所以任一条校验失败，文档一个字节都不会变。
 """
 
+from dataclasses import replace
 from datetime import datetime
 
 from pmstudio.domain.authoring.blocks import Block, Entry, assert_unique_fields
@@ -170,6 +171,7 @@ class Document:
             children.setdefault(block.parent_id, []).append(block)
 
         def build(block: Block) -> BlockView:
+            spec = field_spec(block.field) if block.field is not None else None
             return BlockView(
                 block_id=block.block_id,
                 kind=block.kind,
@@ -178,6 +180,7 @@ class Document:
                 field=block.field,
                 feature_slug=block.feature_slug,
                 manually_edited=block.manually_edited,
+                multiple=True if spec is None else spec.multiple,
             )
 
         sections = tuple(
@@ -219,6 +222,18 @@ class Document:
         )
         for instruction in instructions:
             working.apply(instruction, authorized_new_features=authorized_new_features)
+        # 候选状态也要过一遍校验：不然会出现"写得进去、读不出来"——
+        # 校验只在 Document 构造时跑，写坏了要等下一个人读它才发现。
+        Document(
+            document_id=self._document_id,
+            project_id=self._project_id,
+            title=self._title,
+            blocks=working.blocks,
+            versions=self._versions,
+            preference_entries=working.preference_entries,
+            tombstones=self._tombstones + working.tombstones,
+            created_at=self._created_at,
+        )
         version = Version(
             version_no=self.current_version.version_no + 1,
             trigger=trigger,
@@ -365,14 +380,29 @@ class _WorkingTree:
     def apply(
         self, instruction: WriteInstruction, *, authorized_new_features: frozenset[FeatureSlug]
     ) -> None:
+        """跑一条指令。人写的（`manual`）落到的块会留痕：之后 AI 动不了它。"""
+
+        touched = self._apply_one(instruction, authorized_new_features=authorized_new_features)
+        if instruction.manual and touched is not None:
+            self.mark_edited(touched)
+
+    def mark_edited(self, block_id: BlockId) -> None:
+        block = self._blocks.get(block_id)
+        if block is None:
+            raise UnknownBlock(block_id)
+        self._replace(replace(block, manually_edited=True))
+
+    def _apply_one(
+        self, instruction: WriteInstruction, *, authorized_new_features: frozenset[FeatureSlug]
+    ) -> BlockId | None:
         if instruction.target.zone is Zone.PREFERENCE:
             self._apply_preference(instruction)
-        elif instruction.op is WriteOp.ADD:
-            self._apply_add(instruction, authorized_new_features=authorized_new_features)
-        elif instruction.op is WriteOp.REPLACE:
-            self._apply_replace(instruction)
-        else:
-            self._apply_remove(instruction)
+            return None  # 偏好区不是块，没有"留痕"这回事
+        if instruction.op is WriteOp.ADD:
+            return self._apply_add(instruction, authorized_new_features=authorized_new_features)
+        if instruction.op is WriteOp.REPLACE:
+            return self._apply_replace(instruction)
+        return self._apply_remove(instruction)
 
     # —— 偏好区 ——
     def _apply_preference(self, instruction: WriteInstruction) -> None:
@@ -402,7 +432,7 @@ class _WorkingTree:
     # —— 正文 ——
     def _apply_add(
         self, instruction: WriteInstruction, *, authorized_new_features: frozenset[FeatureSlug]
-    ) -> None:
+    ) -> BlockId:
         target = instruction.target
         if target.section_id is None:
             raise ShapeError("正文写入必须带章节", instruction_id=instruction.instruction_id)
@@ -419,40 +449,44 @@ class _WorkingTree:
                     entries=(entry,),
                 )
             )
-            return
+            return block_id
         parent_id = self._parent_for_write(
             target, authorized_new_features=authorized_new_features
         )
         parent = self._blocks[parent_id]
         multiple = True if target.field is None else field_spec(target.field).multiple
-        if parent.manually_edited and not multiple:
+        # D5 的意思是"不许被**静默**覆盖"：AI 动不了人写过的块，人自己可以接着改。
+        if parent.manually_edited and not multiple and not instruction.manual:
             raise BlockManuallyEdited(block_id=parent.block_id)
         entries = parent.entries + (entry,) if multiple else (entry,)
         self._replace(parent.with_entries(entries))
+        return parent.block_id
 
-    def _apply_replace(self, instruction: WriteInstruction) -> None:
+    def _apply_replace(self, instruction: WriteInstruction) -> BlockId:
         block_id, index = self._locate_entry(instruction.entry_id)
         block = self._blocks[block_id]
-        if block.manually_edited:
+        if block.manually_edited and not instruction.manual:
             raise BlockManuallyEdited(block_id=block.block_id)
         entries = list(block.entries)
         entries[index] = Entry(
             entry_id=instruction.entry_id, text=instruction.text, refs=instruction.refs
         )
         self._replace(block.with_entries(entries))
+        return block.block_id
 
-    def _apply_remove(self, instruction: WriteInstruction) -> None:
+    def _apply_remove(self, instruction: WriteInstruction) -> BlockId:
         block_id = BlockId(str(instruction.entry_id))
         if block_id in self._blocks:
             self._tombstone(block_id)
-            return
+            return block_id
         found_block_id, index = self._locate_entry(instruction.entry_id)
         block = self._blocks[found_block_id]
-        if block.manually_edited:
+        if block.manually_edited and not instruction.manual:
             raise BlockManuallyEdited(block_id=block.block_id)
         entries = list(block.entries)
         entries.pop(index)
         self._replace(block.with_entries(entries))
+        return found_block_id
 
     def _parent_for_write(
         self, target: Target, *, authorized_new_features: frozenset[FeatureSlug]

@@ -1,27 +1,26 @@
-/* 文档区：一次读一章。上面是章节标签条，下面是这一章的正文。
+/* 文档区：一次读一章（换章走左栏那棵树，所以这里不再放一排章节按钮）。
    章节说明（合格标准）现在只在后端与设计文档里，界面不编一份出来。 */
 
 import type { DocumentView, RoundView } from "../api/types";
 import { STATUS_TEXT, sectionStatus, statusClass } from "../document/status";
 import { chapterAnchors } from "../document/structure";
 import { BlockTree } from "./BlockTree";
-import { ChapterTabs } from "./ChapterTabs";
-import { EvidenceChip } from "./EvidenceChip";
+import { EntryList } from "./EntryList";
 import { FeatureBlock } from "./FeatureBlock";
 import { Skeleton } from "./States";
+
+export const PREFERENCE_AREA = "preference-area";
 
 export function DocumentPane({
   document: doc,
   round,
   justWritten,
   activeSection,
-  onSelectSection,
 }: {
   document: DocumentView | null;
   round: RoundView | null;
   justWritten: string[];
   activeSection: string;
-  onSelectSection: (sectionId: string) => void;
 }) {
   if (doc === null) {
     return (
@@ -37,32 +36,16 @@ export function DocumentPane({
     return (
       <main className="doc" aria-label="产品文档">
         <div className="doc__inner">
-          <ChapterTabs
-            document={doc}
-            round={round}
-            activeSection={activeSection}
-            onSelect={onSelectSection}
-          />
-          <section
-            className="prefs"
-            id="sec-preference"
-            role="tabpanel"
-            aria-labelledby="tab-preference"
-          >
+          <section className="prefs" id="sec-preference">
             <h2 className="prefs__head">偏好区</h2>
             <p className="prefs__note">
               你的口味记在这里：不进正文、不进交付物，只影响后面怎么写。
             </p>
-            <ul className="entries">
-              {doc.preference_entries.map((entry) => (
-                <li className="entry" key={entry.entry_id}>
-                  <span className="entry__text">{entry.text}</span>
-                  <span className="entry__refs">
-                    <EvidenceChip eids={entry.refs} />
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <EntryList
+              blockId={PREFERENCE_AREA}
+              entries={doc.preference_entries}
+              kind="bullet_list"
+            />
           </section>
         </div>
       </main>
@@ -77,19 +60,7 @@ export function DocumentPane({
   return (
     <main className="doc" aria-label="产品文档">
       <div className="doc__inner">
-        <ChapterTabs
-          document={doc}
-          round={round}
-          activeSection={section.section_id}
-          onSelect={onSelectSection}
-        />
-
-        <section
-          className="chapter"
-          role="tabpanel"
-          id={`chapter-${section.section_id}`}
-          aria-labelledby={`tab-${section.section_id}`}
-        >
+        <section className="chapter">
           <header className="chapter__head">
             <div className="chapter__kicker">
               <span className="mono">{section.section_id}</span>
@@ -113,12 +84,18 @@ export function DocumentPane({
 
           <div className="chapter__body">
             {section.blocks.length === 0 ? (
-              <>
-                <p className="section__blank">这一章还没写。</p>
+              <div className="chapter__empty">
+                <p className="section__blank">这一章还没写。你也可以自己先写一条。</p>
+                <EntryList
+                  blockId={section.section_id}
+                  entries={[]}
+                  kind="text"
+                  addLabel="+ 在这一章写第一条"
+                />
                 {pendingNote(round, section.section_id) !== null && (
                   <p className="section__note">{pendingNote(round, section.section_id)}</p>
                 )}
-              </>
+              </div>
             ) : (
               section.blocks.map((block) =>
                 block.kind === "feature" ? (

@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import type { AnswerDraft, ClaimEdit } from "../api/payload";
+import type { AnswerDraft, AwaitingMode, ClaimEdit } from "../api/payload";
 import { defaultAccepted, defaultSeats, initialClaimEdits } from "../api/payload";
 import type { RoundView } from "../api/types";
 
@@ -25,7 +25,7 @@ export interface RoundDrafts {
   toggleAccepted: (proposalId: string) => void;
 }
 
-export function useRoundDrafts(round: RoundView | null): RoundDrafts {
+export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): RoundDrafts {
   const [answers, setAnswers] = useState<Record<string, AnswerDraft>>({});
   const [seats, setSeats] = useState<string[]>([]);
   const [edits, setEdits] = useState<Record<string, ClaimEdit>>({});
@@ -35,19 +35,26 @@ export function useRoundDrafts(round: RoundView | null): RoundDrafts {
   const roundId = round?.round_id ?? null;
   const draftId = round?.draft?.draft_id ?? null;
 
-  // 换一轮 = 换现场。
+  // 换一轮 = 换现场。**只在轮次 id 变化时重置**：
+  // 事件推送与"该重读了"都会换掉 round 对象的引用，但那一轮没变——
+  // 之前按 [roundId, round] 重置，结果是每来一条事件就把用户正在打的字清空。
   useEffect(() => {
     setAnswers({});
     setAccepted([]);
-    setCollapsed(false);
     setSeats(round === null ? [] : defaultSeats(round));
     setEdits(round === null ? {} : initialClaimEdits(round));
-  }, [roundId, round]);
+  }, [roundId]);
+
+  // 抽屉什么时候该自己展开：换轮，或"该答问卷 / 该勾草案"这件事本身变了。
+  // 用户手动收起之后，普通的数据刷新不许再把它弹开。
+  useEffect(() => {
+    if (mode === "questionnaire" || mode === "draft") setCollapsed(false);
+  }, [roundId, mode]);
 
   // 草案一到位，默认勾上"你说过的 + 它替你判断的"（它提议的默认不勾）。
   useEffect(() => {
     if (round?.draft != null) setAccepted(defaultAccepted(round.draft));
-  }, [draftId, round]);
+  }, [draftId]);
 
   const changeAnswer = useCallback((questionId: string, draft: AnswerDraft) => {
     setAnswers((current) => ({ ...current, [questionId]: draft }));

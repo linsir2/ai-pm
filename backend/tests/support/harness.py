@@ -180,11 +180,17 @@ class Harness:
 
     def confirm_draft(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import ConfirmDraft
+
+        return ConfirmDraft(
+            committer=self.committer(), rounds=self.rounds, clock=self.clock, events=self.events
+        )
+
+    def committer(self):  # type: ignore[no-untyped-def]
         from pmstudio.domain.services.committer import ProposalCommitter
         from pmstudio.domain.services.scope_guard import ScopeGuard
         from pmstudio.domain.services.traceability import TraceabilityChecker
 
-        committer = ProposalCommitter(
+        return ProposalCommitter(
             documents=self.documents,
             writer=self.documents,
             rounds=self.rounds,
@@ -193,9 +199,6 @@ class Harness:
             scope=ScopeGuard(),
             traceability=TraceabilityChecker(),
             uow=self.uow,
-        )
-        return ConfirmDraft(
-            committer=committer, rounds=self.rounds, clock=self.clock, events=self.events
         )
 
     def retry_round(self):  # type: ignore[no-untyped-def]
@@ -267,6 +270,21 @@ class Harness:
             list_projects=self.list_projects(),
             get_round=self.get_round(),
             get_document=self.get_document(),
+            edit_entry=self.edit_entry(),
             stream=self.events,
             model_name=model_name,
+        )
+
+    def edit_entry(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import EditEntry
+
+        return EditEntry(
+            documents=self.documents,
+            evidence=self.evidences,
+            evidence_writer=self.evidences,
+            committer=self.committer(),
+            uow=self.uow,
+            clock=self.clock,
+            ids=self.ids,
+            events=self.events,
         )

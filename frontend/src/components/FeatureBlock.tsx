@@ -1,9 +1,10 @@
 /* 一个功能子树：名称当标题，整段文字与步骤编号排下来，清单与验收标准并列成表。
    编号只是"排在第几段"，不改变任何后端语义。 */
 
-import type { BlockView, Entry } from "../api/types";
-import { fieldTitle } from "../labels";
+import type { BlockView } from "../api/types";
 import { fieldEntries, groupFields } from "../document/structure";
+import { fieldTitle } from "../labels";
+import { EntryList } from "./EntryList";
 import { EvidenceChip } from "./EvidenceChip";
 
 export function FeatureBlock({
@@ -22,7 +23,10 @@ export function FeatureBlock({
   const isNew = justWritten.includes(feature.block_id);
 
   return (
-    <article className={isNew ? "feature feature--just-written" : "feature"} id={`block-${feature.block_id}`}>
+    <article
+      className={isNew ? "feature feature--just-written" : "feature"}
+      id={`block-${feature.block_id}`}
+    >
       <header className="feature__head">
         <span className="feature__slug">feature#{slug}</span>
         <h3 className="feature__name">{name ?? "还没写名称"}</h3>
@@ -43,7 +47,12 @@ export function FeatureBlock({
                 {fieldTitle(block.field)}
                 <EvidenceChip eids={block.entries.flatMap((entry) => entry.refs)} />
               </h4>
-              <FieldEntries entries={block.entries} kind={block.kind} />
+              <EntryList
+                blockId={block.block_id}
+                entries={block.entries}
+                kind={block.kind}
+                multiple={block.multiple}
+              />
             </li>
           ))}
         </ol>
@@ -54,48 +63,17 @@ export function FeatureBlock({
           {grid.map((block) => (
             <section className="keygrid__cell" id={`block-${block.block_id}`} key={block.block_id}>
               <h4 className="field__name">{fieldTitle(block.field)}</h4>
-              {block.entries.length === 0 ? (
-                <p className="section__blank">还没写</p>
-              ) : (
-                <ul className="keygrid__list">
-                  {block.entries.map((entry) => (
-                    <li className="keygrid__item" key={entry.entry_id}>
-                      <span>{entry.text}</span>
-                      <EvidenceChip eids={entry.refs} />
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <EntryList
+                blockId={block.block_id}
+                entries={block.entries}
+                kind={block.kind}
+                multiple={block.multiple}
+                compact
+              />
             </section>
           ))}
         </div>
       )}
     </article>
-  );
-}
-
-function FieldEntries({ entries, kind }: { entries: Entry[]; kind: string }) {
-  if (entries.length === 0) return <p className="section__blank">还没写</p>;
-  if (kind === "steps") {
-    return (
-      <ol className="entries entries--steps">
-        {entries.map((entry) => (
-          <li className="entry" key={entry.entry_id}>
-            <span className="entry__text">{entry.text}</span>{" "}
-            <EvidenceChip eids={entry.refs} />
-          </li>
-        ))}
-      </ol>
-    );
-  }
-  return (
-    <div className="prose">
-      {entries.map((entry) => (
-        <p className="prose__p" key={entry.entry_id}>
-          {entry.text}
-          <EvidenceChip eids={entry.refs} />
-        </p>
-      ))}
-    </div>
   );
 }

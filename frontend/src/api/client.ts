@@ -3,6 +3,7 @@
 import type {
   ConfirmResponse,
   DocumentView,
+  EditResult,
   ProjectSummaryView,
   RoundView,
   WorkspaceView,
@@ -69,6 +70,13 @@ export interface AnswersBody {
   skipped: string[];
 }
 
+export interface EditBody {
+  op: "add" | "replace" | "remove";
+  entry_id?: string | null;
+  block_id?: string | null;
+  text?: string;
+}
+
 export const api = {
   health: () => request<{ status: string; model: string }>("/health"),
 
@@ -114,4 +122,11 @@ export const api = {
 
   retry: (roundId: string) =>
     request<RoundView>(`/rounds/${roundId}/retry`, { method: "POST", body: "{}" }),
+
+  /** 手改文档：改一条 / 加一条 / 删一条（一次改动一版）。 */
+  editEntry: (projectId: string, body: EditBody) =>
+    request<EditResult>(`/projects/${projectId}/edits`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

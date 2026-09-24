@@ -26,6 +26,8 @@ export interface BlockView {
   field: string | null;
   feature_slug: string | null;
   manually_edited: boolean;
+  /** 这一块能不能有多条：单值字段只能改写，其余可以加与删。 */
+  multiple: boolean;
 }
 
 export interface SectionView {
@@ -112,6 +114,10 @@ export interface SeatSuggestionView {
   seat_id: string;
   title: string;
   focus: string;
+  /** 常驻席位：每轮都请（不是模型判断，是目录里的配置）。 */
+  always_on: boolean;
+  /** 你这轮的话里命中了它的哪些关键词（同样不是模型判断）。 */
+  matched_keywords: string[];
 }
 
 export interface RoundView {
@@ -159,4 +165,12 @@ export interface WorkspaceEvent {
 export interface ConfirmResponse {
   version_no: number;
   round: RoundView;
+}
+
+/** 手改文档的返回：新版本号 + 改完的文档（界面一次往返就够）。 */
+export interface EditResult {
+  version_no: number;
+  written_block_ids: string[];
+  entry_id: string;
+  document: DocumentView;
 }

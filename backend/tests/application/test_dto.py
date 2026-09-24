@@ -1,4 +1,5 @@
 from pmstudio.application import dto
+from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
@@ -77,6 +78,14 @@ def test_round_view_reports_step_waiting_claims_and_seats():
 def test_round_view_suggests_seats_for_the_opening_card():
     """F8：开局要按输入提名席位，并写清为什么请它（理由用席位的 focus）。"""
 
+    def make_triggered_seat():
+        return SeatDefinition(
+            seat_id="seat.export_import",
+            title="导出与导入",
+            focus="导出范围、格式、大文件",
+            trigger_keywords=("导出", "导入"),
+        )
+
     class _Catalog:
         def all(self):
             return (make_seat(),)
@@ -100,6 +109,60 @@ def test_round_view_suggests_seats_for_the_opening_card():
     assert view.nominated_seats[0].seat_id == SEAT
     assert view.nominated_seats[0].title == "数据规模与性能"
     assert view.nominated_seats[0].focus  # 提名理由
+
+
+def test_round_view_tells_why_a_seat_was_nominated():
+    """提名来源要能说明白：常驻席位 / 你这轮的话命中了它的关键词。
+
+    这是**机械判定**（目录里的 always_on 与 trigger_keywords），不是模型判断——
+    界面照实说，用户才好决定删谁。
+    """
+
+    def export_seat(*, always_on: bool) -> SeatDefinition:
+        return SeatDefinition(
+            seat_id="seat.export_import",
+            title="导出与导入",
+            focus="导出范围、格式、大文件",
+            trigger_keywords=("导出", "导入"),
+            always_on=always_on,
+        )
+
+    class _AlwaysOnCatalog:
+        def all(self):
+            return (export_seat(always_on=True),)
+
+        def nominate(self, *, user_input: str):
+            return (export_seat(always_on=True),)
+
+        def by_id(self, seat_id: str):
+            return export_seat(always_on=True)
+
+    always_on = Round.start(
+        round_id=ROUND_ID,
+        project_id=ProjectId("p1"),
+        user_input="把零散想法整理成一份能交付的文档",
+        now=NOW,
+    )
+    on_view = dto.round_view(always_on, catalog=_AlwaysOnCatalog()).nominated_seats[0]
+    assert on_view.always_on is True
+    assert on_view.matched_keywords == ()
+
+    triggered = Round.start(
+        round_id=ROUND_ID,
+        project_id=ProjectId("p1"),
+        user_input="想做个订单导出",
+        now=NOW,
+    )
+    class _TriggeredCatalog(_AlwaysOnCatalog):
+        def nominate(self, *, user_input: str):
+            return (export_seat(always_on=False),)
+
+        def by_id(self, seat_id: str):
+            return export_seat(always_on=False)
+
+    triggered_view = dto.round_view(triggered, catalog=_TriggeredCatalog()).nominated_seats[0]
+    assert triggered_view.always_on is False
+    assert triggered_view.matched_keywords == ("导出",)
 
 
 def test_round_view_lists_every_seat_with_status_pending_or_completed():

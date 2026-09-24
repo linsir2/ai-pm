@@ -276,6 +276,60 @@ a {
   padding-block: var(--space-2);
 }
 
+/* 树：一层一层缩进，小三角只管展开收起 */
+.rail__row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.rail__row--on {
+  background: var(--surface);
+  border-radius: var(--radius-tag);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.rail__twisty {
+  width: 16px;
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--empty);
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.rail__twisty--empty {
+  cursor: default;
+  text-align: center;
+}
+
+.rail__item--flush {
+  padding-left: 2px;
+}
+
+.rail__kids {
+  margin-left: 14px;
+  border-left: var(--hairline);
+  padding-left: var(--space-1);
+}
+
+.rail__grandkids {
+  margin-left: 26px;
+}
+
+.rail__item--leaf {
+  color: var(--empty);
+  font-size: var(--step-1);
+  padding-block: 3px;
+}
+
+.rail__item--leaf .rail__label {
+  font-size: var(--step-1);
+}
+
 /* ── 文档区 ───────────────────────────────────────────────── */
 .doc {
   grid-area: doc;
@@ -293,51 +347,6 @@ a {
   background: var(--paper);
   border: var(--hairline);
   border-radius: var(--radius-card);
-}
-
-/* 章节标签条 */
-.tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  padding-bottom: var(--space-4);
-}
-
-.tab {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px var(--space-2);
-  border: 1px solid transparent;
-  border-radius: var(--radius-tag);
-  background: transparent;
-  color: var(--open);
-  font-size: var(--step-1);
-  cursor: pointer;
-  transition:
-    background var(--dur-micro) var(--ease-out),
-    color var(--dur-micro) var(--ease-out);
-}
-
-.tab:hover {
-  background: color-mix(in srgb, var(--ink) 5%, transparent);
-  color: var(--ink);
-}
-
-.tab--on {
-  background: var(--surface);
-  border-color: var(--border);
-  color: var(--ink);
-}
-
-.tab__num {
-  font-size: 10px;
-  color: var(--empty);
-}
-
-.tab .dot {
-  width: 5px;
-  height: 5px;
 }
 
 /* 章节头 */
@@ -541,6 +550,94 @@ a {
 
 .entries--steps .entry__refs {
   margin-left: 6px;
+}
+
+/* 条目的改 / 加 / 删：平时不显眼，鼠标进来或键盘走到才亮 */
+.entry__tools {
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-micro) var(--ease-out);
+}
+
+.entry:hover .entry__tools,
+.entry:focus-within .entry__tools {
+  opacity: 1;
+}
+
+.iconbtn {
+  border: 0;
+  background: none;
+  color: var(--empty);
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: var(--radius-tag);
+  cursor: pointer;
+}
+
+.iconbtn:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+}
+
+.iconbtn--danger {
+  color: var(--conflict);
+  background: var(--tint-danger);
+}
+
+.entry--editing,
+.entry--add {
+  display: block;
+}
+
+.entry__form {
+  display: block;
+  width: 100%;
+}
+
+.entry__editor {
+  width: 100%;
+  min-height: 58px;
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline);
+  border-radius: var(--radius-input);
+  background: var(--paper);
+  font-size: var(--step-3);
+  line-height: 1.7;
+  resize: vertical;
+}
+
+.entry__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.entry-add {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-input);
+  background: none;
+  color: var(--empty);
+  font-size: var(--step-1);
+  padding: 3px var(--space-2);
+  cursor: pointer;
+  transition: color var(--dur-micro) var(--ease-out);
+}
+
+.entry-add:hover {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+}
+
+.entries--compact .entry__text {
+  font-size: var(--step-2);
+}
+
+.entries-wrap > .entries + .entry-add,
+.entries-wrap > .entries li.entry--add {
+  margin-top: 3px;
 }
 
 /* 偏好区：不进正文、不进交付 */
@@ -915,10 +1012,15 @@ a {
 
 .packet__counts {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   margin-top: var(--space-2);
   font-size: var(--step-1);
   color: var(--open);
+}
+
+.packet__counts--none {
+  line-height: 1.6;
 }
 
 .opinions {
@@ -1253,6 +1355,23 @@ a {
 .seat__title {
   display: block;
   font-size: var(--step-2);
+}
+
+.seat__why {
+  margin-left: var(--space-2);
+  font-size: 10px;
+  color: var(--empty);
+  border: var(--hairline);
+  border-radius: var(--radius-tag);
+  padding: 0 5px;
+  vertical-align: 1px;
+}
+
+.seat__note {
+  font-size: var(--step-1);
+  color: var(--empty);
+  line-height: 1.7;
+  margin: 0 0 var(--space-2);
 }
 
 .seat__focus {

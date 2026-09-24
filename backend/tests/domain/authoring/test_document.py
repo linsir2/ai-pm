@@ -294,3 +294,26 @@ def test_gaps_lists_missing_required_fields():
         "exceptions",
         "acceptance",
     ]
+
+
+def test_apply_refuses_a_candidate_state_that_would_not_load():
+    """写之前先验一次：不合格的候选状态不许落盘。
+
+    这条是"写得进去、读不出来"逼出来的——校验原本只在 Document 构造时跑，
+    于是错误状态能存进库，要等下一个人读它才炸（手改文档踩过一次）。
+    """
+
+    document = new_document()
+    with pytest.raises(SectionSetViolation):
+        # 把章节根块当成普通内容块的 kind 抄下来 → 同一章出现两个 section 根
+        apply(
+            document,
+            instruction(
+                target=Target.body("s2"),
+                entry_id="en1",
+                text="一段话",
+                kind=BlockKind.SECTION,
+            ),
+        )
+
+    assert document.current_version.version_no == 1  # 一个字节没变

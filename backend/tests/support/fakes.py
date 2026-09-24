@@ -86,14 +86,21 @@ class FakeTransaction:
     def __init__(self, *repositories: _InMemoryRepository) -> None:
         self._repositories = repositories
         self._snapshot: list[dict[Any, Any]] = []
+        self._depth = 0
         self.commits = 0
         self.rollbacks = 0
 
     def __enter__(self) -> "FakeTransaction":
-        self._snapshot = [repository.snapshot() for repository in self._repositories]
+        # 可嵌套，语义与 SqliteUnitOfWork 一致：只有最外层那一次算一次事务。
+        if self._depth == 0:
+            self._snapshot = [repository.snapshot() for repository in self._repositories]
+        self._depth += 1
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        self._depth -= 1
+        if self._depth > 0:
+            return False
         if exc_type is None:
             self.commits += 1
         else:

@@ -28,6 +28,8 @@ export function OpeningCard({
 }) {
   const sections = doc?.sections ?? [];
   const touched = touchedTargets(round, edits);
+  const alwaysOn = round.nominated_seats.filter((seat) => seat.always_on).length;
+  const triggered = round.nominated_seats.filter((seat) => seat.matched_keywords.length > 0);
 
   return (
     <section className="pane-card" aria-label="复述卡">
@@ -107,7 +109,15 @@ export function OpeningCard({
         </ul>
 
         <fieldset className="seats">
-          <legend className="loop__label">这一轮请哪些席位（默认全选，可以删）</legend>
+          <legend className="loop__label">这一轮请哪些席位</legend>
+          <p className="seat__note">
+            提名不是模型判断，是目录里的两条规则：<strong>常驻席位</strong>（{alwaysOn} 个，
+            任何产品都要表态的那几面）+ <strong>你这话里命中关键词</strong>的席位
+            {triggered.length > 0
+              ? `（${triggered.map((seat) => `「${seat.matched_keywords[0]}」→${seat.title}`).join("、")}）`
+              : "（这一轮还没命中任何触发席位）"}
+            。默认全勾，删掉不需要的那几个就行。
+          </p>
           {round.nominated_seats.map((seat) => {
             const on = seats.includes(seat.seat_id);
             return (
@@ -118,7 +128,14 @@ export function OpeningCard({
                   onChange={() => onToggleSeat(seat.seat_id)}
                 />
                 <span>
-                  <span className="seat__title">{seat.title}</span>
+                  <span className="seat__title">
+                    {seat.title}
+                    <span className="seat__why">
+                      {seat.matched_keywords.length > 0
+                        ? `命中「${seat.matched_keywords.join("」「")}」`
+                        : "常驻"}
+                    </span>
+                  </span>
                   <span className="seat__focus">为什么请它：{seat.focus}</span>
                 </span>
               </label>

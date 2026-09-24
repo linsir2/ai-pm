@@ -152,6 +152,27 @@ def test_card_answer_needs_question_id():
     assert ledger.get(eid).source.question_id == QuestionId("q3")
 
 
+def test_manual_edit_is_a_terminal_source():
+    """手改的内容也算"用户直接给的"：不要求来源字段，并且是可追溯链的终点。
+
+    依据：`04-未决.md` D1（手改内容如何获得出处）+ `01-规格.md` §5
+    （卡片改的与文档改的谁优先——手改过的块 AI 不能再动）。
+    """
+
+    from pmstudio.domain.shared.evidence_kind import TERMINAL_KINDS
+
+    ledger = empty_ledger()
+    eid = ledger.record(
+        kind=EvidenceKind.MANUAL,
+        text="手工改写：把订单按时间筛出来导出成表格",
+        source=EvidenceSource(),
+        now=NOW,
+    )
+
+    assert ledger.get(eid).kind is EvidenceKind.MANUAL
+    assert EvidenceKind.MANUAL in TERMINAL_KINDS
+
+
 def test_chain_walks_derived_from_and_dedups():
     ledger = empty_ledger()
     user = record_user_input(ledger)

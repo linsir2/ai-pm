@@ -8,6 +8,7 @@ import { buildEvidenceIndex } from "./api/evidence";
 import { awaitingMode, buildAnswers, buildOpeningBody } from "./api/payload";
 import { BottomStrip } from "./components/BottomStrip";
 import { DocumentPane } from "./components/DocumentPane";
+import { EditScope } from "./components/EditContext";
 import { EvidenceScope } from "./components/EvidenceContext";
 import { jumpToEvidence } from "./components/jump";
 import { LoopColumn } from "./components/LoopColumn";
@@ -15,7 +16,6 @@ import { Onboarding } from "./components/Onboarding";
 import { SideRail } from "./components/SideRail";
 import { Banner, Skeleton } from "./components/States";
 import { TopBar } from "./components/TopBar";
-import { FEATURE_HOME } from "./document/structure";
 import { useRoundDrafts } from "./state/useRoundDrafts";
 import { useWorkspaceData } from "./state/useWorkspaceData";
 
@@ -35,7 +35,7 @@ export default function App() {
 
   const mode = awaitingMode(round);
   const project = state.project;
-  const drafts = useRoundDrafts(round);
+  const drafts = useRoundDrafts(round, mode);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -55,10 +55,37 @@ export default function App() {
     void jumpToEvidence(eid);
   }, []);
 
-  const openFeature = useCallback((blockId: string) => {
-    setActiveSection(FEATURE_HOME);
-    setPendingScroll(`block-${blockId}`);
+  /** 点树上的一个节点：切到它所在的那一章，再滚到它。 */
+  const openNode = useCallback((sectionId: string, targetId: string) => {
+    setActiveSection(sectionId);
+    setPendingScroll(
+      targetId.startsWith("block-") ? targetId : `block-${targetId}`,
+    );
   }, []);
+
+  // 手改：三条动作都走同一个入口，改完直接用后端返回的那份文档刷新（不猜）。
+  const editApi = useMemo(
+    () => ({
+      canEdit: project !== null && data.pending === null,
+      busy: data.pending === "edit",
+      edit: (blockId: string, entryId: string, text: string) =>
+        void data.editEntry({
+          op: "replace",
+          block_id: blockId,
+          entry_id: entryId,
+          text,
+        }),
+      add: (blockId: string, text: string) =>
+        void data.editEntry({ op: "add", block_id: blockId, text }),
+      remove: (blockId: string, entryId: string) =>
+        void data.editEntry({
+          op: "remove",
+          block_id: blockId,
+          entry_id: entryId,
+        }),
+    }),
+    [data, project],
+  );
 
   if (project === null) {
     return (
@@ -92,94 +119,107 @@ export default function App() {
 
   return (
     <EvidenceScope index={evidence} onJump={jumpToEvidenceById}>
-      <div className="shell">
-        <TopBar
-          projects={projects}
-          project={project}
-          document={doc}
-          roundStep={round?.step ?? null}
-          connection={state.connection}
-          onSelectProject={data.selectProject}
-          theme={theme}
-          onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
-        />
+      <EditScope value={editApi}>
+        <div className="shell">
+          <TopBar
+            projects={projects}
+            project={project}
+            document={doc}
+            roundStep={round?.step ?? null}
+            connection={state.connection}
+            onSelectProject={data.selectProject}
+            theme={theme}
+            onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+          />
 
-        <SideRail
-          projects={projects}
-          project={project}
-          document={doc}
-          round={round}
-          activeSection={activeSection}
-          onSelectProject={data.selectProject}
-          onSelectSection={setActiveSection}
-          onSelectFeature={openFeature}
-        />
+          <SideRail
+            projects={projects}
+            project={project}
+            document={doc}
+            round={round}
+            activeSection={activeSection}
+            onSelectProject={data.selectProject}
+            onSelectSection={setActiveSection}
+            onSelectNode={openNode}
+          />
 
-        <DocumentPane
-          document={doc}
-          round={round}
-          justWritten={state.justWritten}
-          activeSection={activeSection}
-          onSelectSection={setActiveSection}
-        />
+          <DocumentPane
+            document={doc}
+            round={round}
+            justWritten={state.justWritten}
+            activeSection={activeSection}
+          />
 
-        <LoopColumn
-          round={round}
-          doc={doc}
-          mode={mode}
-          pending={data.pending}
-          drafts={drafts}
-          onSubmitOpening={() =>
-            round !== null &&
-            void data.submitOpening(
-              round.round_id,
-              buildOpeningBody(round, drafts.seats, drafts.edits),
-            )
-          }
-          onSubmitAnswers={() =>
-            round !== null &&
-            void data.submitAnswers(round.round_id, buildAnswers(round, drafts.answers))
-          }
-          onSkipAll={() =>
-            round !== null &&
-            void data.submitAnswers(round.round_id, {
-              form_id: round.form_id ?? "",
-              answers: [],
-              skipped: round.questions.map((question) => question.question_id),
-            })
-          }
-          onConfirm={() =>
-            round !== null && void data.confirm(round.round_id, drafts.accepted)
-          }
-          onRetry={() => {
-            if (round !== null) void data.retry(round.round_id);
-          }}
-        />
+          <LoopColumn
+            round={round}
+            doc={doc}
+            mode={mode}
+            pending={data.pending}
+            drafts={drafts}
+            onSubmitOpening={() =>
+              round !== null &&
+              void data.submitOpening(
+                round.round_id,
+                buildOpeningBody(round, drafts.seats, drafts.edits),
+              )
+            }
+            onSubmitAnswers={() =>
+              round !== null &&
+              void data.submitAnswers(
+                round.round_id,
+                buildAnswers(round, drafts.answers),
+              )
+            }
+            onSkipAll={() =>
+              round !== null &&
+              void data.submitAnswers(round.round_id, {
+                form_id: round.form_id ?? "",
+                answers: [],
+                skipped: round.questions.map(
+                  (question) => question.question_id,
+                ),
+              })
+            }
+            onConfirm={() =>
+              round !== null &&
+              void data.confirm(round.round_id, drafts.accepted)
+            }
+            onRetry={() => {
+              if (round !== null) void data.retry(round.round_id);
+            }}
+          />
 
-        <BottomStrip
-          mode={mode}
-          pending={data.pending}
-          drawerOpen={
-            !drafts.collapsed && (mode === "questionnaire" || mode === "draft") && round !== null
-          }
-          onStartRound={(input) => void data.startRound(input)}
-          onOpenDrawer={() => drafts.setCollapsed(false)}
-          onRetry={() => {
-            if (round !== null) void data.retry(round.round_id);
-          }}
-        />
-      </div>
-
-      {state.error !== null && (
-        <div className="toast">
-          <Banner>
-            {state.error}
-            <button type="button" className="btn btn--ghost btn--sm" onClick={data.dismissError}>
-              知道了
-            </button>
-          </Banner>
+          <BottomStrip
+            mode={mode}
+            pending={data.pending}
+            drawerOpen={
+              !drafts.collapsed &&
+              (mode === "questionnaire" || mode === "draft") &&
+              round !== null
+            }
+            onStartRound={(input) => void data.startRound(input)}
+            onOpenDrawer={() => drafts.setCollapsed(false)}
+            onRetry={() => {
+              if (round !== null) void data.retry(round.round_id);
+            }}
+          />
         </div>
-      )}
+
+        {state.error !== null && (
+          <div className="toast">
+            <Banner>
+              {state.error}
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={data.dismissError}
+              >
+                知道了
+              </button>
+            </Banner>
+          </div>
+        )}
+      </EditScope>
     </EvidenceScope>
   );
 }

@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
-from pmstudio.domain.authoring.version import Version
+from pmstudio.domain.authoring.version import Version, VersionTrigger
 from pmstudio.domain.ports import (
     DocumentReader,
     DocumentWriter,
@@ -27,7 +27,7 @@ from pmstudio.domain.shared.errors import (
     UnknownProposal,
     UntraceableContent,
 )
-from pmstudio.domain.shared.ids import BlockId, ProposalId, RoundId
+from pmstudio.domain.shared.ids import BlockId, ProjectId, ProposalId, RoundId
 
 TRACEABLE_ORIGINS = (OriginType.USER, OriginType.DERIVED)
 
@@ -88,6 +88,36 @@ class ProposalCommitter:
             version=version,
             written_block_ids=version.changed_block_ids,
             advisories=advisories,
+        )
+
+    def apply_manual(
+        self,
+        *,
+        project_id: ProjectId,
+        instruction: WriteInstruction,
+        now: datetime,
+        summary: str,
+    ) -> CommitResult:
+        """用户手改文档：一次改动一版，`trigger=manual`。
+
+        它与 `commit()` 共用同一个 `DocumentWriter`——写入能力仍然只有这一个文件持有
+        （守卫 `test_write_path.py` 钉着）。所以手改不是第二条写入路径，
+        只是同一个写入口的另一种来源。
+        """
+
+        with self._uow:
+            document: Document = self._documents.get(project_id)
+            version = document.apply(
+                [instruction],
+                now=now,
+                summary=summary,
+                trigger=VersionTrigger.MANUAL,
+            )
+            self._writer.save(document)
+        return CommitResult(
+            version=version,
+            written_block_ids=version.changed_block_ids,
+            advisories=(),
         )
 
     def _resolve(self, round_: Round, accepted: Sequence[ProposalId]) -> tuple[Proposal, ...]:

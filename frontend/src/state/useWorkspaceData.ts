@@ -6,12 +6,12 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { ApiError, api } from "../api/client";
-import type { AnswersBody, OpeningBody } from "../api/client";
-import type { ProjectSummaryView, WorkspaceEvent } from "../api/types";
+import type { AnswersBody, EditBody, OpeningBody } from "../api/client";
+import type { EditResult, ProjectSummaryView, WorkspaceEvent } from "../api/types";
 import { initialState, reduce } from "./workspace";
 import { useEvents } from "./useEvents";
 
-export type PendingAction = "start" | "opening" | "answers" | "confirm" | "retry";
+export type PendingAction = "start" | "opening" | "answers" | "confirm" | "retry" | "edit";
 
 const PROJECT_PARAM = "project";
 
@@ -200,6 +200,30 @@ export function useWorkspaceData() {
     [run],
   );
 
+  /** 手改文档：很快的一次写，但也给"正在写"的反馈，失败要看得见。 */
+  const editEntry = useCallback(async (body: EditBody): Promise<EditResult | null> => {
+    const projectId = selected.current;
+    if (projectId === null) return null;
+    setPending("edit");
+    dispatch({ type: "error", message: null });
+    try {
+      const result = await api.editEntry(projectId, body);
+      dispatch({ type: "document", document: result.document });
+      dispatch({ type: "written", blockIds: result.written_block_ids });
+      setProjects((list) =>
+        list.map((item) =>
+          item.project_id === projectId ? { ...item, version_no: result.version_no } : item,
+        ),
+      );
+      return result;
+    } catch (error) {
+      dispatch({ type: "error", message: describe(error) });
+      return null;
+    } finally {
+      setPending(null);
+    }
+  }, []);
+
   const dismissError = useCallback(() => dispatch({ type: "error", message: null }), []);
 
   return {
@@ -215,6 +239,7 @@ export function useWorkspaceData() {
     submitAnswers,
     confirm,
     retry,
+    editEntry,
     dismissError,
     refreshDocument,
   };

@@ -54,6 +54,7 @@ from pmstudio.application.ports import (
     WorkspaceIndex,
 )
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.ports import (
     DocumentReader,
@@ -83,7 +84,9 @@ from pmstudio.domain.services.committer import (
 )
 from pmstudio.domain.shared.errors import DomainError, NotAwaitingAnswers, ShapeError
 from pmstudio.domain.shared.ids import (
+    PREFERENCE_AREA_ID,
     DraftId,
+    EntryId,
     EvidenceId,
     FormId,
     ProjectId,
@@ -92,7 +95,9 @@ from pmstudio.domain.shared.ids import (
     RoundId,
 )
 from pmstudio.domain.shared.label import ClaimLabel
+from pmstudio.domain.shared.sections import FEATURE_HOME, SECTION_IDS
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.writing import BlockKind, WriteOp
 
 
 @dataclass(frozen=True, slots=True)
@@ -686,6 +691,195 @@ class RetryRound:
                 round_.resume()
                 self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
+
+
+MANUAL_PREFERENCE_BLOCK = str(PREFERENCE_AREA_ID)
+
+EDIT_SUMMARY = {
+    WriteOp.ADD: "加一条",
+    WriteOp.REPLACE: "改一条",
+    WriteOp.REMOVE: "删一条",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class EditResult:
+    version_no: int
+    written_block_ids: tuple[str, ...]
+    entry_id: str
+    document: DocumentView
+
+
+class EditEntry:
+    """用户直接编辑文档（F17）：改 / 加 / 删条目，一次改动一版（`trigger=manual`）。
+
+    它和 AI 写入只差两点：
+
+    1. **来源是 `manual`**：手改内容也进账本，有自己的编号（`04-未决.md` D1 的建议版），
+       所以文档里每条内容都查得到"这句话是谁说的"。
+    2. **改过的块打上 `manually_edited`**：之后 AI 的改写与删除会被 `BlockManuallyEdited` 拦下来，
+       不会把你亲手写的东西悄悄覆盖掉——这就是"卡片改的与文档改的谁优先"的答案。
+
+    写入仍然只有一条路：这里只负责准备指令与编号，落盘交给 `ProposalCommitter.apply_manual`。
+    """
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        evidence: EvidenceReader,
+        evidence_writer: EvidenceWriter,
+        committer: ProposalCommitter,
+        uow: UnitOfWork,
+        clock: Clock,
+        ids: IdGenerator,
+        events: EventPublisher,
+    ) -> None:
+        self._documents = documents
+        self._evidence = evidence
+        self._evidence_writer = evidence_writer
+        self._committer = committer
+        self._uow = uow
+        self._clock = clock
+        self._ids = ids
+        self._events = events
+
+    async def __call__(
+        self,
+        *,
+        project_id: ProjectId,
+        op: WriteOp,
+        entry_id: str | None = None,
+        block_id: str | None = None,
+        text: str = "",
+    ) -> EditResult:
+        with self._uow:
+            document: Document = self._documents.get(project_id)
+            ledger = self._evidence.get(project_id)
+            now = self._clock.now()
+            target, existing = _resolve_manual_target(
+                document, op=op, entry_id=entry_id, block_id=block_id
+            )
+            # 手改也要有出处：编号先发，内容才落得进去（GB1）。
+            manual_eid = ledger.record(
+                kind=EvidenceKind.MANUAL,
+                text=_manual_note(
+                    op,
+                    existing_text=None if existing is None else existing.text,
+                    text=text,
+                ),
+                source=EvidenceSource(),
+                now=now,
+            )
+            if op is WriteOp.ADD:
+                final_entry_id = EntryId(self._ids.new("entry"))
+                refs = (manual_eid,)
+                instruction_text = text
+            else:
+                assert existing is not None  # _resolve_manual_target 保证
+                final_entry_id = existing.entry_id
+                # 保留原来的出处，再加上"你自己改的"这一条：新旧都能查。
+                refs = tuple(existing.refs) + (manual_eid,)
+                # 删除也要有一条非空文本（写入指令的硬要求）；记录被删掉的是什么。
+                instruction_text = text if text.strip() else existing.text
+
+            instruction = WriteInstruction(
+                instruction_id=f"manual-{manual_eid}",
+                entry_id=final_entry_id,
+                op=op,
+                target=target,
+                text=instruction_text,
+                refs=refs,
+                kind=_manual_kind(document, block_id=block_id) if op is WriteOp.ADD else None,
+                manual=True,
+            )
+            result: CommitResult = self._committer.apply_manual(
+                project_id=project_id,
+                instruction=instruction,
+                now=now,
+                summary=f"手工{EDIT_SUMMARY[op]}：{text.strip() or '（删除）'}"[:120],
+            )
+            self._evidence_writer.save(ledger)
+            view = self._documents.get(project_id).view()
+        self._events.publish(
+            Event(
+                name=DOC_CHANGED,
+                project_id=str(project_id),
+                payload={
+                    "version_no": result.version.version_no,
+                    "written_block_ids": [str(item) for item in result.written_block_ids],
+                    "summary": result.version.summary,
+                },
+                occurred_at=now,
+            )
+        )
+        return EditResult(
+            version_no=result.version.version_no,
+            written_block_ids=tuple(str(item) for item in result.written_block_ids),
+            entry_id=str(final_entry_id),
+            document=view,
+        )
+
+
+def _resolve_manual_target(
+    document: Document, *, op: WriteOp, entry_id: str | None, block_id: str | None
+) -> tuple[Target, object | None]:
+    """手改要落到哪个 target、动的是哪一条。
+
+    ADD 的 `block_id` 有三种给法：`preference-area`（偏好区）、某个块的 id（往这块加）、
+    某个章节 id（`s1`…`s13`：这一章还没有块，那就新开一段）。
+    """
+
+    if op is WriteOp.ADD:
+        if block_id is None:
+            raise ShapeError("加一条要先说加到哪一块")
+        if block_id == MANUAL_PREFERENCE_BLOCK:
+            return Target.preference(), None
+        if block_id in SECTION_IDS:
+            return Target.body(block_id), None
+        block = next((item for item in document.blocks if str(item.block_id) == block_id), None)
+        if block is None:
+            raise ShapeError(f"找不到块 {block_id}", block_id=block_id)
+        return _target_of_block(block), None
+
+    if entry_id is None:
+        raise ShapeError("改或删要先说改哪一条")
+    for entry in document.preference_entries:
+        if str(entry.entry_id) == entry_id:
+            return Target.preference(), entry
+    for block in document.blocks:
+        entry = block.entry(EntryId(entry_id))
+        if entry is not None:
+            return _target_of_block(block), entry
+    raise ShapeError(f"找不到条目 {entry_id}", entry_id=entry_id)
+
+
+def _target_of_block(block) -> Target:  # type: ignore[no-untyped-def]
+    if block.field is not None and block.feature_slug is not None:
+        return Target.feature_field(block.feature_slug, block.field)
+    if block.kind is BlockKind.FEATURE and block.feature_slug is not None:
+        return Target.body(FEATURE_HOME, feature_slug=block.feature_slug)
+    section_id = str(block.parent_id or block.block_id)
+    return Target.body(section_id)
+
+
+def _manual_kind(document: Document, *, block_id: str | None) -> BlockKind | None:
+    """往章节级块里加内容时，跟着被点的块保持同一种 kind（清单还是清单）。"""
+
+    # 偏好区不是块；章节 id 也不能照抄——章节根块的 kind 是 section，
+    # 抄下来会造出第二个章节根（D1：13 章必须不多不少，这条真踩过）。
+    if block_id is None or block_id == MANUAL_PREFERENCE_BLOCK or block_id in SECTION_IDS:
+        return None
+    block = next((item for item in document.blocks if str(item.block_id) == block_id), None)
+    return None if block is None else block.kind
+
+
+def _manual_note(op: WriteOp, *, existing_text: str | None, text: str) -> str:
+    if op is WriteOp.REMOVE:
+        return f"手工删除：{existing_text or ''}".strip()
+    if op is WriteOp.REPLACE:
+        return f"手工改写：{text.strip()}"
+    return f"手工新增：{text.strip()}"
 
 
 class CreateProject:
