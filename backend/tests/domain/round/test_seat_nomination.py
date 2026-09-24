@@ -10,6 +10,7 @@ import pytest
 from pmstudio.domain.round.round import Round, SeatNomination
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import ProjectId, RoundId
+
 NOW = datetime(2026, 9, 24, 10, 0, 0)
 
 

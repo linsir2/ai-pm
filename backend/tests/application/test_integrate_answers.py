@@ -21,6 +21,9 @@ CLAIMS_REPLY = json.dumps(
                 "section_id": "s5",
             }
         ],
+        "seats": [
+            {"seat_id": SEAT, "why": "导出要评估数据量与耗时"},
+        ],
     },
     ensure_ascii=False,
 )

@@ -21,6 +21,9 @@ CLAIMS_REPLY = json.dumps(
                 "feature_slug": "order-export",
             }
         ],
+        "seats": [
+            {"seat_id": "seat.data_scale", "why": "导出要评估数据量与耗时"},
+        ],
     },
     ensure_ascii=False,
 )

@@ -37,6 +37,13 @@ CLAIMS_REPLY = json.dumps(
                 "zone": "preference",
             },
         ],
+        # 席位提名：目录里 7 个席位，这次只挑两个（导出相关 + 数据量），
+        # 其余常驻席位（业务规则/权限/前端交互/技术方案）**故意没挑**——
+        # 开场卡上该显示的是这份名单，不是目录匹配的结果。
+        "seats": [
+            {"seat_id": "seat.export_import", "why": "这轮就是在做导出"},
+            {"seat_id": "seat.data_scale", "why": "你说到了数据量"},
+        ],
     },
     ensure_ascii=False,
 )

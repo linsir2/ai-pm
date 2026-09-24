@@ -33,9 +33,21 @@ class ClaimDraft(BaseModel):
     decided_by: str | None = None
 
 
+class SeatPickDraft(BaseModel):
+    """Analyzer 挑的席位：只能从目录里挑，并且必须说清为什么这一轮需要它。"""
+
+    seat_id: str = Field(description="只能取上面席位目录里出现过的 id")
+    why: str = Field(description="一句话：读完这段输入，为什么这个专业面要表态")
+
+
 class ClaimsPacket(BaseModel):
     basis: str = Field(description="你读了哪些章节与编号才切出这些主张")
     claims: list[ClaimDraft] = Field(min_length=1, max_length=12)
+    seats: list[SeatPickDraft] = Field(
+        min_length=1,
+        max_length=7,
+        description="这一轮该请哪些席位（从目录里挑，一般 2–6 个）",
+    )
 
 
 class OpinionDraft(BaseModel):

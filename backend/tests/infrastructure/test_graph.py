@@ -20,6 +20,7 @@ CLAIMS_REPLY = json.dumps(
                 "feature_slug": "order-export",
             }
         ],
+        "seats": [{"seat_id": "seat.data_scale", "why": "你说到了数据量"}],
     },
     ensure_ascii=False,
 )

@@ -81,7 +81,9 @@ class Harness:
         self.events = RecordingPublisher()
         self.index = StaticWorkspaceIndex()
         self.seats = StaticSeatCatalog(tuple(seats) if seats else (make_seat(),))
-        self.analyzer = ClaimAnalyzer(model=self.gateway, prompts=self.prompts)
+        self.analyzer = ClaimAnalyzer(
+            model=self.gateway, prompts=self.prompts, catalog=self.seats
+        )
         self.reviewer = SeatReviewer(model=self.gateway, prompts=self.prompts)
         self.integrator = Integrator(model=self.gateway, prompts=self.prompts)
         self.assigner = EvidenceAssigner()

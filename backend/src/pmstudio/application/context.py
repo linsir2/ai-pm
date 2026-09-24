@@ -9,6 +9,7 @@
 
 from collections.abc import Mapping, Sequence
 
+from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.authoring.blocks import Entry
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.schema import FEATURE_FIELDS
@@ -53,6 +54,24 @@ FEATURE_FIELDS_TEXT = "\n".join(
     f"{'，可多条' if spec.multiple else ''}{'，必填' if spec.required else ''}）"
     for spec in FEATURE_FIELDS
 )
+
+
+def render_seat_catalog(seats: Sequence[SeatDefinition]) -> str:
+    """席位目录：给分析者挑席位用。一行一个，说清它管什么、什么时候该请它。
+
+    目录是"有哪些席位"的清单，**不是**"这一轮请谁"的答案——那件事由读到输入的那次
+    模型调用决定（`02-编排与数据.md` §4.6）。
+    """
+
+    lines: list[str] = []
+    for seat in seats:
+        parts = [f"- {seat.seat_id} · {seat.title}", f"管：{seat.focus}"]
+        if seat.always_on:
+            parts.append("常驻（每轮都值得考虑，但不是必须选）")
+        if seat.trigger_keywords:
+            parts.append("说到这些词通常要请它：" + " / ".join(seat.trigger_keywords))
+        lines.append(" · ".join(parts))
+    return "\n".join(lines)
 
 
 def _entry_line(entry: Entry) -> str:

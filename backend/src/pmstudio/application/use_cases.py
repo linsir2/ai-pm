@@ -171,7 +171,7 @@ class StartRound:
         user_input = round_.user_input
         document_state = render_document(document.view())
         try:
-            claims = await self._analyzer.analyze(
+            analysis = await self._analyzer.analyze(
                 user_input=user_input, document_state=document_state
             )
         except ApplicationError as error:
@@ -190,9 +190,11 @@ class StartRound:
             document = self._documents.get(round_.project_id)
             ledger = self._evidence.get(round_.project_id)
             assigned = self._assigner.assign_claims(
-                claims, ledger=ledger, round_id=round_id, now=self._clock.now()
+                analysis.claims, ledger=ledger, round_id=round_id, now=self._clock.now()
             )
             round_.attach_claims(assigned)
+            # 席位名单跟着主张一起落：它是这一次判断的产物，重试/刷新都该看得见
+            round_.nominate(analysis.seats)
             authorize_named_features(round_, assigned, document=document)
             self._evidence_writer.save(ledger)
             self._round_writer.save(round_)

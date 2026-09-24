@@ -6,11 +6,19 @@ from pydantic import ValidationError
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.schemas import ClaimsPacket
 from pmstudio.application.errors import PacketParseError
+from pmstudio.domain.round.round import SeatNomination
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
-from tests.support.doubles import RecordingPrompts, ScriptedModelGateway
+from tests.support.builders import SEAT, make_seat
+from tests.support.doubles import RecordingPrompts, ScriptedModelGateway, StaticSeatCatalog
 
 INPUT = "想做个订单导出的功能，运营每天都要用，数据量大概几万。登录页太丑了。下个月必须上线。"
+
+
+def make_analyzer(gateway, prompts) -> ClaimAnalyzer:  # type: ignore[no-untyped-def]
+    """测试里统一用"只有一个席位"的目录：`SEAT`。"""
+
+    return ClaimAnalyzer(model=gateway, prompts=prompts, catalog=StaticSeatCatalog((make_seat(),)))
 
 CLAIMS_REPLY = json.dumps(
     {
@@ -41,6 +49,7 @@ CLAIMS_REPLY = json.dumps(
                 "zone": "preference",
             },
         ],
+        "seats": [{"seat_id": SEAT, "why": "你说到了数据量"}],
     },
     ensure_ascii=False,
 )
@@ -49,9 +58,10 @@ CLAIMS_REPLY = json.dumps(
 async def test_analyzer_returns_claims_with_labels_targets_and_no_eids():
     gateway = ScriptedModelGateway(replies={"claims": CLAIMS_REPLY})
     prompts = RecordingPrompts()
-    analyzer = ClaimAnalyzer(model=gateway, prompts=prompts)
+    analyzer = make_analyzer(gateway, prompts)
 
-    claims = await analyzer.analyze(user_input=INPUT, document_state="# 订单中台（v1）")
+    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 订单中台（v1）")
+    claims = analysis.claims
 
     assert [claim.label for claim in claims] == [
         ClaimLabel.NEED,
@@ -63,12 +73,13 @@ async def test_analyzer_returns_claims_with_labels_targets_and_no_eids():
     assert claims[1].assumption is not None
     assert claims[2].target == Target.preference()
     assert all(claim.eid is None for claim in claims)  # 编号由汇合点分配
+    assert analysis.seats == (SeatNomination(seat_id=SEAT, why="你说到了数据量"),)
 
 
 async def test_analyzer_sends_purpose_schema_and_all_prompt_slots():
     gateway = ScriptedModelGateway(replies={"claims": CLAIMS_REPLY})
     prompts = RecordingPrompts()
-    analyzer = ClaimAnalyzer(model=gateway, prompts=prompts)
+    analyzer = make_analyzer(gateway, prompts)
 
     await analyzer.analyze(user_input=INPUT, document_state="# 文档")
 
@@ -80,6 +91,9 @@ async def test_analyzer_sends_purpose_schema_and_all_prompt_slots():
     assert tuple(sorted(slots)) == tuple(sorted(ClaimAnalyzer.PROMPT_SLOTS))
     assert "猜测" in slots["labels"]
     assert "s5 功能需求" in slots["sections"]
+    # 席位目录也要进上下文：模型得看见"有哪些席位"才好挑
+    assert SEAT in slots["seat_catalog"]
+    assert "管：" in slots["seat_catalog"]
 
 
 async def test_analyzer_bad_raw_span_must_appear_in_input():
@@ -95,11 +109,12 @@ async def test_analyzer_bad_raw_span_must_appear_in_input():
                     "section_id": "s5",
                 }
             ],
+            "seats": [{"seat_id": SEAT, "why": "你说到了数据量"}],
         },
         ensure_ascii=False,
     )
     gateway = ScriptedModelGateway(replies={"claims": reply})
-    analyzer = ClaimAnalyzer(model=gateway, prompts=RecordingPrompts())
+    analyzer = make_analyzer(gateway, RecordingPrompts())
 
     with pytest.raises(PacketParseError) as exc:
         await analyzer.analyze(user_input=INPUT, document_state="# 文档")
@@ -126,13 +141,14 @@ async def test_analyzer_realigns_recombined_raw_span_to_a_real_fragment():
                     "section_id": "s5",
                 }
             ],
+            "seats": [{"seat_id": SEAT, "why": "你说到了数据量"}],
         },
         ensure_ascii=False,
     )
     gateway = ScriptedModelGateway(replies={"claims": reply})
-    analyzer = ClaimAnalyzer(model=gateway, prompts=RecordingPrompts())
+    analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    claims = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    claims = (await analyzer.analyze(user_input=INPUT, document_state="# 文档")).claims
 
     span = claims[0].raw_span
     assert span in INPUT  # 一定是原文里真实存在的一段
@@ -152,11 +168,12 @@ async def test_analyzer_still_rejects_invented_spans():
                     "section_id": "s5",
                 }
             ],
+            "seats": [{"seat_id": SEAT, "why": "你说到了数据量"}],
         },
         ensure_ascii=False,
     )
     gateway = ScriptedModelGateway(replies={"claims": reply})
-    analyzer = ClaimAnalyzer(model=gateway, prompts=RecordingPrompts())
+    analyzer = make_analyzer(gateway, RecordingPrompts())
 
     with pytest.raises(PacketParseError):
         await analyzer.analyze(user_input=INPUT, document_state="# 文档")
@@ -181,13 +198,14 @@ async def test_analyzer_normalizes_preference_target_that_also_carries_a_section
                     "section_id": "s3",
                 }
             ],
+            "seats": [{"seat_id": SEAT, "why": "你说到了数据量"}],
         },
         ensure_ascii=False,
     )
     gateway = ScriptedModelGateway(replies={"claims": reply})
-    analyzer = ClaimAnalyzer(model=gateway, prompts=RecordingPrompts())
+    analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    claims = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    claims = (await analyzer.analyze(user_input=INPUT, document_state="# 文档")).claims
 
     assert claims[0].target == Target.preference()  # 偏好区胜出，内容照旧
     assert claims[0].text == "登录页太丑"
@@ -196,3 +214,69 @@ async def test_analyzer_normalizes_preference_target_that_also_carries_a_section
 def test_claims_from_packet_requires_at_least_one_claim():
     with pytest.raises(ValidationError):
         ClaimsPacket.model_validate({"basis": "读了文档", "claims": []})
+
+
+async def test_analyzer_refuses_a_seat_that_is_not_in_the_catalog():
+    """挑了目录里没有的席位 → 整轮失败。
+
+    不"悄悄丢掉"：挑到不存在的席位说明它没看目录，这一轮的编制就不可信了；
+    与 raw_span 编造、引用不存在的编号同一套严格度（可重试）。
+    """
+
+    reply = json.dumps(
+        {
+            "basis": "读了文档",
+            "claims": [
+                {
+                    "text": "要做一个订单导出功能",
+                    "raw_span": "想做个订单导出的功能",
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                }
+            ],
+            "seats": [{"seat_id": "seat.invented", "why": "我编的"}],
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"claims": reply})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    with pytest.raises(PacketParseError) as exc:
+        await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert "目录里没有" in exc.value.message
+    assert exc.value.details["seat_id"] == "seat.invented"
+
+
+async def test_analyzer_dedups_repeated_seat_picks():
+    reply = json.dumps(
+        {
+            "basis": "读了文档",
+            "claims": [
+                {
+                    "text": "要做一个订单导出功能",
+                    "raw_span": "想做个订单导出的功能",
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                }
+            ],
+            "seats": [
+                {"seat_id": SEAT, "why": "第一次说的理由"},
+                {"seat_id": SEAT, "why": "又说了一遍"},
+            ],
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"claims": reply})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert analysis.seats == (SeatNomination(seat_id=SEAT, why="第一次说的理由"),)
+
+
+def test_claims_packet_requires_at_least_one_seat():
+    with pytest.raises(ValidationError):
+        ClaimsPacket.model_validate({"basis": "读了文档", "claims": [], "seats": []})

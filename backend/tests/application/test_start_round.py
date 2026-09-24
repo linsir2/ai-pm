@@ -34,7 +34,13 @@ def claims_reply(*, feature_slug: str | None = None) -> str:
         },
     }
     return json.dumps(
-        {"basis": "读了 s1–s13 全文（空文档）与本轮输入", "claims": [claim, second]},
+        {
+            "basis": "读了 s1–s13 全文（空文档）与本轮输入",
+            "claims": [claim, second],
+            "seats": [
+                {"seat_id": "seat.data_scale", "why": "你说到了数据量，量级决定同步还是异步"},
+            ],
+        },
         ensure_ascii=False,
     )
 
@@ -53,6 +59,10 @@ async def test_start_round_records_claims_with_eids_in_two_transactions():
     assert [str(claim.eid) for claim in round_.claims] == ["E1", "E2"]
     assert round_.claims[1].label.value == "guess"
     assert len(harness.evidences.get(PROJECT)) == 2
+    # 席位名单也跟着分析结果落下来：开场卡上默认勾的就是它
+    assert [(item.seat_id, item.why) for item in round_.nominated_seats] == [
+        ("seat.data_scale", "你说到了数据量，量级决定同步还是异步")
+    ]
     assert harness.uow.commits == 2  # 建轮一个事务、落主张一个事务；模型调用不在事务里
     assert harness.events.names == [ROUND_UPDATED, ROUND_UPDATED]
 

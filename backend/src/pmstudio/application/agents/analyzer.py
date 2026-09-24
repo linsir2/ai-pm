@@ -1,16 +1,42 @@
-"""Analyzer：把一段用户输入切分成带标签与去处的主张。"""
+"""Analyzer：把一段用户输入切分成带标签与去处的主张，并挑出这一轮该请的席位。
+
+挑席位放在这里，是因为它同时读到了「本轮输入」与「文档现状」——只有它能在同一口气里
+判断"这段话触到了哪些专业面"。目录只提供"有哪些席位"，请谁由这次判断决定；
+用户拿到的是建议，可以删也可以从目录里补（`02-编排与数据.md` §4.6）。
+"""
 
 import json
+from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.context import FEATURE_FIELDS_TEXT, LABELS_TEXT, SECTIONS_TEXT
+from pmstudio.application.context import (
+    FEATURE_FIELDS_TEXT,
+    LABELS_TEXT,
+    SECTIONS_TEXT,
+    render_seat_catalog,
+)
 from pmstudio.application.errors import PacketParseError
-from pmstudio.application.ports import ModelGateway, ModelMessage, ModelRequest, PromptLibrary
+from pmstudio.application.ports import (
+    ModelGateway,
+    ModelMessage,
+    ModelRequest,
+    PromptLibrary,
+    SeatCatalog,
+)
 from pmstudio.domain.round.claim import Assumption, Claim
+from pmstudio.domain.round.round import SeatNomination
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.label import ClaimLabel
 
 PURPOSE = "claims"
+
+
+@dataclass(frozen=True, slots=True)
+class Analysis:
+    """一次分析的全部产出：主张 + 席位提名。"""
+
+    claims: tuple[Claim, ...]
+    seats: tuple[SeatNomination, ...]
 
 
 def normalize(text: str) -> str:
@@ -72,14 +98,18 @@ class ClaimAnalyzer:
         "labels",
         "sections",
         "feature_fields",
+        "seat_catalog",
         "schema_json",
     )
 
-    def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
+    def __init__(
+        self, *, model: ModelGateway, prompts: PromptLibrary, catalog: SeatCatalog
+    ) -> None:
         self._model = model
         self._prompts = prompts
+        self._catalog = catalog
 
-    async def analyze(self, *, user_input: str, document_state: str) -> tuple[Claim, ...]:
+    async def analyze(self, *, user_input: str, document_state: str) -> Analysis:
         schema = schemas.ClaimsPacket.model_json_schema()
         prompt = self._prompts.render(
             self.PROMPT,
@@ -88,6 +118,7 @@ class ClaimAnalyzer:
             labels=LABELS_TEXT,
             sections=SECTIONS_TEXT,
             feature_fields=FEATURE_FIELDS_TEXT,
+            seat_catalog=render_seat_catalog(self._catalog.all()),
             schema_json=json.dumps(schema, ensure_ascii=False),
         )
         reply = await self._model.complete(
@@ -99,7 +130,46 @@ class ClaimAnalyzer:
             )
         )
         packet = schemas.parse_packet(reply.text, schemas.ClaimsPacket, purpose=self.PURPOSE)
-        return claims_from_packet(packet, user_input=user_input)
+        return Analysis(
+            claims=claims_from_packet(packet, user_input=user_input),
+            seats=nominations_from_packet(packet, catalog=self._catalog),
+        )
+
+
+def nominations_from_packet(
+    packet: schemas.ClaimsPacket, *, catalog: SeatCatalog
+) -> tuple[SeatNomination, ...]:
+    """模型挑的席位 → 领域值对象。目录里没有的 id 直接判整轮失败。
+
+    为什么不"悄悄丢掉"：挑到不存在的席位说明它没看目录，这一轮的编制就不可信了；
+    按这个仓库一贯的规矩（raw_span 编造、引用不存在的编号都判死），宁可整轮失败可重试。
+    """
+
+    known = {seat.seat_id for seat in catalog.all()}
+    picked: list[SeatNomination] = []
+    seen: set[str] = set()
+    for index, item in enumerate(packet.seats, start=1):
+        if item.seat_id not in known:
+            raise PacketParseError(
+                "席位提名里出现了目录里没有的席位",
+                purpose=PURPOSE,
+                seat_id=item.seat_id,
+                position=index,
+            )
+        if item.seat_id in seen:
+            continue
+        seen.add(item.seat_id)
+        try:
+            picked.append(SeatNomination(seat_id=item.seat_id, why=item.why.strip()))
+        except DomainError as error:
+            raise PacketParseError(
+                f"席位 {item.seat_id} 的提名过不了领域校验：{error.message}",
+                purpose=PURPOSE,
+                seat_id=item.seat_id,
+            ) from error
+    if not picked:
+        raise PacketParseError("这一轮一个席位都没挑", purpose=PURPOSE)
+    return tuple(picked)
 
 
 def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tuple[Claim, ...]:

@@ -8,10 +8,13 @@ from pmstudio.application.errors import PacketParseError
 
 def test_claims_packet_schema_is_generated_with_required_fields():
     schema = schemas.ClaimsPacket.model_json_schema()
-    assert set(schema["required"]) == {"basis", "claims"}
+    assert set(schema["required"]) == {"basis", "claims", "seats"}
     claim_props = schema["$defs"]["ClaimDraft"]["properties"]
     assert {"text", "raw_span", "label", "zone"} <= set(claim_props)
     assert "fact" in claim_props["label"]["enum"]
+    # 挑席位是硬要求：至少一个，且要说清为什么
+    seat_props = schema["$defs"]["SeatPickDraft"]["properties"]
+    assert set(seat_props) == {"seat_id", "why"}
 
 
 def test_seat_packet_requires_form_enum():
@@ -38,6 +41,7 @@ def test_parse_packet_returns_model_instance():
                     "section_id": "s5",
                 }
             ],
+            "seats": [{"seat_id": "seat.data_scale", "why": "你说到了数据量"}],
         },
         ensure_ascii=False,
     )
