@@ -30,12 +30,14 @@ def test_prompt_library_renders_slots_and_reports_missing():
         labels="- need（需求）：要做出来的能力",
         sections="- s5 功能需求",
         feature_fields="- acceptance（验收标准，acceptance，可多条，必填）",
+        section_slots="- s8.performance（性能，章节槽）",
         seat_catalog="- seat.data_scale · 数据规模与性能 · 管：量级与耗时 · 常驻",
         schema_json="{}",
     )
     assert "# 文档" in text
     assert "想做个导出" in text
     assert "seat.data_scale" in text  # 席位目录要真的落进提示词
+    assert "s8.performance" in text  # 章节槽也要真的落进提示词
     with pytest.raises(KeyError):
         library.render("analyzer", document_state="# 文档")  # 少给槽位要炸，不许静默留空
 

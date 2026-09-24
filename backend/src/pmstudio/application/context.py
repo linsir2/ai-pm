@@ -21,7 +21,7 @@ from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId
 from pmstudio.domain.shared.label import ClaimLabel
-from pmstudio.domain.shared.sections import SECTIONS
+from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS, slot_block_id
 from pmstudio.domain.shared.writing import BlockKind
 
 LABEL_TITLES: dict[ClaimLabel, str] = {
@@ -48,6 +48,15 @@ LABELS_TEXT = "\n".join(
     f"- {label.value}（{LABEL_TITLES[label]}）：{LABEL_HINTS[label]}" for label in ClaimLabel
 )
 SECTIONS_TEXT = "\n".join(f"- {spec.section_id} {spec.title}" for spec in SECTIONS)
+
+# 章节槽：section 级内容也可以指定"落到哪个槽"（目前只有 s8 的六项表态）。
+# 与功能字段表分开列，免得模型把槽名当功能字段。
+SECTION_SLOTS_TEXT = "\n".join(
+    f"- {slot_block_id(section_id, slot.name)}（{slot.title}，章节槽；"
+    f"写它时给 section_id={section_id} + field={slot.name}，不要给 feature_slug）"
+    for section_id, slots in SECTION_SLOTS.items()
+    for slot in slots
+) or "（没有章节槽）"
 
 # 功能字段表：从 `authoring/schema.py` 生成（结构的唯一真相源），不许手抄。
 FEATURE_FIELDS_TEXT = "\n".join(

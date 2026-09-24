@@ -57,6 +57,57 @@ def test_new_document_creates_six_empty_nfr_slots():
     assert all(block.entries == () for block in slots)
 
 
+def test_write_into_section_slot_reuses_the_skeleton_block():
+    document = new_document()
+
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i1",
+                entry_id=EntryId("en1"),
+                op=WriteOp.ADD,
+                target=Target.body("s8", field="performance"),
+                text="5 万条内 60 秒",
+                refs=(REF,),
+            )
+        ],
+        now=NOW,
+        summary="补性能表态",
+    )
+
+    block = document.block(BlockId("s8.performance"))
+    assert [entry.text for entry in block.entries] == ["5 万条内 60 秒"]
+    assert block.kind is BlockKind.NFR
+    assert block.field == "performance"
+    assert block.feature_slug is None
+
+
+def test_second_write_into_the_same_slot_appends_instead_of_creating_a_new_block():
+    document = new_document()
+    for index in (1, 2):
+        document.apply(
+            [
+                WriteInstruction(
+                    instruction_id=f"i{index}",
+                    entry_id=EntryId(f"en{index}"),
+                    op=WriteOp.ADD,
+                    target=Target.body("s8", field="performance"),
+                    text=f"第 {index} 条性能表态",
+                    refs=(REF,),
+                )
+            ],
+            now=NOW,
+            summary="补性能表态",
+        )
+
+    slots = [block for block in document.blocks if str(block.block_id).startswith("s8.")]
+    assert len(slots) == 6
+    assert [entry.text for entry in document.block(BlockId("s8.performance")).entries] == [
+        "第 1 条性能表态",
+        "第 2 条性能表态",
+    ]
+
+
 def instruction(
     *,
     target: Target,

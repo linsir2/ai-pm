@@ -925,6 +925,9 @@ def _resolve_manual_target(
 def _target_of_block(block) -> Target:  # type: ignore[no-untyped-def]
     if block.field is not None and block.feature_slug is not None:
         return Target.feature_field(block.feature_slug, block.field)
+    if block.field is not None and block.parent_id is not None:
+        # 章节槽（s8 的六块）：手改要落回那个槽，别退化成"整章"
+        return Target.body(str(block.parent_id), field=block.field)
     if block.kind is BlockKind.FEATURE and block.feature_slug is not None:
         return Target.body(FEATURE_HOME, feature_slug=block.feature_slug)
     section_id = str(block.parent_id or block.block_id)

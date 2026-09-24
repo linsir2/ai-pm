@@ -36,6 +36,26 @@ def block_with_field(document, block_field: str):
     raise AssertionError(f"没有这个字段块：{block_field}")
 
 
+async def test_add_into_a_section_slot_lands_in_that_slot(world):
+    """章节槽（s8 的六块）也要能手写：往槽里加一条，落到那个槽、不是整章。"""
+
+    result = await world.edit_entry()(
+        project_id=ProjectId(PROJECT),
+        op=WriteOp.ADD,
+        block_id="s8.performance",
+        text="导出 5 万条 60 秒内完成",
+    )
+
+    assert result.written_block_ids == ("s8.performance",)
+    document = world.documents.get(PROJECT)
+    slot = document.block(BlockId("s8.performance"))
+    assert [entry.text for entry in slot.entries] == ["导出 5 万条 60 秒内完成"]
+    assert slot.manually_edited is True
+    # 不能顺手在 s8 里另开一个块
+    extra = [block for block in document.blocks if str(block.block_id).startswith("s8.b")]
+    assert extra == []
+
+
 async def test_replace_writes_a_manual_version_with_its_own_evidence(world):
     before = world.documents.get(PROJECT)
     entry = block_with_field(before, "one_liner").entries[0]

@@ -27,6 +27,9 @@ $entry_ids
 ## 功能字段表（field 只能从这里选）
 $feature_fields
 
+## 章节槽（field 的另一套合法名字：给 section_id + field，别给 feature_slug）
+$section_slots
+
 ## 硬规矩
 $limits
 

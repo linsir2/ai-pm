@@ -9,7 +9,7 @@ from pmstudio.domain.shared.errors import (
 )
 from pmstudio.domain.shared.ids import FeatureSlug, SectionId
 from pmstudio.domain.shared.label import Zone
-from pmstudio.domain.shared.sections import FEATURE_HOME, SECTION_BY_ID
+from pmstudio.domain.shared.sections import FEATURE_HOME, SECTION_BY_ID, section_slot
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,8 +40,12 @@ class Target:
                 raise TargetShapeError("feature_slug 不能为空")
         if self.field is not None:
             if self.feature_slug is None:
-                raise TargetShapeError("只有功能字段才带 field 名")
-            if not self.field.strip():
+                # 没有 feature_slug 时，field 只能取该章的章节槽（如 s8 的 performance）
+                if section_slot(self.section_id, self.field) is None:
+                    raise TargetShapeError(
+                        f"{self.section_id} 没有名为 {self.field} 的章节槽"
+                    )
+            elif not self.field.strip():
                 raise TargetShapeError("field 名不能为空")
 
     @classmethod

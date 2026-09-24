@@ -16,6 +16,9 @@ $sections
 ## 功能字段表（field 只能从这里选；不在表里的名字一律不许用）
 $feature_fields
 
+## 章节槽（另一套 field 名字：**不要**给 feature_slug，只给 section_id + field）
+$section_slots
+
 ## 席位目录（挑席位只能从这里挑）
 $seat_catalog
 
@@ -34,7 +37,8 @@ $seat_catalog
    决定必须给 decided_by。
 4. 归位：功能相关的内容落到 s5，并给 feature_slug（小写连字符，如 order-export）——
    用户点名的新功能也给，它会被当作新建子树的授权。不指向具体功能字段的章节级内容，
-   只给 section_id。**要指定字段时必须同时给 feature_slug，且 field 只能取上面表里的名字**；
+   只给 section_id。**要指定功能字段时必须同时给 feature_slug**；要落进章节槽
+   （如 s8 的 performance）就只给 section_id + field，**不许同时给 feature_slug**。
    拿不准落在哪个字段上，就只给 section_id 交给后面的整合环节。
    注意：**给了 feature_slug 就不要再写别的章节**（功能子树只长在 s5）；
    时间、上线、合规这类约束属于 s10 / s12，给 section_id 就够了，不要挂 feature_slug。

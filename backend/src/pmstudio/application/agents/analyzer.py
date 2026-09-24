@@ -12,6 +12,7 @@ from pmstudio.application.agents import schemas
 from pmstudio.application.context import (
     FEATURE_FIELDS_TEXT,
     LABELS_TEXT,
+    SECTION_SLOTS_TEXT,
     SECTIONS_TEXT,
     render_seat_catalog,
 )
@@ -98,6 +99,7 @@ class ClaimAnalyzer:
         "labels",
         "sections",
         "feature_fields",
+        "section_slots",
         "seat_catalog",
         "schema_json",
     )
@@ -118,6 +120,7 @@ class ClaimAnalyzer:
             labels=LABELS_TEXT,
             sections=SECTIONS_TEXT,
             feature_fields=FEATURE_FIELDS_TEXT,
+            section_slots=SECTION_SLOTS_TEXT,
             seat_catalog=render_seat_catalog(self._catalog.all()),
             schema_json=json.dumps(schema, ensure_ascii=False),
         )

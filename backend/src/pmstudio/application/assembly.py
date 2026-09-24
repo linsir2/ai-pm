@@ -39,7 +39,7 @@ from pmstudio.domain.shared.ids import (
     QuestionId,
     RoundId,
 )
-from pmstudio.domain.shared.sections import FEATURE_HOME
+from pmstudio.domain.shared.sections import FEATURE_HOME, section_slot
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 
@@ -378,7 +378,11 @@ def _asking_seats(refs: Sequence[EvidenceId], *, ledger: EvidenceLedger) -> list
 def _kind_for(target: Target, name: str | None) -> BlockKind:
     try:
         if target.field is not None:
-            return field_spec(target.field).kind
+            if target.feature_slug is not None:
+                return field_spec(target.field).kind
+            slot = section_slot(target.section_id, target.field)
+            assert slot is not None  # Target 已经校验过
+            return slot.kind
         return BlockKind(name) if name else BlockKind.TEXT
     except (DomainError, ValueError) as error:
         raise PacketParseError(

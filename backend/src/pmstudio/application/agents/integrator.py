@@ -6,7 +6,7 @@
 import json
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.context import FEATURE_FIELDS_TEXT
+from pmstudio.application.context import FEATURE_FIELDS_TEXT, SECTION_SLOTS_TEXT
 from pmstudio.application.ports import ModelGateway, ModelMessage, ModelRequest, PromptLibrary
 
 PURPOSE = "integration"
@@ -46,6 +46,7 @@ class Integrator:
         "entry_ids",
         "limits",
         "feature_fields",
+        "section_slots",
         "schema_json",
         "validation_error",
     )
@@ -76,6 +77,7 @@ class Integrator:
             entry_ids=entry_ids,
             limits=LIMITS_TEXT,
             feature_fields=FEATURE_FIELDS_TEXT,
+            section_slots=SECTION_SLOTS_TEXT,
             schema_json=json.dumps(schema, ensure_ascii=False),
             validation_error=validation_error,
         )

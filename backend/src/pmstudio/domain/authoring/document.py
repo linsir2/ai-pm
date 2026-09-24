@@ -492,7 +492,11 @@ class _WorkingTree:
             target, authorized_new_features=authorized_new_features
         )
         parent = self._blocks[parent_id]
-        multiple = True if target.field is None else field_spec(target.field).multiple
+        if target.field is None or target.feature_slug is None:
+            # 章节槽与章节级内容都可以多条（槽是可生长的表态）
+            multiple = True
+        else:
+            multiple = field_spec(target.field).multiple
         # D5 的意思是"不许被**静默**覆盖"：AI 动不了人写过的块，人自己可以接着改。
         if parent.manually_edited and not multiple and not instruction.manual:
             raise BlockManuallyEdited(block_id=parent.block_id)
@@ -530,6 +534,8 @@ class _WorkingTree:
         self, target: Target, *, authorized_new_features: frozenset[FeatureSlug]
     ) -> BlockId:
         if target.feature_slug is None:
+            if target.field is not None:
+                return self._section_slot_parent(target)
             return BlockId(str(target.section_id))
         parent_id = self._feature_parent(
             target, authorized_new_features=authorized_new_features
@@ -547,6 +553,26 @@ class _WorkingTree:
                 parent_id=parent_id,
                 spec=spec,
                 feature_slug=target.feature_slug,
+            )
+        )
+        return block_id
+
+    def _section_slot_parent(self, target: Target) -> BlockId:
+        """章节槽（s8 的六块）：有就复用，没有就按槽表建一个。"""
+
+        section_id = str(target.section_id)
+        slot = section_slot(section_id, target.field or "")
+        assert slot is not None  # Target 已经校验过
+        existing = self._field_block(BlockId(section_id), slot.name)
+        if existing is not None:
+            return existing.block_id
+        block_id = self._free_id(slot_block_id(section_id, slot.name))
+        self._add(
+            Block(
+                block_id=block_id,
+                parent_id=BlockId(section_id),
+                kind=slot.kind,
+                field=slot.name,
             )
         )
         return block_id
