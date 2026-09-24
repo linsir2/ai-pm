@@ -6,15 +6,17 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from pmstudio.application.agents import schemas
 from pmstudio.application.context import seat_entry_handle
 from pmstudio.application.errors import PacketParseError, unknown_ref_message
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.schema import field_spec
+from pmstudio.domain.provenance.evidence import EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
-from pmstudio.domain.round.opinion import SeatReview
+from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
     MAX_QUESTIONS_PER_BATCH,
     ListItem,
@@ -26,6 +28,7 @@ from pmstudio.domain.round.questionnaire import (
 )
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.errors import DomainError
+from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
     DraftId,
     EntryId,
@@ -54,6 +57,8 @@ class Assembly:
     list_items: tuple[ListItem, ...]
     proposals: tuple[Proposal, ...]
     dropped: tuple[str, ...] = ()  # 归因解析不上的席位条目地址（留痕，不判死整轮）
+    degrade_reason: str | None = None
+    """整合失败、改走降级通道时的原因原文（见 `degraded_question_proposals`）。"""
 
 
 def normalize(text: str) -> str:
@@ -174,6 +179,64 @@ def draft_of(
     return Draft(
         draft_id=draft_id, round_id=round_id, proposals=tuple(proposals), gaps=tuple(gaps)
     )
+
+
+def seat_questions(reviews: Sequence[SeatReview]) -> tuple[tuple[str, Opinion], ...]:
+    """本轮席位交回的**疑问**（带上是哪个席位说的）。
+
+    疑问不进出处账本，所以整合失败时它是唯一能救回来的东西：原样落成开放问题，
+    总比把整轮判死、让用户对着九条问不出来的疑问干瞪眼强（`04-未决.md` C9）。
+    """
+
+    return tuple(
+        (review.seat_id, opinion)
+        for review in reviews
+        for opinion in review.opinions
+        if opinion.form is OpinionForm.QUESTION
+    )
+
+
+def degraded_question_proposals(
+    reviews: Sequence[SeatReview],
+    *,
+    ledger: EvidenceLedger,
+    round_id: RoundId,
+    now: datetime,
+    start_index: int,
+    reason: str,
+) -> tuple[Proposal, ...]:
+    """整合失败时的出口：把席位疑问**原样**落成 s11 开放问题，并出草案卡。
+
+    与"跳过问卷"那条降级（`_system_defaults` + `open_question_proposals`）同一套语义：
+    内容不改写、来源写清是系统降级、原因摆在卡片上——差别只是触发者是"整合失败"。
+    """
+
+    proposals: list[Proposal] = []
+    for offset, (seat_id, opinion) in enumerate(seat_questions(reviews)):
+        eid = ledger.record(
+            kind=EvidenceKind.SYSTEM_DEFAULT,
+            text=f"{seat_id} 的疑问（整合失败，未归并）：{opinion.claim}",
+            source=EvidenceSource(
+                round_id=round_id,
+                rationale=f"整合失败降级（{reason}）：席位疑问原样落到 s11",
+            ),
+            now=now,
+        )
+        index = start_index + offset
+        proposals.append(
+            Proposal(
+                proposal_id=ProposalId(f"p{index:02d}"),
+                entry_id=EntryId(f"{round_id}#open{index:02d}"),
+                op=WriteOp.ADD,
+                target=Target.body(OPEN_QUESTION_HOME),
+                text=f"{opinion.about}：{opinion.claim}（整合失败，未归并；待决人：PM）",
+                origin=Origin(
+                    OriginType.SYSTEM_DEFAULT, (eid,), f"整合失败降级：{reason}"
+                ),
+                kind=BlockKind.QUESTION,
+            )
+        )
+    return tuple(proposals)
 
 
 def open_question_proposals(

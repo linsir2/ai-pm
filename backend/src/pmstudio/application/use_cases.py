@@ -15,11 +15,14 @@ from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.assembly import (
     NEW_FEATURE_YES,
+    Assembly,
     assemble,
+    degraded_question_proposals,
     downgraded_question_proposals,
     draft_of,
     open_question_proposals,
     questionnaire_of,
+    seat_questions,
 )
 from pmstudio.application.context import (
     answer_eids,
@@ -469,6 +472,18 @@ class IntegrateRound:
             ledger = self._evidence.get(round_.project_id)
             now = self._clock.now()
             proposals = list(assembled.proposals)
+            degraded = 0
+            if assembled.degrade_reason is not None:
+                degraded_proposals = degraded_question_proposals(
+                    round_.current_reviews,
+                    ledger=ledger,
+                    round_id=round_id,
+                    now=now,
+                    start_index=len(proposals) + 1,
+                    reason=assembled.degrade_reason,
+                )
+                degraded = len(degraded_proposals)
+                proposals += list(degraded_proposals)
             system_defaults = _system_defaults(round_, ledger=ledger, now=now)
             proposals += list(
                 open_question_proposals(
@@ -477,6 +492,11 @@ class IntegrateRound:
             )
             questions = assembled.questions
             gaps = list(gaps)
+            if assembled.degrade_reason is not None:
+                gaps.append(
+                    f"{assembled.degrade_reason}：{degraded} 条席位疑问未归并，"
+                    "已原样落到 s11（未改一个字）"
+                )
             stop_reason = _stop_asking_reason(round_)
             if questions and stop_reason is not None:
                 # 不再追问：题目降级成 s11 开放问题，直接出草案（02 §7 / 04-未决 C6）
@@ -563,6 +583,18 @@ class IntegrateRound:
                 message = getattr(error, "message", str(error))
                 if attempt == MAX_INTEGRATION_ATTEMPTS:
                     reason = f"整合两次都过不了校验：{message}"
+                    if seat_questions(round_.current_reviews):
+                        # 有可救的东西就别判死：席位的疑问原样落成 s11 开放问题，
+                        # 走草案卡让用户自己决定（04-未决 C9；与 C6/C7 的降级同一套语义）。
+                        return (
+                            Assembly(
+                                questions=(),
+                                list_items=(),
+                                proposals=(),
+                                degrade_reason=reason,
+                            ),
+                            (),
+                        )
                     fail_round(
                         rounds=self._rounds,
                         round_writer=self._round_writer,

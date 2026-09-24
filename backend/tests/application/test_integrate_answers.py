@@ -4,10 +4,13 @@ import pytest
 
 from pmstudio.application.errors import PacketParseError
 from pmstudio.application.use_cases import AnswerInput
+from pmstudio.domain.round.draft import OriginType
 from pmstudio.domain.round.questionnaire import AnswerSet
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
+from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, FormId, QuestionId
+from pmstudio.domain.shared.writing import BlockKind
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT
 from tests.support.harness import Harness
 
@@ -50,6 +53,23 @@ SEAT_REPLY = json.dumps(
                 "because": "同类导出的常见上限",
                 "evidence_refs": ["E1"],
             },
+        ],
+    },
+    ensure_ascii=False,
+)
+
+JUDGMENT_ONLY_REPLY = json.dumps(
+    {
+        "basis": "读了 s1–s13 与 E1",
+        "opinions": [
+            {
+                "local_id": "O1",
+                "form": "judgment",
+                "about": "导出的性能上限",
+                "claim": "单次导出应在 60 秒内完成",
+                "because": "同类导出的常见上限",
+                "evidence_refs": ["E1"],
+            }
         ],
     },
     ensure_ascii=False,
@@ -173,11 +193,52 @@ async def test_integrate_round_repairs_once_when_validation_fails():
     assert harness.rounds.get(round_id).step is Step.AWAITING_CONFIRM
 
 
-async def test_integrate_round_bad_two_failures_fail_the_round():
+async def test_integrate_round_bad_two_failures_degrades_to_open_questions():
+    """整合两次都过不了校验时，不再把整轮判死。
+
+    旧行为（整轮 failed + 点"继续/重试"又跑同样的提示词、原地撞墙）在 `.codex/docs/设计/
+    04-未决.md` C9 里定性为故障：作者真跑时席位交了 9 条疑问却无处可答。
+    新语义：席位的疑问**原样**落成 s11 开放问题并出草案卡，失败原因写进缺口行。
+    """
+
     bad = draft_packet(field="exceptionss")
     harness = Harness(
         replies={"claims": CLAIMS_REPLY, "integration": [bad, bad]},
         seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    # 不授权的话坏提案会被当成"新功能"转成一道题，压根走不到字段校验那一步
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.AWAITING_CONFIRM
+    assert round_.failure is None
+    draft = round_.draft
+    assert draft is not None
+    # SEAT_REPLY 里只有一条疑问（O1），它要被原样接住
+    assert len(draft.proposals) == 1
+    proposal = draft.proposals[0]
+    assert proposal.target.section_id == "s11"
+    assert proposal.kind is BlockKind.QUESTION
+    assert proposal.origin.type is OriginType.SYSTEM_DEFAULT
+    assert "量级决定同步还是异步" in proposal.text
+    # 文档里那句话保持干净（不塞内部席位 id）；"谁提的"从出处查得到
+    evidence = harness.evidences.get(PROJECT).get(proposal.origin.refs[0])
+    assert evidence.kind is EvidenceKind.SYSTEM_DEFAULT
+    assert SEAT in evidence.text
+    assert "整合失败" in evidence.source.rationale
+    assert any("整合" in gap for gap in draft.gaps)
+
+
+async def test_integrate_round_bad_two_failures_without_seat_questions_still_fails():
+    """没有可降级的内容（席位只给了判断）时，仍然是整轮失败——失败必须是失败。"""
+
+    bad = draft_packet(field="exceptionss")
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": [bad, bad]},
+        seat_replies={SEAT: JUDGMENT_ONLY_REPLY},
     )
     round_id = await round_in_seat_pass(harness)
     authorize_order_export(harness, round_id)
