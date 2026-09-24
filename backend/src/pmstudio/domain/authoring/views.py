@@ -52,3 +52,6 @@ class DocumentView:
     version_no: int
     sections: tuple[SectionView, ...]
     preference_entries: tuple[Entry, ...] = ()
+    # 功能必填字段的缺口（`Document.gaps()` 的投影）：就绪度直接用它，
+    # 不另写一套"哪些字段必填"的规则。
+    feature_gaps: tuple[Gap, ...] = ()

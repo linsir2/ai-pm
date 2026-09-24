@@ -226,6 +226,7 @@ class Document:
             version_no=self.current_version.version_no,
             sections=sections,
             preference_entries=self._preference_entries,
+            feature_gaps=self.gaps(),
         )
 
     # —— 写入 ——
