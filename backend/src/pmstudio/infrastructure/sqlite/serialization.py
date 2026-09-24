@@ -24,7 +24,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import Failure, Round, SeatNomination
+from pmstudio.domain.round.round import DroppedItem, DropSource, Failure, Round, SeatNomination
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
@@ -529,6 +529,16 @@ def round_to_payload(round_: Round) -> dict:
         "authorized_new_features": {
             str(slug): str(eid) for slug, eid in round_.authorized_feature_basis.items()
         },
+        "dropped": [
+            {
+                "handle": item.handle,
+                "reason": item.reason,
+                "source": item.source.value,
+                "seat_id": item.seat_id,
+                "pass_index": item.pass_index,
+            }
+            for item in round_.dropped
+        ],
         "failure": _failure_to_json(round_.failure),
         "confirmed_version_no": round_.confirmed_version_no,
     }
@@ -570,6 +580,17 @@ def round_from_payload(
             FeatureSlug(slug): EvidenceId(eid)
             for slug, eid in payload["authorized_new_features"].items()
         },
+        # 老行里没有这个键（留痕是后加的）：给空元组，读回来照样能跑
+        dropped=tuple(
+            DroppedItem(
+                handle=item["handle"],
+                reason=item["reason"],
+                source=DropSource(item["source"]),
+                seat_id=item.get("seat_id"),
+                pass_index=int(item.get("pass_index", 1)),
+            )
+            for item in payload.get("dropped", ())
+        ),
         failure=_failure_from_json(payload["failure"]),
         confirmed_version_no=payload["confirmed_version_no"],
     )

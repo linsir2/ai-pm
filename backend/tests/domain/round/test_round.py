@@ -14,7 +14,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import Failure, Round
+from pmstudio.domain.round.round import DroppedItem, DropSource, Failure, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.errors import (
     AlreadyAnswered,
@@ -458,3 +458,68 @@ def test_resume_refuses_a_resume_point_that_is_itself_failed():
         round_.resume()
 
     assert "at_step" in error.value.message
+
+
+# —— P5b Task 1：留痕通道 ——
+
+
+def test_dropped_items_are_recorded_on_the_round():
+    """留痕落进聚合：`04` C5 要的"这条为什么没进卡片"要能过两天再查。"""
+
+    round_ = round_with_seats()
+    round_.integrate(
+        questionnaire=make_questionnaire(),
+        dropped=(
+            DroppedItem(
+                handle="seat.data_scale:O1",
+                reason="与文档已有内容重复",
+                source=DropSource.INTEGRATOR,
+                seat_id="seat.data_scale",
+                pass_index=1,
+            ),
+        ),
+    )
+
+    assert [(item.handle, item.reason, item.source) for item in round_.dropped] == [
+        ("seat.data_scale:O1", "与文档已有内容重复", DropSource.INTEGRATOR)
+    ]
+
+
+def test_round_without_dropped_items_is_empty():
+    assert round_with_seats().dropped == ()
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"handle": "   "},
+        {"reason": "  "},
+        {"pass_index": 0},
+    ],
+)
+def test_dropped_item_requires_handle_reason_and_pass(override):
+    base = {
+        "handle": "seat.x:O1",
+        "reason": "重复",
+        "source": DropSource.INTEGRATOR,
+        "seat_id": None,
+        "pass_index": 1,
+    }
+
+    with pytest.raises(ShapeError):
+        DroppedItem(**{**base, **override})
+
+
+def test_dropped_handle_shape_is_not_validated_on_purpose():
+    """模型写歪的地址正是要留痕的东西——写歪就抛错等于"写歪了就不留痕"。"""
+
+    item = DroppedItem(
+        handle="查不到:O9",
+        reason="归因对不上号",
+        source=DropSource.ASSEMBLY,
+        seat_id=None,
+        pass_index=1,
+    )
+
+    assert item.seat_id is None
+    assert item.handle == "查不到:O9"

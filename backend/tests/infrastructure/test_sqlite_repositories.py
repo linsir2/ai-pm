@@ -11,7 +11,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import SeatNomination
+from pmstudio.domain.round.round import DroppedItem, DropSource, SeatNomination
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EntryId, EvidenceId, FormId, ProjectId, QuestionId, RoundId
 from pmstudio.domain.shared.target import Target
@@ -319,3 +319,84 @@ def test_question_blocking_round_trips_and_defaults_to_false(repos):
     payload = serialization.questionnaire_to_json(loaded.questionnaire)
     payload["questions"][0].pop("blocking", None)
     assert serialization.questionnaire_from_json(payload).questions[0].blocking is False
+
+
+def test_round_dropped_items_round_trip(repos):
+    """留痕要跟着轮次落库、读回来一条不差（P5b Task 1）。"""
+
+    _, rounds, _, _, uow = repos
+    round_ = make_round()
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f1"),
+            round_id=round_.round_id,
+            questions=(
+                Question(
+                    question_id=QuestionId("q1"),
+                    target=Target.body("s8"),
+                    type=QuestionType.TEXT,
+                    title="单次导出的最大行数是多少？",
+                    why="量级决定同步还是异步",
+                    consequence_if_skipped="按同步实现",
+                ),
+            ),
+        ),
+        dropped=(
+            DroppedItem(
+                handle="seat.nope:O1",
+                reason="归因对不上号：这一轮没有这条席位条目",
+                source=DropSource.ASSEMBLY,
+                seat_id=None,
+                pass_index=1,
+            ),
+            DroppedItem(
+                handle="seat.data_scale:O2",
+                reason="与文档已有内容重复",
+                source=DropSource.INTEGRATOR,
+                seat_id="seat.data_scale",
+                pass_index=1,
+            ),
+        ),
+    )
+    with uow:
+        rounds.save(round_)
+
+    loaded = rounds.get(round_.round_id)
+    assert [
+        (item.handle, item.reason, item.source, item.seat_id, item.pass_index)
+        for item in loaded.dropped
+    ] == [
+        (
+            "seat.nope:O1",
+            "归因对不上号：这一轮没有这条席位条目",
+            DropSource.ASSEMBLY,
+            None,
+            1,
+        ),
+        (
+            "seat.data_scale:O2",
+            "与文档已有内容重复",
+            DropSource.INTEGRATOR,
+            "seat.data_scale",
+            1,
+        ),
+    ]
+
+
+def test_round_payload_without_dropped_key_still_loads():
+    """老行里没有 `dropped` 键：读成空元组，不炸（与 nominated_seats 同一条规矩）。"""
+
+    round_ = make_round()
+    payload = serialization.round_to_payload(round_)
+    payload.pop("dropped")
+
+    loaded = serialization.round_from_payload(
+        payload,
+        round_id=round_.round_id,
+        project_id=round_.project_id,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+
+    assert loaded.dropped == ()

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, replace
 from datetime import datetime
+from enum import StrEnum
 
 from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.draft import Draft
@@ -51,6 +52,40 @@ class SeatNomination:
             raise ShapeError("席位提名必须写清为什么请它", seat_id=self.seat_id)
 
 
+class DropSource(StrEnum):
+    """留痕是谁发现的。"""
+
+    INTEGRATOR = "integrator"  # 模型在报文里申报的（原因它自己写）
+    ASSEMBLY = "assembly"  # 装配层算出来的：归因对不上号
+    UNACCOUNTED = "unaccounted"  # 装配层核出来的：既没说丢、也没交代落到哪儿
+
+
+@dataclass(frozen=True, slots=True)
+class DroppedItem:
+    """一条"没进卡片"的留痕（`04-未决.md` C5 后半）。
+
+    `handle` 是**席位条目地址**（`seat.data_scale:O2`），不是出处编号——疑问根本没有编号。
+    形状**故意不校验**：模型写歪的地址正是要留痕的东西，写歪就抛错等于"写歪了就不留痕"。
+
+    为什么带 `pass_index`：同一轮里席位会跑好几趟（答案回来再跑一次），而 `local_id`
+    每趟都从 O1 重新开始；只有加上趟数，界面才知道这行该挂在哪个席位包下面。
+    """
+
+    handle: str
+    reason: str
+    source: DropSource
+    seat_id: str | None
+    pass_index: int
+
+    def __post_init__(self) -> None:
+        if not self.handle.strip():
+            raise ShapeError("留痕必须写清是哪一条席位意见（handle）")
+        if not self.reason.strip():
+            raise ShapeError("留痕必须写清原因", handle=self.handle)
+        if self.pass_index < 1:
+            raise ShapeError("留痕必须说明属于哪一趟席位轮", handle=self.handle)
+
+
 class Round:
     def __init__(
         self,
@@ -72,6 +107,7 @@ class Round:
         authorized_new_features: dict[FeatureSlug, EvidenceId] | None = None,
         failure: Failure | None = None,
         confirmed_version_no: int | None = None,
+        dropped: tuple[DroppedItem, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -90,6 +126,7 @@ class Round:
         self._authorized = dict(authorized_new_features or {})
         self._failure = failure
         self._confirmed_version_no = confirmed_version_no
+        self._dropped = tuple(dropped)
 
     @classmethod
     def start(
@@ -183,6 +220,15 @@ class Round:
     @property
     def confirmed_version_no(self) -> int | None:
         return self._confirmed_version_no
+
+    @property
+    def dropped(self) -> tuple[DroppedItem, ...]:
+        """留痕通道：`integrator` 申报 / `assembly` 归因对不上 / `unaccounted` 没交代去处。
+
+        跨趟累加：一趟席位轮一条命，历史留痕不覆盖。
+        """
+
+        return self._dropped
 
     @property
     def write_scope(self) -> frozenset[Target]:
@@ -290,11 +336,16 @@ class Round:
         self._claims = revised
 
     def integrate(
-        self, *, questionnaire: Questionnaire | None = None, draft: Draft | None = None
+        self,
+        *,
+        questionnaire: Questionnaire | None = None,
+        draft: Draft | None = None,
+        dropped: tuple[DroppedItem, ...] | list[DroppedItem] = (),
     ) -> None:
         self._require_step(Step.SEATS_RUNNING)
         if (questionnaire is None) == (draft is None):
             raise ShapeError("整合必须给出问卷或草案其中之一（问卷不是必然环节）")
+        self._dropped = self._dropped + tuple(dropped)
         if questionnaire is not None:
             if questionnaire.round_id != self._round_id:
                 raise ShapeError("问卷不属于本轮", form_id=str(questionnaire.form_id))
