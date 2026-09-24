@@ -1,5 +1,26 @@
 """应用层错误。领域错误在 pmstudio.domain.shared.errors，两者不许互相继承。"""
 
+from collections.abc import Sequence
+
+
+def unknown_ref_message(
+    unknown: Sequence[str], *, what: str = "引用了不存在的编号"
+) -> str:
+    """引用了账本里没有的编号时给模型看的话。
+
+    单独做一条是因为真模型踩过：它把席位条目地址（`seat.business_rules:O1`）当编号写进
+    `evidence_refs`。重装那一次要能看懂"错在哪、该改成什么"，只报"编号不存在"它只会重犯
+    （`04-未决.md` C9）。
+    """
+
+    listed = "、".join(unknown)
+    if any(":" in item for item in unknown):
+        return (
+            f"{what}：{listed}；`seat.xxx:O1` 是席位条目地址，"
+            "不是出处编号——请改引它「依据」里那些 E 编号，或者留空"
+        )
+    return f"{what}：{listed}"
+
 
 class ApplicationError(Exception):
     def __init__(self, message: str, *, code: str = "application_error", **details: object) -> None:

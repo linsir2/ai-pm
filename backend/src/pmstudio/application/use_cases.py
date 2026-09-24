@@ -291,7 +291,7 @@ class RunSeatRound:
         claims_text = render_claims(round_.claims)
         answered_text = render_answers(round_, ledger=ledger)
         answer_refs = answer_eids(ledger=ledger)
-        previous = render_reviews(round_.seat_reviews, titles=titles)
+        previous = render_reviews(round_.seat_reviews, titles=titles, ledger=ledger)
         known_eids = frozenset(evidence.eid for evidence in ledger.evidences())
 
         results = await asyncio.gather(
@@ -531,7 +531,9 @@ class IntegrateRound:
                 packet = await self._integrator.integrate(
                     document_state=render_document(document.view()),
                     claims=render_claims(round_.claims),
-                    opinions=render_reviews(round_.current_reviews, titles=titles),
+                    opinions=render_reviews(
+                        round_.current_reviews, titles=titles, ledger=ledger
+                    ),
                     answered=answered,
                     skipped=skipped,
                     entry_ids=render_existing_entries(document),

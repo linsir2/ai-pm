@@ -19,6 +19,7 @@ from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.opinion import OpinionForm, SeatReview
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
+from pmstudio.domain.shared.ids import EvidenceId
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.sections import SECTIONS
 from pmstudio.domain.shared.writing import BlockKind
@@ -125,7 +126,42 @@ def render_claims(claims: Sequence[Claim]) -> str:
     return "\n".join(lines) or "（没有主张）"
 
 
-def render_reviews(reviews: Sequence[SeatReview], *, titles: Mapping[str, str]) -> str:
+def seat_entry_handle(seat_id: str, local_id: str) -> str:
+    """席位条目的身份：`seat.xxx:O1`。
+
+    它**不是**出处编号——只是"哪个席位的第几条意见"的地址。两套写法分开命名，
+    是因为真模型会把看着像编号的东西当编号引用（`04-未决.md` C9）：
+    同一份提示词里既有 `E4` 又有 `[O1]`，模型就把 O1 写进了必须放 E 编号的字段。
+    """
+
+    return f"{seat_id}:{local_id}"
+
+
+def _own_eid(
+    review: SeatReview, local_id: str, *, ledger: EvidenceLedger | None
+) -> EvidenceId | None:
+    """这条意见自己的出处编号（只有"判断"有；"疑问"不进账本，所以没有）。"""
+
+    if ledger is None:
+        return None
+    evidence = ledger.find_by_local(
+        seat_id=review.seat_id, local_id=f"p{review.pass_index}:{local_id}"
+    )
+    return None if evidence is None else evidence.eid
+
+
+def render_reviews(
+    reviews: Sequence[SeatReview],
+    *,
+    titles: Mapping[str, str],
+    ledger: EvidenceLedger | None = None,
+) -> str:
+    """席位意见的渲染。**两套身份必须各叫各的名字**：
+
+    - 席位条目 `seat.xxx:O2`：这条意见在席位里叫啥（不是编号，不许写进 evidence_refs）；
+    - 出处编号 `E7`：这条判断自己进账本后拿到的编号（只有判断有，疑问没有）。
+    """
+
     blocks: list[str] = []
     for review in reviews:
         title = titles.get(review.seat_id, review.seat_id)
@@ -134,8 +170,16 @@ def render_reviews(reviews: Sequence[SeatReview], *, titles: Mapping[str, str]) 
             lines.append("- （没有需要补充的意见）")
         for opinion in review.opinions:
             form = "疑问" if opinion.form is OpinionForm.QUESTION else "判断"
+            handle = seat_entry_handle(review.seat_id, opinion.local_id)
+            own_eid = _own_eid(review, opinion.local_id, ledger=ledger)
             refs = " ".join(str(eid) for eid in opinion.evidence_refs)
-            lines.append(f"- [{form}] [{opinion.local_id}] 关于{opinion.about}")
+            if own_eid is not None:
+                identity = f"（席位条目 {handle} · 出处编号 {own_eid}）"
+            elif ledger is not None:
+                identity = f"（席位条目 {handle} · 没有出处编号）"
+            else:
+                identity = f"（席位条目 {handle}）"
+            lines.append(f"- [{form}]{identity}关于{opinion.about}")
             lines.append(f"  结论：{opinion.claim}")
             lines.append(f"  理由：{opinion.because}")
             lines.append(f"  依据：{refs or opinion.basis_note or '（无依据）'}")

@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.errors import PacketParseError
+from pmstudio.application.errors import PacketParseError, unknown_ref_message
 from pmstudio.application.ports import (
     ModelGateway,
     ModelMessage,
@@ -118,7 +118,7 @@ def review_from_packet(
         unknown = [str(ref) for ref in refs if ref not in known_eids]
         if unknown:
             raise PacketParseError(
-                f"意见引用了不存在的编号：{'、'.join(unknown)}",
+                unknown_ref_message(unknown, what="意见引用了不存在的编号"),
                 purpose=PURPOSE,
                 seat_id=seat_id,
                 local_id=local_id,

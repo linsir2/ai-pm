@@ -19,7 +19,9 @@ $answered
 
 ## 硬规矩
 1. 每条意见都要给 because（一句话理由）。
-2. judgment 必须带 evidence_refs（只能引用上面出现过的编号，如 E4）。没有可引用的编号时，
+2. judgment 必须带 evidence_refs（只能引用 E 开头的出处编号，如 E4）。**上面意见里的
+   `席位条目 seat.xxx:O1` 是地址，不是编号，写进 evidence_refs 会被判为检查不过**。
+   没有可引用的编号时，
    要么把 form 改成 question，要么用 basis_note 说明为什么这是纯经验判断。
    注意：用户答过的题在编号栏里已经带上 E 编号；引用用户的回答时用那个 **E 编号**，
    不要写题号（q1 不是出处编号）。

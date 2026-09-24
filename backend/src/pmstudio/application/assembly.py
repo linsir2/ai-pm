@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.errors import PacketParseError
+from pmstudio.application.errors import PacketParseError, unknown_ref_message
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.schema import field_spec
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -280,7 +280,7 @@ def _refs(raw: Sequence[str], *, known: frozenset[EvidenceId]) -> tuple[Evidence
         raise PacketParseError("提案必须带 evidence_refs", purpose=PURPOSE)
     unknown = [str(ref) for ref in refs if ref not in known]
     if unknown:
-        raise PacketParseError(f"引用了不存在的编号：{'、'.join(unknown)}", purpose=PURPOSE)
+        raise PacketParseError(unknown_ref_message(unknown), purpose=PURPOSE)
     return refs
 
 
@@ -357,7 +357,7 @@ def _question(draft: schemas.QuestionDraft, *, known: frozenset[EvidenceId]) -> 
     unknown = [str(ref) for ref in refs if ref not in known]
     if unknown:
         raise PacketParseError(
-            f"题目的依据编号不存在：{'、'.join(unknown)}", purpose=PURPOSE
+            unknown_ref_message(unknown, what="题目的依据编号不存在"), purpose=PURPOSE
         )
     try:
         return Question(

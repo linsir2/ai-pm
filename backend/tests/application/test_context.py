@@ -3,6 +3,8 @@ from datetime import datetime
 from pmstudio.application import context
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
+from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
+from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
@@ -80,8 +82,8 @@ def test_render_claims_keeps_numbers_labels_targets_and_raw_span():
     assert "想做个订单导出的功能" in text
 
 
-def test_render_reviews_shows_forms_basis_and_refs():
-    review = SeatReview(
+def _review_with_two_opinions() -> SeatReview:
+    return SeatReview(
         seat_id="seat.data_scale",
         basis="读了 s5 与 E1",
         opinions=(
@@ -104,12 +106,67 @@ def test_render_reviews_shows_forms_basis_and_refs():
         ),
         pass_index=2,
     )
-    text = context.render_reviews((review,), titles={"seat.data_scale": "数据规模与性能"})
+
+
+def _ledger_with_judgment_numbered() -> EvidenceLedger:
+    """挑一个判断进账本，让它拿到出处编号（形状与真 assigner 一致）。"""
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做一个订单导出功能",
+        source=EvidenceSource(round_id=RoundId("r1"), raw_span="想做个订单导出的功能"),
+        now=NOW,
+    )
+    ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="单次导出应在 60 秒内完成",
+        source=EvidenceSource(
+            seat_id="seat.data_scale",
+            local_id="p2:O2",
+            derived_from=(EvidenceId("E1"),),
+            rationale="量级在 1 万级，同步实现可满足",
+        ),
+        now=NOW,
+    )
+    return ledger
+
+
+def test_render_reviews_shows_forms_basis_and_refs():
+    text = context.render_reviews(
+        (_review_with_two_opinions(),),
+        titles={"seat.data_scale": "数据规模与性能"},
+        ledger=_ledger_with_judgment_numbered(),
+    )
     assert "数据规模与性能" in text
     assert "疑问" in text
     assert "判断" in text
-    assert "O2" in text
     assert "读了 s5 与 E1" in text
+
+
+def test_render_reviews_names_seat_entries_without_pretending_they_are_evidence():
+    """席位条目身份与出处编号必须分开写：`[O1]` 冒充编号，就是把模型带沟里的那一下。"""
+
+    text = context.render_reviews(
+        (_review_with_two_opinions(),),
+        titles={"seat.data_scale": "数据规模与性能"},
+        ledger=_ledger_with_judgment_numbered(),
+    )
+    assert "席位条目 seat.data_scale:O2" in text
+    assert "席位条目 seat.data_scale:O1" in text
+    assert "[O1]" not in text
+    assert "[O2]" not in text
+    # 判断自己有出处编号（E2），疑问没有——两种要分别写明
+    assert "出处编号 E2" in text
+    assert "没有出处编号" in text
+
+
+def test_render_reviews_without_ledger_still_names_seat_entries():
+    text = context.render_reviews(
+        (_review_with_two_opinions(),), titles={"seat.data_scale": "数据规模与性能"}
+    )
+    assert "席位条目 seat.data_scale:O2" in text
+    assert "出处编号" not in text
 
 
 def test_render_existing_entries_lists_entry_ids_for_rewrites():

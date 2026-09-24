@@ -14,7 +14,12 @@ PURPOSE = "integration"
 LIMITS_TEXT = "\n".join(
     [
         "- 一批最多 5 道题；多出来的放进 list_items（本轮不挡交付）",
-        "- 每条提案必须带 evidence_refs，只能引用清单里已有的编号（如 E9）",
+        "- evidence_refs 里**只许出现 E 开头的出处编号**（E1、E9…），只能是清单里已有的；"
+        "席位条目（seat.xxx:O2）是地址不是编号，写进来算校验不过",
+        "- 每条提案必须带 evidence_refs（至少一条 E 编号）；题目的 evidence_refs 可以留空"
+        "——席位的「疑问」自己没有出处编号，要引用就引用它「依据」里那些 E 编号",
+        "- 题目要写 from_opinions（席位条目地址，如 seat.business_rules:O1）：这道题来自哪几条"
+        "席位意见。它只用来标「谁问的」，不当出处编号",
         "- 不许新建功能子树：席位想建新功能时，出一道具，kind=decision，"
         "选项 id 用 new_feature_yes / new_feature_no",
         "- target 必须落在 13 章内。两种写法别混：",
