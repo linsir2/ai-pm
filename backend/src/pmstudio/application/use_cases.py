@@ -32,6 +32,7 @@ from pmstudio.application.context import (
     render_existing_entries,
     render_reviews,
 )
+from pmstudio.application.deliverable import Deliverable, render_markdown
 from pmstudio.application.dto import (
     ProjectSummaryView,
     ReadinessItemView,
@@ -1039,6 +1040,34 @@ class GetReadiness:
     async def __call__(self, *, project_id: ProjectId) -> tuple[ReadinessItemView, ...]:
         view = self._documents.get(project_id).view()
         return tuple(readiness_view(item) for item in self._checker.check(view))
+
+
+class ExportMarkdown:
+    """交付物：纯读 + 纯渲染。它是"能不能交出去"这句话的落地形态（`01` §7.3）。"""
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        evidence: EvidenceReader,
+        checker: ReadinessChecker,
+        clock: Clock,
+    ) -> None:
+        self._documents = documents
+        self._evidence = evidence
+        self._checker = checker
+        self._clock = clock
+
+    async def __call__(self, *, project_id: ProjectId) -> Deliverable:
+        document = self._documents.get(project_id)
+        view = document.view()
+        return render_markdown(
+            view=view,
+            readiness=self._checker.check(view),
+            versions=document.versions,
+            ledger=self._evidence.get(project_id),
+            exported_at=self._clock.now(),
+        )
 
 
 class ListProjects:

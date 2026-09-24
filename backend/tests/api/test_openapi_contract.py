@@ -8,6 +8,7 @@ EXPECTED_PATHS = {
     "/api/projects/{project_id}/workspace",
     "/api/projects/{project_id}/document",
     "/api/projects/{project_id}/readiness",
+    "/api/projects/{project_id}/export/markdown",
     "/api/projects/{project_id}/edits",
     "/api/projects/{project_id}/rounds",
     "/api/rounds/{round_id}",

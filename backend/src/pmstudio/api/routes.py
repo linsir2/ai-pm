@@ -1,7 +1,9 @@
-"""11 个端点：解析请求 → 调用例 → 序列化返回。业务判断一个都不在这儿。"""
+"""14 个端点：解析请求 → 调用例 → 序列化返回。业务判断一个都不在这儿。"""
+
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from pmstudio.api.schemas import (
     AnswersRequest,
@@ -70,6 +72,26 @@ async def get_readiness(request: Request, project_id: str):  # type: ignore[no-u
             "warns": warns,
             "ready": blockers == 0,
         }
+    )
+
+
+@router.get("/projects/{project_id}/export/markdown")
+async def export_markdown(request: Request, project_id: str) -> Response:
+    """导出一份可以递出去的 Markdown。
+
+    文件名可能是中文（项目名），所以 `Content-Disposition` 双写：
+    ASCII 兜底名给老浏览器，RFC 5987 的 `filename*` 给现代浏览器。
+    """
+
+    file = await services_of(request).export_markdown(project_id=ProjectId(project_id))
+    disposition = (
+        f'attachment; filename="deliverable-v{file.version_no}.md"; '
+        f"filename*=UTF-8''{quote(file.filename)}"
+    )
+    return Response(
+        content=file.markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": disposition},
     )
 
 

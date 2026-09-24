@@ -12,6 +12,7 @@ from pmstudio.application.ports import EventStream, RoundOrchestrator
 from pmstudio.application.use_cases import (
     CreateProject,
     EditEntry,
+    ExportMarkdown,
     GetDocument,
     GetReadiness,
     GetRound,
@@ -30,6 +31,7 @@ class ApiServices:
     get_round: GetRound
     get_document: GetDocument
     get_readiness: GetReadiness
+    export_markdown: ExportMarkdown
     edit_entry: EditEntry
     stream: EventStream
     model_name: str

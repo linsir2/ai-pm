@@ -15,6 +15,7 @@ from pmstudio.application.use_cases import (
     ConfirmDraft,
     CreateProject,
     EditEntry,
+    ExportMarkdown,
     GetDocument,
     GetReadiness,
     GetRound,
@@ -201,6 +202,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         get_round=get_round,
         get_document=GetDocument(documents=documents),
         get_readiness=GetReadiness(documents=documents, checker=readiness),
+        export_markdown=ExportMarkdown(
+            documents=documents, evidence=evidences, checker=readiness, clock=clock
+        ),
         edit_entry=EditEntry(
             documents=documents,
             evidence=evidences,

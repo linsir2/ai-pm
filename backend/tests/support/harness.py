@@ -234,6 +234,16 @@ class Harness:
 
         return GetRound(rounds=self.rounds, evidence=self.evidences, catalog=self.seats)
 
+    def export_markdown(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import ExportMarkdown
+
+        return ExportMarkdown(
+            documents=self.documents,
+            evidence=self.evidences,
+            checker=self.readiness,
+            clock=self.clock,
+        )
+
     def get_readiness(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetReadiness
 
@@ -287,6 +297,7 @@ class Harness:
             get_round=self.get_round(),
             get_document=self.get_document(),
             get_readiness=self.get_readiness(),
+            export_markdown=self.export_markdown(),
             edit_entry=self.edit_entry(),
             stream=self.events,
             model_name=model_name,

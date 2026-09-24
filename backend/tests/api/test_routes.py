@@ -312,6 +312,33 @@ async def test_readiness_endpoint_reports_counts_and_items():
     assert body["blockers"] == sum(1 for item in body["items"] if item["severity"] == "blocker")
 
 
+async def test_export_markdown_returns_a_downloadable_file():
+    app, _ = make_client()
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        response = await client.get(f"/api/projects/{project_id}/export/markdown")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/markdown")
+    disposition = response.headers["content-disposition"]
+    assert disposition.startswith("attachment")
+    assert 'filename="deliverable-v1.md"' in disposition
+    assert "filename*=UTF-8''" in disposition  # 中文项目名要用 RFC 5987 双写
+    assert response.text.startswith("# 产品文档 · 订单中台（v1）")
+    assert "## 13 版本历史" in response.text
+    assert "附录 A · 出处" in response.text
+
+
+async def test_export_markdown_unknown_project_is_404():
+    app, _ = make_client()
+    async with async_client(app) as client:
+        response = await client.get("/api/projects/p-nope/export/markdown")
+
+    assert response.status_code == 404
+
+
 def test_round_busy_maps_to_409():
     """同一个 round 上已经有一个动作在跑：是"冲突"（409），不是服务器炸了（500）。"""
 
