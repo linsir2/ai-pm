@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 
 from pmstudio.domain.shared.errors import UnknownSection
-from pmstudio.domain.shared.ids import SectionId
+from pmstudio.domain.shared.ids import BlockId, SectionId
+from pmstudio.domain.shared.writing import BlockKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +34,45 @@ SECTION_IDS: tuple[SectionId, ...] = tuple(spec.section_id for spec in SECTIONS)
 SECTION_TITLES: dict[SectionId, str] = {spec.section_id: spec.title for spec in SECTIONS}
 SECTION_BY_ID: dict[SectionId, SectionSpec] = {spec.section_id: spec for spec in SECTIONS}
 FEATURE_HOME = SectionId("s5")
+
+
+@dataclass(frozen=True, slots=True)
+class SlotSpec:
+    """章节槽：章节下的固定子块（骨架，不是内容）。
+
+    只有 s8 有槽（性能 / 可用性 / 安全 / 兼容 / 可观测 / 成本）——"六项表态"这条合格标准
+    因此从形容词变成可判据（`01-规格.md` §4、`02-编排与数据.md` §4.8）。
+    """
+
+    name: str
+    title: str
+    kind: BlockKind
+
+
+SECTION_SLOTS: dict[SectionId, tuple[SlotSpec, ...]] = {
+    SectionId("s8"): tuple(
+        SlotSpec(name, title, BlockKind.NFR)
+        for name, title in (
+            ("performance", "性能"),
+            ("availability", "可用性"),
+            ("security", "安全"),
+            ("compatibility", "兼容"),
+            ("observability", "可观测"),
+            ("cost", "成本"),
+        )
+    ),
+}
+
+
+def section_slot(section_id: SectionId | str, name: str) -> SlotSpec | None:
+    for slot in SECTION_SLOTS.get(SectionId(section_id), ()):
+        if slot.name == name:
+            return slot
+    return None
+
+
+def slot_block_id(section_id: SectionId | str, name: str) -> BlockId:
+    return BlockId(f"{section_id}.{name}")
 
 
 def section_spec(section_id: SectionId | str) -> SectionSpec:

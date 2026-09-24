@@ -266,7 +266,8 @@ async def test_manual_edit_over_http_bumps_the_version_and_returns_the_document(
     entries = [entry for block in blocks for entry in block["entries"]]
     assert [entry["text"] for entry in entries] == ["把想法整理成一份能交付的文档"]
     assert len(entries[0]["refs"]) == 2  # 原来的出处 + 手改那一条
-    assert [block["manually_edited"] for block in blocks] == [True]
+    # 有内容的那一块被标记成"人改过"（s8 的空槽是骨架，不在判定里）
+    assert [block["manually_edited"] for block in blocks if block["entries"]] == [True]
 
     assert bad.status_code == 422
     assert missing.status_code == 422

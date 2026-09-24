@@ -39,6 +39,24 @@ def new_document() -> Document:
     )
 
 
+def test_new_document_creates_six_empty_nfr_slots():
+    """s8 的六个章节槽是骨架：空块不算内容，但必须存在（判据按槽名找它们）。"""
+
+    document = new_document()
+
+    slots = [block for block in document.blocks if str(block.block_id).startswith("s8.")]
+    assert sorted(str(block.block_id) for block in slots) == [
+        "s8.availability",
+        "s8.compatibility",
+        "s8.cost",
+        "s8.observability",
+        "s8.performance",
+        "s8.security",
+    ]
+    assert all(block.kind is BlockKind.NFR for block in slots)
+    assert all(block.entries == () for block in slots)
+
+
 def instruction(
     *,
     target: Target,

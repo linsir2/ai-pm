@@ -35,7 +35,14 @@ from pmstudio.domain.shared.ids import (
     SectionId,
 )
 from pmstudio.domain.shared.label import Zone
-from pmstudio.domain.shared.sections import FEATURE_HOME, SECTION_IDS, SECTIONS
+from pmstudio.domain.shared.sections import (
+    FEATURE_HOME,
+    SECTION_IDS,
+    SECTION_SLOTS,
+    SECTIONS,
+    section_slot,
+    slot_block_id,
+)
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 
@@ -72,7 +79,17 @@ class Document:
         title: str,
         now: datetime,
     ) -> "Document":
-        blocks = tuple(Block.section(spec.section_id) for spec in SECTIONS)
+        # 13 章根 + 章节槽（s8 的六块）：槽是骨架，空的，不算内容
+        blocks = tuple(Block.section(spec.section_id) for spec in SECTIONS) + tuple(
+            Block(
+                block_id=slot_block_id(section_id, slot.name),
+                parent_id=BlockId(str(section_id)),
+                kind=slot.kind,
+                field=slot.name,
+            )
+            for section_id, slots in SECTION_SLOTS.items()
+            for slot in slots
+        )
         version = Version(
             version_no=1,
             trigger=VersionTrigger.MANUAL,
@@ -171,13 +188,22 @@ class Document:
             children.setdefault(block.parent_id, []).append(block)
 
         def build(block: Block) -> BlockView:
-            spec = field_spec(block.field) if block.field is not None else None
+            spec = None
+            field_title: str | None = None
+            if block.field is not None:
+                if block.feature_slug is not None:
+                    spec = field_spec(block.field)
+                    field_title = spec.title
+                else:
+                    slot = section_slot(block.parent_id, block.field)
+                    field_title = None if slot is None else slot.title
             return BlockView(
                 block_id=block.block_id,
                 kind=block.kind,
                 entries=block.entries,
                 children=tuple(build(child) for child in children.get(block.block_id, ())),
                 field=block.field,
+                field_title=field_title,
                 feature_slug=block.feature_slug,
                 manually_edited=block.manually_edited,
                 multiple=True if spec is None else spec.multiple,
@@ -318,9 +344,21 @@ class Document:
                     )
             if block.field is not None:
                 parent = by_id.get(block.parent_id) if block.parent_id is not None else None
-                if parent is None or parent.kind is not BlockKind.FEATURE:
+                if parent is not None and parent.kind is BlockKind.FEATURE:
+                    field_spec(block.field)
+                    continue
+                # 章节槽（s8 的六块）：field 名必须命中该章的槽表
+                if (
+                    parent is not None
+                    and parent.kind is BlockKind.SECTION
+                    and section_slot(parent.block_id, block.field) is not None
+                ):
+                    continue
+                if parent is None:
+                    raise ShapeError("字段块必须挂在功能根或章节槽下", block_id=str(block.block_id))
+                if parent.kind is BlockKind.SECTION:
                     raise ShapeError("字段块必须挂在功能根下", block_id=str(block.block_id))
-                field_spec(block.field)
+                raise ShapeError("字段块必须挂在功能根下", block_id=str(block.block_id))
         self._assert_acyclic(by_id)
         assert_unique_fields(self._blocks)
 

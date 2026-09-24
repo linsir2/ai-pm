@@ -304,7 +304,8 @@ async def test_loop_with_questionnaire_and_a_skipped_question(make_app):
         fields = {child["field"] for child in feature["children"]}
         assert {"acceptance", "exceptions"} <= fields
         assert "rules" not in fields  # 提议那条没被采纳
-        assert sections["s8"]["blocks"]  # s8 的 nfr 写进去了
+        # s8 的 nfr 写进去了：按"有非空条目"判（空槽是骨架，别让它冒充内容）
+        assert any(block["entries"] for block in sections["s8"]["blocks"])
         assert workspace["document"]["preference_entries"]  # 偏好进偏好区，不进 13 章
 
 
@@ -345,7 +346,12 @@ async def test_ai_cannot_write_the_document_until_confirm(make_app):
         document = (await client.get(f"/api/projects/{project_id}/document")).json()
 
     assert document["version_no"] == 1  # 全程没确认 → 版本没动
-    assert all(not section["blocks"] for section in document["sections"])
+    # 零写入 = 正文一条内容都没有。s8 的六个空槽是骨架（不是内容），所以按 entries 判。
+    assert all(
+        not block["entries"]
+        for section in document["sections"]
+        for block in section["blocks"]
+    )
 
 
 async def test_seat_with_no_opinions_is_allowed_when_basis_is_given(make_app):

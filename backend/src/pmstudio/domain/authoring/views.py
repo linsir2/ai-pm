@@ -27,6 +27,9 @@ class BlockView:
     entries: tuple[Entry, ...]
     children: tuple["BlockView", ...] = ()
     field: str | None = None
+    # 字段的中文名（功能字段或章节槽的标题）。真相源在后端的字段表/槽表，
+    # 界面不再自己抄一份（`06-前端.md` §5 记的那处重复可以退休了）。
+    field_title: str | None = None
     feature_slug: FeatureSlug | None = None
     manually_edited: bool = False
     # 这一块"能不能有多条"。单值字段（名称、一句话描述、优先级、用户故事）只能改写；
