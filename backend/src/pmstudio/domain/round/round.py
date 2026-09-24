@@ -32,6 +32,25 @@ class Failure:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class SeatNomination:
+    """Analyzer 读这一轮输入之后挑的席位，外加一句"为什么这一轮需要它"。
+
+    这张名单是**判断的产物**，不是关键词匹配的结果：目录只提供"有哪些席位"，
+    要不要请、请谁，由读得懂这段话的那一次模型调用说了算。用户拿到的默认勾选就是它，
+    可以做减法（也可以从目录里补，写入端只要求席位在注册表里）。
+    """
+
+    seat_id: str
+    why: str
+
+    def __post_init__(self) -> None:
+        if not self.seat_id.strip():
+            raise ShapeError("席位提名必须有 seat_id")
+        if not self.why.strip():
+            raise ShapeError("席位提名必须写清为什么请它", seat_id=self.seat_id)
+
+
 class Round:
     def __init__(
         self,
@@ -44,6 +63,7 @@ class Round:
         waiting_on: WaitingOn = WaitingOn.NONE,
         claims: tuple[Claim, ...] = (),
         seats: tuple[str, ...] = (),
+        nominated_seats: tuple[SeatNomination, ...] = (),
         seat_reviews: tuple[SeatReview, ...] = (),
         questionnaire: Questionnaire | None = None,
         answer_sets: tuple[AnswerSet, ...] = (),
@@ -61,6 +81,7 @@ class Round:
         self._waiting_on = waiting_on
         self._claims = tuple(claims)
         self._seats = tuple(seats)
+        self._nominated_seats = tuple(nominated_seats)
         self._seat_reviews = tuple(seat_reviews)
         self._questionnaire = questionnaire
         self._answer_sets = tuple(answer_sets)
@@ -112,6 +133,10 @@ class Round:
     @property
     def seats(self) -> tuple[str, ...]:
         return self._seats
+
+    @property
+    def nominated_seats(self) -> tuple[SeatNomination, ...]:
+        return self._nominated_seats
 
     @property
     def seat_reviews(self) -> tuple[SeatReview, ...]:
@@ -194,6 +219,16 @@ class Round:
                 raise ContentWithoutEvidence(what=f"主张 {item.claim_id}")
         self._claims = claims
         self._advance_to(Step.CLAIMS_READY, waiting_on=WaitingOn.OPENING)
+
+    def nominate(self, seats: tuple[SeatNomination, ...] | list[SeatNomination]) -> None:
+        """记下这一轮的席位提名（Analyzer 挑的）。同一席位只留第一次出现的那条。"""
+
+        unique: dict[str, SeatNomination] = {}
+        for item in seats:
+            unique.setdefault(item.seat_id, item)
+        if not unique:
+            raise ShapeError("席位提名不能为空")
+        self._nominated_seats = tuple(unique.values())
 
     def submit_opening(self, *, seats: tuple[str, ...] | list[str]) -> None:
         self._require_step(Step.CLAIMS_READY)

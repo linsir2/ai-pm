@@ -6,10 +6,12 @@ from pmstudio.application.errors import UnknownProject, UnknownRound
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
+from pmstudio.domain.round.round import SeatNomination
+from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EntryId, EvidenceId, ProjectId, RoundId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from pmstudio.infrastructure.sqlite import database
+from pmstudio.infrastructure.sqlite import database, serialization
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
@@ -82,6 +84,12 @@ def test_document_versions_are_append_only(repos):
 def test_round_round_trips_every_field(repos):
     _, rounds, _, _, uow = repos
     round_ = make_round()
+    round_.nominate(
+        [
+            SeatNomination(seat_id="seat.export_import", why="你说到导出"),
+            SeatNomination(seat_id="seat.permissions", why="导出涉及数据外流"),
+        ]
+    )
     with uow:
         rounds.save(round_)
 
@@ -98,6 +106,39 @@ def test_round_round_trips_every_field(repos):
     assert loaded.claims[0].label is round_.claims[0].label
     assert loaded.created_at == round_.created_at
     assert loaded.seat_round_count == round_.seat_round_count
+    assert [(item.seat_id, item.why) for item in loaded.nominated_seats] == [
+        ("seat.export_import", "你说到导出"),
+        ("seat.permissions", "导出涉及数据外流"),
+    ]
+
+
+def test_round_payload_without_nominations_still_loads():
+    """老行（没有 nominated_seats 键）必须读得回来：给空名单，不炸。"""
+
+    payload = {
+        "user_input": "想做个订单导出的功能",
+        "claims": [],
+        "seats": [],
+        "seat_reviews": [],
+        "questionnaire": None,
+        "answer_sets": [],
+        "draft": None,
+        "seat_round_count": 0,
+        "authorized_new_features": {},
+        "failure": None,
+        "confirmed_version_no": None,
+    }
+
+    round_ = serialization.round_from_payload(
+        payload,
+        round_id=RoundId("r1"),
+        project_id=PROJECT,
+        created_at=NOW,
+        step=Step.STARTED,
+        waiting_on=WaitingOn.NONE,
+    )
+
+    assert round_.nominated_seats == ()
 
 
 def test_ledger_round_trips_and_keeps_next_number(repos):

@@ -24,7 +24,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import Failure, Round
+from pmstudio.domain.round.round import Failure, Round, SeatNomination
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
@@ -510,6 +510,9 @@ def round_to_payload(round_: Round) -> dict:
         "user_input": round_.user_input,
         "claims": [claim_to_json(claim) for claim in round_.claims],
         "seats": list(round_.seats),
+        "nominated_seats": [
+            {"seat_id": item.seat_id, "why": item.why} for item in round_.nominated_seats
+        ],
         "seat_reviews": [review_to_json(review) for review in round_.seat_reviews],
         "questionnaire": (
             None if round_.questionnaire is None else questionnaire_to_json(round_.questionnaire)
@@ -543,6 +546,11 @@ def round_from_payload(
         waiting_on=waiting_on,
         claims=tuple(claim_from_json(item) for item in payload["claims"]),
         seats=tuple(payload["seats"]),
+        # 老行里没有这个键（席位提名是后加的）：给空元组，读回来照样能跑
+        nominated_seats=tuple(
+            SeatNomination(seat_id=item["seat_id"], why=item["why"])
+            for item in payload.get("nominated_seats", ())
+        ),
         seat_reviews=tuple(review_from_json(item) for item in payload["seat_reviews"]),
         questionnaire=(
             None
