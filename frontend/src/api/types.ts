@@ -139,6 +139,8 @@ export interface RoundView {
   seat_packets: SeatPacketView[];
   questions: QuestionView[];
   list_items: string[];
+  /** 模型写了"这题来自哪条席位意见"但装配层对不上号的条目（留痕，不是错误）。 */
+  dropped_attributions: string[];
   draft: DraftView | null;
   advisories: string[];
   failure_reason: string | null;

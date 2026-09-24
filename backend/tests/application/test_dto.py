@@ -257,6 +257,32 @@ def test_round_view_exposes_question_kind_options_and_consequence():
     assert view.questions[0].consequence_if_skipped == "按同步实现"
 
 
+def test_round_view_exposes_dropped_attributions():
+    """归因留痕要投影到接口上，界面才看得见"哪几条没算数"。"""
+
+    round_ = make_round()
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f1"),
+            round_id=ROUND_ID,
+            questions=(
+                Question(
+                    question_id=QuestionId("q1"),
+                    target=Target.body("s8"),
+                    type=QuestionType.TEXT,
+                    title="单次导出最大行数？",
+                    why="量级决定同步还是异步",
+                    consequence_if_skipped="按同步实现",
+                ),
+            ),
+            dropped=("seat.nope:O1",),
+        )
+    )
+
+    assert dto.round_view(round_).dropped_attributions == ("seat.nope:O1",)
+    assert dto.round_view(make_round()).dropped_attributions == ()
+
+
 def test_round_view_surfaces_failure_reason_and_resume_point():
     round_ = make_round()
     round_.fail("席位 seat.permissions 返回的报文过不了 schema")

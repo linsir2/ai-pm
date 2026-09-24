@@ -44,6 +44,13 @@ export function QuestionnaireDrawer({
       </header>
 
       <div className="drawer__body">
+        {round.dropped_attributions.length > 0 && (
+          <p className="drawer__note" aria-label="未能解析的归因">
+            有 {round.dropped_attributions.length} 条席位条目没能对上号（
+            {round.dropped_attributions.join("、")}
+            ），这几条没算作「谁问的」——题目本身没受影响。
+          </p>
+        )}
         {round.questions.map((question) => (
           <Question
             key={question.question_id}
