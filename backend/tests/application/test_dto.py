@@ -10,7 +10,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import Round, SeatNomination
+from pmstudio.domain.round.round import DroppedItem, DropSource, Round, SeatNomination
 from pmstudio.domain.shared.ids import (
     DocumentId,
     DraftId,
@@ -258,8 +258,12 @@ def test_round_view_exposes_question_kind_options_and_consequence():
     assert view.questions[0].consequence_if_skipped == "按同步实现"
 
 
-def test_round_view_exposes_dropped_attributions():
-    """归因留痕要投影到接口上，界面才看得见"哪几条没算数"。"""
+def test_round_view_exposes_dropped_channel():
+    """留痕投影要有地址、席位、趟数、原因、来源（06 §2.2：界面据此挂到席位包下面）。
+
+    旧契约里这是一串裸字符串（`Questionnaire.dropped` → `dropped_attributions`）；
+    P5b 合成一条通道后，原因与来源也要跟着上桌——旧字段由新通道派生。
+    """
 
     round_ = make_round()
     round_.integrate(
@@ -276,12 +280,37 @@ def test_round_view_exposes_dropped_attributions():
                     consequence_if_skipped="按同步实现",
                 ),
             ),
-            dropped=("seat.nope:O1",),
-        )
+        ),
+        dropped=(
+            DroppedItem(
+                handle="seat.nope:O1",
+                reason="归因对不上号：这一轮没有这条席位条目",
+                source=DropSource.ASSEMBLY,
+                seat_id=None,
+                pass_index=1,
+            ),
+            DroppedItem(
+                handle="seat.data_scale:O2",
+                reason="与文档已有内容重复",
+                source=DropSource.INTEGRATOR,
+                seat_id="seat.data_scale",
+                pass_index=1,
+            ),
+        ),
     )
 
-    assert dto.round_view(round_).dropped_attributions == ("seat.nope:O1",)
-    assert dto.round_view(make_round()).dropped_attributions == ()
+    view = dto.round_view(round_)
+
+    assert [
+        (item.handle, item.seat_id, item.pass_index, item.source, item.reason)
+        for item in view.dropped
+    ] == [
+        ("seat.nope:O1", None, 1, "assembly", "归因对不上号：这一轮没有这条席位条目"),
+        ("seat.data_scale:O2", "seat.data_scale", 1, "integrator", "与文档已有内容重复"),
+    ]
+    # 过渡期：旧字段仍是新通道的派生视图（Task 10 收口后删掉）
+    assert view.dropped_attributions == ("seat.nope:O1",)
+    assert dto.round_view(make_round()).dropped == ()
 
 
 def test_round_view_surfaces_failure_reason_and_resume_point():

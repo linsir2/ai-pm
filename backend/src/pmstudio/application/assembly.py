@@ -65,6 +65,9 @@ class Assembly:
     #: 这一趟没进卡片的意见。三个来源合成一条通道（`04` C5 后半）：
     #: 模型申报的丢弃 / 归因对不上号 / 装配层核出来"根本没交代去处"。
     dropped: tuple[DroppedItem, ...] = ()
+    #: 这一趟真的被题目用到的席位条目地址（整合者写对了的那些）。
+    #: 去处核查要拿它当"算交代过"的依据之一，所以由装配层如实记下来。
+    accounted_handles: frozenset[str] = frozenset()
     degrade_reason: str | None = None
     """整合失败、改走降级通道时的原因原文（见 `degraded_question_proposals`）。"""
 
@@ -201,6 +204,7 @@ def assemble(
 
     pass_index = round_.seat_round_count
     dropped: list[DroppedItem] = []
+    used_handles: set[str] = set()
     ordered = feature_questions + [
         _question(
             item,
@@ -209,6 +213,7 @@ def assemble(
             reviews=round_.current_reviews,
             pass_index=pass_index,
             dropped=dropped,
+            used_handles=used_handles,
         )
         for item in packet.questions
     ]
@@ -229,6 +234,7 @@ def assemble(
         + dropped_from_packet(
             packet, reviews=round_.current_reviews, pass_index=pass_index
         ),
+        accounted_handles=frozenset(used_handles),
     )
 
 
@@ -542,6 +548,7 @@ def _question(
     reviews: Sequence[SeatReview],
     pass_index: int,
     dropped: list[DroppedItem],
+    used_handles: set[str],
 ) -> Question:
     """题目：依据编号照旧校验，**归因由装配层算**，不信模型自己写的提问者。
 
@@ -580,8 +587,10 @@ def _question(
                     pass_index=pass_index,
                 )
             )
-        elif seat_id not in seats:
-            seats.append(seat_id)
+        else:
+            used_handles.add(handle)
+            if seat_id not in seats:
+                seats.append(seat_id)
     try:
         return Question(
             question_id=QuestionId("q0"),

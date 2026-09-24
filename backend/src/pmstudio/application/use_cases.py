@@ -23,6 +23,7 @@ from pmstudio.application.assembly import (
     open_question_proposals,
     questionnaire_of,
     seat_questions,
+    unaccounted_drops,
 )
 from pmstudio.application.context import (
     answer_eids,
@@ -31,6 +32,7 @@ from pmstudio.application.context import (
     render_document_state,
     render_existing_entries,
     render_reviews,
+    seat_entry_handle,
 )
 from pmstudio.application.deliverable import Deliverable, render_markdown
 from pmstudio.application.dto import (
@@ -82,7 +84,7 @@ from pmstudio.domain.round.questionnaire import (
     Question,
     QuestionKind,
 )
-from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.round import DroppedItem, DropSource, Round
 from pmstudio.domain.round.step import MAX_SEAT_ROUNDS, Step
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import (
@@ -539,20 +541,26 @@ class IntegrateRound:
                     f"未决（{stop_reason}，不再追问）：{item.title}" for item in questions
                 ]
                 questions = ()
+            dropped = _dropped_items_for(
+                round_,
+                assembled=assembled,
+                proposals=proposals,
+                produced_questions=assembled.questions,
+                ledger=ledger,
+            )
             questionnaire = questionnaire_of(
                 round_id,
                 FormId(self._ids.new("f")),
                 questions,
                 assembled.list_items,
-                dropped=assembled.dropped,
             )
             if questionnaire is not None:
-                round_.integrate(questionnaire=questionnaire)
+                round_.integrate(questionnaire=questionnaire, dropped=dropped)
             else:
                 draft = draft_of(round_id, DraftId(self._ids.new("d")), proposals, gaps)
                 if draft is None:
                     raise ShapeError("整合既没有给出题目也没有给出提案")
-                round_.integrate(draft=draft)
+                round_.integrate(draft=draft, dropped=dropped)
             self._evidence_writer.save(ledger)
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
@@ -628,6 +636,46 @@ class IntegrateRound:
                 continue
             return assembled, gaps
         raise AssertionError("不可能走到这里")
+
+
+def _dropped_items_for(
+    round_: Round,
+    *,
+    assembled: Assembly,
+    proposals: Sequence[Proposal],
+    produced_questions: Sequence[Question],
+    ledger: EvidenceLedger,
+) -> tuple[DroppedItem, ...]:
+    """这一趟的留痕：三个来源合成一条通道（`04-未决.md` C5 后半）。
+
+    装配层不假设"模型会老实交代"——它自己核一遍：哪些意见真的被用到了、
+    哪些只是被申报为丢弃、剩下的就是"没人说过它去哪了"（`unaccounted`）。
+    问卷路、草案路、降级路都走这一个出口，所以留痕不会只在某一条路上活着。
+    """
+
+    accounted_handles = frozenset(assembled.accounted_handles)
+    if assembled.degrade_reason is not None:
+        # 整合失败时，这一趟的疑问会被原样落进 s11：算交代过；没落地的判断仍会报
+        accounted_handles |= frozenset(
+            seat_entry_handle(seat_id, opinion.local_id)
+            for seat_id, opinion in seat_questions(round_.current_reviews)
+        )
+    accounted_eids = frozenset(
+        eid for proposal in proposals for eid in proposal.origin.refs
+    ) | frozenset(
+        eid for question in produced_questions for eid in question.evidence_refs
+    )
+    return assembled.dropped + unaccounted_drops(
+        round_.current_reviews,
+        ledger=ledger,
+        accounted_handles=accounted_handles,
+        accounted_eids=accounted_eids,
+        declared=frozenset(
+            item.handle
+            for item in assembled.dropped
+            if item.source is DropSource.INTEGRATOR
+        ),
+    )
 
 
 class SubmitAnswers:

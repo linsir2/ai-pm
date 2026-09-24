@@ -13,7 +13,7 @@ from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Proposal
 from pmstudio.domain.round.opinion import OpinionForm, SeatReview
-from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.round import DropSource, Round
 from pmstudio.domain.services.scope_guard import ScopeGuard
 
 SEAT_COMPLETED = "completed"
@@ -76,6 +76,17 @@ class SeatPacketView:
 
 
 @dataclass(frozen=True, slots=True)
+class DroppedView:
+    """一条"没进卡片"的留痕：地址、席位、第几趟、原因、来源（`04` C5 后半）。"""
+
+    handle: str
+    seat_id: str | None
+    pass_index: int
+    reason: str
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
 class QuestionView:
     question_id: str
     kind: str
@@ -125,6 +136,7 @@ class RoundView:
     available_seats: tuple[SeatSuggestionView, ...]
     claims: tuple[ClaimView, ...]
     seat_packets: tuple[SeatPacketView, ...]
+    dropped: tuple[DroppedView, ...]
     questions: tuple[QuestionView, ...]
     list_items: tuple[str, ...]
     dropped_attributions: tuple[str, ...]
@@ -195,9 +207,22 @@ def round_view(
         seat_packets=_seat_packets(
             round_, seat_titles=seat_titles, ledger=ledger, catalog=catalog
         ),
+        dropped=tuple(
+            DroppedView(
+                handle=item.handle,
+                seat_id=item.seat_id,
+                pass_index=item.pass_index,
+                reason=item.reason,
+                source=item.source.value,
+            )
+            for item in round_.dropped
+        ),
         questions=_question_views(round_),
         list_items=tuple(item.text for item in (questionnaire.list_items if questionnaire else ())),
-        dropped_attributions=() if questionnaire is None else questionnaire.dropped,
+        # 过渡期字段（Task 10 收口后删掉）：不是第二份真相源，就是新通道的派生视图
+        dropped_attributions=tuple(
+            item.handle for item in round_.dropped if item.source is DropSource.ASSEMBLY
+        ),
         draft=draft_view,
         advisories=advisories,
         failure_reason=round_.failure.reason if round_.failure is not None else None,
