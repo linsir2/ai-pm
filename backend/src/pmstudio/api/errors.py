@@ -8,6 +8,7 @@ CODE_STATUS = {
     "unknown_round": 404,
     "model_call_failed": 502,
     "model_packet_unparsable": 502,
+    "round_busy": 409,
 }
 
 

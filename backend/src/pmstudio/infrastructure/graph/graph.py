@@ -12,6 +12,7 @@ from langgraph.graph import END, StateGraph
 
 from pmstudio.application.commands import RoundCommand
 from pmstudio.application.dto import RoundView
+from pmstudio.application.errors import RoundBusy
 from pmstudio.application.use_cases import (
     ConfirmDraft,
     GetRound,
@@ -43,6 +44,9 @@ RESUME_ROUTES: dict[str, str] = {
     Step.AWAITING_ANSWERS.value: END,
     Step.AWAITING_CONFIRM.value: END,
     Step.DONE.value: END,
+    # 兜底：老库里的坏行（step=failed）也得有个出口，否则路由表 KeyError → 500。
+    # 正常路径进不来——`Round.resume()` 会先把坏 `at_step` 拦下来（04-未决 C9）。
+    Step.FAILED.value: END,
 }
 
 COMMAND_ROUTES: dict[str, str] = {
@@ -75,6 +79,7 @@ class RoundRunner:
         self._confirm_draft = confirm_draft
         self._retry_round = retry_round
         self._get_round = get_round
+        self._running_rounds: set[str] = set()
         self._graph = build_graph(self)
 
     @property
@@ -84,9 +89,23 @@ class RoundRunner:
         return self._graph
 
     async def run(self, command: RoundCommand) -> RoundView:
-        final: dict[str, Any] = await self._graph.ainvoke(
-            {"command": command, "round_id": command.round_id or "", "view": None}
-        )
+        """跑一次用户动作。**同一个 round 同时只允许一个动作**。
+
+        双击"继续/重试"、两个标签页、前端重发都会撞上；真撞过一次，代价是那一轮永久锁死
+        （`04-未决.md` C9）。`start` 没有 round_id，不参与串行化——两轮新输入本来就互不相干。
+        """
+
+        key = command.round_id or ""
+        if key and key in self._running_rounds:
+            raise RoundBusy(round_id=key)
+        if key:
+            self._running_rounds.add(key)
+        try:
+            final: dict[str, Any] = await self._graph.ainvoke(
+                {"command": command, "round_id": key, "view": None}
+            )
+        finally:
+            self._running_rounds.discard(key)
         view = final.get("view")
         if view is None:
             # 图停在"等人"的边上（例如 retry 后本来就是 claims_ready）——

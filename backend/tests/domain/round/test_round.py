@@ -14,7 +14,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.round import Failure, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.errors import (
     AlreadyAnswered,
@@ -422,3 +422,39 @@ def test_opening_bad_revise_claims_after_seat_round_started():
     round_ = round_with_seats()
     with pytest.raises(IllegalStepTransition):
         round_.revise_claims((claim(),))
+
+
+def test_fail_is_idempotent_so_a_second_writer_cannot_move_the_resume_point():
+    """并发/重复失败时，`at_step` 必须还是"从哪一步重跑"，不能被后一次改写。
+
+    作者库里真出现过 `at_step=failed`：两个重试同时跑，第二次记失败时 step 已经是 failed，
+    于是续跑点被写成 failed，这一轮再也恢复不了（`04-未决.md` C9）。
+    """
+
+    round_ = round_with_seats()
+    round_.fail("第一次失败")
+    round_.fail("第二次失败（另一次并发尝试）")
+
+    assert round_.step is Step.FAILED
+    assert round_.failure is not None
+    assert round_.failure.at_step is Step.SEATS_RUNNING
+    assert round_.failure.reason == "第一次失败"
+
+
+def test_resume_refuses_a_resume_point_that_is_itself_failed():
+    """老库里的坏行：`at_step=failed`。要明确报错，而不是让路由表 KeyError（500）。"""
+
+    round_ = Round(
+        round_id=RoundId("r1"),
+        project_id=ProjectId("p1"),
+        user_input="想做个订单导出的功能",
+        created_at=NOW,
+        step=Step.FAILED,
+        waiting_on=WaitingOn.NONE,
+        failure=Failure(at_step=Step.FAILED, waiting_on=WaitingOn.NONE, reason="坏行"),
+    )
+
+    with pytest.raises(ShapeError) as error:
+        round_.resume()
+
+    assert "at_step" in error.value.message

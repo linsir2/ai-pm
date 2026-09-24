@@ -1,10 +1,13 @@
+import asyncio
 import json
 
 import pytest
 
-from pmstudio.application.errors import ModelCallFailed
+from pmstudio.application.errors import ModelCallFailed, RoundBusy
 from pmstudio.application.use_cases import AnswerInput
-from pmstudio.infrastructure.graph.graph import RoundCommand
+from pmstudio.domain.round.step import Step
+from pmstudio.infrastructure.graph.graph import RESUME_ROUTES, RoundCommand
+from tests.support.builders import make_round
 from tests.support.harness import Harness
 
 CLAIMS_REPLY = json.dumps(
@@ -205,3 +208,46 @@ def test_graph_has_no_checkpointer():
     harness = harness_for_draft_path()
     harness.seed_project()
     assert getattr(harness.runner().graph, "checkpointer", None) is None
+
+
+def test_resume_routes_have_an_exit_for_every_step():
+    """每个 step 都要有出口：老库里的坏行（step=failed）不能再撞 KeyError 变成 500。"""
+
+    for step in Step:
+        assert step.value in RESUME_ROUTES, f"{step} 没有续跑出口"
+    assert RESUME_ROUTES[Step.FAILED.value] == "__end__"
+
+
+class BlockingGateway:
+    """第一次调用就卡住：用来把一轮钉在"正在处理中"，好测并发保护。"""
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        self.entered.set()
+        await self.release.wait()
+        raise ModelCallFailed("测试用：卡住之后不打算成功", purpose=str(request.purpose))
+
+
+async def test_a_second_action_on_the_same_round_is_rejected_while_one_is_running():
+    """同一个 round 同时只允许一个动作——这就是把 `at_step` 写成 failed 的那条路。"""
+
+    gateway = BlockingGateway()
+    harness = Harness(gateway=gateway, seats=None)
+    harness.seed_project()
+    broken = make_round()
+    broken.fail("先失败一次")  # 模拟"上一轮已经失败，用户点了继续/重试"
+    harness.rounds.save(broken)
+    runner = harness.runner()
+
+    first = asyncio.create_task(runner.run(RoundCommand(kind="retry", round_id="r1")))
+    await asyncio.wait_for(gateway.entered.wait(), timeout=5)
+
+    with pytest.raises(RoundBusy):
+        await runner.run(RoundCommand(kind="retry", round_id="r1"))
+
+    gateway.release.set()
+    with pytest.raises(ModelCallFailed):
+        await first

@@ -340,8 +340,17 @@ class Round:
         self._authorized[slug] = basis
 
     def fail(self, reason: str) -> None:
+        """记失败：**只记第一次**。
+
+        第二次调用（并发重试、重复提交）会把 `at_step` 记成当时那一步——那时它已经是
+        `failed` 了，于是"从哪一步重跑"这个信息就没了，任谁都救不回来（`04-未决.md` C9）。
+        失败点只有一个，重复的失败不改写它。
+        """
+
         if self._step is Step.DONE:
             raise IllegalStepTransition(current=self._step, target=Step.FAILED)
+        if self._step is Step.FAILED:
+            return
         self._failure = Failure(at_step=self._step, waiting_on=self._waiting_on, reason=reason)
         self._waiting_on = WaitingOn.NONE
         self._step = Step.FAILED
@@ -349,6 +358,13 @@ class Round:
     def resume(self) -> None:
         if self._step is not Step.FAILED or self._failure is None:
             raise ShapeError("没有可恢复的失败")
+        if self._failure.at_step is Step.FAILED:
+            # 老库里真出现过这种行（并发写的）：恢复成 failed 等于没有恢复，
+            # 路由表也没有这个出口。明确报错，别让它变成 500。
+            raise ShapeError(
+                "这一轮的失败点被写坏了（at_step=failed），没法自动续跑；请重新开一轮",
+                at_step=Step.FAILED.value,
+            )
         self._step = self._failure.at_step
         self._waiting_on = self._failure.waiting_on
         self._failure = None

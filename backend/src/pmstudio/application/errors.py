@@ -58,3 +58,19 @@ class UnknownRound(ApplicationError):
         super().__init__(
             f"找不到这一轮：{round_id}", code="unknown_round", round_id=str(round_id)
         )
+
+
+class RoundBusy(ApplicationError):
+    """同一个 round 上已经有一个动作在跑。
+
+    单用户不代表不会有并发：双击"继续/重试"、开两个标签页、前端自动重发都会。
+    真出现过一次：两个重试同时跑，第二个记失败时 step 已经是 failed，
+    续跑点被写成 failed，这一轮从此恢复不了（`04-未决.md` C9）。
+    """
+
+    def __init__(self, round_id: object) -> None:
+        super().__init__(
+            "这一轮正在处理中：同一个动作别点第二次，等它跑完",
+            code="round_busy",
+            round_id=str(round_id),
+        )

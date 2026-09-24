@@ -9,7 +9,7 @@ from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.dto import ProjectSummaryView
-from pmstudio.application.ports import SeatDefinition
+from pmstudio.application.ports import ModelGateway, SeatDefinition
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.services.assigner import EvidenceAssigner
@@ -67,12 +67,14 @@ class Harness:
         replies: Mapping[str, str | Sequence[str]] | None = None,
         seat_replies: Mapping[str, str | Sequence[str]] | None = None,
         seats: Sequence[SeatDefinition] | None = None,
+        gateway: ModelGateway | None = None,
     ) -> None:
         self.documents = InMemoryDocumentRepository()
         self.rounds = InMemoryRoundRepository()
         self.evidences = InMemoryEvidenceRepository()
         self.uow = FakeTransaction(self.documents, self.rounds, self.evidences)
-        self.gateway = ScriptedModelGateway(
+        # gateway 是给"要卡住/要乱来"的测试用的注入口；平时用脚本化网关
+        self.gateway = gateway or ScriptedModelGateway(
             replies=replies or {}, seat_replies=seat_replies or {}
         )
         self.prompts = RecordingPrompts()

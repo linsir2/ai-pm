@@ -294,6 +294,15 @@ async def test_model_failure_is_502():
     assert response.json()["code"] == "model_call_failed"
 
 
+def test_round_busy_maps_to_409():
+    """同一个 round 上已经有一个动作在跑：是"冲突"（409），不是服务器炸了（500）。"""
+
+    from pmstudio.api.errors import status_for
+    from pmstudio.application.errors import RoundBusy
+
+    assert status_for(RoundBusy(round_id="r1")) == 409
+
+
 async def test_round_view_exposes_discussion_stream_data():
     app, _ = make_client()
     async with async_client(app) as client:
