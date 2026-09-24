@@ -220,9 +220,20 @@
 
 **数字**：后端 351 passed + `ruff` 干净；前端 `tsc` 干净 + 77 passed。
 
-**下一步**：Task 7 真模型证据（`scripts/smoke.py` 跑一遍，确认 `evidence_refs` 全是 E 编号、
-归因来自 `from_opinions`、两批问卷到顶仍能出草案）；作者库里那一轮（`at_step=failed` 的坏行）
-现在会明确报错要求重开一轮，不再 500。
+**真模型证据（Task 7，已拿到的三条）**
+
+1. 改过的整合提示词 + 作者真数据重放（qwen3.8-flash）：`evidence_refs` 里只有 E 编号
+   （引不到就留空），席位条目改走 `from_opinions`（`seat.business_rules:O1`…）——
+   以前正是这里被塞进 `evidence_refs` 才判死整轮。
+2. 同一份报文过装配层：5 道题留下（上限 5）、归因丢弃 0 条、`asked_by` 来自归因。
+3. 整合必失败的降级（作者库副本 + 复现 O1 的 stub）：草案 9 条全落 s11（那 9 条疑问原样），
+   缺口行写明原因；再点重试 **0 次模型调用**，不再撞墙。
+
+**还没拿到**：完整 `scripts/smoke.py` 跑到确认写入——`.env` 的 `deepseek-v4-pro-0813` 与
+`qwen3.8-flash` 都在席位轮卡住十几分钟没返回，疑点是**网关没设请求超时**
+（`LiteLLMGateway.complete` 不传 timeout），provider 一慢这一轮就永远"正在跑"。下轮候选。
+
+作者库里那一轮（`at_step=failed` 的坏行）现在会明确报错要求重开一轮，不再 500。
 
 ### 执行结果（2026-09-22，P1 已完成）
 

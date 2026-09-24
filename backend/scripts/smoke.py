@@ -72,6 +72,8 @@ async def run(client: httpx.AsyncClient) -> int:
             f"{packet['question_count']} 个；依据：{packet['basis'][:40]}",
         )
     show("integrate", f"waiting_on={body['waiting_on']}，题目 {len(body['questions'])} 道")
+    if body.get("dropped_attributions"):
+        show("attribution", f"归因没对上号：{'、'.join(body['dropped_attributions'])}")
 
     # 一轮里可能问不止一次（最多 3 次席位轮）：一直答到出草案卡为止
     while body["waiting_on"] == "questionnaire":
@@ -88,7 +90,9 @@ async def run(client: httpx.AsyncClient) -> int:
             show(
                 "question",
                 f"{question['kind']} {question['title']} → 选 "
-                f"{options[0][1] if options else '（开放题）'}",
+                f"{options[0][1] if options else '（开放题）'}"
+                f"〔依据 {question['eids'] or '（无）'} · 谁问的 "
+                f"{question['asked_by'] or '（没认出来）'}〕",
             )
         answered = await client.post(
             f"/api/rounds/{round_id}/answers",
