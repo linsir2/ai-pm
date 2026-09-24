@@ -34,8 +34,10 @@ from pmstudio.application.context import (
 )
 from pmstudio.application.dto import (
     ProjectSummaryView,
+    ReadinessItemView,
     RoundView,
     WorkspaceView,
+    readiness_view,
     round_view,
     workspace_view,
 )
@@ -1000,12 +1002,14 @@ class GetWorkspace:
         evidence: EvidenceReader,
         index: WorkspaceIndex,
         catalog: SeatCatalog,
+        checker: ReadinessChecker,
     ) -> None:
         self._documents = documents
         self._rounds = rounds
         self._evidence = evidence
         self._index = index
         self._catalog = catalog
+        self._checker = checker
 
     async def __call__(self, *, project_id: ProjectId) -> WorkspaceView:
         document = self._documents.get(project_id)
@@ -1013,14 +1017,28 @@ class GetWorkspace:
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
         round_ = None if round_id is None else self._rounds.get(round_id)
         ledger = None if round_ is None else self._evidence.get(project_id)
+        view = document.view()
         return workspace_view(
             project=self._index.summary(project_id),
-            document=document.view(),
+            document=view,
             round_=round_,
             seat_titles=titles,
             catalog=self._catalog,
             ledger=ledger,
+            readiness=self._checker.check(view),
         )
+
+
+class GetReadiness:
+    """只读：这份文档按合格标准还差什么（`01-规格.md` §4/§7）。"""
+
+    def __init__(self, *, documents: DocumentReader, checker: ReadinessChecker) -> None:
+        self._documents = documents
+        self._checker = checker
+
+    async def __call__(self, *, project_id: ProjectId) -> tuple[ReadinessItemView, ...]:
+        view = self._documents.get(project_id).view()
+        return tuple(readiness_view(item) for item in self._checker.check(view))
 
 
 class ListProjects:

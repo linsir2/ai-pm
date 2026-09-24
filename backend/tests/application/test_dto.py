@@ -1,6 +1,7 @@
 from pmstudio.application import dto
 from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
@@ -302,6 +303,42 @@ def test_workspace_view_carries_project_document_and_round():
     assert view.project.title == "订单中台"
     assert view.document.version_no == 1
     assert view.round is not None
+
+
+def test_workspace_view_carries_readiness_items():
+    """就绪度是文档投影的一部分：界面刷新一次就能拿到"差 N 项"。"""
+
+    document = Document.new(
+        document_id=DocumentId("doc1"), project_id=ProjectId("p1"), title="订单中台", now=NOW
+    )
+    project = dto.ProjectSummaryView(
+        project_id="p1", title="订单中台", version_no=1, updated_at=NOW
+    )
+    items = ReadinessChecker().check(document.view())
+
+    view = dto.workspace_view(
+        project=project, document=document.view(), round_=None, readiness=items
+    )
+
+    assert {item.section_id for item in view.readiness} >= {"s1", "s5", "s8"}
+    assert all(item.severity in {"blocker", "warn"} for item in view.readiness)
+    assert [item.section_id for item in view.readiness] == [
+        item.section_id for item in items
+    ]
+
+
+def test_workspace_view_without_readiness_is_empty():
+    document = Document.new(
+        document_id=DocumentId("doc1"), project_id=ProjectId("p1"), title="订单中台", now=NOW
+    )
+    view = dto.workspace_view(
+        project=dto.ProjectSummaryView(
+            project_id="p1", title="订单中台", version_no=1, updated_at=NOW
+        ),
+        document=document.view(),
+        round_=None,
+    )
+    assert view.readiness == ()
 
 
 class _TwoSeatCatalog:

@@ -234,6 +234,11 @@ class Harness:
 
         return GetRound(rounds=self.rounds, evidence=self.evidences, catalog=self.seats)
 
+    def get_readiness(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import GetReadiness
+
+        return GetReadiness(documents=self.documents, checker=self.readiness)
+
     def get_document(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetDocument
 
@@ -248,6 +253,7 @@ class Harness:
             evidence=self.evidences,
             index=self.index,
             catalog=self.seats,
+            checker=self.readiness,
         )
 
     def list_projects(self):  # type: ignore[no-untyped-def]
@@ -280,6 +286,7 @@ class Harness:
             list_projects=self.list_projects(),
             get_round=self.get_round(),
             get_document=self.get_document(),
+            get_readiness=self.get_readiness(),
             edit_entry=self.edit_entry(),
             stream=self.events,
             model_name=model_name,

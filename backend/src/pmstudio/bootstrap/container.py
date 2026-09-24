@@ -16,6 +16,7 @@ from pmstudio.application.use_cases import (
     CreateProject,
     EditEntry,
     GetDocument,
+    GetReadiness,
     GetRound,
     GetWorkspace,
     IntegrateRound,
@@ -189,11 +190,17 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         runner=runner,
         create_project=CreateProject(factory=factory, index=index, clock=clock, ids=ids),
         workspace=GetWorkspace(
-            documents=documents, rounds=rounds, evidence=evidences, index=index, catalog=catalog
+            documents=documents,
+            rounds=rounds,
+            evidence=evidences,
+            index=index,
+            catalog=catalog,
+            checker=readiness,
         ),
         list_projects=ListProjects(index=index),
         get_round=get_round,
         get_document=GetDocument(documents=documents),
+        get_readiness=GetReadiness(documents=documents, checker=readiness),
         edit_entry=EditEntry(
             documents=documents,
             evidence=evidences,

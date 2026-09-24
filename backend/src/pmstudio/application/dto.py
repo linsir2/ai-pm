@@ -3,11 +3,12 @@
 这里不做任何业务判断——"要不要出问卷""能不能写"全由领域决定，这里只是把结论摆出来。
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
 from pmstudio.application.ports import SeatCatalog, SeatDefinition
+from pmstudio.domain.authoring.readiness import ReadinessItem
 from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Proposal
@@ -143,10 +144,20 @@ class ProjectSummaryView:
 
 
 @dataclass(frozen=True, slots=True)
+class ReadinessItemView:
+    section_id: str
+    code: str
+    title: str
+    detail: str
+    severity: str
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceView:
     project: ProjectSummaryView
     document: DocumentView
     round: RoundView | None
+    readiness: tuple[ReadinessItemView, ...] = ()
 
 
 def round_view(
@@ -203,6 +214,7 @@ def workspace_view(
     seat_titles: Mapping[str, str] = {},
     catalog: SeatCatalog | None = None,
     ledger: EvidenceLedger | None = None,
+    readiness: Sequence[ReadinessItem] = (),
 ) -> WorkspaceView:
     return WorkspaceView(
         project=project,
@@ -212,6 +224,17 @@ def workspace_view(
             if round_ is None
             else round_view(round_, seat_titles=seat_titles, catalog=catalog, ledger=ledger)
         ),
+        readiness=tuple(readiness_view(item) for item in readiness),
+    )
+
+
+def readiness_view(item: ReadinessItem) -> ReadinessItemView:
+    return ReadinessItemView(
+        section_id=item.section_id,
+        code=item.code,
+        title=item.title,
+        detail=item.detail,
+        severity=item.severity.value,
     )
 
 

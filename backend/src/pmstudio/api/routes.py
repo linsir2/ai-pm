@@ -56,6 +56,23 @@ async def get_document(request: Request, project_id: str):  # type: ignore[no-un
     return as_json(view)
 
 
+@router.get("/projects/{project_id}/readiness")
+async def get_readiness(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+    """按 13 章的合格标准算"还差什么"。只读，不挡写入（01 §7.4）。"""
+
+    items = await services_of(request).get_readiness(project_id=ProjectId(project_id))
+    blockers = sum(1 for item in items if item.severity == "blocker")
+    warns = sum(1 for item in items if item.severity == "warn")
+    return as_json(
+        {
+            "items": items,
+            "blockers": blockers,
+            "warns": warns,
+            "ready": blockers == 0,
+        }
+    )
+
+
 @router.post("/projects/{project_id}/edits")
 async def edit_entry(request: Request, project_id: str, body: EditEntryRequest):  # type: ignore[no-untyped-def]
     """用户手改文档。一次改动一版，改过的块之后 AI 不能再动。"""

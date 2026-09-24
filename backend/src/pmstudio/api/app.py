@@ -13,6 +13,7 @@ from pmstudio.application.use_cases import (
     CreateProject,
     EditEntry,
     GetDocument,
+    GetReadiness,
     GetRound,
     GetWorkspace,
     ListProjects,
@@ -28,6 +29,7 @@ class ApiServices:
     list_projects: ListProjects
     get_round: GetRound
     get_document: GetDocument
+    get_readiness: GetReadiness
     edit_entry: EditEntry
     stream: EventStream
     model_name: str
