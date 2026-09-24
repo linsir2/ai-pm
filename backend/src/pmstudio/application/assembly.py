@@ -26,7 +26,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.round import DroppedItem, DropSource, Round
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
@@ -62,13 +62,85 @@ class Assembly:
     questions: tuple[Question, ...]
     list_items: tuple[ListItem, ...]
     proposals: tuple[Proposal, ...]
-    dropped: tuple[str, ...] = ()  # 归因解析不上的席位条目地址（留痕，不判死整轮）
+    #: 这一趟没进卡片的意见。三个来源合成一条通道（`04` C5 后半）：
+    #: 模型申报的丢弃 / 归因对不上号 / 装配层核出来"根本没交代去处"。
+    dropped: tuple[DroppedItem, ...] = ()
     degrade_reason: str | None = None
     """整合失败、改走降级通道时的原因原文（见 `degraded_question_proposals`）。"""
 
 
 def normalize(text: str) -> str:
     return " ".join(text.split()).casefold()
+
+
+def _seat_of_handle(handle: str, *, seats: frozenset[str]) -> str | None:
+    """从席位条目地址里解析席位（解析不到就留 None——留痕照样留，不猜）。"""
+
+    if ":" not in handle:
+        return None
+    seat_id = handle.split(":", 1)[0].strip()
+    return seat_id if seat_id in seats else None
+
+
+def dropped_from_packet(
+    packet: schemas.IntegrationPacket,
+    *,
+    reviews: Sequence[SeatReview],
+    pass_index: int,
+) -> tuple[DroppedItem, ...]:
+    """模型申报的丢弃：原因它自己写；席位解析不出来也照收（留痕比归类重要）。"""
+
+    seats = frozenset(review.seat_id for review in reviews)
+    return tuple(
+        DroppedItem(
+            handle=item.handle,
+            reason=item.reason,
+            source=DropSource.INTEGRATOR,
+            seat_id=_seat_of_handle(item.handle, seats=seats),
+            pass_index=pass_index,
+        )
+        for item in packet.dropped_opinions
+    )
+
+
+def unaccounted_drops(
+    reviews: Sequence[SeatReview],
+    *,
+    ledger: EvidenceLedger,
+    accounted_handles: frozenset[str],
+    accounted_eids: frozenset[EvidenceId],
+    declared: frozenset[str],
+) -> tuple[DroppedItem, ...]:
+    """装配层的核查：这条意见**既没被引用、也没被申报** → 留一条痕。
+
+    这三条边界是为了把假阳性压到最低（任一条成立就算"交代过"）：
+    1. 地址出现在某道题的 `from_opinions` 里；
+    2. 它自己的出处编号（只有判断有）出现在某条提案或某道题的引用里；
+    3. 模型在 `dropped_opinions` 里申报过。
+    """
+
+    items: list[DroppedItem] = []
+    for review in reviews:
+        for opinion in review.opinions:
+            handle = seat_entry_handle(review.seat_id, opinion.local_id)
+            if handle in accounted_handles or handle in declared:
+                continue
+            own = ledger.find_by_local(
+                seat_id=review.seat_id,
+                local_id=f"p{review.pass_index}:{opinion.local_id}",
+            )
+            if own is not None and own.eid in accounted_eids:
+                continue
+            items.append(
+                DroppedItem(
+                    handle=handle,
+                    reason="整合既没说丢掉它，也没交代它落到了哪儿",
+                    source=DropSource.UNACCOUNTED,
+                    seat_id=review.seat_id,
+                    pass_index=review.pass_index,
+                )
+            )
+    return tuple(items)
 
 
 def assemble(
@@ -127,13 +199,15 @@ def assemble(
             )
         )
 
-    dropped: list[str] = []
+    pass_index = round_.seat_round_count
+    dropped: list[DroppedItem] = []
     ordered = feature_questions + [
         _question(
             item,
             known=known,
             ledger=ledger,
             reviews=round_.current_reviews,
+            pass_index=pass_index,
             dropped=dropped,
         )
         for item in packet.questions
@@ -151,7 +225,10 @@ def assemble(
         questions=tuple(kept),
         list_items=tuple(list_items),
         proposals=tuple(proposals),
-        dropped=tuple(dropped),
+        dropped=tuple(dropped)
+        + dropped_from_packet(
+            packet, reviews=round_.current_reviews, pass_index=pass_index
+        ),
     )
 
 
@@ -463,7 +540,8 @@ def _question(
     known: frozenset[EvidenceId],
     ledger: EvidenceLedger,
     reviews: Sequence[SeatReview],
-    dropped: list[str],
+    pass_index: int,
+    dropped: list[DroppedItem],
 ) -> Question:
     """题目：依据编号照旧校验，**归因由装配层算**，不信模型自己写的提问者。
 
@@ -493,7 +571,15 @@ def _question(
         handle = raw.strip()
         seat_id = by_handle.get(handle)
         if seat_id is None:
-            dropped.append(handle)
+            dropped.append(
+                DroppedItem(
+                    handle=handle,
+                    reason="归因对不上号：这一轮没有这条席位条目",
+                    source=DropSource.ASSEMBLY,
+                    seat_id=_seat_of_handle(handle, seats=frozenset(by_handle.values())),
+                    pass_index=pass_index,
+                )
+            )
         elif seat_id not in seats:
             seats.append(seat_id)
     try:

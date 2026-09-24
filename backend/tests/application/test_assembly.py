@@ -15,7 +15,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.round import DropSource, Round
 from pmstudio.domain.shared.ids import EvidenceId, FormId, ProjectId, QuestionId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
@@ -208,7 +208,10 @@ def test_question_from_unparsable_opinion_is_dropped_not_fatal():
 
     assert len(result.questions) == 1
     assert result.questions[0].asked_by == ()
-    assert result.dropped == ("seat.nope:O1", f"{SECOND_SEAT}:O9")
+    assert [(item.handle, item.source) for item in result.dropped] == [
+        ("seat.nope:O1", DropSource.ASSEMBLY),
+        (f"{SECOND_SEAT}:O9", DropSource.ASSEMBLY),
+    ]
 
 
 def test_question_is_blocking_when_target_hits_a_required_feature_field():
@@ -458,3 +461,115 @@ def test_open_question_proposals_bad_missing_system_default_eid():
             round_after_skipping_a_question(), system_defaults={}, start_index=1
         )
     assert exc.value.details["question_id"] == "q1"
+
+
+# —— P5b Task 2：丢弃留痕的三个来源 ——
+
+
+def ledger_with_own_eid_for_the_judgment() -> EvidenceLedger:
+    """E1 用户输入 + E2 席位判断，且判断带 `local_id`（find_by_local 才反查得到它）。
+
+    形状照抄真实写法：`local_id=f"p{pass}:{O1}"`——汇合点的幂等编号键。
+    """
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    e1 = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="导出要快",
+        source=EvidenceSource(round_id=ROUND_ID, raw_span="导出要快一点"),
+        now=NOW,
+    )
+    ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="单次导出应在 60 秒内完成",
+        source=EvidenceSource(
+            seat_id=SEAT,
+            local_id="p1:O2",
+            derived_from=(e1,),
+            rationale="量级在 1 万级",
+        ),
+        now=NOW,
+    )
+    return ledger
+
+
+def test_packet_declared_drops_land_in_the_channel():
+    """模型申报的丢弃：原因照抄、席位按地址前缀解析；写歪了也留痕，只是认不出席位。"""
+
+    declared = schemas.IntegrationPacket(
+        dropped_opinions=[
+            {"handle": f"{SEAT}:O2", "reason": "与文档已有内容重复"},
+            {"handle": "查不到:O9", "reason": "写歪了地址"},
+        ]
+    )
+
+    drops = assembly.dropped_from_packet(
+        declared,
+        reviews=round_with_two_seats_attested().current_reviews,
+        pass_index=1,
+    )
+
+    assert [(item.handle, item.reason, item.source, item.seat_id) for item in drops] == [
+        (f"{SEAT}:O2", "与文档已有内容重复", DropSource.INTEGRATOR, SEAT),
+        ("查不到:O9", "写歪了地址", DropSource.INTEGRATOR, None),
+    ]
+
+
+def test_unaccounted_opinion_is_reported():
+    """整合既没说丢了它、也没交代它落到哪儿 → 装配层替它留痕。"""
+
+    drops = assembly.unaccounted_drops(
+        round_with_two_seats_attested().current_reviews,
+        ledger=ledger_with_own_eid_for_the_judgment(),
+        accounted_handles=frozenset(),
+        accounted_eids=frozenset(),
+        declared=frozenset(),
+    )
+
+    assert [(item.handle, item.source, item.pass_index) for item in drops] == [
+        (f"{SEAT}:O1", DropSource.UNACCOUNTED, 1),
+        (f"{SEAT}:O2", DropSource.UNACCOUNTED, 1),
+        (f"{SECOND_SEAT}:O1", DropSource.UNACCOUNTED, 1),
+    ]
+
+
+def test_opinion_cited_by_a_question_is_not_reported():
+    """地址被某道题的 from_opinions 点过 → 算交代过。"""
+
+    drops = assembly.unaccounted_drops(
+        round_with_two_seats_attested().current_reviews,
+        ledger=ledger_with_own_eid_for_the_judgment(),
+        accounted_handles=frozenset({f"{SEAT}:O1", f"{SEAT}:O2", f"{SECOND_SEAT}:O1"}),
+        accounted_eids=frozenset(),
+        declared=frozenset(),
+    )
+
+    assert drops == ()
+
+
+def test_judgment_referenced_by_a_proposal_is_not_reported():
+    """判断自己的编号被引用就算交代过——哪怕题目没写 from_opinions。"""
+
+    drops = assembly.unaccounted_drops(
+        round_with_two_seats_attested().current_reviews,
+        ledger=ledger_with_own_eid_for_the_judgment(),
+        accounted_handles=frozenset({f"{SEAT}:O1", f"{SECOND_SEAT}:O1"}),
+        accounted_eids=frozenset({EvidenceId("E2")}),  # ← 那条判断自己的编号
+        declared=frozenset(),
+    )
+
+    assert drops == ()
+
+
+def test_declared_opinion_is_not_reported_twice():
+    """模型申报过的，不许再报一条"没交代"（同一件事只留一次痕）。"""
+
+    drops = assembly.unaccounted_drops(
+        round_with_two_seats_attested().current_reviews,
+        ledger=ledger_with_own_eid_for_the_judgment(),
+        accounted_handles=frozenset(),
+        accounted_eids=frozenset(),
+        declared=frozenset({f"{SEAT}:O1", f"{SEAT}:O2", f"{SECOND_SEAT}:O1"}),
+    )
+
+    assert drops == ()

@@ -59,3 +59,45 @@ def test_parse_packet_bad_not_json_is_a_packet_error():
 def test_parse_packet_bad_missing_field_is_a_packet_error():
     with pytest.raises(PacketParseError):
         schemas.parse_packet('{"claims": []}', schemas.ClaimsPacket, purpose="claims")
+
+
+def test_integration_packet_accepts_dropped_opinions():
+    """报文要能装"我丢了哪条、为什么"（`04` C5 后半）。"""
+
+    packet = schemas.parse_packet(
+        json.dumps(
+            {
+                "questions": [],
+                "list_items": [],
+                "proposals": [],
+                "dropped_opinions": [
+                    {"handle": "seat.data_scale:O2", "reason": "与文档已有内容重复"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        schemas.IntegrationPacket,
+        purpose="integration",
+    )
+
+    assert packet.dropped_opinions[0].handle == "seat.data_scale:O2"
+    assert packet.dropped_opinions[0].reason == "与文档已有内容重复"
+
+
+def test_dropped_opinion_without_reason_is_rejected():
+    """丢弃必须给原因——没有原因的留痕等于没留。"""
+
+    with pytest.raises(PacketParseError):
+        schemas.parse_packet(
+            json.dumps(
+                {
+                    "questions": [],
+                    "list_items": [],
+                    "proposals": [],
+                    "dropped_opinions": [{"handle": "seat.x:O1", "reason": ""}],
+                },
+                ensure_ascii=False,
+            ),
+            schemas.IntegrationPacket,
+            purpose="integration",
+        )

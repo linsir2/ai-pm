@@ -127,10 +127,22 @@ class ProposalDraft(BaseModel):
     )
 
 
+class DroppedOpinionDraft(BaseModel):
+    """模型自己申报的丢弃：一条都不许默默丢掉（`04-未决.md` C5 后半）。"""
+
+    handle: str = Field(min_length=1, description="席位条目地址，如 seat.business_rules:O1")
+    reason: str = Field(min_length=1, description="一句话：为什么这条意见没有进卡片")
+
+
 class IntegrationPacket(BaseModel):
     questions: list[QuestionDraft] = Field(default_factory=list, max_length=12)
     list_items: list[ListItemDraft] = Field(default_factory=list, max_length=20)
     proposals: list[ProposalDraft] = Field(default_factory=list, max_length=30)
+    dropped_opinions: list[DroppedOpinionDraft] = Field(
+        default_factory=list,
+        max_length=30,
+        description="你没采用的席位意见：给出地址与原因；**一条都不许默默丢掉**",
+    )
 
 
 def parse_packet[T: BaseModel](text: str, model: type[T], *, purpose: str) -> T:
