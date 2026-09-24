@@ -245,8 +245,47 @@
 | B 信任 | C5 后半（`Round.dropped` 统一留痕）、版本列表/diff/回退（`rollback_to` 已在领域里躺着）、跨轮编号按需查 | `04` C5、`02` §4.6 |
 | C 韧性 | 网关超时、放弃这一轮（`Step.ABANDONED`）、模型留样、最小 eval；C8 缩编要先把席位 TOML 的 `sections`/`fields` 补上 | `02` §7/§7.1、`04` C8/E3 |
 
-**下一步**：按 `docs/plans/2026-09-24-P5a-交付闭环-就绪度与导出.md` 执行 P5a（10 个任务，
-TDD，一步一提交）。P5b（信任三件套）与 P5c（韧性 + 缩编）等 P5a 落地后再拆。
+**下一步**：P5a 已执行完（见下）；接着拆 P5b（信任三件套）与 P5c（韧性 + 缩编）。
+
+### 执行结果（2026-09-24，P5a：交付闭环——就绪度 + s8 章节槽 + 导出）
+
+计划：`docs/plans/2026-09-24-P5a-交付闭环-就绪度与导出.md`（10 个任务，全部完成）。
+
+**改了什么**
+
+1. **s8 六个章节槽进骨架（Task 1、2）**：`SECTION_SLOTS` 放 `shared/sections.py`（与 13 章同处，
+   避免 shared→authoring 反向依赖）；`Target.field` 分两个命名空间——有 `feature_slug` 取功能字段，
+   没有就取该章槽表（`Target.body("s8", field="performance")`）。手改也能落进槽。
+   `BlockView.field_title` 由后端给字段中文名，前端不再抄一份。
+2. **就绪度（Task 3）**：`domain/authoring/readiness.py`，六种判据、纯代码、只读 `DocumentView`；
+   结构缺失才是 blocker，语义条款一律 warn；同一 (章节, code) 只出一条；s13 不判。
+   `DocumentView.feature_gaps` = `Document.gaps()` 的投影（不重写必填规则）。
+3. **阻塞型未决（Task 4）**：`Question.blocking` 由规则算（必填功能字段 / 必填章节），
+   跳过的阻塞题在 s11 带 `〔未决·阻塞〕` 前缀；老 payload 读回 `False`。
+4. **缺口进提示词（Task 5）**：`render_document_state(view, readiness=...)`，三处调用点都换成它；
+   提示词里写明"补缺口不等于填满，拿不准就出题"。
+5. **投影与端点（Task 6、8）**：`WorkspaceView.readiness`；`GET /readiness`；
+   `GET /export/markdown`（中文文件名 RFC 5987 双写）。端点白名单守卫同步更新（现 14 个）。
+6. **导出渲染（Task 7）**：`application/deliverable.py` 纯函数——头部盖章就绪度、13 章、
+   空章显式、s13 由 `Version[]` 生成、附录 A 只给编号+类型+摘要（D5）、附录 B 偏好区标明
+   "不进交付物"、附录 C 未完成项；同一输入两次导出字节一致。
+7. **前端（Task 9）**：版本条"就差 N 项"、顶栏导出按钮、章节头列出该章缺口、s8 空槽显示"待补"、
+   判"有内容"改成按**非空条目**；写文档后整份工作区重读（否则就绪度停在旧数字）。
+
+**数字**：后端 398 passed + `ruff` 干净；前端 `tsc` 干净 + 85 passed（新增 readiness 7 条、
+status 空槽 1 条）。
+
+**本地端到端证据（不依赖模型）**：新建项目 → `GET /readiness` 报"阻塞 8 项 / 提示 0 项"
+（空文档不重复吵，s6/s7/s9 的提示要有内容才报）→ `GET /export/markdown` 200，
+`Content-Disposition: attachment; filename="deliverable-v1.md"; filename*=UTF-8''订单中台-v1.md`，
+正文首行 `# 产品文档 · 订单中台（v1）`、第三行 `> 就绪度：未通过（阻塞 8 项 / 提示 0 项）`，
+空章逐条写出"（本章为空：至少 1 条…）"。
+
+**真模型走一遍：没拿到**。两次尝试（`.env` 的 `deepseek-v4-pro-0813`、覆盖成
+`qwen3.8-flash`）都卡在第一次模型调用上，8 分钟不返回——根因是网关没有请求超时
+（`04-未决.md` E3），provider 一慢这一轮就永远"正在跑"。因此 P5a 的证据是**本地端到端**
+（上面那段）：不依赖模型，接口与渲染都对得上。**真模型那一步并进 P5c 第一件事**
+（先给 `LiteLLMGateway` 加超时，再回来跑）。
 
 作者库里那一轮（`at_step=failed` 的坏行）现在会明确报错要求重开一轮，不再 500。
 
