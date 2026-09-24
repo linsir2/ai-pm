@@ -1,0 +1,231 @@
+"""交付物渲染：把文档 + 账本 + 版本变成一份可以直接递出去的 Markdown。
+
+**纯函数**：同一份 `DocumentView` + 同一份账本 + 同一个 `exported_at`，永远同一份字节
+（"权威"的前提是确定性）。没有 IO、不调模型、不持有写入能力。
+
+四条硬规矩（`01-规格.md` §7.3）：
+
+1. 空章显式写出"本章为空 + 差什么"，**不许静默省略**；
+2. **s13 版本历史由 `Version[]` 生成**，不读 block 树；
+3. 偏好区不进正文，只作附录 B，并标明"不进交付物"；
+4. 附录 A 只给 `编号 + 类型 + 一句话摘要`，原话（`raw_span`）留在系统内（`04` D5）。
+"""
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
+
+from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
+from pmstudio.domain.authoring.schema import FEATURE_FIELDS
+from pmstudio.domain.authoring.version import Version, VersionTrigger
+from pmstudio.domain.authoring.views import BlockView, DocumentView, SectionView
+from pmstudio.domain.provenance.ledger import EvidenceLedger
+from pmstudio.domain.shared.evidence_kind import EvidenceKind
+from pmstudio.domain.shared.writing import BlockKind
+
+KIND_LABELS = {
+    EvidenceKind.USER_INPUT: "用户输入",
+    EvidenceKind.CARD_ANSWER: "问卷回答",
+    EvidenceKind.AGENT_DERIVED: "席位判断",
+    EvidenceKind.AGENT_PROPOSED: "席位提议",
+    EvidenceKind.SYSTEM_DEFAULT: "系统默认",
+    EvidenceKind.MANUAL: "手工编辑",
+    EvidenceKind.EXTERNAL: "外部材料",
+}
+
+TRIGGER_LABELS = {
+    VersionTrigger.CONFIRM: "草案确认",
+    VersionTrigger.MANUAL: "手工编辑",
+    VersionTrigger.ROLLBACK: "回退",
+}
+
+SUMMARY_LIMIT = 60
+
+
+@dataclass(frozen=True, slots=True)
+class Deliverable:
+    filename: str
+    version_no: int
+    markdown: str
+
+
+def render_markdown(
+    *,
+    view: DocumentView,
+    readiness: Sequence[ReadinessItem],
+    versions: Sequence[Version],
+    ledger: EvidenceLedger,
+    exported_at: datetime,
+) -> Deliverable:
+    parts: list[str] = [_header(view, readiness, exported_at)]
+    for section in view.sections:
+        parts.append(_section(section, readiness=readiness, versions=versions))
+    parts.append(_appendix_a(ledger))
+    if view.preference_entries:
+        parts.append(_appendix_b(view))
+    unfinished = _unfinished(readiness)
+    if unfinished:
+        parts.append(unfinished)
+    return Deliverable(
+        filename=f"{view.title}-v{view.version_no}.md",
+        version_no=view.version_no,
+        markdown="\n\n".join(part for part in parts if part) + "\n",
+    )
+
+
+def _header(
+    view: DocumentView, readiness: Sequence[ReadinessItem], exported_at: datetime
+) -> str:
+    blockers = sum(1 for item in readiness if item.severity is Severity.BLOCKER)
+    warns = sum(1 for item in readiness if item.severity is Severity.WARN)
+    if not readiness:
+        stamp = "就绪度：未评估（这次导出没带判据结果）"
+    elif blockers == 0:
+        stamp = f"就绪度：通过（无阻塞项，提示 {warns} 项）"
+    else:
+        stamp = f"就绪度：未通过（阻塞 {blockers} 项 / 提示 {warns} 项）"
+    return "\n".join(
+        [
+            f"# 产品文档 · {view.title}（v{view.version_no}）",
+            f"> 导出时间 {exported_at:%Y-%m-%d %H:%M} · 文档版本 v{view.version_no}",
+            f"> {stamp}",
+        ]
+    )
+
+
+def _section(
+    section: SectionView,
+    *,
+    readiness: Sequence[ReadinessItem],
+    versions: Sequence[Version],
+) -> str:
+    number = str(section.section_id).lstrip("s")
+    lines = [f"## {number} {section.title}"]
+    if str(section.section_id) == "s13":
+        lines += _versions_table(versions)
+        return "\n".join(lines)
+    features = [block for block in section.blocks if block.kind is BlockKind.FEATURE]
+    if features:
+        for index, feature in enumerate(features, start=1):
+            lines += _feature(feature, index=index)
+    plain = [block for block in section.blocks if block.kind is not BlockKind.FEATURE]
+    for block in plain:
+        lines += _block_lines(block)
+    if not _has_entries(section) and not features:
+        lines.append(_empty_note(section.section_id, readiness))
+    return "\n".join(lines)
+
+
+def _feature(feature: BlockView, *, index: int) -> list[str]:
+    slug = str(feature.feature_slug)
+    name_block = _child(feature, "name")
+    name = name_block.entries[0].text if name_block and name_block.entries else slug
+    lines = [f"### 5.{index} {name}（{slug}）"]
+    missing: list[str] = []
+    for spec in FEATURE_FIELDS:
+        if spec.name == "name":
+            continue
+        block = _child(feature, spec.name)
+        if block is None or not block.entries:
+            missing.append(spec.title)
+            continue
+        if spec.multiple:
+            lines.append(f"- **{spec.title}**：")
+            lines += [f"  - {_entry_line(entry)}" for entry in block.entries]
+        else:
+            lines.append(f"- **{spec.title}**：{_entry_line(block.entries[0])}")
+    if missing:
+        lines.append(f"- （待补：{'、'.join(missing)}）")
+    return lines
+
+
+def _block_lines(block: BlockView, *, indent: str = "") -> list[str]:
+    lines: list[str] = []
+    for entry in block.entries:
+        lines.append(f"{indent}- {_entry_line(entry)}")
+    for child in block.children:
+        lines += _block_lines(child, indent=indent)
+    return lines
+
+
+def _entry_line(entry) -> str:  # type: ignore[no-untyped-def]
+    refs = " ".join(str(eid) for eid in entry.refs)
+    return f"{entry.text}〔{refs}〕" if refs else entry.text
+
+
+def _empty_note(section_id: object, readiness: Sequence[ReadinessItem]) -> str:
+    item = next(
+        (
+            candidate
+            for candidate in readiness
+            if candidate.section_id == str(section_id)
+        ),
+        None,
+    )
+    if item is None:
+        return "（本章为空）"
+    return f"（本章为空：{item.detail}）"
+
+
+def _versions_table(versions: Sequence[Version]) -> list[str]:
+    lines = ["", "| 版本 | 时间 | 触发 | 摘要 |", "|---|---|---|---|"]
+    for version in reversed(tuple(versions)):
+        trigger = TRIGGER_LABELS.get(version.trigger, str(version.trigger))
+        lines.append(
+            f"| v{version.version_no} | {version.created_at:%Y-%m-%d %H:%M} | {trigger} "
+            f"| {version.summary} |"
+        )
+    return lines
+
+
+def _appendix_a(ledger: EvidenceLedger) -> str:
+    lines = ["## 附录 A · 出处（只给编号与一句话摘要）"]
+    for evidence in ledger.evidences():
+        label = KIND_LABELS.get(evidence.kind, str(evidence.kind))
+        lines.append(f"- {evidence.eid} · {label} · {_summarize(evidence.text)}")
+    if len(lines) == 1:
+        lines.append("（还没有任何出处）")
+    return "\n".join(lines)
+
+
+def _appendix_b(view: DocumentView) -> str:
+    lines = ["## 附录 B · 偏好区（不进交付物）"]
+    lines += [f"- {_entry_line(entry)}" for entry in view.preference_entries]
+    return "\n".join(lines)
+
+
+def _unfinished(readiness: Sequence[ReadinessItem]) -> str:
+    if not readiness:
+        return ""
+    lines = ["## 附录 C · 未完成项（系统按合格标准算的）"]
+    for item in readiness:
+        tag = "阻塞" if item.severity is Severity.BLOCKER else "提示"
+        lines.append(f"- 〔{tag}〕{item.section_id} {item.title}：{item.detail}")
+    return "\n".join(lines)
+
+
+def _summarize(text: str) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= SUMMARY_LIMIT else f"{flat[:SUMMARY_LIMIT]}…"
+
+
+def _has_entries(section: SectionView) -> bool:
+    return any(
+        entry
+        for block in section.blocks
+        for entry in _walk_entries(block)
+    )
+
+
+def _walk_entries(block: BlockView) -> list:  # type: ignore[type-arg]
+    entries = list(block.entries)
+    for child in block.children:
+        entries += _walk_entries(child)
+    return entries
+
+
+def _child(feature: BlockView, field: str) -> BlockView | None:
+    for child in feature.children:
+        if child.field == field:
+            return child
+    return None
