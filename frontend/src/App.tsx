@@ -94,9 +94,11 @@ export default function App() {
           projects={projects}
           project={null}
           document={null}
+          readiness={[]}
           roundStep={null}
           connection={state.connection}
           onSelectProject={data.selectProject}
+          onExport={() => void data.exportMarkdown()}
           theme={theme}
           onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
         />
@@ -125,9 +127,11 @@ export default function App() {
             projects={projects}
             project={project}
             document={doc}
+            readiness={state.readiness}
             roundStep={round?.step ?? null}
             connection={state.connection}
             onSelectProject={data.selectProject}
+            onExport={() => void data.exportMarkdown()}
             theme={theme}
             onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
           />
@@ -148,6 +152,7 @@ export default function App() {
             round={round}
             justWritten={state.justWritten}
             activeSection={activeSection}
+            readiness={state.readiness}
           />
 
           <LoopColumn

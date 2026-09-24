@@ -11,7 +11,12 @@ export type SectionStatus = "empty" | "filled" | "gap" | "open" | "conflict";
 /** 只依赖用得到的那一小片：纯函数不假装自己认识整个 DTO。 */
 export interface SectionSlice {
   section_id: string;
-  blocks: readonly unknown[];
+  blocks: readonly BlockSlice[];
+}
+
+/** 判"有内容"看的是**非空条目**：s8 的六个空槽是骨架，不算内容。 */
+export interface BlockSlice {
+  entries: readonly unknown[];
 }
 
 export interface RoundSlice {
@@ -41,7 +46,7 @@ export function sectionStatus(
   }
   const proposals = round?.draft?.proposals ?? [];
   if (proposals.some((proposal) => inSection(proposal.target_label))) return "gap";
-  if (section.blocks.length > 0) return "filled";
+  if (section.blocks.some((block) => block.entries.length > 0)) return "filled";
   return "empty";
 }
 

@@ -11,7 +11,10 @@ export function BlockTree({
   justWritten: string[];
 }) {
   const isNew = justWritten.includes(block.block_id);
-  const field = fieldTitle(block.field);
+  // 后端已经给了字段中文名（含 s8 的六个章节槽），本地表只作老数据兜底
+  const field = block.field_title ?? fieldTitle(block.field);
+  const isSlot = block.field !== null && block.feature_slug === null;
+  const slotEmpty = isSlot && block.entries.length === 0;
 
   return (
     <div className={isNew ? "block block--just-written" : "block"}>
@@ -19,6 +22,7 @@ export function BlockTree({
         <div className="field__name">
           {field}
           {block.manually_edited && <span className="tag">手改过</span>}
+          {slotEmpty && <span className="tag">待补</span>}
         </div>
       )}
       <EntryList

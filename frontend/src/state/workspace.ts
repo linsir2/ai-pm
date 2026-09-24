@@ -5,6 +5,7 @@
 import type {
   DocumentView,
   ProjectSummaryView,
+  ReadinessItemView,
   RoundView,
   SeatPacketView,
   WorkspaceEvent,
@@ -20,6 +21,7 @@ export interface State {
   project: ProjectSummaryView | null;
   document: DocumentView | null;
   round: RoundView | null;
+  readiness: ReadinessItemView[];
   documentStale: boolean;
   roundStale: boolean;
   lastSeq: number;
@@ -43,6 +45,7 @@ export const initialState: State = {
   project: null,
   document: null,
   round: null,
+  readiness: [],
   documentStale: false,
   roundStale: false,
   lastSeq: 0,
@@ -60,6 +63,7 @@ export function reduce(state: State, action: Action): State {
         project: action.workspace.project,
         document: action.workspace.document,
         round: action.workspace.round,
+        readiness: action.workspace.readiness,
         documentStale: false,
         roundStale: false,
         error: null,

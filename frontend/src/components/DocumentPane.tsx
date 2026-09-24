@@ -1,7 +1,8 @@
 /* 文档区：一次读一章（换章走左栏那棵树，所以这里不再放一排章节按钮）。
    章节说明（合格标准）现在只在后端与设计文档里，界面不编一份出来。 */
 
-import type { DocumentView, RoundView } from "../api/types";
+import type { DocumentView, ReadinessItemView, RoundView } from "../api/types";
+import { readinessItemsFor } from "../document/readiness";
 import { STATUS_TEXT, sectionStatus, statusClass } from "../document/status";
 import { chapterAnchors } from "../document/structure";
 import { BlockTree } from "./BlockTree";
@@ -16,11 +17,13 @@ export function DocumentPane({
   round,
   justWritten,
   activeSection,
+  readiness = [],
 }: {
   document: DocumentView | null;
   round: RoundView | null;
   justWritten: string[];
   activeSection: string;
+  readiness?: ReadinessItemView[];
 }) {
   if (doc === null) {
     return (
@@ -56,6 +59,7 @@ export function DocumentPane({
     doc.sections.find((item) => item.section_id === activeSection) ?? doc.sections[0]!;
   const status = sectionStatus(section, round);
   const anchors = chapterAnchors(doc, section.section_id);
+  const gaps = readinessItemsFor(readiness, section.section_id);
 
   return (
     <main className="doc" aria-label="产品文档">
@@ -80,6 +84,17 @@ export function DocumentPane({
                 </a>
               ))}
             </nav>
+          )}
+
+          {gaps.length > 0 && (
+            <ul className="chapter__gaps" aria-label="这一章按合格标准还差什么">
+              {gaps.map((item) => (
+                <li className={item.severity === "blocker" ? "gap gap--blocker" : "gap"} key={item.code}>
+                  {item.severity === "blocker" ? "阻塞" : "提示"}：{item.title}
+                  {item.detail !== "" && <span className="muted"> · {item.detail}</span>}
+                </li>
+              ))}
+            </ul>
           )}
 
           <div className="chapter__body">

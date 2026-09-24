@@ -24,6 +24,8 @@ export interface BlockView {
   entries: Entry[];
   children: BlockView[];
   field: string | null;
+  /** 字段的中文名（功能字段或章节槽）。真相源在后端，界面不再自己抄一份。 */
+  field_title: string | null;
   feature_slug: string | null;
   manually_edited: boolean;
   /** 这一块能不能有多条：单值字段只能改写，其余可以加与删。 */
@@ -157,10 +159,20 @@ export interface ProjectSummaryView {
   updated_at: string;
 }
 
+export interface ReadinessItemView {
+  section_id: string;
+  code: string;
+  title: string;
+  detail: string;
+  severity: "blocker" | "warn" | string;
+}
+
 export interface WorkspaceView {
   project: ProjectSummaryView;
   document: DocumentView;
   round: RoundView | null;
+  /** 这份文档按合格标准还差什么（只读判据，不是模型判断）。 */
+  readiness: ReadinessItemView[];
 }
 
 export interface WorkspaceEvent {

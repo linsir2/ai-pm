@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import { sectionIdOf } from "../labels";
 import { filledSectionCount, sectionStatus } from "./status";
 
-const filled = { section_id: "s1", title: "背景与问题", blocks: [{}] };
+const filled = {
+  section_id: "s1",
+  title: "背景与问题",
+  blocks: [{ entries: [{ entry_id: "en1", text: "有内容", refs: ["E1"] }] }],
+};
 const empty = { section_id: "s9", title: "技术方案与约束", blocks: [] };
 
 describe("sectionStatus", () => {
@@ -13,6 +17,16 @@ describe("sectionStatus", () => {
 
   it("有内容 → filled", () => {
     expect(sectionStatus(filled, null)).toBe("filled");
+  });
+
+  it("空槽不算内容：只有空块还是 empty（s8 六块是骨架）", () => {
+    const skeleton = {
+      section_id: "s8",
+      title: "非功能需求",
+      blocks: [{ entries: [] }, { entries: [] }],
+    };
+    expect(sectionStatus(skeleton, null)).toBe("empty");
+    expect(filledSectionCount({ sections: [skeleton, filled] })).toBe(1);
   });
 
   it("本轮草案里有落在这章的提案 → gap（还要你再确认一次）", () => {

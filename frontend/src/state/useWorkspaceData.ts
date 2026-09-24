@@ -96,13 +96,15 @@ export function useWorkspaceData() {
   }, [connection]);
 
   // 事件说"文档变了" / "这一轮变了"，就去把真数据读回来。
+  // 写文档会同时改变就绪度（缺的字段补上了），所以整份工作区一起重读——只刷文档会让
+  // 版本条上的"就差 N 项"停在旧数字上。
   useEffect(() => {
     const projectId = state.projectId;
     if (projectId === null || !state.documentStale) return;
-    void refreshDocument(projectId).catch((error: unknown) => {
+    void loadWorkspace(projectId).catch((error: unknown) => {
       dispatch({ type: "error", message: describe(error) });
     });
-  }, [state.documentStale, state.projectId, refreshDocument]);
+  }, [state.documentStale, state.projectId, loadWorkspace]);
 
   useEffect(() => {
     const round = state.round;
@@ -226,6 +228,19 @@ export function useWorkspaceData() {
 
   const dismissError = useCallback(() => dispatch({ type: "error", message: null }), []);
 
+  /** 导出交付用 Markdown：浏览器下载一份 deliverable-v{n}.md。 */
+  const exportMarkdown = useCallback(async () => {
+    const projectId = selected.current;
+    if (projectId === null) return;
+    const version = state.document?.version_no ?? state.project?.version_no ?? 1;
+    dispatch({ type: "error", message: null });
+    try {
+      await api.exportMarkdown(projectId, version);
+    } catch (error) {
+      dispatch({ type: "error", message: describe(error) });
+    }
+  }, [state.document, state.project]);
+
   return {
     state,
     projects,
@@ -242,5 +257,6 @@ export function useWorkspaceData() {
     editEntry,
     dismissError,
     refreshDocument,
+    exportMarkdown,
   };
 }

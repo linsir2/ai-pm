@@ -1,4 +1,4 @@
-import type { DocumentView, ProjectSummaryView } from "../api/types";
+import type { DocumentView, ProjectSummaryView, ReadinessItemView } from "../api/types";
 import { stepText } from "../labels";
 import { Logo } from "./Logo";
 import { VersionBar } from "./VersionBar";
@@ -7,18 +7,22 @@ export function TopBar({
   projects,
   project,
   document: doc,
+  readiness,
   roundStep,
   connection,
   onSelectProject,
+  onExport,
   theme,
   onToggleTheme,
 }: {
   projects: ProjectSummaryView[];
   project: ProjectSummaryView | null;
   document: DocumentView | null;
+  readiness: ReadinessItemView[];
   roundStep: string | null;
   connection: "idle" | "open" | "lost";
   onSelectProject: (projectId: string) => void;
+  onExport: () => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
 }) {
@@ -55,8 +59,11 @@ export function TopBar({
               </option>
             ))}
           </select>
-          <VersionBar project={project} document={doc} />
+          <VersionBar project={project} document={doc} readiness={readiness} />
           {roundStep !== null && <span className="pill-step">{stepText(roundStep)}</span>}
+          <button type="button" className="btn btn--sm" onClick={onExport}>
+            导出
+          </button>
         </>
       )}
 

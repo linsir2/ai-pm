@@ -55,6 +55,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+/** 导出交付用 Markdown：拿文本自己触发一次下载（不新开窗口，不依赖后端文件名）。 */
+async function download(path: string, fallbackName: string): Promise<void> {
+  const response = await fetch(`${BASE}${path}`);
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    throw new ApiError(
+      typeof body.code === "string" ? body.code : "http_error",
+      typeof body.message === "string" ? body.message : `导出失败（HTTP ${response.status}）`,
+    );
+  }
+  const text = await response.text();
+  const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fallbackName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 export interface OpeningBody {
   seats: string[];
   claim_edits: {
@@ -129,4 +148,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  /** 导出交付用 Markdown（浏览器直接下载；文件名兜底用 ASCII，中文名由后端给头）。 */
+  exportMarkdown: (projectId: string, versionNo: number) =>
+    download(`/projects/${projectId}/export/markdown`, `deliverable-v${versionNo}.md`),
 };

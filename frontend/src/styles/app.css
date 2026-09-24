@@ -1237,6 +1237,27 @@ a {
   line-height: 1.5;
 }
 
+/* 章节级就绪度：一行一句"这一章按合格标准还差什么" */
+.chapter__gaps {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--app-bg);
+  font-size: var(--step-2);
+  line-height: 1.6;
+}
+
+.chapter__gaps .gap--blocker {
+  color: var(--gap);
+}
+
+/* 版本条上的就绪度：有阻塞时用缺口色，读起来一眼能扫到 */
+.readiness {
+  color: var(--gap);
+}
+
 .drawer__foot {
   border-top: var(--hairline);
   padding: var(--space-3) var(--space-4) var(--space-4);
