@@ -381,6 +381,7 @@ def questionnaire_to_json(questionnaire: Questionnaire) -> dict:
             {"text": item.text, "target": target_to_json(item.target), "reason": item.reason}
             for item in questionnaire.list_items
         ],
+        "dropped": list(questionnaire.dropped),
     }
 
 
@@ -397,6 +398,8 @@ def questionnaire_from_json(data: dict) -> Questionnaire:
             )
             for item in data["list_items"]
         ),
+        # 老行里没有这个键：读成空元组
+        dropped=tuple(data.get("dropped", ())),
     )
 
 

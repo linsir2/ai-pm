@@ -97,7 +97,13 @@ class QuestionDraft(BaseModel):
     type: Literal["single", "multi", "text"] = "single"
     options: list[OptionDraft] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
-    asked_by: list[str] = Field(default_factory=list, description="提出这条问题的席位 id")
+    from_opinions: list[str] = Field(
+        default_factory=list,
+        description=(
+            "这道题来自哪几条席位意见（席位条目地址，如 seat.business_rules:O1）。"
+            "这只是归因，不是出处编号；出处编号写在 evidence_refs 里"
+        ),
+    )
 
 
 class ListItemDraft(BaseModel):

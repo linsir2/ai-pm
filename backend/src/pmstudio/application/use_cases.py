@@ -504,7 +504,11 @@ class IntegrateRound:
                 ]
                 questions = ()
             questionnaire = questionnaire_of(
-                round_id, FormId(self._ids.new("f")), questions, assembled.list_items
+                round_id,
+                FormId(self._ids.new("f")),
+                questions,
+                assembled.list_items,
+                dropped=assembled.dropped,
             )
             if questionnaire is not None:
                 round_.integrate(questionnaire=questionnaire)

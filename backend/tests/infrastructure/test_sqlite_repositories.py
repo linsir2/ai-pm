@@ -6,9 +6,14 @@ from pmstudio.application.errors import UnknownProject, UnknownRound
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
+from pmstudio.domain.round.questionnaire import (
+    Question,
+    Questionnaire,
+    QuestionType,
+)
 from pmstudio.domain.round.round import SeatNomination
 from pmstudio.domain.round.step import Step, WaitingOn
-from pmstudio.domain.shared.ids import EntryId, EvidenceId, ProjectId, RoundId
+from pmstudio.domain.shared.ids import EntryId, EvidenceId, FormId, ProjectId, QuestionId, RoundId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.infrastructure.sqlite import database, serialization
@@ -226,3 +231,58 @@ def test_summary_updated_at_comes_from_the_database(repos):
     summary = index.summary(PROJECT)
     assert isinstance(summary.updated_at, datetime)
     assert summary.updated_at.tzinfo == UTC
+
+
+def test_questionnaire_dropped_attribution_round_trips(repos):
+    """归因留痕（`dropped`）要跟着轮次落库、读回来一致。"""
+
+    _, rounds, _, _, uow = repos
+    round_ = make_round()
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f1"),
+            round_id=round_.round_id,
+            questions=(
+                Question(
+                    question_id=QuestionId("q1"),
+                    target=Target.body("s8"),
+                    type=QuestionType.TEXT,
+                    title="单次导出的最大行数是多少？",
+                    why="量级决定同步还是异步",
+                    consequence_if_skipped="按同步实现",
+                ),
+            ),
+            dropped=("seat.nope:O1",),
+        )
+    )
+    with uow:
+        rounds.save(round_)
+
+    loaded = rounds.get(round_.round_id)
+    assert loaded.questionnaire is not None
+    assert loaded.questionnaire.dropped == ("seat.nope:O1",)
+
+
+def test_questionnaire_without_dropped_key_still_loads(repos):
+    """老行里没有这个键：读成空元组，不炸。"""
+
+    data = serialization.questionnaire_to_json(
+        Questionnaire(
+            form_id=FormId("f1"),
+            round_id=RoundId("r1"),
+            questions=(
+                Question(
+                    question_id=QuestionId("q1"),
+                    target=Target.body("s8"),
+                    type=QuestionType.TEXT,
+                    title="单次导出的最大行数是多少？",
+                    why="量级决定同步还是异步",
+                    consequence_if_skipped="按同步实现",
+                ),
+            ),
+        )
+    )
+    data.pop("dropped", None)
+
+    loaded = serialization.questionnaire_from_json(data)
+    assert loaded.dropped == ()

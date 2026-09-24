@@ -6,6 +6,7 @@ from pmstudio.application.errors import PacketParseError
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import OriginType
+from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
     AnswerSet,
     Option,
@@ -14,6 +15,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
+from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.ids import EvidenceId, FormId, ProjectId, QuestionId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
@@ -27,6 +29,7 @@ from tests.support.builders import (
 )
 
 PROJECT = ProjectId("p1")
+SECOND_SEAT = "seat.rules"
 
 
 def ledger_with_two_entries() -> EvidenceLedger:
@@ -88,6 +91,126 @@ def test_assemble_assigns_ids_and_field_kind():
     assert proposal.origin.refs == (EvidenceId("E1"), EvidenceId("E2"))
 
 
+def round_with_two_seats_attested() -> Round:
+    """两个席位都交回了意见的那一轮：归因要能落到"哪条意见"这一层。"""
+
+    round_ = make_round(seats=(SEAT, SECOND_SEAT))
+    round_.attest(
+        SeatReview(
+            seat_id=SEAT,
+            basis="读了 E1",
+            opinions=(
+                Opinion(
+                    local_id="O1",
+                    form=OpinionForm.QUESTION,
+                    about="导出的数据量级",
+                    claim="量级决定同步还是异步，必须问用户",
+                    because="1 万以内可同步，10 万以上必须异步",
+                    evidence_refs=(EvidenceId("E1"),),
+                ),
+                Opinion(
+                    local_id="O2",
+                    form=OpinionForm.JUDGMENT,
+                    about="导出的性能上限",
+                    claim="单次导出应在 60 秒内完成",
+                    because="量级在 1 万级",
+                    evidence_refs=(EvidenceId("E1"),),
+                ),
+            ),
+        )
+    )
+    round_.attest(
+        SeatReview(
+            seat_id=SECOND_SEAT,
+            basis="读了 s5",
+            opinions=(
+                Opinion(
+                    local_id="O1",
+                    form=OpinionForm.QUESTION,
+                    about="谁能看导出文件",
+                    claim="导出文件的可见范围必须问用户",
+                    because="涉及数据权限",
+                    evidence_refs=(EvidenceId("E1"),),
+                ),
+            ),
+        )
+    )
+    return round_
+
+
+def question_draft(**overrides: object) -> dict:
+    draft: dict[str, object] = {
+        "kind": "gap",
+        "title": "单次导出的最大行数是多少？",
+        "why": "量级决定同步还是异步",
+        "consequence_if_skipped": "按同步实现，超时风险由 PM 承担",
+        "target": {"zone": "body", "section_id": "s8"},
+        "type": "single",
+        "options": [
+            {"option_id": "a", "text": "少于 1 万"},
+            {"option_id": "b", "text": "1 万–10 万"},
+        ],
+        "evidence_refs": ["E1"],
+    }
+    draft.update(overrides)
+    return draft
+
+
+def test_question_asked_by_comes_from_from_opinions():
+    """`from_opinions` 写的是席位条目地址——归因由它决定，不由模型另写一份 asked_by。"""
+
+    result = assembly.assemble(
+        packet(
+            questions=[
+                question_draft(
+                    evidence_refs=[], from_opinions=[f"{SECOND_SEAT}:O1"]
+                )
+            ]
+        ),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert result.questions[0].asked_by == (SECOND_SEAT,)
+    assert result.dropped == ()
+
+
+def test_question_asked_by_also_comes_from_the_cited_evidence():
+    """引用了某个席位的判断（E2 带 seat_id），就等于说这条问题出在那个席位。"""
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(evidence_refs=["E2"], from_opinions=[])]),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert result.questions[0].asked_by == (SEAT,)
+
+
+def test_question_from_unparsable_opinion_is_dropped_not_fatal():
+    """归因解析不出来只丢归因、留痕，不判死整轮（题目本身可能没问题）。"""
+
+    result = assembly.assemble(
+        packet(
+            questions=[
+                question_draft(
+                    evidence_refs=[],
+                    from_opinions=["seat.nope:O1", f"{SECOND_SEAT}:O9"],
+                )
+            ]
+        ),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert len(result.questions) == 1
+    assert result.questions[0].asked_by == ()
+    assert result.dropped == ("seat.nope:O1", f"{SECOND_SEAT}:O9")
+
+
 def test_assemble_creates_feature_subtree_only_when_authorized():
     result = assembly.assemble(
         packet(proposals=[proposal_draft()]),
@@ -120,7 +243,7 @@ def test_assemble_keeps_first_five_questions_and_degrades_the_rest():
             "type": "single",
             "options": [{"option_id": "a", "text": "甲"}, {"option_id": "b", "text": "乙"}],
             "evidence_refs": ["E1"],
-            "asked_by": ["seat.data_scale"],
+            "from_opinions": [f"{SEAT}:O1"],
         }
         for index in range(1, 8)
     ]
@@ -197,6 +320,25 @@ def test_assemble_drops_proposal_that_duplicates_the_document():
 
 def test_questionnaire_of_returns_none_without_questions():
     assert assembly.questionnaire_of(ROUND_ID, FormId("f1"), (), ()) is None
+
+
+def test_questionnaire_carries_the_dropped_attribution():
+    """归因解析不上的要跟着问卷走一趟，界面上才看得到"这几条没算数是为什么"。"""
+
+    question = Question(
+        question_id=QuestionId("q1"),
+        target=Target.body("s8"),
+        type=QuestionType.TEXT,
+        title="单次导出的最大行数是多少？",
+        why="量级决定同步还是异步",
+        consequence_if_skipped="按同步实现",
+    )
+    questionnaire = assembly.questionnaire_of(
+        ROUND_ID, FormId("f1"), (question,), (), dropped=("seat.nope:O1",)
+    )
+    assert questionnaire is not None
+    assert questionnaire.dropped == ("seat.nope:O1",)
+    assert assembly.questionnaire_of(ROUND_ID, FormId("f1"), (question,), ()).dropped == ()
 
 
 def round_after_skipping_a_question():

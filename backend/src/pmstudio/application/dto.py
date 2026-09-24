@@ -125,6 +125,7 @@ class RoundView:
     seat_packets: tuple[SeatPacketView, ...]
     questions: tuple[QuestionView, ...]
     list_items: tuple[str, ...]
+    dropped_attributions: tuple[str, ...]
     draft: DraftView | None
     advisories: tuple[str, ...]
     failure_reason: str | None
@@ -184,6 +185,7 @@ def round_view(
         ),
         questions=_question_views(round_),
         list_items=tuple(item.text for item in (questionnaire.list_items if questionnaire else ())),
+        dropped_attributions=() if questionnaire is None else questionnaire.dropped,
         draft=draft_view,
         advisories=advisories,
         failure_reason=round_.failure.reason if round_.failure is not None else None,

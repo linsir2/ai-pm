@@ -8,11 +8,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from pmstudio.application.agents import schemas
+from pmstudio.application.context import seat_entry_handle
 from pmstudio.application.errors import PacketParseError, unknown_ref_message
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.schema import field_spec
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
+from pmstudio.domain.round.opinion import SeatReview
 from pmstudio.domain.round.questionnaire import (
     MAX_QUESTIONS_PER_BATCH,
     ListItem,
@@ -51,6 +53,7 @@ class Assembly:
     questions: tuple[Question, ...]
     list_items: tuple[ListItem, ...]
     proposals: tuple[Proposal, ...]
+    dropped: tuple[str, ...] = ()  # 归因解析不上的席位条目地址（留痕，不判死整轮）
 
 
 def normalize(text: str) -> str:
@@ -113,7 +116,17 @@ def assemble(
             )
         )
 
-    ordered = feature_questions + [_question(item, known=known) for item in packet.questions]
+    dropped: list[str] = []
+    ordered = feature_questions + [
+        _question(
+            item,
+            known=known,
+            ledger=ledger,
+            reviews=round_.current_reviews,
+            dropped=dropped,
+        )
+        for item in packet.questions
+    ]
     kept = [
         replace(question, question_id=QuestionId(f"q{index}"))
         for index, question in enumerate(ordered[:MAX_QUESTIONS_PER_BATCH], start=1)
@@ -124,7 +137,10 @@ def assemble(
         for item in ordered[MAX_QUESTIONS_PER_BATCH:]
     ]
     return Assembly(
-        questions=tuple(kept), list_items=tuple(list_items), proposals=tuple(proposals)
+        questions=tuple(kept),
+        list_items=tuple(list_items),
+        proposals=tuple(proposals),
+        dropped=tuple(dropped),
     )
 
 
@@ -133,6 +149,8 @@ def questionnaire_of(
     form_id: FormId,
     questions: Sequence[Question],
     list_items: Sequence[ListItem],
+    *,
+    dropped: Sequence[str] = (),
 ) -> Questionnaire | None:
     if not questions:
         return None
@@ -141,6 +159,7 @@ def questionnaire_of(
         round_id=round_id,
         questions=tuple(questions),
         list_items=tuple(list_items),
+        dropped=tuple(dropped),
     )
 
 
@@ -351,7 +370,25 @@ def _proposal(
         ) from error
 
 
-def _question(draft: schemas.QuestionDraft, *, known: frozenset[EvidenceId]) -> Question:
+def _question(
+    draft: schemas.QuestionDraft,
+    *,
+    known: frozenset[EvidenceId],
+    ledger: EvidenceLedger,
+    reviews: Sequence[SeatReview],
+    dropped: list[str],
+) -> Question:
+    """题目：依据编号照旧校验，**归因由装配层算**，不信模型自己写的提问者。
+
+    归因有两个来源，都指向"这条问题出在哪个席位"：
+
+    - `evidence_refs` 里那些带 `seat_id` 的出处（席位判断进了账本，反查得到是谁）；
+    - `from_opinions` 里的席位条目地址（`seat.xxx:O1`）——疑问不进账本，
+      只能靠这个地址找回来。
+
+    解析不出的地址只丢归因、写进 `dropped` 留痕：归属写错不该把一道好题判死。
+    """
+
     target = _target(draft.target)
     refs = tuple(EvidenceId(item) for item in draft.evidence_refs)
     unknown = [str(ref) for ref in refs if ref not in known]
@@ -359,6 +396,19 @@ def _question(draft: schemas.QuestionDraft, *, known: frozenset[EvidenceId]) -> 
         raise PacketParseError(
             unknown_ref_message(unknown, what="题目的依据编号不存在"), purpose=PURPOSE
         )
+    by_handle = {
+        seat_entry_handle(review.seat_id, opinion.local_id): review.seat_id
+        for review in reviews
+        for opinion in review.opinions
+    }
+    seats = list(_asking_seats(refs, ledger=ledger))
+    for raw in draft.from_opinions:
+        handle = raw.strip()
+        seat_id = by_handle.get(handle)
+        if seat_id is None:
+            dropped.append(handle)
+        elif seat_id not in seats:
+            seats.append(seat_id)
     try:
         return Question(
             question_id=QuestionId("q0"),
@@ -369,7 +419,7 @@ def _question(draft: schemas.QuestionDraft, *, known: frozenset[EvidenceId]) -> 
             consequence_if_skipped=draft.consequence_if_skipped,
             options=tuple(Option(item.option_id, item.text) for item in draft.options),
             evidence_refs=refs,
-            asked_by=tuple(draft.asked_by),
+            asked_by=tuple(sorted(set(seats))),
             kind=QuestionKind(draft.kind),
         )
     except DomainError as error:
