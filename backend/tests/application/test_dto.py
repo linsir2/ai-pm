@@ -9,7 +9,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.round import Round, SeatNomination
 from pmstudio.domain.shared.ids import (
     DocumentId,
     DraftId,
@@ -276,3 +276,102 @@ def test_workspace_view_carries_project_document_and_round():
     assert view.project.title == "订单中台"
     assert view.document.version_no == 1
     assert view.round is not None
+
+
+class _TwoSeatCatalog:
+    """两个席位：一个常驻、一个有触发词。用来对照"名单"与"目录匹配"的差别。"""
+
+    def __init__(self) -> None:
+        self._seats = (
+            SeatDefinition(
+                seat_id="seat.data_scale",
+                title="数据规模与性能",
+                focus="量级、耗时上限",
+                always_on=True,
+            ),
+            SeatDefinition(
+                seat_id="seat.export_import",
+                title="导出与导入",
+                focus="导出范围、格式、大文件",
+                trigger_keywords=("导出",),
+            ),
+        )
+
+    def all(self):
+        return self._seats
+
+    def nominate(self, *, user_input: str):
+        return tuple(
+            seat
+            for seat in self._seats
+            if seat.always_on or any(word in user_input for word in seat.trigger_keywords)
+        )
+
+    def by_id(self, seat_id: str):
+        for seat in self._seats:
+            if seat.seat_id == seat_id:
+                return seat
+        raise KeyError(seat_id)
+
+
+def _opening_round(*, nominated: bool = True):
+    round_ = Round.start(
+        round_id=ROUND_ID,
+        project_id=ProjectId("p1"),
+        user_input="想做个订单导出的功能",
+        now=NOW,
+    )
+    round_.attach_claims((make_claim(eid=EvidenceId("E1")),))
+    if nominated:
+        # 分析者只挑了导出这一个；常驻的数据规模它认为这轮不用来
+        round_.nominate(
+            [SeatNomination(seat_id="seat.export_import", why="这轮就是在做导出")]
+        )
+    return round_
+
+
+def test_opening_card_uses_the_analyzer_nomination_not_the_catalog_match():
+    """名单是判断的产物：目录匹配会给出两个，分析者只挑了一个 —— 开场卡显示一个。"""
+
+    view = dto.round_view(_opening_round(), catalog=_TwoSeatCatalog())
+
+    assert [seat.seat_id for seat in view.nominated_seats] == ["seat.export_import"]
+    assert view.nominated_seats[0].why == "这轮就是在做导出"
+    assert view.nominated_seats[0].source == "agent"
+    # 常驻的席位并没有消失：它以"还能加的"身份留在旁边
+    assert [seat.seat_id for seat in view.available_seats] == ["seat.data_scale"]
+
+
+def test_catalog_fallback_is_marked_as_such_for_older_rounds():
+    """老轮次（分析时还没席位名单）才回落目录匹配，并且必须标出来源。"""
+
+    view = dto.round_view(_opening_round(nominated=False), catalog=_TwoSeatCatalog())
+
+    assert [seat.seat_id for seat in view.nominated_seats] == [
+        "seat.data_scale",
+        "seat.export_import",
+    ]
+    assert {seat.source for seat in view.nominated_seats} == {"catalog"}
+    assert view.nominated_seats[0].why == ""
+    assert view.nominated_seats[1].matched_keywords == ("导出",)
+
+
+def test_opening_stage_packets_list_the_nominated_seats():
+    view = dto.round_view(_opening_round(), catalog=_TwoSeatCatalog())
+
+    assert [packet.seat_id for packet in view.seat_packets] == ["seat.export_import"]
+    assert view.seat_packets[0].status == "pending"
+
+
+def test_selected_seats_win_over_the_nomination_once_the_round_started():
+    """用户确认之后，展示的是他选的那批（可能加了名单外的席位）。"""
+
+    round_ = _opening_round()
+    round_.submit_opening(seats=("seat.export_import", "seat.data_scale"))
+
+    view = dto.round_view(round_, catalog=_TwoSeatCatalog())
+
+    assert [seat.seat_id for seat in view.nominated_seats] == [
+        "seat.export_import",
+        "seat.data_scale",
+    ]

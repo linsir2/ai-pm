@@ -224,11 +224,16 @@ async def test_loop_with_questionnaire_and_a_skipped_question(make_app):
         assert started["waiting_on"] == "opening_card"
         assert [claim["eid"] for claim in started["claims"]] == ["E1", "E2", "E3"]
         assert started["claims"][0]["label"] == "need"
-        # 开场卡的席位提名（F8）：为什么请它写在 focus 里
+        # 开场卡的席位提名（F8）：名单是**分析者挑的**，不是目录匹配的结果。
+        # 真目录里 5 个席位是 always_on，但分析者这轮只挑了这两个 →
+        # 名单只该有两个，其余 5 个以"还能加的"身份出现，并且每条都带分析者的理由。
         nominated = {seat["seat_id"]: seat for seat in started["nominated_seats"]}
-        assert "seat.data_scale" in nominated  # 通用组
-        assert "seat.export_import" in nominated  # 触发组：输入里有"导出"
-        assert all(seat["focus"] for seat in nominated.values())
+        assert set(nominated) == {"seat.export_import", "seat.data_scale"}
+        assert all(seat["source"] == "agent" for seat in nominated.values())
+        assert all(seat["why"] for seat in nominated.values())
+        available = {seat["seat_id"] for seat in started["available_seats"]}
+        assert "seat.business_rules" in available  # 常驻但没被挑 → 想加还能加
+        assert set(available) & set(nominated) == set()
 
         opened = await client.post(
             f"/api/rounds/{started['round_id']}/opening", json=OPPENING

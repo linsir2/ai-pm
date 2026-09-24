@@ -4,7 +4,7 @@
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from pmstudio.application.ports import SeatCatalog, SeatDefinition
@@ -23,14 +23,18 @@ SEAT_PENDING = "pending"
 class SeatSuggestionView:
     """开场卡上的一个席位提名。
 
-    "为什么请它"由两部分说清：`focus`（它管什么）+ 提名来源——
-    `always_on`（常驻席位，每轮都请）与 `matched_keywords`（你这轮的话里命中了它的关键词）。
-    两者都是**机械判定**，不是模型判断；界面照实说明，用户才好做减法。
+    "为什么请它"分三层说清：
+    `why`（**分析者读完这段输入之后给的理由**，这是主口径）、
+    `focus`（它管什么）、以及机械事实 `always_on` / `matched_keywords`（目录里的配置）。
+    `source` 标出这条是分析者挑的（`agent`）还是老轮次回落目录匹配来的（`catalog`）——
+    界面照实说，用户才好做减法。
     """
 
     seat_id: str
     title: str
     focus: str
+    why: str = ""
+    source: str = "agent"
     always_on: bool = False
     matched_keywords: tuple[str, ...] = ()
 
@@ -116,6 +120,7 @@ class RoundView:
     seat_round_count: int
     seats: tuple[str, ...]
     nominated_seats: tuple[SeatSuggestionView, ...]
+    available_seats: tuple[SeatSuggestionView, ...]
     claims: tuple[ClaimView, ...]
     seat_packets: tuple[SeatPacketView, ...]
     questions: tuple[QuestionView, ...]
@@ -158,6 +163,7 @@ def round_view(
         advisories = tuple(f"{item.target.label()}：{item.message}" for item in violations)
         draft_view = _draft_view(round_.draft, warnings=warnings)
     questionnaire = round_.questionnaire
+    nominated = _suggestions(round_, catalog=catalog, seat_titles=seat_titles)
     return RoundView(
         round_id=str(round_.round_id),
         project_id=str(round_.project_id),
@@ -166,7 +172,12 @@ def round_view(
         waiting_on=str(round_.waiting_on),
         seat_round_count=round_.seat_round_count,
         seats=tuple(round_.seats),
-        nominated_seats=_suggestions(round_, catalog=catalog, seat_titles=seat_titles),
+        nominated_seats=nominated,
+        available_seats=_available_seats(
+            round_,
+            catalog=catalog,
+            already={seat.seat_id for seat in nominated},
+        ),
         claims=tuple(_claim_view(claim) for claim in round_.claims),
         seat_packets=_seat_packets(
             round_, seat_titles=seat_titles, ledger=ledger, catalog=catalog
@@ -204,18 +215,52 @@ def workspace_view(
 def _suggestions(
     round_: Round, *, catalog: SeatCatalog | None, seat_titles: Mapping[str, str]
 ) -> tuple[SeatSuggestionView, ...]:
-    """开场卡要的就是"提名了谁 + 为什么请它"（F8）。"""
+    """开场卡要的就是"提名了谁 + 为什么请它"（F8）。三种情形，优先级从高到低：
 
-    if catalog is not None and not round_.seats:
+    1. 用户已经确认过编制 → 展示他选的那批（可能加了名单外的席位），
+       名单里有的仍带上分析者给的理由；
+    2. 还没确认、但有分析者的名单 → 展示名单（`source="agent"`）；
+    3. 都没有（老轮次、或分析失败停在 started）→ 回落目录匹配，并标 `source="catalog"`。
+    """
+
+    if catalog is None:
         return tuple(
-            _suggestion(seat, user_input=round_.user_input)
-            for seat in catalog.nominate(user_input=round_.user_input)
+            SeatSuggestionView(seat_id=seat_id, title=seat_titles.get(seat_id, seat_id), focus="")
+            for seat_id in round_.seats
         )
+    by_nomination = {item.seat_id: item for item in round_.nominated_seats}
+
+    def for_seat(seat: SeatDefinition) -> SeatSuggestionView:
+        suggestion = _suggestion(seat, user_input=round_.user_input)
+        item = by_nomination.get(seat.seat_id)
+        if item is None:
+            return suggestion
+        return replace(suggestion, why=item.why, source="agent")
+
+    if round_.seats:
+        return tuple(for_seat(catalog.by_id(seat_id)) for seat_id in round_.seats)
+    if round_.nominated_seats:
+        return tuple(
+            for_seat(catalog.by_id(item.seat_id)) for item in round_.nominated_seats
+        )
+    # 老轮次：分析那会儿还没有"挑席位"这一步，只好按目录匹配，并如实标出来源
     return tuple(
-        _suggestion(catalog.by_id(seat_id), user_input=round_.user_input)
-        if catalog is not None
-        else SeatSuggestionView(seat_id=seat_id, title=seat_titles.get(seat_id, seat_id), focus="")
-        for seat_id in round_.seats
+        replace(_suggestion(seat, user_input=round_.user_input), source="catalog")
+        for seat in catalog.nominate(user_input=round_.user_input)
+    )
+
+
+def _available_seats(
+    round_: Round, *, catalog: SeatCatalog | None, already: set[str]
+) -> tuple[SeatSuggestionView, ...]:
+    """目录里还有哪些席位可以自己加（名单与已选之外的全部）。"""
+
+    if catalog is None:
+        return ()
+    return tuple(
+        replace(_suggestion(seat, user_input=round_.user_input), source="catalog")
+        for seat in catalog.all()
+        if seat.seat_id not in already
     )
 
 
@@ -259,9 +304,13 @@ def _seat_packets(
     by_seat = {review.seat_id: review for review in round_.current_reviews}
     # 还没选席位时（开场卡阶段）显示被提名的席位，状态是"待启动"——
     # 界面在开场卡上就要看到"接下来谁会跑"。
-    seat_ids = round_.seats or tuple(
-        seat.seat_id
-        for seat in (catalog.nominate(user_input=round_.user_input) if catalog else ())
+    seat_ids = (
+        round_.seats
+        or tuple(item.seat_id for item in round_.nominated_seats)
+        or tuple(
+            seat.seat_id
+            for seat in (catalog.nominate(user_input=round_.user_input) if catalog else ())
+        )
     )
     packets: list[SeatPacketView] = []
     for seat_id in seat_ids:
