@@ -1,4 +1,8 @@
-"""问卷：一批最多 5 题；超出的先降级成清单项。问卷不是必然环节。"""
+"""问卷：一批最多 5 题；超出的先降级成清单项。问卷不是必然环节。
+
+**最多两批**（`04-未决.md` C6）：第二批答完再整合时，剩下的题目一律降级成 s11 开放问题，
+不再追问——用户的体感是"别没完没了地问"，代价是有些题要到文档里再补。
+"""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +17,7 @@ from pmstudio.domain.shared.ids import EvidenceId, FormId, QuestionId, RoundId
 from pmstudio.domain.shared.target import Target
 
 MAX_QUESTIONS_PER_BATCH = 5
+MAX_QUESTIONNAIRES = 2
 
 
 class QuestionType(StrEnum):

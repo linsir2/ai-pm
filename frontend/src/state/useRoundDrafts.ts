@@ -23,6 +23,7 @@ export interface RoundDrafts {
   toggleSeat: (seatId: string) => void;
   changeClaim: (claimId: string, edit: ClaimEdit) => void;
   toggleAccepted: (proposalId: string) => void;
+  setAccepted: (proposalIds: string[]) => void;
 }
 
 export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): RoundDrafts {
@@ -78,6 +79,11 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     );
   }, []);
 
+  /** 本批全接受 / 全不勾：一次替换整批，不走逐条 toggle。 */
+  const setAcceptedIds = useCallback((proposalIds: string[]) => {
+    setAccepted([...proposalIds]);
+  }, []);
+
   return {
     answers,
     seats,
@@ -89,5 +95,6 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     toggleSeat,
     changeClaim,
     toggleAccepted,
+    setAccepted: setAcceptedIds,
   };
 }

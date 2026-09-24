@@ -4,9 +4,11 @@ import pytest
 
 from pmstudio.application.errors import PacketParseError
 from pmstudio.application.use_cases import AnswerInput
+from pmstudio.domain.round.questionnaire import AnswerSet
+from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
-from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug
-from tests.support.builders import PROJECT, SEAT
+from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, FormId, QuestionId
+from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT
 from tests.support.harness import Harness
 
 CLAIMS_REPLY = json.dumps(
@@ -284,11 +286,11 @@ async def test_submit_answers_authorizes_new_feature_when_user_says_yes():
     assert round_.authorized_new_features == frozenset({FeatureSlug("order-export")})
 
 
-async def test_integrate_round_at_seat_limit_forces_a_draft_instead_of_asking_again():
-    """`02` §7：到席位轮上限仍有缺口 → 全部显式化，不再追问。
+async def test_integrate_round_stops_asking_after_two_questionnaires():
+    """`04-未决.md` C6：默认最多两批问卷，第三批不再问，题目全部显式化成 s11 开放问题。
 
-    真模型冒烟实测：第二轮整合又出了一轮问卷；如果没有这条规则，用户会被卡在
-    "回答 → 又问 → 回答 → 撞上限报错"的死循环里。
+    真模型冒烟实测：一轮里被问了三批（用户体感是"没完没了"）。这条闸门保证——
+    用户永远能走到草案卡，剩下的缺口在文档里挂着，想补随时补。
     """
 
     harness = Harness(
@@ -309,7 +311,9 @@ async def test_integrate_round_at_seat_limit_forces_a_draft_instead_of_asking_ag
         )
         await harness.run_seat_round()(round_id=round_id)
 
-    assert harness.rounds.get(round_id).seat_round_count == 3  # 到了上限
+    round_ = harness.rounds.get(round_id)
+    assert round_.seat_round_count == 3
+    assert len(round_.answer_sets) == 2  # 已经答了两批
 
     await harness.integrate_round()(round_id=round_id)  # 第 3 次整合：模型还想问
 
@@ -321,8 +325,41 @@ async def test_integrate_round_at_seat_limit_forces_a_draft_instead_of_asking_ag
         proposal
         for proposal in round_.draft.proposals
         if proposal.origin.type.value == "system_default"
-        and "上限" in (proposal.origin.rationale or "")
+        and "问卷已满" in (proposal.origin.rationale or "")
     ]
     assert downgraded
     assert all(str(item.target.section_id) == "s11" for item in downgraded)
-    assert any("不再追问" in gap for gap in round_.draft.gaps)
+    assert any("问卷已满" in gap and "不再追问" in gap for gap in round_.draft.gaps)
+
+
+def test_stop_asking_reason_covers_both_gates():
+    """两道闸门各自说得清是哪一条响的；问卷闸门优先（用户最先感受到的就是它）。"""
+
+    from pmstudio.application.use_cases import _stop_asking_reason
+
+    def make_round_with_history(*, answer_sets: int, seat_round_count: int) -> Round:
+        return Round(
+            round_id=ROUND_ID,
+            project_id=PROJECT,
+            user_input="想做个订单导出的功能",
+            created_at=NOW,
+            seat_round_count=seat_round_count,
+            answer_sets=tuple(
+                AnswerSet(
+                    form_id=FormId(f"f{index + 1}"),
+                    answers=(),
+                    answered_at=NOW,
+                    skipped=(QuestionId("q1"),),
+                )
+                for index in range(answer_sets)
+            ),
+        )
+
+    two_answers = make_round_with_history(answer_sets=2, seat_round_count=1)
+    assert _stop_asking_reason(two_answers) == "问卷已满 2 批"
+
+    seat_limit = make_round_with_history(answer_sets=1, seat_round_count=3)
+    assert _stop_asking_reason(seat_limit) == "已到席位轮上限"
+
+    fresh = make_round_with_history(answer_sets=0, seat_round_count=1)
+    assert _stop_asking_reason(fresh) is None

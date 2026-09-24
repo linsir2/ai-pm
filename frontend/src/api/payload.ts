@@ -75,6 +75,14 @@ export function defaultAccepted(draft: DraftView): string[] {
     .map((proposal) => proposal.proposal_id);
 }
 
+/** `04-未决.md` C4 的"本批全接受"：含"它提议的"那组（默认不勾的那些）。 */
+export function allProposalIds(draft: DraftView): string[] {
+  return draft.proposals.map((proposal) => proposal.proposal_id);
+}
+
+/** 与"全接受"配对的那一半：一条都不勾（用户自己挑）。 */
+export const NO_PROPOSALS: string[] = [];
+
 export function defaultSeats(round: RoundView): string[] {
   return round.nominated_seats.map((seat) => seat.seat_id);
 }

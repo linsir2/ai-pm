@@ -206,11 +206,13 @@ def downgraded_question_proposals(
     system_defaults: Mapping[QuestionId, EvidenceId],
     start_index: int,
     round_id: RoundId,
+    reason: str = "到席位轮上限",
 ) -> tuple[Proposal, ...]:
-    """到席位轮上限时，把"还想问的题"降级成 s11 开放问题（不再追问）。
+    """停止追问时，把"还想问的题"降级成 s11 开放问题。
 
-    `02` §7 / `04-未决.md` C7：到上限仍有缺口就**全部显式化**——用户永远能走到草案卡，
+    `02` §7 / `04-未决.md` C6+C7：到闸门仍有缺口就**全部显式化**——用户永远能走到草案卡，
     不会被系统卡在无限提问里。（这条是 P2 真模型冒烟才暴露出来漏实现的规格。）
+    `reason` 写清是哪道闸门响的（问卷已满两批 / 已到席位轮上限），免得日后只看理由猜不出。
     """
 
     proposals: list[Proposal] = []
@@ -228,7 +230,7 @@ def downgraded_question_proposals(
                 eid=eid,
                 index=start_index + offset,
                 round_id=round_id,
-                rationale="到席位轮上限，不再追问，转为开放性记录",
+                rationale=f"{reason}，不再追问，转为开放性记录",
             )
         )
     return tuple(proposals)

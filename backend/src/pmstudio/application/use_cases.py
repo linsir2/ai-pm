@@ -69,6 +69,7 @@ from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.draft import Proposal
 from pmstudio.domain.round.questionnaire import (
+    MAX_QUESTIONNAIRES,
     Answer,
     AnswerSet,
     Question,
@@ -416,6 +417,20 @@ class RunSeatRound:
 MAX_INTEGRATION_ATTEMPTS = 2
 
 
+def _stop_asking_reason(round_: Round) -> str | None:
+    """该不该停止追问？两个闸门，谁先到算谁，理由写进证据与缺口行里。
+
+    - **问卷已两批**（`04-未决.md` C6）：这是用户最先感受到的那条——别再没完没了地问；
+    - **席位轮到上限**（`02` §7）：兜底，正常路径下问卷闸门会先响。
+    """
+
+    if len(round_.answer_sets) >= MAX_QUESTIONNAIRES:
+        return f"问卷已满 {MAX_QUESTIONNAIRES} 批"
+    if round_.seat_round_count >= MAX_SEAT_ROUNDS:
+        return "已到席位轮上限"
+    return None
+
+
 class IntegrateRound:
     """整合 → 干跑 →（失败就重装一次）→ 一个事务里出问卷或草案。"""
 
@@ -462,15 +477,16 @@ class IntegrateRound:
             )
             questions = assembled.questions
             gaps = list(gaps)
-            if questions and round_.seat_round_count >= MAX_SEAT_ROUNDS:
-                # 到席位轮上限：不再追问，把题目降级成 s11 开放问题，直接出草案（02 §7）
+            stop_reason = _stop_asking_reason(round_)
+            if questions and stop_reason is not None:
+                # 不再追问：题目降级成 s11 开放问题，直接出草案（02 §7 / 04-未决 C6）
                 for question in questions:
                     system_defaults[question.question_id] = ledger.record(
                         kind=EvidenceKind.SYSTEM_DEFAULT,
-                        text=f"{question.title}（到席位轮上限，未决定）",
+                        text=f"{question.title}（{stop_reason}，未决定）",
                         source=EvidenceSource(
                             round_id=round_id,
-                            rationale="到席位轮上限，不再追问，转为开放性记录",
+                            rationale=f"{stop_reason}，不再追问，转为开放性记录",
                         ),
                         now=now,
                     )
@@ -480,10 +496,11 @@ class IntegrateRound:
                         system_defaults=system_defaults,
                         start_index=len(proposals) + 1,
                         round_id=round_id,
+                        reason=stop_reason,
                     )
                 )
                 gaps += [
-                    f"未决（已到席位轮上限，不再追问）：{item.title}" for item in questions
+                    f"未决（{stop_reason}，不再追问）：{item.title}" for item in questions
                 ]
                 questions = ()
             questionnaire = questionnaire_of(

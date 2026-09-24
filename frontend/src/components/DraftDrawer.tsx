@@ -2,6 +2,7 @@
    只有要 / 不要这一个动作；确认后冻结，写入产生新版本。 */
 
 import type { DocumentView, DraftView, ProposalView, RoundView } from "../api/types";
+import { allProposalIds, NO_PROPOSALS } from "../api/payload";
 import { OP_TEXT, ORIGIN_TEXT, targetText } from "../labels";
 import { Banner } from "./States";
 import { EvidenceChip } from "./EvidenceChip";
@@ -12,6 +13,7 @@ export function DraftDrawer({
   accepted,
   pending,
   onToggle,
+  onSetAccepted,
   onSubmit,
   onCollapse,
 }: {
@@ -20,6 +22,7 @@ export function DraftDrawer({
   accepted: string[];
   pending: boolean;
   onToggle: (proposalId: string) => void;
+  onSetAccepted: (proposalIds: string[]) => void;
   onSubmit: () => void;
   onCollapse: () => void;
 }) {
@@ -82,10 +85,26 @@ export function DraftDrawer({
           已勾 {accepted.length} / {total} 条。确认后写进文档，产生新的一版；没勾的不会写。
         </p>
         <div className="row">
+          {/* C4：本批全接受要有，但"它提议的"那组单独计——别让人一条条点 */}
+          <button
+            type="button"
+            className="btn btn--sm"
+            onClick={() => onSetAccepted(allProposalIds(draft))}
+            disabled={pending || accepted.length === total}
+          >
+            本批全接受（{total} 条）
+          </button>
+          <button
+            type="button"
+            className="btn btn--sm btn--ghost"
+            onClick={() => onSetAccepted(NO_PROPOSALS)}
+            disabled={pending || accepted.length === 0}
+          >
+            全不勾
+          </button>
           <button type="button" className="btn btn--primary" disabled={pending} onClick={onSubmit}>
             {pending ? "正在写入…" : `确认写入 ${accepted.length} 条`}
           </button>
-          <span className="muted small">它提议的默认没勾：那些没有依据。</span>
         </div>
       </footer>
     </aside>

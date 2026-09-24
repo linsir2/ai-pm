@@ -87,6 +87,7 @@ export function LoopColumn({
           accepted={drafts.accepted}
           pending={pending === "confirm"}
           onToggle={drafts.toggleAccepted}
+          onSetAccepted={drafts.setAccepted}
           onSubmit={onConfirm}
           onCollapse={() => drafts.setCollapsed(true)}
         />

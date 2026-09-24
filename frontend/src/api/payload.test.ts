@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  allProposalIds,
   awaitingMode,
   buildAnswers,
   buildClaimEdits,
@@ -85,6 +86,12 @@ describe("unansweredCount", () => {
 describe("defaultAccepted", () => {
   it("提议组默认不勾，其余默认勾上", () => {
     expect(defaultAccepted(round.draft!)).toEqual(["p01", "p02", "p04"]);
+  });
+});
+
+describe("allProposalIds", () => {
+  it("本批全接受：三组全覆盖，包含默认不勾的那一组", () => {
+    expect(allProposalIds(round.draft!)).toEqual(["p01", "p02", "p03", "p04"]);
   });
 });
 
