@@ -128,6 +128,7 @@ class Harness:
         return SubmitOpening(
             rounds=self.rounds,
             round_writer=self.rounds,
+            catalog=self.seats,
             uow=self.uow,
             clock=self.clock,
             events=self.events,

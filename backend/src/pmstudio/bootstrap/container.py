@@ -113,7 +113,12 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         events=bus,
     )
     submit_opening = SubmitOpening(
-        rounds=rounds, round_writer=rounds, uow=uow, clock=clock, events=bus
+        rounds=rounds,
+        round_writer=rounds,
+        catalog=catalog,
+        uow=uow,
+        clock=clock,
+        events=bus,
     )
     run_seat_round = RunSeatRound(
         rounds=rounds,

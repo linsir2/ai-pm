@@ -133,6 +133,30 @@ async def test_full_loop_over_http():
     assert opened.json()["form_id"] == "f1"
 
 
+async def test_opening_with_an_unknown_seat_is_a_422_not_a_500():
+    """席位必须在注册表里：给错 id 是"请求不对"（422），不该拖到执行时才炸成 500。"""
+
+    app, _ = make_client()
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        round_id = (
+            await client.post(
+                f"/api/projects/{project_id}/rounds", json={"input": "想做个订单导出的功能"}
+            )
+        ).json()["round_id"]
+        response = await client.post(
+            f"/api/rounds/{round_id}/opening",
+            json={"seats": ["seat.data_scale", "seat.nope"], "claim_edits": []},
+        )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "shape_error"
+    assert body["details"]["seat_ids"] == ["seat.nope"]
+
+
 async def test_opening_accepts_claim_edits():
     app, _ = make_client()
     async with async_client(app) as client:

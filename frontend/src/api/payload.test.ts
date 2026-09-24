@@ -10,6 +10,7 @@ import {
   initialClaimEdits,
   integrationSummary,
   selectableLabels,
+  seatNominationSummary,
   unansweredCount,
 } from "./payload";
 import type { RoundView } from "./types";
@@ -170,6 +171,35 @@ describe("buildOpeningBody", () => {
 describe("defaultSeats", () => {
   it("提名的席位默认全选（可删）", () => {
     expect(defaultSeats(round)).toEqual(["seat.data_scale", "seat.ux_flow"]);
+  });
+});
+
+describe("seatNominationSummary", () => {
+  it("名单来自分析者时如实说 agent，并给出还能加几个", () => {
+    const view = {
+      nominated_seats: [
+        { seat_id: "seat.export_import", why: "这轮就是在做导出", source: "agent" },
+      ],
+      available_seats: [{ seat_id: "seat.data_scale" }, { seat_id: "seat.permissions" }],
+    } as unknown as RoundView;
+    expect(seatNominationSummary(view)).toEqual({
+      nominated: 1,
+      available: 2,
+      source: "agent",
+    });
+  });
+
+  it("老轮次回落目录匹配时标 catalog", () => {
+    const view = {
+      nominated_seats: [{ seat_id: "seat.data_scale", why: "", source: "catalog" }],
+      available_seats: [],
+    } as unknown as RoundView;
+    expect(seatNominationSummary(view).source).toBe("catalog");
+  });
+
+  it("一个都没有时是 empty", () => {
+    const view = { nominated_seats: [], available_seats: [] } as unknown as RoundView;
+    expect(seatNominationSummary(view).source).toBe("empty");
   });
 });
 

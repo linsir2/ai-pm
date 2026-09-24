@@ -2,7 +2,7 @@
    只改标签与去处（改文本归文档，见 01-规格 §5 的硬约束）。 */
 
 import type { ClaimEdit } from "../api/payload";
-import { selectableLabels } from "../api/payload";
+import { seatNominationSummary, selectableLabels } from "../api/payload";
 import type { DocumentView, RoundView } from "../api/types";
 import { claimLabelText } from "../labels";
 import { EvidenceChip } from "./EvidenceChip";
@@ -30,6 +30,7 @@ export function OpeningCard({
   const touched = touchedTargets(round, edits);
   const alwaysOn = round.nominated_seats.filter((seat) => seat.always_on).length;
   const triggered = round.nominated_seats.filter((seat) => seat.matched_keywords.length > 0);
+  const summary = seatNominationSummary(round);
 
   return (
     <section className="pane-card" aria-label="复述卡">
@@ -111,12 +112,21 @@ export function OpeningCard({
         <fieldset className="seats">
           <legend className="loop__label">这一轮请哪些席位</legend>
           <p className="seat__note">
-            提名不是模型判断，是目录里的两条规则：<strong>常驻席位</strong>（{alwaysOn} 个，
-            任何产品都要表态的那几面）+ <strong>你这话里命中关键词</strong>的席位
-            {triggered.length > 0
-              ? `（${triggered.map((seat) => `「${seat.matched_keywords[0]}」→${seat.title}`).join("、")}）`
-              : "（这一轮还没命中任何触发席位）"}
-            。默认全勾，删掉不需要的那几个就行。
+            {summary.source === "agent" ? (
+              <>
+                这 {summary.nominated} 个是<strong>分析席位读完你这段话之后挑的</strong>
+                （每条都写了理由）；不合适的就取消勾选。
+                {summary.available > 0 && ` 目录里还有 ${summary.available} 个可以自己加。`}
+              </>
+            ) : (
+              <>
+                这一轮的名单是<strong>按目录关键词回落的</strong>（常驻 {alwaysOn} 个
+                {triggered.length > 0
+                  ? `，另加命中「${triggered.map((seat) => seat.matched_keywords[0]).join("」「")}」的`
+                  : ""}
+                ）——它没经过分析席位的判断，你多看两眼。
+              </>
+            )}
           </p>
           {round.nominated_seats.map((seat) => {
             const on = seats.includes(seat.seat_id);
@@ -130,17 +140,42 @@ export function OpeningCard({
                 <span>
                   <span className="seat__title">
                     {seat.title}
-                    <span className="seat__why">
+                    <span className="seat__tag">
                       {seat.matched_keywords.length > 0
                         ? `命中「${seat.matched_keywords.join("」「")}」`
-                        : "常驻"}
+                        : seat.always_on
+                          ? "常驻"
+                          : "触发"}
                     </span>
                   </span>
-                  <span className="seat__focus">为什么请它：{seat.focus}</span>
+                  {seat.why.trim() !== "" && <span className="seat__why">{seat.why}</span>}
+                  <span className="seat__focus">它管什么：{seat.focus}</span>
                 </span>
               </label>
             );
           })}
+
+          {round.available_seats.length > 0 && (
+            <details className="seats__more">
+              <summary>目录里还有 {round.available_seats.length} 个席位，想加就加</summary>
+              {round.available_seats.map((seat) => (
+                <div className="seat seat--extra" key={seat.seat_id}>
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    onClick={() => onToggleSeat(seat.seat_id)}
+                    disabled={seats.includes(seat.seat_id)}
+                  >
+                    {seats.includes(seat.seat_id) ? "已加上" : "+ 加上"}
+                  </button>
+                  <span>
+                    <span className="seat__title">{seat.title}</span>
+                    <span className="seat__focus">它管什么：{seat.focus}</span>
+                  </span>
+                </div>
+              ))}
+            </details>
+          )}
         </fieldset>
       </div>
 

@@ -79,6 +79,24 @@ export function defaultSeats(round: RoundView): string[] {
   return round.nominated_seats.map((seat) => seat.seat_id);
 }
 
+export interface SeatNominationSummary {
+  nominated: number;
+  available: number;
+  /** agent = 名单来自分析者的判断；catalog = 老轮次的目录回落（界面要照实说）。 */
+  source: "agent" | "catalog" | "empty";
+}
+
+/** 复述卡顶上那句话要的数字：分析者挑了几个、还能自己加几个、名单是哪来的。 */
+export function seatNominationSummary(round: RoundView): SeatNominationSummary {
+  const first = round.nominated_seats[0];
+  return {
+    nominated: round.nominated_seats.length,
+    available: round.available_seats.length,
+    source:
+      first === undefined ? "empty" : first.source === "catalog" ? "catalog" : "agent",
+  };
+}
+
 export function initialClaimEdits(round: RoundView): Record<string, ClaimEdit> {
   return Object.fromEntries(
     round.claims.map((claim) => [

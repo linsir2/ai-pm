@@ -17,7 +17,7 @@ DEFINITIONS = (
 def test_catalog_reads_every_definition():
     catalog = TomlSeatCatalog(DEFINITIONS)
     seats = catalog.all()
-    assert len(seats) == 7
+    assert len(seats) == 10
     assert {seat.seat_id for seat in seats} >= {
         "seat.data_scale",
         "seat.permissions",
@@ -25,7 +25,41 @@ def test_catalog_reads_every_definition():
         "seat.frontend_interaction",
         "seat.tech_approach",
     }
+    # 触发组（`04-未决.md` C1 的推荐版）：导出导入 / 报表 / 通知 / 状态机 / 第三方集成 / 合规
+    assert {seat.seat_id for seat in seats} >= {
+        "seat.export_import",
+        "seat.notification",
+        "seat.state_machine",
+        "seat.integration",
+        "seat.compliance",
+    }
+    assert all(
+        not seat.always_on
+        for seat in seats
+        if seat.seat_id
+        in {
+            "seat.export_import",
+            "seat.notification",
+            "seat.state_machine",
+            "seat.integration",
+            "seat.compliance",
+        }
+    )
     assert all(seat.title and seat.focus for seat in seats)
+
+
+@pytest.mark.parametrize(
+    ("user_input", "expected"),
+    [
+        ("订单要有审核状态，驳回后能回到草稿", "seat.state_machine"),
+        ("要跟 CRM 对接，用开放平台的接口同步", "seat.integration"),
+        ("导出的文件里有客户信息，要脱敏并留审计", "seat.compliance"),
+    ],
+)
+def test_catalog_nominates_the_trigger_seats_by_keyword(user_input: str, expected: str):
+    catalog = TomlSeatCatalog(DEFINITIONS)
+    ids = {seat.seat_id for seat in catalog.nominate(user_input=user_input)}
+    assert expected in ids
 
 
 def test_catalog_nominates_always_on_plus_keyword_hits():

@@ -207,12 +207,14 @@ class SubmitOpening:
         *,
         rounds: RoundReader,
         round_writer: RoundWriter,
+        catalog: SeatCatalog,
         uow: UnitOfWork,
         clock: Clock,
         events: EventPublisher,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
+        self._catalog = catalog
         self._uow = uow
         self._clock = clock
         self._events = events
@@ -226,6 +228,15 @@ class SubmitOpening:
     ) -> None:
         with self._uow:
             round_ = self._rounds.get(round_id)
+            # 席位必须在注册表里：不然它会一路走到 `catalog.by_id` 才炸成 500。
+            # 这是"你给的 id 不对"（422），不是领域不变量被破坏（409），所以用 ShapeError。
+            known = {seat.seat_id for seat in self._catalog.all()}
+            unknown = [seat_id for seat_id in seats if seat_id not in known]
+            if unknown:
+                raise ShapeError(
+                    f"这些席位不在注册表里：{'、'.join(sorted(set(unknown)))}",
+                    seat_ids=sorted(set(unknown)),
+                )
             if claim_edits:
                 round_.revise_claims(_apply_claim_edits(round_, claim_edits))
             round_.submit_opening(seats=tuple(seats))

@@ -114,6 +114,10 @@ export interface SeatSuggestionView {
   seat_id: string;
   title: string;
   focus: string;
+  /** 分析者读完这一轮输入之后给的理由（主口径）。回落目录匹配时为空。 */
+  why: string;
+  /** agent = 分析者挑的；catalog = 老轮次的目录回落。 */
+  source: "agent" | "catalog" | string;
   /** 常驻席位：每轮都请（不是模型判断，是目录里的配置）。 */
   always_on: boolean;
   /** 你这轮的话里命中了它的哪些关键词（同样不是模型判断）。 */
@@ -129,6 +133,8 @@ export interface RoundView {
   seat_round_count: number;
   seats: string[];
   nominated_seats: SeatSuggestionView[];
+  /** 目录里没被提名、但用户想加就能加的席位。 */
+  available_seats: SeatSuggestionView[];
   claims: ClaimView[];
   seat_packets: SeatPacketView[];
   questions: QuestionView[];
