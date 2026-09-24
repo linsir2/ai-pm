@@ -67,6 +67,22 @@ async def test_start_round_records_claims_with_eids_in_two_transactions():
     assert harness.events.names == [ROUND_UPDATED, ROUND_UPDATED]
 
 
+async def test_analyzer_prompt_carries_the_readiness_gaps():
+    """就绪度要真进提示词——否则它只是个界面上的仪表盘，不改变 AI 行为。"""
+
+    harness = Harness(replies={"claims": claims_reply()})
+    harness.seed_project()
+    use_case = harness.start_round()
+
+    round_id = await use_case.create(project_id=PROJECT, user_input=INPUT)
+    await use_case.analyze(round_id=round_id)
+
+    document_state = harness.prompts.calls[-1][1]["document_state"]
+    assert "本章还差什么" in document_state
+    assert "补缺口不等于填满" in document_state
+    assert "〔阻塞〕" in document_state
+
+
 async def test_start_round_authorizes_feature_the_user_named():
     harness = Harness(replies={"claims": claims_reply(feature_slug="order-export")})
     harness.seed_project()

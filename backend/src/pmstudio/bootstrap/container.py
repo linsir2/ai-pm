@@ -27,6 +27,7 @@ from pmstudio.application.use_cases import (
     SubmitOpening,
 )
 from pmstudio.bootstrap.settings import Settings
+from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import ProposalCommitter
 from pmstudio.domain.services.scope_guard import ScopeGuard
@@ -94,6 +95,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         )
     catalog = TomlSeatCatalog(SEATS_DIR)
     assigner = EvidenceAssigner()
+    readiness = ReadinessChecker()
     analyzer = ClaimAnalyzer(model=gateway, prompts=prompts, catalog=catalog)
     reviewer = SeatReviewer(model=gateway, prompts=prompts)
     integrator = Integrator(model=gateway, prompts=prompts)
@@ -108,6 +110,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         uow=uow,
         analyzer=analyzer,
         assigner=assigner,
+        checker=readiness,
         clock=clock,
         ids=ids,
         events=bus,
@@ -130,6 +133,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         reviewer=reviewer,
         catalog=catalog,
         assigner=assigner,
+        checker=readiness,
         clock=clock,
         events=bus,
     )
@@ -142,6 +146,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         uow=uow,
         integrator=integrator,
         catalog=catalog,
+        checker=readiness,
         clock=clock,
         ids=ids,
         events=bus,

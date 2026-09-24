@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.authoring.blocks import Entry
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
 from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.views import BlockView, DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -114,6 +115,37 @@ def render_document(view: DocumentView) -> str:
         lines.append("## 偏好区（不进正文 / 不进交付）")
         lines.extend(f"- {_entry_line(entry)}" for entry in view.preference_entries)
     return "\n".join(lines)
+
+
+READINESS_HARD_RULE = "补缺口不等于填满——拿不准就出题，不许为凑判据编内容。"
+
+
+def render_readiness(items: Sequence[ReadinessItem]) -> str:
+    """把就绪度清单渲染成提示词里的一段。没缺口就返回空串（别给模型一段废话）。"""
+
+    if not items:
+        return ""
+    lines = ["## 本章还差什么（系统按 01-规格 §4 的合格标准算的）", READINESS_HARD_RULE]
+    lines += [
+        f"- {item.section_id} {item.title}：{item.detail}"
+        f"〔{'阻塞' if item.severity is Severity.BLOCKER else '提示'}〕"
+        for item in items
+    ]
+    return "\n".join(lines)
+
+
+def render_document_state(
+    view: DocumentView, *, readiness: Sequence[ReadinessItem] = ()
+) -> str:
+    """智能体看到的"文档现状" = 全文渲染 + 缺口清单。
+
+    缺口必须进提示词，否则就绪度只是个界面上的仪表盘，不改变 AI 行为
+    （`01-规格.md` §7.2）。
+    """
+
+    gaps = render_readiness(readiness)
+    text = render_document(view)
+    return text if not gaps else f"{text}\n\n{gaps}"
 
 
 def render_claims(claims: Sequence[Claim]) -> str:

@@ -11,6 +11,7 @@ from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.dto import ProjectSummaryView
 from pmstudio.application.ports import ModelGateway, SeatDefinition
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.ids import DocumentId, ProjectId
@@ -89,6 +90,7 @@ class Harness:
         self.reviewer = SeatReviewer(model=self.gateway, prompts=self.prompts)
         self.integrator = Integrator(model=self.gateway, prompts=self.prompts)
         self.assigner = EvidenceAssigner()
+        self.readiness = ReadinessChecker()
         self.factory = InMemoryProjectFactory(
             self.documents, self.evidences, self.index, self.ids
         )
@@ -119,6 +121,7 @@ class Harness:
             uow=self.uow,
             analyzer=self.analyzer,
             assigner=self.assigner,
+            checker=self.readiness,
             clock=self.clock,
             ids=self.ids,
             events=self.events,
@@ -149,6 +152,7 @@ class Harness:
             reviewer=self.reviewer,
             catalog=self.seats,
             assigner=self.assigner,
+            checker=self.readiness,
             clock=self.clock,
             events=self.events,
         )
@@ -165,6 +169,7 @@ class Harness:
             uow=self.uow,
             integrator=self.integrator,
             catalog=self.seats,
+            checker=self.readiness,
             clock=self.clock,
             ids=self.ids,
             events=self.events,

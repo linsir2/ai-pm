@@ -3,6 +3,7 @@ from datetime import datetime
 from pmstudio.application import context
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
+from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
@@ -167,6 +168,57 @@ def test_render_reviews_without_ledger_still_names_seat_entries():
     )
     assert "席位条目 seat.data_scale:O2" in text
     assert "出处编号" not in text
+
+
+def test_render_readiness_has_hard_rule_and_severity_tags():
+    text = context.render_readiness(
+        (
+            ReadinessItem(
+                "s1",
+                "section_min_entries",
+                "背景与问题还缺 1 条内容",
+                "至少 1 条：现状 / 问题 / 不做的代价",
+                Severity.BLOCKER,
+            ),
+            ReadinessItem(
+                "s6",
+                "section_kind_present",
+                "业务流程与交互还没有主流程",
+                "这类内容用 steps 块写",
+                Severity.WARN,
+            ),
+        )
+    )
+
+    assert "本章还差什么" in text
+    assert "s1 背景与问题还缺 1 条内容" in text and "〔阻塞〕" in text
+    assert "〔提示〕" in text
+    assert "补缺口不等于填满" in text
+
+
+def test_render_readiness_is_empty_when_nothing_is_missing():
+    assert context.render_readiness(()) == ""
+
+
+def test_render_document_state_appends_gaps_after_the_document():
+    view = document_with_one_feature().view()
+    without = context.render_document_state(view)
+    assert "本章还差什么" not in without
+
+    with_gaps = context.render_document_state(
+        view,
+        readiness=(
+            ReadinessItem(
+                "s1",
+                "section_min_entries",
+                "背景与问题还没有内容",
+                "至少 1 条",
+                Severity.BLOCKER,
+            ),
+        ),
+    )
+    assert with_gaps.startswith(without)
+    assert "本章还差什么" in with_gaps
 
 
 def test_render_existing_entries_lists_entry_ids_for_rewrites():

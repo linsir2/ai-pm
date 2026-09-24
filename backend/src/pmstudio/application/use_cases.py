@@ -28,7 +28,7 @@ from pmstudio.application.context import (
     answer_eids,
     render_answers,
     render_claims,
-    render_document,
+    render_document_state,
     render_existing_entries,
     render_reviews,
 )
@@ -58,6 +58,7 @@ from pmstudio.application.ports import (
 )
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
+from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.ports import (
     DocumentReader,
@@ -138,6 +139,7 @@ class StartRound:
         uow: UnitOfWork,
         analyzer: ClaimAnalyzer,
         assigner: EvidenceAssigner,
+        checker: ReadinessChecker,
         clock: Clock,
         ids: IdGenerator,
         events: EventPublisher,
@@ -150,6 +152,7 @@ class StartRound:
         self._uow = uow
         self._analyzer = analyzer
         self._assigner = assigner
+        self._checker = checker
         self._clock = clock
         self._ids = ids
         self._events = events
@@ -173,7 +176,10 @@ class StartRound:
         round_ = self._rounds.get(round_id)
         document = self._documents.get(round_.project_id)
         user_input = round_.user_input
-        document_state = render_document(document.view())
+        view = document.view()
+        document_state = render_document_state(
+            view, readiness=self._checker.check(view)
+        )
         try:
             analysis = await self._analyzer.analyze(
                 user_input=user_input, document_state=document_state
@@ -268,6 +274,7 @@ class RunSeatRound:
         reviewer: SeatReviewer,
         catalog: SeatCatalog,
         assigner: EvidenceAssigner,
+        checker: ReadinessChecker,
         clock: Clock,
         events: EventPublisher,
     ) -> None:
@@ -280,6 +287,7 @@ class RunSeatRound:
         self._reviewer = reviewer
         self._catalog = catalog
         self._assigner = assigner
+        self._checker = checker
         self._clock = clock
         self._events = events
 
@@ -290,7 +298,10 @@ class RunSeatRound:
         ledger = self._evidence.get(round_.project_id)
         pending = tuple(self._catalog.by_id(seat_id) for seat_id in round_.pending_seats)
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
-        document_state = render_document(document.view())
+        view = document.view()
+        document_state = render_document_state(
+            view, readiness=self._checker.check(view)
+        )
         claims_text = render_claims(round_.claims)
         answered_text = render_answers(round_, ledger=ledger)
         answer_refs = answer_eids(ledger=ledger)
@@ -448,6 +459,7 @@ class IntegrateRound:
         uow: UnitOfWork,
         integrator: Integrator,
         catalog: SeatCatalog,
+        checker: ReadinessChecker,
         clock: Clock,
         ids: IdGenerator,
         events: EventPublisher,
@@ -460,6 +472,7 @@ class IntegrateRound:
         self._uow = uow
         self._integrator = integrator
         self._catalog = catalog
+        self._checker = checker
         self._clock = clock
         self._ids = ids
         self._events = events
@@ -551,9 +564,12 @@ class IntegrateRound:
             answered, _, skipped = render_answers(
                 round_, ledger=self._evidence.get(round_.project_id)
             ).partition("--")
+            view = document.view()
             try:
                 packet = await self._integrator.integrate(
-                    document_state=render_document(document.view()),
+                    document_state=render_document_state(
+                        view, readiness=self._checker.check(view)
+                    ),
                     claims=render_claims(round_.claims),
                     opinions=render_reviews(
                         round_.current_reviews, titles=titles, ledger=ledger
