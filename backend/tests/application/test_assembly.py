@@ -18,7 +18,7 @@ from pmstudio.domain.round.questionnaire import (
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.ids import EvidenceId, FormId, ProjectId, QuestionId
 from pmstudio.domain.shared.target import Target
-from pmstudio.domain.shared.writing import WriteOp
+from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import (
     NOW,
     ROUND_ID,
@@ -209,6 +209,66 @@ def test_question_from_unparsable_opinion_is_dropped_not_fatal():
     assert len(result.questions) == 1
     assert result.questions[0].asked_by == ()
     assert result.dropped == ("seat.nope:O1", f"{SECOND_SEAT}:O9")
+
+
+def test_question_is_blocking_when_target_hits_a_required_feature_field():
+    result = assembly.assemble(
+        packet(
+            questions=[
+                question_draft(
+                    target={
+                        "zone": "body",
+                        "section_id": "s5",
+                        "feature_slug": "order-export",
+                        "field": "acceptance",
+                    }
+                )
+            ]
+        ),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert result.questions[0].blocking is True
+
+
+def test_question_is_not_blocking_for_a_non_blocking_section_or_preference():
+    assert assembly.is_blocking(Target.body("s7")) is False
+    assert assembly.is_blocking(Target.body("s8", field="performance")) is True
+    assert assembly.is_blocking(Target.preference()) is False
+
+
+def test_skipped_blocking_question_lands_in_s11_with_the_marker():
+    blocking = Question(
+        question_id=QuestionId("q1"),
+        target=Target.feature_field("order-export", "acceptance"),
+        type=QuestionType.TEXT,
+        title="单次导出的最大行数是多少？",
+        why="量级决定同步还是异步",
+        consequence_if_skipped="按同步实现，超时风险由 PM 承担",
+        blocking=True,
+    )
+    plain = Question(
+        question_id=QuestionId("q2"),
+        target=Target.body("s7"),
+        type=QuestionType.TEXT,
+        title="导出文件要不要留档？",
+        why="影响存储与合规",
+        consequence_if_skipped="先不留档",
+    )
+
+    marked = assembly.open_question_proposal(
+        blocking, eid=EvidenceId("E9"), index=1, round_id=ROUND_ID, rationale="跳过的题按题面后果"
+    )
+    plain_proposal = assembly.open_question_proposal(
+        plain, eid=EvidenceId("E10"), index=2, round_id=ROUND_ID, rationale="跳过的题按题面后果"
+    )
+
+    assert marked.text.startswith("〔未决·阻塞〕")
+    assert not plain_proposal.text.startswith("〔未决·阻塞〕")
+    assert marked.target.section_id == "s11"
+    assert marked.kind is BlockKind.QUESTION
 
 
 def test_assemble_creates_feature_subtree_only_when_authorized():

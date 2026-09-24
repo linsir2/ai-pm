@@ -351,6 +351,7 @@ def _question_to_json(question: Question) -> dict:
         ],
         "evidence_refs": _refs(question.evidence_refs),
         "asked_by": list(question.asked_by),
+        "blocking": question.blocking,
     }
 
 
@@ -369,6 +370,8 @@ def _question_from_json(data: dict) -> Question:
         ),
         evidence_refs=tuple(EvidenceId(item) for item in data["evidence_refs"]),
         asked_by=tuple(data["asked_by"]),
+        # 老行里没有这个键：按"非阻塞"读
+        blocking=bool(data.get("blocking", False)),
     )
 
 

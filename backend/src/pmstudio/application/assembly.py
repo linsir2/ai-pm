@@ -12,7 +12,7 @@ from pmstudio.application.agents import schemas
 from pmstudio.application.context import seat_entry_handle
 from pmstudio.application.errors import PacketParseError, unknown_ref_message
 from pmstudio.domain.authoring.document import Document
-from pmstudio.domain.authoring.schema import field_spec
+from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS, field_spec
 from pmstudio.domain.provenance.evidence import EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
@@ -39,6 +39,7 @@ from pmstudio.domain.shared.ids import (
     QuestionId,
     RoundId,
 )
+from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.sections import FEATURE_HOME, section_slot
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
@@ -49,6 +50,11 @@ NEW_FEATURE_YES = "new_feature_yes"
 NEW_FEATURE_NO = "new_feature_no"
 
 OPEN_QUESTION_HOME = "s11"
+
+#: 缺了这些章节的内容就"交不出去"——命中它们的题目算阻塞型（`01` §4 / `02` §⑤）
+BLOCKING_SECTIONS = frozenset({"s1", "s2", "s3", "s4", "s5", "s8", "s10", "s12"})
+REQUIRED_FEATURE_FIELD_NAMES = frozenset(spec.name for spec in REQUIRED_FEATURE_FIELDS)
+BLOCKING_MARK = "〔未决·阻塞〕"
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,12 +338,26 @@ def open_question_proposal(
         op=WriteOp.ADD,
         target=Target.body(OPEN_QUESTION_HOME),
         text=(
-            f"{question.title}（未决定，待决人：PM；"
+            f"{BLOCKING_MARK if question.blocking else ''}{question.title}（未决定，待决人：PM；"
             f"跳过后果：{question.consequence_if_skipped}）"
         ),
         origin=Origin(OriginType.SYSTEM_DEFAULT, (eid,), rationale),
         kind=BlockKind.QUESTION,
     )
+
+
+def is_blocking(target: Target) -> bool:
+    """这道题不答，文档就交不出去吗？**规则算，不问模型**（`01` §7）。
+
+    命中必填功能字段，或落在"那几章不写就没有交付物"的章节上 → 阻塞；
+    偏好区永远不算（偏好不进正文）。
+    """
+
+    if target.zone is Zone.PREFERENCE:
+        return False
+    if target.field is not None and target.feature_slug is not None:
+        return target.field in REQUIRED_FEATURE_FIELD_NAMES
+    return str(target.section_id) in BLOCKING_SECTIONS
 
 
 # —— 内部 ——
@@ -488,6 +508,7 @@ def _question(
             evidence_refs=refs,
             asked_by=tuple(sorted(set(seats))),
             kind=QuestionKind(draft.kind),
+            blocking=is_blocking(target),
         )
     except DomainError as error:
         raise PacketParseError(

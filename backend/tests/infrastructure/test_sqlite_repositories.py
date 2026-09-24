@@ -286,3 +286,36 @@ def test_questionnaire_without_dropped_key_still_loads(repos):
 
     loaded = serialization.questionnaire_from_json(data)
     assert loaded.dropped == ()
+
+
+def test_question_blocking_round_trips_and_defaults_to_false(repos):
+    _, rounds, _, _, uow = repos
+    round_ = make_round()
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f1"),
+            round_id=round_.round_id,
+            questions=(
+                Question(
+                    question_id=QuestionId("q1"),
+                    target=Target.body("s8"),
+                    type=QuestionType.TEXT,
+                    title="单次导出的最大行数是多少？",
+                    why="量级决定同步还是异步",
+                    consequence_if_skipped="按同步实现",
+                    blocking=True,
+                ),
+            ),
+        )
+    )
+    with uow:
+        rounds.save(round_)
+
+    loaded = rounds.get(round_.round_id)
+    assert loaded.questionnaire is not None
+    assert loaded.questionnaire.questions[0].blocking is True
+
+    # 老 payload（没有 blocking 键）读回来必须是 False
+    payload = serialization.questionnaire_to_json(loaded.questionnaire)
+    payload["questions"][0].pop("blocking", None)
+    assert serialization.questionnaire_from_json(payload).questions[0].blocking is False

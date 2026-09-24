@@ -86,6 +86,7 @@ class QuestionView:
     consequence_if_skipped: str
     eids: tuple[str, ...]
     asked_by: tuple[str, ...]
+    blocking: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +383,7 @@ def _question_views(round_: Round) -> tuple[QuestionView, ...]:
             consequence_if_skipped=question.consequence_if_skipped,
             eids=tuple(str(eid) for eid in question.evidence_refs),
             asked_by=tuple(question.asked_by),
+            blocking=question.blocking,
         )
         for question in questionnaire.questions
     )

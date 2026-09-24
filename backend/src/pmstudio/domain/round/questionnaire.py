@@ -54,6 +54,9 @@ class Question:
     evidence_refs: tuple[EvidenceId, ...] = ()
     asked_by: tuple[str, ...] = ()
     kind: QuestionKind = QuestionKind.GAP
+    #: 阻塞型：缺了它就交不出去（target 命中必填字段/必填章节）。由装配层的规则算，
+    #: 不问模型；跳过的阻塞题落成 s11 开放问题时会带上 `〔未决·阻塞〕` 前缀。
+    blocking: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, QuestionKind):

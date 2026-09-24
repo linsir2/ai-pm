@@ -88,6 +88,8 @@ export interface QuestionView {
   consequence_if_skipped: string;
   eids: string[];
   asked_by: string[];
+  /** 阻塞型问题：不答就交不出去（后端按规则算的，不是模型说自己重要）。 */
+  blocking: boolean;
 }
 
 export interface ProposalView {
