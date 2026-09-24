@@ -141,6 +141,57 @@
 - 还没做：Task 26 的浏览器手测复核（已截图核对四个状态：复述卡前的输入态、席位在跑、失败、
   问卷抽屉）、`04-未决.md` 的前端遗留条目、以及上面那轮"失败后接着跑"的最终草案与写入。
 
+### 执行结果（2026-09-24，P3 第一批：席位提名交给 Analyzer + 未决 B–D 订正）
+
+计划：`docs/plans/2026-09-24-P3-席位提名与未决订正.md`（9 个任务，已全部完成）。
+
+**改了什么**
+
+1. **席位名单由判断产生**（以前是"常驻 + 关键词命中"）：
+   - 报文加 `seats[]`（每条 `{seat_id, why}`，必填、1–7 条）；挑到目录外 → 整轮失败；
+   - 提示词加 `$seat_catalog` 槽位与"怎么挑席位"四条；`ClaimAnalyzer` 返回 `Analysis(claims, seats)`；
+     `StartRound.analyze` 与主张同一事务落库（`Round.nominated_seats`）；
+   - 投影：`nominated_seats[].why`（主口径）+ `source`（agent/catalog）+ 新增 `available_seats`；
+     只有老轮次才回落目录匹配，界面照实说"这名单没经过判断"。
+2. **复述卡**：每条席位显示分析者给的理由；常驻/命中降为小标签；底部"目录里还有 N 个，想加就加"。
+3. **注册表 7 → 10**：补状态机与流转 / 第三方集成 / 合规与数据安全（都靠关键词命中）；
+   提交注册表外的 seat_id → 422（以前会拖到执行时炸 500）。
+4. **问卷封顶两批**（C6）：`MAX_QUESTIONNAIRES = 2`，到顶降级成 s11 开放问题，
+   理由写进证据与缺口行；席位轮上限（3 次）退为兜底。
+5. **草案卡**：加「本批全接受（N 条）」与「全不勾」。
+6. **文档**：`04-未决.md` B–D 逐条落定（C1/C2/C4/C6/D3 写成现状，C5/C8/D5 标 P3）；
+   `01` F8、`02` §4②、`06-前端` 同步。
+
+**真模型证据**（qwen3.8-flash，临时库 `/tmp/pmstudio-p3.db`，不碰作者的项目数据）
+
+| 输入 | 分析者挑的席位 | 没挑的 |
+|---|---|---|
+| 订单导出 / 按时间筛选 / 数据量几万 | export_import(触发) + business_rules + data_scale + frontend_interaction + permissions，各带贴着输入的理由 | **tech_approach（常驻但没挑）**、notification、compliance、state_machine、integration |
+| 按审核状态筛 / 对接 CRM / 客户信息脱敏 | **state_machine + compliance + integration（三个新席位全中）** + export_import + business_rules + tech_approach + data_scale | frontend_interaction、notification、permissions |
+
+结论：名单跟着输入走（两个方向都能变），常驻席位不再"每轮必到"。
+
+**C6 真模型全路径**（同一个临时库，第一轮那 5 个席位）：
+
+| 步 | 结果 |
+|---|---|
+| 席位轮 1 → 整合 | 第 **1** 批问卷，5 题（时间筛选口径 / 文件格式 / 行数阈值 / 是否异步 / PII 脱敏） |
+| 作答（3 答 2 跳）→ 席位轮 2 → 整合 | 第 **2** 批问卷，5 题（超量策略 / 可接受耗时 / 脱敏规则 / 并发 / 空数据） |
+| 作答（2 答 3 跳）→ 席位轮 3 → 整合 | **不再问**：`step=awaiting_confirm`，草案 **38 条**；剩下的题全部降级成 s11 开放问题，理由写着"问卷已满 2 批，不再追问" |
+
+改动前这里会出第 3 批问卷（用户体感"没完没了"）。
+
+**界面复述卡**（浏览器实测，第 2 轮的那份名单）：
+顶上"这 7 个是分析席位读完你这段话之后挑的（每条都写了理由）；目录里还有 3 个可以自己加"；
+每条显示"命中「状态」「审核」"这类小标签 + 分析者的理由 + "它管什么"；
+底部折叠区"目录里还有 3 个席位，想加就加"。
+
+**数字**：后端 338 passed + `ruff` 干净；前端 `tsc` 干净 + 77 passed（新增 `seatNominationSummary`、
+`allProposalIds`、复述卡/草案卡改动带来的纯函数用例）。
+
+**下一步（P3 剩余）**：C5（丢弃的 finding 留痕）、C8（答案轮缩编）、C4 的三轮统计、
+"继续深挖"入口、跨轮编号跳转、版本历史与 diff、索引层。
+
 ### 执行结果（2026-09-22，P1 已完成）
 
 - 代码：`backend/src/pmstudio/domain/`（shared / authoring / provenance / round / services / ports）
