@@ -154,7 +154,9 @@ function Question({
 
       <p className="q__meta">
         跳过后果：{question.consequence_if_skipped}
-        {question.asked_by.length > 0 && ` · 谁问的：${question.asked_by.join("、")}`}
+        {question.asked_by.length > 0
+          ? ` · 谁问的：${question.asked_by.join("、")}`
+          : " · 整合者提的（不是某个席位提的）"}
       </p>
       <div className="row">
         <EvidenceChip eids={question.eids} />

@@ -170,6 +170,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         round_writer=rounds,
         evidence=evidences,
         evidence_writer=evidences,
+        catalog=catalog,
         uow=uow,
         clock=clock,
         events=bus,

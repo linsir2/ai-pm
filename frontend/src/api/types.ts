@@ -146,6 +146,8 @@ export interface RoundView {
   waiting_on: WaitingOn | string;
   seat_round_count: number;
   seats: string[];
+  /** 这一趟实际跑的名单（缩编后的结果；用户编制仍是 `seats`）。 */
+  active_seats: string[];
   nominated_seats: SeatSuggestionView[];
   /** 目录里没被提名、但用户想加就能加的席位。 */
   available_seats: SeatSuggestionView[];

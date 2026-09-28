@@ -93,7 +93,12 @@ export function LoopPane({
             index={3}
             actor="席位轮"
             title={`${round.seats.length} 个席位`}
-            meta={`第 ${Math.min(round.seat_round_count, MAX_SEAT_ROUNDS)} / ${MAX_SEAT_ROUNDS} 轮`}
+            meta={
+              `第 ${Math.min(round.seat_round_count, MAX_SEAT_ROUNDS)} / ${MAX_SEAT_ROUNDS} 轮` +
+              (round.active_seats.length < round.seats.length
+                ? ` · 这一趟只请了 ${round.active_seats.length} 个（缩编：只请与本次答案相关的面）`
+                : "")
+            }
           >
             {round.seat_packets.map((packet, order) => (
               <SeatPacketCard

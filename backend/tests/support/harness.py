@@ -183,6 +183,7 @@ class Harness:
             round_writer=self.rounds,
             evidence=self.evidences,
             evidence_writer=self.evidences,
+            catalog=self.seats,
             uow=self.uow,
             clock=self.clock,
             events=self.events,

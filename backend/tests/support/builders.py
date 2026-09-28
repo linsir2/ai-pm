@@ -59,9 +59,19 @@ def make_round(*, seats: tuple[str, ...] = (SEAT,)) -> Round:
     return round_
 
 
-def make_seat(seat_id: str = SEAT, *, title: str = "数据规模与性能") -> SeatDefinition:
+def make_seat(
+    seat_id: str = SEAT,
+    *,
+    title: str = "数据规模与性能",
+    sections: tuple[str, ...] = (),
+    fields: tuple[str, ...] = (),
+) -> SeatDefinition:
     return SeatDefinition(
-        seat_id=seat_id, title=title, focus="量级、性能上限与同步异步的分界"
+        seat_id=seat_id,
+        title=title,
+        focus="量级、性能上限与同步异步的分界",
+        sections=sections,
+        fields=fields,
     )
 
 

@@ -60,6 +60,7 @@ from pmstudio.application.events import (
     ROUND_UPDATED,
     Event,
 )
+from pmstudio.application.narrowing import narrow_seats
 from pmstudio.application.ports import (
     Clock,
     EventPublisher,
@@ -702,6 +703,7 @@ class SubmitAnswers:
         round_writer: RoundWriter,
         evidence: EvidenceReader,
         evidence_writer: EvidenceWriter,
+        catalog: SeatCatalog,
         uow: UnitOfWork,
         clock: Clock,
         events: EventPublisher,
@@ -710,6 +712,7 @@ class SubmitAnswers:
         self._round_writer = round_writer
         self._evidence = evidence
         self._evidence_writer = evidence_writer
+        self._catalog = catalog
         self._uow = uow
         self._clock = clock
         self._events = events
@@ -743,7 +746,18 @@ class SubmitAnswers:
                 answered_at=now,
                 skipped=tuple(QuestionId(item) for item in skipped),
             )
-            round_.submit_answers(answer_set)  # 先让领域把关（R6）
+            # C8 缩编：只请"这批题跟它有关"的席位。名单要基于**用户编制**算，
+            # 结果也一定在编制之内（领域还会再校验一次）。
+            touched = tuple(item.question_id for item in answer_set.answers) + tuple(
+                answer_set.skipped
+            )
+            active_seats = narrow_seats(
+                seats=round_.seats,
+                catalog=self._catalog,
+                questionnaire=questionnaire,
+                touched=touched,
+            )
+            round_.submit_answers(answer_set, active_seats=active_seats)  # 领域把关（R6）
             for answer in answer_set.answers:
                 question = by_id[str(answer.question_id)]
                 eid = ledger.record(

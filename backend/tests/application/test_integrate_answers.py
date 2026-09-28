@@ -11,7 +11,7 @@ from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, FormId, QuestionId
 from pmstudio.domain.shared.writing import BlockKind
-from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT
+from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_seat
 from tests.support.harness import Harness
 
 CLAIMS_REPLY = json.dumps(
@@ -96,6 +96,19 @@ def question_draft() -> dict:
 def questionnaire_packet() -> str:
     return json.dumps(
         {"questions": [question_draft()], "list_items": [], "proposals": []},
+        ensure_ascii=False,
+    )
+
+
+def attributed_questionnaire_packet() -> str:
+    """一道**带归因**的题：`from_opinions` 指向 `SEAT` 的第一条意见。
+
+    归因是装配层算的（不看模型自填的 `asked_by`）——缩编的路径 ① 就靠它。
+    """
+
+    draft = question_draft() | {"from_opinions": [f"{SEAT}:O1"]}
+    return json.dumps(
+        {"questions": [draft], "list_items": [], "proposals": []},
         ensure_ascii=False,
     )
 
@@ -424,3 +437,61 @@ def test_stop_asking_reason_covers_both_gates():
 
     fresh = make_round_with_history(answer_sets=0, seat_round_count=1)
     assert _stop_asking_reason(fresh) is None
+
+
+# —— P5c Task 8：答案轮缩编 ——
+
+OTHER_SEAT = "seat.rules"
+
+OTHER_SEAT_REPLY = json.dumps(
+    {
+        "basis": "读了 s1–s13 与 E1",
+        "opinions": [
+            {
+                "local_id": "O1",
+                "form": "judgment",
+                "about": "状态与规则",
+                "claim": "驳回后回到草稿态",
+                "because": "同类流程的常见做法",
+                "evidence_refs": ["E1"],
+            }
+        ],
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_second_pass_only_runs_the_narrowed_seats():
+    """答完问卷之后：第二趟只调缩编名单里的席位（不看关键词、不看常驻）。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [attributed_questionnaire_packet(), draft_packet()],
+        },
+        seat_replies={SEAT: SEAT_REPLY, OTHER_SEAT: OTHER_SEAT_REPLY},
+        # 两个席位的映射都不碰 s8：这道题的 target 正是 s8，
+        # 所以只有"提过这道题"的 SEAT 会留下（这就是 C8 要的效果）
+        seats=(make_seat(SEAT, sections=("s1",)), make_seat(OTHER_SEAT, sections=("s1",))),
+    )
+    harness.seed_project()
+    start = harness.start_round()
+    round_id = await start.create(project_id=PROJECT, user_input="想做个订单导出的功能")
+    await start.analyze(round_id=round_id)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT, OTHER_SEAT))
+    await harness.run_seat_round()(round_id=round_id)  # 第一趟：两个席位都跑
+    await harness.integrate_round()(round_id=round_id)  # 出一道题（target=s8，asking=SEAT）
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.questionnaire is not None
+    authorize_order_export(harness, round_id)  # 第二趟的草案要落到已有功能的字段上
+
+    await harness.submit_answers()(
+        round_id=round_id, form_id="f1", answers=(), skipped=("q1",)
+    )
+    await harness.run_seat_round()(round_id=round_id)  # 第二趟：只跑缩编名单
+
+    assert harness.gateway.purposes.count("seat_review") == 3  # 第一趟 2 + 第二趟 1
+    round_ = harness.rounds.get(round_id)
+    assert round_.active_seats == (SEAT,)
+    assert round_.seats == (SEAT, OTHER_SEAT)  # 用户编制不动
