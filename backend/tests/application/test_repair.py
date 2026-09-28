@@ -84,3 +84,26 @@ def test_overflow_tells_the_model_how_many_to_cut():
     assert "44" in note and "60" in note
     assert "proposals" in note
     assert "精简" in note
+
+
+def test_packet_shape_tells_the_model_the_object_it_owes():
+    """真跑实测：模型把整包回成一个数组（留样 15 / 66）→ 指引要说清它欠一个对象。"""
+
+    note = repair_note(
+        PacketParseError(
+            "模型把整包返回成了数组，无法唯一归位到任何一类内容",
+            purpose="integration",
+            packet_shape={
+                "got": "array",
+                "expected_keys": (
+                    "questions",
+                    "list_items",
+                    "proposals",
+                    "dropped_opinions",
+                ),
+            },
+        )
+    )
+
+    assert "数组" in note and "对象" in note
+    assert "questions" in note and "dropped_opinions" in note

@@ -46,6 +46,15 @@ def repair_note(error: PacketParseError) -> str:
             "优先保留 s5 功能字段（name / one_liner / goal / audience / exceptions / acceptance）"
             "与已经定下来的验收标准，删掉重复与推测。"
         )
+    elif "packet_shape" in details:
+        # 形状错比字段路径更根本（字段路径会只报一句"(根)"，模型看了也不知道欠什么）。
+        shape = details["packet_shape"] or {}
+        keys = "、".join(shape.get("expected_keys", ())) or "（见下面的 schema）"
+        lines.append(
+            f"你返回的是**{shape.get('got', '未知形状')}**，而我要的是一个**对象**："
+            f"顶层只允许这些键——{keys}；每个键的值才是数组。"
+            '例如：{"questions": [ … ], "proposals": [ … ]}。不要只输出里面那个数组。'
+        )
     elif "errors" in details:
         lines.append(
             f"过不了 schema 的字段：{_schema_paths(details['errors'])}。"
