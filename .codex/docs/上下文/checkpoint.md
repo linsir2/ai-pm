@@ -359,3 +359,72 @@ status 空槽 1 条）。
 3. **模型留样**（`PMSTUDIO_TRACE_MODEL=1`，可开关）+ **最小 eval**。
 4. **C8 答案轮缩编**（要先给席位 TOML 补 `sections` / `fields`，新增 `Round.active_seats`）。
 5. 最后**统一真模型验证**（P5a + P5b 的功能一起跑）。
+
+### 执行结果（2026-09-28，P5c：韧性 + 缩编）
+
+计划：`docs/plans/2026-09-28-P5c-韧性-超时放弃留样eval.md`（9 个任务，一步一提交，全部完成）。
+
+**做了什么**
+
+1. **网关超时（T1）**：`PMSTUDIO_MODEL_TIMEOUT`（默认 90 秒，按次算）+ **`num_retries=0`**；
+   失败详情带 `timeout_seconds / attempts / cause`。两条离线测试钉住：传参，以及"静默服务端"下
+   1 秒超时必须在 3 秒内抛出来（不关内部重试是 ~4 秒）。
+2. **放弃这一轮（T2–T4）**：`Step.ABANDONED`（终点、带原因、幂等）+ `Round.abandon()`
+   \+ `RoundCanceller` 端口 + `RoundRunner.cancel()`（记当前任务 → `task.cancel()` →
+   `asyncio.wait` 等它退出）+ `AbandonRound` 用例 + `POST /rounds/{id}/abandon`（端点 18→19）
+   \+ 界面「放弃这一轮」。**先写状态、再取消**；取消异常不吞，前端用标志位吞掉在途请求的报错。
+3. **模型留样（T5）**：`model_calls` 表（零迁移）+ `PMSTUDIO_TRACE_MODEL`（默认关）+
+   `LiteLLMGateway(recorder=…)`；存提示词**原文**（截断 2 万字符）+ 回复 + sha + usage + 耗时 + round_id。
+4. **最小 eval（T6）**：`evals/assertions.py`（七条结构性断言，纯函数）+ `evals/cases/*.json`（8 条）
+   \+ `scripts/eval.py`（真模型、不进 CI、直接调用用例不走 HTTP）。
+5. **C8 缩编（T7–T8）**：10 个席位 TOML 补 `sections` / `fields`、`Round.active_seats`
+   （`pending_seats` 基于它算、`attest` 校验它）、`application/narrowing.py::narrow_seats()`
+   （① `asked_by` ∪ ② 映射命中 ∩ 用户编制；命中为空全跑）+ 界面照实说"这一趟只请了谁"。
+
+**验证（本机）**
+
+- `cd backend && PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -p no:cacheprovider -o addopts=""`
+  → **486 passed**（P5c 之前 440）；`ruff check --no-cache .` → All checks passed。
+- `cd frontend && npx tsc --noEmit && npx vitest run` → tsc 干净、**97 passed**。
+- 端点白名单 **18 → 19**。
+
+**统一真模型验证（作者 .env：`openai/qwen3.7-flash-2026-07-15` + DashScope）**
+
+| 条件 | 结果 |
+|---|---|
+| 默认 90 秒超时 | **失败**：`integration` 三次尝试全超时（`attempts=3`、`timeout value=90.0, time taken=90.29s`）→ 整轮 502 |
+| `PMSTUDIO_MODEL_TIMEOUT=300` | **跑通**：6 条主张 → 3 个席位 → 草案 → 确认写入 v2；**第一次真正落进 s8 的三个章节槽**（performance / availability / security） |
+| `scripts/eval.py --case edge-vague` | **7/7 断言通过**（一条用例约 8 分钟；问了两批问卷、题目全跳过） |
+
+**诊断 · 为什么超时（我的活，不是功能）**
+
+依据：`model_calls` 留样（`PMSTUDIO_TRACE_MODEL=1`）+ `ModelCallFailed.details`。两次真跑共 14 次调用：
+
+| purpose | 提示词（字符） | 耗时 | `reasoning_tokens` / 输出 |
+|---|---|---|---|
+| `claims` | 6 307 | 81.6–84.0s | 4 253–4 880 / 5 626 ≈ 82–87% |
+| `seat_review` | 3 085–3 234 | 57.3–84.4s | 3 303–4 579 / 3 766–4 556 ≈ 83–88% |
+| `integration` | 10 022–12 544 | **116.9 / 164.4 / 179.4s** | 4 272–7 290 / 6 450–9 104 ≈ 66–80% |
+
+结论：
+
+1. **`integration` 是这个模型上的热点**：它要读文档状态 + 主张 + 各席位意见 + 字段表 + 槽表 +
+   JSON Schema，提示词 1 万～1.25 万字符，单次 2–3 分钟——**90 秒对它不成立**。席位轮也在 57–84 秒。
+2. **时间几乎全花在"思考"上**：completion 里 66–88% 是 `reasoning_tokens`，实际输出只有一两千 token。
+3. **重试只是把同一堵墙撞三次**：一次 90 秒、三次 274 秒后整轮失败；对"提示词太长"这类确定性原因，
+   重试没有价值（对网络抖动仍然有价值）。
+
+**建议（配置项，等作者拍板；代码没改）**：① 在这个模型上**关掉思考**（预计快 3–5 倍）；
+② `PMSTUDIO_MODEL_TIMEOUT` 提到 240–300 兜底；③ 或换更快的模型/快照。
+
+**真模型当场暴露并修掉的三个问题**（`04-未决.md` G3、learnings L16/L17）
+
+1. 留样把整轮搞失败（litellm 的 `usage` 里是 pydantic 包装对象 → `json.dumps` TypeError）。
+2. **章节槽（P5a）对 AI 路径不可达**：报文层要求 field 必配 `feature_slug`，整合者写
+   `{section_id: s8, field: compatibility}` 被判非法 → 两次整合失败、整轮降级到 s11。
+3. 模型把章节表整行抄进 `section_id`（`"s3 用户与受众"`）→ 502；又把功能字段名当章节字段用
+   （`{section_id: s1, field: one_liner}`）→ 提示词补了反例。
+
+**待作者拍板**：默认超时值/是否关思考；"去处写错要不要一条降级而不是整轮失败"（`04` G3 末尾）。
+
+**下一步**：按拍板调参数 → 跑完整 eval（8 条）→ 之后再考虑"从失败的那一次调用续跑"与索引层。
