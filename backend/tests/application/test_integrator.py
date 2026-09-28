@@ -7,16 +7,17 @@ from pmstudio.application.errors import PacketParseError
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway
 
 
-def test_integrator_limits_forbid_two_questions_for_the_same_place():
-    """eval 有一条结构性断言「同一个去处别问两遍」——提示词里必须有对应的规矩。
+def test_integrator_limits_forbid_the_same_question_twice():
+    """口径（2026-09-28 拍板）：**同一件事**不许问两遍；**同一去处的两件不同事各出一题**。
 
-    真模型实测（`edge-one-constraint`）：整合者就 s7 出了两道题（鉴权协议 / 幂等与超时），
-    `no_duplicate_questions` 直接判失败。**考一件没交代过的事是不公平的**，
-    所以这条规矩要写进硬规矩里（口径：断言要求的，提示词必须先说）。
+    来历：先写成"同一个去处只出一题"，结果 `case-a` 上 `s8.availability` 的
+    "幂等性与重试策略" 与 "对端不可用时的降级策略" 被当成重复——那是两道真问题，
+    合并会丢结构、丢掉哪一道都是把用户该填的题吞了。提示词与断言的口径必须一致
+    （断言考的东西，提示词先说）。
     """
 
-    assert "同一个去处" in LIMITS_TEXT
-    assert "只出一题" in LIMITS_TEXT
+    assert "同一件事不要问两遍" in LIMITS_TEXT
+    assert "两件不同的事" in LIMITS_TEXT
 
 INTEGRATION_REPLY = json.dumps(
     {
