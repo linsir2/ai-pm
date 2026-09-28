@@ -435,17 +435,25 @@ class RunSeatRound:
 
         validation_error = ""
         for attempt in range(1, MAX_SEAT_ATTEMPTS + 1):
-            outcome = await self._reviewer.review(
-                seat=seat,
-                document_state=document_state,
-                claims=claims,
-                opinions_so_far=opinions_so_far,
-                answered=answered,
-                known_eids=known_eids,
-                answer_eids=answer_eids or {},
-                round_id=round_id,
-                validation_error=validation_error,
-            )
+            try:
+                outcome = await self._reviewer.review(
+                    seat=seat,
+                    document_state=document_state,
+                    claims=claims,
+                    opinions_so_far=opinions_so_far,
+                    answered=answered,
+                    known_eids=known_eids,
+                    answer_eids=answer_eids or {},
+                    round_id=round_id,
+                    validation_error=validation_error,
+                )
+            except PacketParseError as error:
+                # 解析错也是**可修复的错**：只重跑这个席位（其余席位不动）。
+                # 真跑 P7 验证实测：某个席位把 `evidence_refs` 写成 `null`，没重装时整轮判死。
+                if attempt == MAX_SEAT_ATTEMPTS:
+                    raise
+                validation_error = repair_note(error)
+                continue
             if outcome.overflow and attempt < MAX_SEAT_ATTEMPTS:
                 # **先重装、再截断**（报告 F4）：超限是可修复的错，先让它自己精简一次。
                 # 判定点放在用例层：重试策略归这里，席位 agent 只负责"报文 → 领域对象"。

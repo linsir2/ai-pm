@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from pmstudio.application.errors import ModelCallFailed
+from pmstudio.application.errors import ModelCallFailed, PacketParseError
 from pmstudio.application.events import GENERATION_FAILED, PACKET_EMITTED
 from pmstudio.application.use_cases import ClaimEdit
 from pmstudio.domain.round.step import Step
@@ -28,6 +28,24 @@ OVER_CAP_SEAT_REPLY = json.dumps(
                 "evidence_refs": ["E1"],
             }
             for index in range(1, 15)
+        ],
+    },
+    ensure_ascii=False,
+)
+
+#: 真跑 P7 验证里的真实坏包：`evidence_refs` 写成了 `null`（不是数组）→ schema 过不了
+NULL_REFS_SEAT_REPLY = json.dumps(
+    {
+        "basis": "读了 s1–s13 全文与 E1",
+        "opinions": [
+            {
+                "local_id": "O1",
+                "form": "judgment",
+                "about": "量级与耗时的关系",
+                "claim": "100 万行 3 秒不成立",
+                "because": "单次导出的常见上限是 60 秒",
+                "evidence_refs": None,
+            }
         ],
     },
     ensure_ascii=False,
@@ -249,3 +267,45 @@ async def test_run_seat_round_truncates_and_traces_when_the_repack_still_overflo
     assert round_.step is Step.SEATS_RUNNING
     assert any("超出单席位上限" in item.reason for item in round_.dropped)
     assert GENERATION_FAILED not in harness.events.names
+
+
+async def test_run_seat_round_repacks_when_a_seat_packet_is_unparsable():
+    """真跑 P7 验证实测：某个席位的 `evidence_refs` 写成了 `null` → 整轮 `席位失败` 判死。
+
+    解析错和超限一样是**可修复的错**：该席位重装一次就好了（其余席位不动）。
+    """
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={SEAT: [NULL_REFS_SEAT_REPLY, SEAT_REPLY]},
+    )
+    harness.seed_project()
+    round_id = await started_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    await harness.run_seat_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert len(round_.current_reviews) == 1
+    assert len(round_.current_reviews[0].opinions) == 1  # 第二次那份
+    assert round_.step is Step.SEATS_RUNNING
+    assert GENERATION_FAILED not in harness.events.names
+    assert [request.purpose for request in harness.gateway.requests].count("seat_review") == 2
+    assert harness.prompts.calls[-1][1]["validation_error"] != ""  # 重装带上了纠错指引
+
+
+async def test_run_seat_round_still_fails_when_the_seat_repack_also_fails():
+    """两次都过不了 → 照旧整轮失败（"失败必须是失败"，口径不变）。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={SEAT: [NULL_REFS_SEAT_REPLY, NULL_REFS_SEAT_REPLY]},
+    )
+    harness.seed_project()
+    round_id = await started_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    with pytest.raises(PacketParseError):
+        await harness.run_seat_round()(round_id=round_id)
+
+    assert harness.rounds.get(round_id).step is Step.FAILED
