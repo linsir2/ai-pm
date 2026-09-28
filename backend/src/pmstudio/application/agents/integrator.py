@@ -4,6 +4,7 @@
 """
 
 import json
+from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
 from pmstudio.application.context import FEATURE_FIELDS_TEXT, SECTION_SLOTS_TEXT
@@ -11,6 +12,19 @@ from pmstudio.application.ports import ModelGateway, ModelMessage, ModelRequest,
 from pmstudio.domain.shared.ids import RoundId
 
 PURPOSE = "integration"
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrationOutcome:
+    """整合者这一趟交回的东西：报文 + **容器被截断了几条**。
+
+    截断不是错误（`schemas.parse_packet_trimmed` 的语义）：用例层决定要不要先重装一次，
+    溢出最终变成留痕与草案卡上的缺口行（"不静默丢"）。
+    """
+
+    packet: schemas.IntegrationPacket
+    overflow: tuple[schemas.Overflow, ...] = ()
+
 
 LIMITS_TEXT = "\n".join(
     [
@@ -85,7 +99,7 @@ class Integrator:
         entry_ids: str,
         validation_error: str = "",
         round_id: RoundId | None = None,
-    ) -> schemas.IntegrationPacket:
+    ) -> IntegrationOutcome:
         schema = schemas.IntegrationPacket.model_json_schema()
         prompt = self._prompts.render(
             self.PROMPT,
@@ -110,4 +124,7 @@ class Integrator:
                 metadata={} if round_id is None else {"round_id": str(round_id)},
             )
         )
-        return schemas.parse_packet(reply.text, schemas.IntegrationPacket, purpose=self.PURPOSE)
+        packet, overflow = schemas.parse_packet_trimmed(
+            reply.text, schemas.IntegrationPacket, purpose=self.PURPOSE
+        )
+        return IntegrationOutcome(packet=packet, overflow=overflow)

@@ -141,6 +141,43 @@ async def test_judgment_accounted_by_a_proposal_still_leaves_the_question_report
     ]
 
 
+def overflow_reply(count: int) -> str:
+    """一次交太多：真跑里 44 条提案把整轮打死（报告 F2）。"""
+
+    return json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "dropped_opinions": [],
+            "proposals": [
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s1"},
+                    "text": f"第 {index} 条",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                }
+                for index in range(count)
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_overflow_items_land_in_dropped_and_gaps():
+    """超限截断的那部分：留痕里说得清，草案卡缺口行上也看得见（不静默丢）。"""
+
+    harness = harness_with(integration=overflow_reply(70))
+
+    round_id = await run_to_integrated(harness)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.draft is not None
+    assert len(round_.draft.proposals) == 60
+    assert any("超出单轮上限" in item.reason for item in round_.dropped)
+    assert any("因单轮上限未进卡片" in gap for gap in round_.draft.gaps)
+
+
 async def test_degraded_questions_count_as_accounted_but_judgments_do_not():
     """整合失败时，疑问原样落 s11（算交代过），没落地的判断仍然报"没交代"。"""
 

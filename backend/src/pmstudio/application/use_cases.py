@@ -534,6 +534,25 @@ def _truncation_items(
     ]
 
 
+def _overflow_items(
+    overflow: tuple[Overflow, ...],
+    *,
+    pass_index: int,
+) -> tuple[DroppedItem, ...]:
+    """整合这一趟被截断掉的那几条：留痕说清是"超出单轮上限"。"""
+
+    return tuple(
+        DroppedItem(
+            handle=f"提案 #{item.kept + 1} 起（共 {item.dropped} 条）",
+            reason=f"超出单轮上限 {item.kept} 条，被截断未进卡片（{item.container}）",
+            source=DropSource.ASSEMBLY,
+            seat_id=None,
+            pass_index=pass_index,
+        )
+        for item in overflow
+    )
+
+
 def _stop_asking_reason(round_: Round) -> str | None:
     """该不该停止追问？两个闸门，谁先到算谁，理由写进证据与缺口行里。
 
@@ -675,7 +694,7 @@ class IntegrateRound:
             ).partition("--")
             view = document.view()
             try:
-                packet = await self._integrator.integrate(
+                outcome = await self._integrator.integrate(
                     document_state=render_document_state(
                         view, readiness=self._checker.check(view)
                     ),
@@ -689,6 +708,21 @@ class IntegrateRound:
                     validation_error=validation_error,
                     round_id=round_id,
                 )
+                if outcome.overflow and attempt < MAX_INTEGRATION_ATTEMPTS:
+                    # 超限是可修复的错：先让它自己精简一次，第二次才截断（报告 F2/F11）。
+                    first = outcome.overflow[0]
+                    validation_error = repair_note(
+                        PacketParseError(
+                            "模型返回的报文过不了 schema",
+                            purpose="integration",
+                            overflow=(
+                                first.container,
+                                first.kept + first.dropped,
+                                first.kept,
+                            ),
+                        )
+                    )
+                    continue
             except ApplicationError as error:
                 fail_round(
                     rounds=self._rounds,
@@ -701,10 +735,23 @@ class IntegrateRound:
                 )
                 raise
             try:
-                assembled = assemble(packet, round_=round_, document=document, ledger=ledger)
+                assembled = assemble(
+                    outcome.packet, round_=round_, document=document, ledger=ledger
+                )
+                # 截断掉的那几条要留痕 + 在草案卡缺口行里说清（"不静默丢"）。
+                assembled = replace(
+                    assembled,
+                    dropped=assembled.dropped
+                    + _overflow_items(outcome.overflow, pass_index=round_.seat_round_count),
+                )
                 gaps = dry_run(
                     document, assembled.proposals, round_=round_, now=self._clock.now()
                 )
+                if outcome.overflow:
+                    count = sum(item.dropped for item in outcome.overflow)
+                    gaps = gaps + (
+                        f"本轮有 {count} 条内容因单轮上限未进卡片（可在下一轮继续提）",
+                    )
             except (PacketParseError, DomainError) as error:
                 message = getattr(error, "message", str(error))
                 if attempt == MAX_INTEGRATION_ATTEMPTS:

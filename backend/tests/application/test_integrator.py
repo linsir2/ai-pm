@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from pmstudio.application.agents import schemas
 from pmstudio.application.agents.integrator import LIMITS_TEXT, Integrator
 from pmstudio.application.errors import PacketParseError
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway
@@ -64,7 +65,7 @@ async def test_integrator_returns_parsed_packet_and_all_slots():
     prompts = RecordingPrompts()
     integrator = Integrator(model=gateway, prompts=prompts)
 
-    packet = await integrator.integrate(
+    outcome = await integrator.integrate(
         document_state="# 文档",
         claims="- [E1] 需求 · s5 · 要做一个订单导出功能",
         opinions="### seat.data_scale（数据规模与性能）…",
@@ -72,6 +73,7 @@ async def test_integrator_returns_parsed_packet_and_all_slots():
         skipped="（没有跳过的题）",
         entry_ids="（文档现在没有任何条目）",
     )
+    packet = outcome.packet
 
     assert packet.questions[0].kind == "gap"
     assert packet.proposals[0].target.field == "acceptance"
@@ -84,6 +86,7 @@ async def test_integrator_returns_parsed_packet_and_all_slots():
     assert slots["validation_error"] == ""  # 第一次不给错误
     assert "最多 5" in slots["limits"]
     assert "功能子树" in slots["limits"]
+    assert "60" in slots["limits"]  # 提案上限与 schema 对齐
 
 
 async def test_integrator_passes_validation_error_on_repair():
@@ -133,3 +136,43 @@ async def test_integrator_bad_missing_proposal_refs_is_a_packet_error():
             skipped="…",
             entry_ids="…",
         )
+
+
+def over_cap_reply(count: int) -> str:
+    return json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": [
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s1"},
+                    "text": f"第 {index} 条",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E4"],
+                }
+                for index in range(count)
+            ],
+            "dropped_opinions": [],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_integrator_reports_overflow_instead_of_raising():
+    """真跑实测：CRF 那轮 44 条提案整轮被毙；现在只截断并报告（报告 F2）。"""
+
+    gateway = ScriptedModelGateway(replies={"integration": over_cap_reply(70)})
+    integrator = Integrator(model=gateway, prompts=RecordingPrompts())
+
+    outcome = await integrator.integrate(
+        document_state="# 文档",
+        claims="…",
+        opinions="…",
+        answered="…",
+        skipped="…",
+        entry_ids="…",
+    )
+
+    assert len(outcome.packet.proposals) == 60
+    assert outcome.overflow == (schemas.Overflow(container="proposals", kept=60, dropped=10),)
