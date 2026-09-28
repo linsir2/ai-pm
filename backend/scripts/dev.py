@@ -89,6 +89,8 @@ def main() -> int:
     print(f"配置来源：{ENV_FILE if loaded else '当前环境变量'}")
     print(f"模型：{os.environ['PMSTUDIO_MODEL']} · key：{mask(os.environ['PMSTUDIO_API_KEY'])}")
     print(f"网关：{os.environ.get('PMSTUDIO_API_BASE') or '(官方默认)'}")
+    timeout = os.environ.get("PMSTUDIO_MODEL_TIMEOUT", "").strip() or "90"
+    print(f"超时：{timeout} 秒/次（一次业务调用最多重试 3 次）")
     print(f"库：{db_path}{'（已存在）' if db_path.exists() else '（还没有，首次写入时建）'}")
     print(f"起在 http://{args.host}:{port} · 健康检查 /api/health")
 

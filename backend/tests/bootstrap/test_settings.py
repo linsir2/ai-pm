@@ -1,6 +1,6 @@
 import pytest
 
-from pmstudio.bootstrap.settings import ConfigError, Settings
+from pmstudio.bootstrap.settings import DEFAULT_MODEL_TIMEOUT, ConfigError, Settings
 
 
 def test_settings_read_model_key_and_db_path(tmp_path):
@@ -36,3 +36,28 @@ def test_settings_bad_missing_model_is_a_hard_error(tmp_path):
 def test_settings_bad_missing_key_is_a_hard_error(tmp_path):
     with pytest.raises(ConfigError, match="PMSTUDIO_API_KEY"):
         Settings.from_env({"PMSTUDIO_MODEL": "m"}, default_db=tmp_path / "d.db")
+
+
+def test_settings_model_timeout_defaults_and_reads_env(tmp_path):
+    """超时是配置项：不填有默认值，填了要生效，填错要当场报错（不做静默兜底）。"""
+
+    base = {"PMSTUDIO_MODEL": "m", "PMSTUDIO_API_KEY": "k"}
+
+    assert (
+        Settings.from_env(base, default_db=tmp_path / "d.db").model_timeout
+        == DEFAULT_MODEL_TIMEOUT
+    )
+    assert (
+        Settings.from_env(
+            {**base, "PMSTUDIO_MODEL_TIMEOUT": "12.5"}, default_db=tmp_path / "d.db"
+        ).model_timeout
+        == 12.5
+    )
+    with pytest.raises(ConfigError, match="PMSTUDIO_MODEL_TIMEOUT"):
+        Settings.from_env(
+            {**base, "PMSTUDIO_MODEL_TIMEOUT": "abc"}, default_db=tmp_path / "d.db"
+        )
+    with pytest.raises(ConfigError, match="PMSTUDIO_MODEL_TIMEOUT"):
+        Settings.from_env(
+            {**base, "PMSTUDIO_MODEL_TIMEOUT": "0"}, default_db=tmp_path / "d.db"
+        )

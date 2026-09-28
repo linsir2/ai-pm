@@ -23,6 +23,11 @@ testpaths = ["tests"]
 addopts = "-q"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # litellm 内部 pydantic 的 ReadOnly 告警（第三方库自己的兼容提示，与我们无关）；
+    # 只有真 HTTP 那条测试会走到它，别让它把测试输出搞脏。
+    "ignore:Item 'summary' on TypedDict class:UserWarning",
+]
 
 [tool.ruff]
 line-length = 100

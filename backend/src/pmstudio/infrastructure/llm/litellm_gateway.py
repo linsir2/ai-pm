@@ -5,15 +5,19 @@
 """
 
 import asyncio
+import hashlib
 import json
 import os
+import time
+from collections.abc import Mapping
+from datetime import UTC, datetime
 
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")  # 别在导入时去网上拉价目表
 
 from litellm import acompletion  # noqa: E402
 
 from pmstudio.application.errors import ModelCallFailed
-from pmstudio.application.ports import ModelReply, ModelRequest
+from pmstudio.application.ports import ModelCallRecorder, ModelReply, ModelRequest
 
 # 只重试"明显是抖动"的错误：连接失败、超时、限流、5xx。认证/参数类错误立刻失败。
 # 失败语义不变：重试到上限仍然失败 → ModelCallFailed → 整轮失败、可重试。
@@ -33,17 +37,33 @@ TRANSIENT_HINTS = (
 )
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (1.0, 3.0)
+#: 默认每次调用的墙钟上限（秒）。真值由 `Settings.model_timeout` 传进来（默认 90）。
+DEFAULT_TIMEOUT = 90.0
 
 
 class LiteLLMGateway:
     def __init__(
-        self, *, model: str, api_key: str | None = None, api_base: str | None = None
+        self,
+        *,
+        model: str,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
+        max_attempts: int = MAX_ATTEMPTS,
+        backoff: tuple[float, ...] = BACKOFF_SECONDS,
+        recorder: ModelCallRecorder | None = None,
     ) -> None:
         self._model = model
         self._api_key = api_key
         self._api_base = api_base
+        self._timeout = timeout
+        self._max_attempts = max_attempts
+        self._backoff = backoff
+        # 留样（`02` §5.3）：默认不接——没给 recorder 就什么都不记
+        self._recorder = recorder
 
     async def complete(self, request: ModelRequest) -> ModelReply:
+        started = time.monotonic()
         kwargs: dict[str, object] = {
             "model": self._model,
             "messages": [
@@ -57,20 +77,33 @@ class LiteLLMGateway:
                     "schema": dict(request.response_schema),
                 },
             },
+            # 包一层墙钟。**必须同时关掉 SDK 自己的重试**（num_retries=0），
+            # 否则只有 timeout 时墙钟会被放大数倍（实测 timeout=2 → 7.8 秒；
+            # 加 num_retries=0 → 2.0 秒）。重试只由下面这一圈负责，时间才算得出来。
+            "timeout": self._timeout,
+            "num_retries": 0,
         }
         if self._api_key:
             kwargs["api_key"] = self._api_key
         if self._api_base:
             kwargs["api_base"] = self._api_base
         response = None
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        for attempt in range(1, self._max_attempts + 1):
             try:
                 response = await acompletion(**kwargs)
                 break
             except Exception as error:  # noqa: BLE001 —— 供应商异常类型太多，统一转译
-                if is_transient(error) and attempt < MAX_ATTEMPTS:
-                    await asyncio.sleep(BACKOFF_SECONDS[attempt - 1])
+                if is_transient(error) and attempt < self._max_attempts:
+                    await asyncio.sleep(self._backoff[attempt - 1])
                     continue
+                # 失败的这一次也留样（reply_text 空串）：查"为什么超时"要看**每一次**尝试，
+                # 不只是最后成功的那次。
+                self._record(
+                    request,
+                    reply_text="",
+                    usage={},
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
                 raise ModelCallFailed(
                     f"模型调用失败：{type(error).__name__}"
                     + (f"（重试 {attempt - 1} 次后仍失败）" if attempt > 1 else ""),
@@ -78,6 +111,7 @@ class LiteLLMGateway:
                     cause=str(error),
                     model=self._model,
                     attempts=attempt,
+                    timeout_seconds=self._timeout,
                 ) from error
         assert response is not None
         raw = (response.choices[0].message.content or "").strip()
@@ -93,10 +127,42 @@ class LiteLLMGateway:
                 model=self._model,
                 head=text[:120],
             )
-        return ModelReply(
+        reply = ModelReply(
             text=text,
             model=getattr(response, "model", self._model),
             usage=dict(getattr(response, "usage", {}) or {}),
+        )
+        self._record(
+            request,
+            reply_text=reply.text,
+            usage=reply.usage,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+        return reply
+
+    def _record(
+        self,
+        request: ModelRequest,
+        *,
+        reply_text: str,
+        usage: Mapping[str, object],
+        duration_ms: int,
+    ) -> None:
+        """旁路留样：没接 recorder 就什么都不做（默认就是没接）。"""
+
+        if self._recorder is None:
+            return
+        prompt = "\n".join(message.content for message in request.messages)
+        self._recorder.record(
+            round_id=request.metadata.get("round_id"),
+            purpose=request.purpose,
+            model=self._model,
+            prompt_sha=hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
+            prompt_text=prompt,
+            reply_text=reply_text,
+            usage=usage,
+            duration_ms=duration_ms,
+            created_at=datetime.now(UTC),
         )
 
 

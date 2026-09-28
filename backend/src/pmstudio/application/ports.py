@@ -60,6 +60,29 @@ class ModelGateway(Protocol):
 
 
 @runtime_checkable
+class ModelCallRecorder(Protocol):
+    """留样的旁路出口（`02` §5.3）：记下每一次模型调用，给排查用，不参与业务。
+
+    实现是 `infrastructure/sqlite/model_calls.py`；网关默认不接（`recorder=None` 时什么都不记）。
+    提示词给的是**原文**——只存哈希复现不了，而复现是这张表唯一的目的。
+    """
+
+    def record(
+        self,
+        *,
+        round_id: str | None,
+        purpose: str,
+        model: str,
+        prompt_sha: str,
+        prompt_text: str,
+        reply_text: str,
+        usage: Mapping[str, object],
+        duration_ms: int,
+        created_at: datetime,
+    ) -> None: ...
+
+
+@runtime_checkable
 class PromptLibrary(Protocol):
     def render(self, name: str, **slots: str) -> str: ...
 

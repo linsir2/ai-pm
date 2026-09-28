@@ -1,4 +1,6 @@
+import asyncio
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -266,3 +268,91 @@ async def test_gateway_rejects_content_that_is_not_json(monkeypatch):
             )
         )
     assert "JSON" in exc.value.message
+
+
+# —— P5c Task 1：超时 ——
+
+
+async def test_gateway_passes_timeout_and_disables_sdk_retries(monkeypatch):
+    """两条都必须传：只传 timeout 会被 SDK 的内部重试放大墙钟（P5c §0.1 实测 4 倍）。"""
+
+    captured: dict = {}
+
+    async def scripted(**kwargs):
+        captured.update(kwargs)
+
+        class _Message:
+            content = "{}"
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "m"
+            usage = {}
+
+        return _Response()
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", scripted)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None, timeout=7.5)
+
+    await gateway.complete(
+        ModelRequest(
+            purpose="claims",
+            messages=(ModelMessage(role="user", content="x"),),
+            schema_name="ClaimsPacket",
+            response_schema={"type": "object"},
+        )
+    )
+
+    assert captured["timeout"] == 7.5
+    assert captured["num_retries"] == 0
+
+
+async def _accept_and_hang(reader, writer):  # type: ignore[no-untyped-def]
+    """静默服务端：接上就不说话，等客户端自己断开（超时后 httpx 会断）。"""
+
+    try:
+        await reader.read()
+    finally:
+        writer.close()
+
+
+async def test_gateway_honours_the_timeout_against_a_silent_provider():
+    """真 HTTP、真 litellm：1 秒的超时必须在 3 秒内抛出来，不许被放大。
+
+    边界怎么定的：直接量过"只传 timeout、不关 SDK 重试"的样子是 timeout 的约 4 倍
+    （P5c §0.1：timeout=2 → 7.8 秒）。这里 timeout=1，正常的 1.1 秒左右结束，
+    放大版要到 4 秒上下——3 秒这条线两边都不蹭。
+    """
+
+    server = await asyncio.start_server(_accept_and_hang, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    gateway = LiteLLMGateway(
+        model="openai/x",
+        api_key="k",
+        api_base=f"http://127.0.0.1:{port}/v1",
+        timeout=1.0,
+        max_attempts=1,
+        backoff=(0.0,),
+    )
+
+    start = time.monotonic()
+    try:
+        with pytest.raises(ModelCallFailed) as exc:
+            await gateway.complete(
+                ModelRequest(
+                    purpose="claims",
+                    messages=(ModelMessage(role="user", content="x"),),
+                    schema_name="ClaimsPacket",
+                    response_schema={"type": "object"},
+                )
+            )
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert time.monotonic() - start < 3.0
+    assert exc.value.details["timeout_seconds"] == 1.0
+    assert exc.value.details["purpose"] == "claims"
