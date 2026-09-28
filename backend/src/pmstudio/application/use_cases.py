@@ -53,7 +53,12 @@ from pmstudio.application.dto import (
     version_summary_view,
     workspace_view,
 )
-from pmstudio.application.errors import ApplicationError, PacketParseError, UnknownEvidenceId
+from pmstudio.application.errors import (
+    ApplicationError,
+    ModelCallFailed,
+    PacketParseError,
+    UnknownEvidenceId,
+)
 from pmstudio.application.events import (
     DOC_CHANGED,
     GENERATION_FAILED,
@@ -725,18 +730,6 @@ class IntegrateRound:
                         )
                     )
                     continue
-            except ApplicationError as error:
-                fail_round(
-                    rounds=self._rounds,
-                    round_writer=self._round_writer,
-                    uow=self._uow,
-                    events=self._events,
-                    clock=self._clock,
-                    round_id=round_id,
-                    reason=error.message,
-                )
-                raise
-            try:
                 assembled = assemble(
                     outcome.packet, round_=round_, document=document, ledger=ledger
                 )
@@ -754,7 +747,22 @@ class IntegrateRound:
                     gaps = gaps + (
                         f"本轮有 {count} 条内容因单轮上限未进卡片（可在下一轮继续提）",
                     )
+            except ModelCallFailed as error:
+                # 网关类失败：网关自己已经重试 3 次 + 退避，报文重装解决不了它 → 立刻判死
+                fail_round(
+                    rounds=self._rounds,
+                    round_writer=self._round_writer,
+                    uow=self._uow,
+                    events=self._events,
+                    clock=self._clock,
+                    round_id=round_id,
+                    reason=error.message,
+                )
+                raise
             except (PacketParseError, DomainError) as error:
+                # 形状错 / 结构错 / 内容错**都是可修复的错**：给第二次机会。
+                # 以前 `except ApplicationError` 把解析错和网关错一起判死，于是
+                # `repair_note` 对整合从来没生效过（真跑留样 15 与 16 差 55 秒就是证据）。
                 message = getattr(error, "message", str(error))
                 if attempt == MAX_INTEGRATION_ATTEMPTS:
                     reason = f"整合两次都过不了校验：{message}"
@@ -780,8 +788,26 @@ class IntegrateRound:
                         reason=reason,
                     )
                     raise PacketParseError(reason, purpose="integration") from error
-                validation_error = message
+                validation_error = (
+                    # 解析错：`repair_note` 有结构化细节（形状 / 超限 / 字段路径）要说
+                    repair_note(error)
+                    if isinstance(error, PacketParseError)
+                    # 领域错：它自己的话术更具体（如"选择题至少两个选项"），别用通用话盖掉
+                    else message
+                )
                 continue
+            except ApplicationError as error:
+                # 兜底：认不出的应用层错误照旧"失败必须是失败"（与改动前的行为一致）
+                fail_round(
+                    rounds=self._rounds,
+                    round_writer=self._round_writer,
+                    uow=self._uow,
+                    events=self._events,
+                    clock=self._clock,
+                    round_id=round_id,
+                    reason=error.message,
+                )
+                raise
             return assembled, gaps
         raise AssertionError("不可能走到这里")
 

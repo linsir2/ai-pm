@@ -178,6 +178,51 @@ async def test_overflow_items_land_in_dropped_and_gaps():
     assert any("因单轮上限未进卡片" in gap for gap in round_.draft.gaps)
 
 
+def harness_with_replies(*, integration: str | list[str]) -> Harness:
+    """与 `harness_with` 一样，只是整合那一步可以给一串回复（测重装）。"""
+
+    return Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": integration},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+
+
+async def test_integration_repacks_when_the_packet_is_an_array():
+    """真跑实测：第一次回数组就立刻 502，**根本没有第二次调用**（留样 15 与 16 差 55 秒）。
+
+    修好之后：第一次是归不了位的数组（元素 `{}`）→ 判死前先重装 → 第二次写对 → 整轮照走。
+    """
+
+    harness = harness_with_replies(
+        integration=["[{}]", draft_reply(refs=["E2"], dropped=[])]
+    )
+
+    round_id = await run_to_integrated(harness)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.draft is not None  # 没判死
+    integrations = [
+        request for request in harness.gateway.requests if request.purpose == "integration"
+    ]
+    assert len(integrations) == 2
+    assert "数组" in harness.prompts.calls[-1][1]["validation_error"]  # 重装带上了形状指引
+
+
+async def test_integration_still_takes_the_graceful_exit_after_two_bad_shapes():
+    """两次都是数组 → 与内容错**同一个出口**（有席位疑问就降级成 s11 草案，不判死）。"""
+
+    harness = harness_with_replies(integration=["[{}]", "[{}]"])
+
+    round_id = await run_to_integrated(harness)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.draft is not None
+    assert any("未归并" in gap for gap in round_.draft.gaps)
+    assert len(
+        [request for request in harness.gateway.requests if request.purpose == "integration"]
+    ) == 2
+
+
 async def test_degraded_questions_count_as_accounted_but_judgments_do_not():
     """整合失败时，疑问原样落 s11（算交代过），没落地的判断仍然报"没交代"。"""
 
