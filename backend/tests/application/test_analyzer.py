@@ -3,7 +3,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.agents.analyzer import ClaimAnalyzer, grounded_span
 from pmstudio.application.agents.schemas import ClaimsPacket
 from pmstudio.application.errors import PacketParseError
 from pmstudio.domain.round.round import SeatNomination
@@ -13,6 +13,15 @@ from tests.support.builders import SEAT, make_seat
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway, StaticSeatCatalog
 
 INPUT = "想做个订单导出的功能，运营每天都要用，数据量大概几万。登录页太丑了。下个月必须上线。"
+
+#: `case-a` 那次的真实输入（留样原样抄下来）
+CASE_A_INPUT = (
+    "想做个订单导出的功能，运营每天都要用，最好能按时间筛选，数据量大概几万吧。"
+    "另外登录页太丑了，顺便改一下，支持微信登录。月底必须上线。"
+)
+#: 真模型在 `case-a` 上稳定产出的那条复述（完整 eval 与单条重跑各留了一次，逐字相同）。
+#: 两段都是原话，省略号 3 个字却计进分母：最长匹配 10 字撞上 10.5 字门槛 → 差 0.5 字判死整轮。
+CASE_A_SPAN = "想做个订单导出的功能...最好能按时间筛选"
 
 
 def make_analyzer(gateway, prompts) -> ClaimAnalyzer:  # type: ignore[no-untyped-def]
@@ -155,6 +164,34 @@ async def test_analyzer_realigns_recombined_raw_span_to_a_real_fragment():
     assert len(span) >= 6
 
 
+async def test_analyzer_survives_an_ellipsis_joined_raw_span():
+    """同一件事的省略号写法：整轮不许再判死（完整 eval 里 `case-a` 就是这么红的）。"""
+
+    reply = json.dumps(
+        {
+            "basis": "读了文档",
+            "claims": [
+                {
+                    "text": "订单导出要能按时间筛选",
+                    "raw_span": CASE_A_SPAN,
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                }
+            ],
+            "seats": [{"seat_id": SEAT, "why": "你说到了数据量"}],
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"claims": reply})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    claims = (await analyzer.analyze(user_input=CASE_A_INPUT, document_state="# 文档")).claims
+
+    assert claims[0].raw_span == "想做个订单导出的功能"
+    assert claims[0].raw_span in CASE_A_INPUT
+
+
 async def test_analyzer_still_rejects_invented_spans():
     reply = json.dumps(
         {
@@ -177,6 +214,54 @@ async def test_analyzer_still_rejects_invented_spans():
 
     with pytest.raises(PacketParseError):
         await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+
+def test_grounded_span_realigns_an_ellipsis_joined_span_when_both_parts_are_real():
+    """省略号是"拼接标记"，不是内容：每段各自得站得住，取最长的那段真实原话。
+
+    真模型实测（完整 eval 的 `case-a`）：`A...B` 两段都在输入里逐字存在，
+    却因为省略号 3 个字也计进分母，差 0.5 字把整轮判死（502，用户只能手动重试）。
+    """
+
+    assert grounded_span(CASE_A_SPAN, CASE_A_INPUT) == "想做个订单导出的功能"
+
+
+@pytest.mark.parametrize("joiner", ["...", "……", "。。。", "…"])
+def test_grounded_span_accepts_the_common_ellipsis_forms(joiner):
+    """模型写省略号的写法不止一种（英文三点、中文省略号、连写句号）——都按拼接标记处理。"""
+
+    span = f"想做个订单导出的功能{joiner}最好能按时间筛选"
+
+    assert grounded_span(span, CASE_A_INPUT) == "想做个订单导出的功能"
+
+
+def test_grounded_span_rejects_an_ellipsis_joined_span_with_one_invented_part():
+    """拼接不放松反编造：只要有一段在原文里找不到，整条还是不认（这段是真模型编过的形状）。"""
+
+    span = "想做个订单导出的功能...帮我搞个导出吧"
+
+    assert grounded_span(span, CASE_A_INPUT) is None
+
+
+def test_grounded_span_rejects_a_span_that_is_only_an_ellipsis():
+    """`……` 这种"只有一个拼接标记"的候选里一句原话都没有，不算复述。"""
+
+    assert grounded_span("……", CASE_A_INPUT) is None
+    assert grounded_span("...", CASE_A_INPUT) is None
+
+
+def test_grounded_span_keeps_a_verbatim_span_that_itself_contains_dots():
+    """原文里真的写了三点时，逐字命中优先——不许把它切段（切了反而跳不回原文）。"""
+
+    source = "第一句...第二句都在原文里"
+
+    assert grounded_span(source, source) == source
+
+
+def test_grounded_span_returns_the_longest_real_fragment():
+    span = "月底必须上线...想做个订单导出的功能"
+
+    assert grounded_span(span, CASE_A_INPUT) == "想做个订单导出的功能"
 
 
 async def test_analyzer_normalizes_preference_target_that_also_carries_a_section():
