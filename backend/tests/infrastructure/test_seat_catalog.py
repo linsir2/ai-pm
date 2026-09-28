@@ -89,3 +89,33 @@ def test_catalog_by_id_returns_definition_and_raises_on_unknown():
     assert catalog.by_id("seat.data_scale").title == "数据规模与性能"
     with pytest.raises(KeyError):
         catalog.by_id("seat.nope")
+
+
+def test_catalog_reads_sections_and_fields(tmp_path):
+    """席位 TOML 要能声明"负责哪几章 / 哪些功能字段"（`01` F16，缩编要用）。"""
+
+    (tmp_path / "a.toml").write_text(
+        'seat_id = "seat.a"\ntitle = "A"\nfocus = "x"\n'
+        'sections = ["s5", "s8"]\nfields = ["acceptance"]\n',
+        encoding="utf-8",
+    )
+
+    seat = TomlSeatCatalog(tmp_path).all()[0]
+
+    assert (seat.sections, seat.fields) == (("s5", "s8"), ("acceptance",))
+
+
+def test_real_seat_files_all_declare_their_sections():
+    """10 个真实席位都要有两项，章节 id 必须合法（防手滑写 s15）。"""
+
+    from pmstudio.domain.shared.sections import SECTION_IDS
+
+    catalog = TomlSeatCatalog(DEFINITIONS)
+    valid_sections = {str(item) for item in SECTION_IDS}
+    from pmstudio.domain.authoring.schema import FEATURE_FIELD_BY_NAME
+
+    for seat in catalog.all():
+        assert seat.sections, seat.seat_id
+        assert set(seat.sections) <= valid_sections, seat.seat_id
+        assert seat.fields, seat.seat_id
+        assert set(seat.fields) <= set(FEATURE_FIELD_BY_NAME), seat.seat_id

@@ -23,6 +23,8 @@ class TomlSeatCatalog:
                     focus=data["focus"],
                     trigger_keywords=tuple(data.get("trigger_keywords", ())),
                     always_on=bool(data.get("always_on", False)),
+                    sections=tuple(data.get("sections", ())),
+                    fields=tuple(data.get("fields", ())),
                 )
             )
         self.order: list[str] = [seat.seat_id for seat in self._seats]

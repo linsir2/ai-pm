@@ -109,6 +109,7 @@ class Round:
         confirmed_version_no: int | None = None,
         dropped: tuple[DroppedItem, ...] = (),
         abandon_reason: str | None = None,
+        active_seats: tuple[str, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -129,6 +130,7 @@ class Round:
         self._confirmed_version_no = confirmed_version_no
         self._dropped = tuple(dropped)
         self._abandon_reason = abandon_reason
+        self._active_seats = tuple(active_seats)
 
     @classmethod
     def start(
@@ -236,6 +238,16 @@ class Round:
     def abandon_reason(self) -> str | None:
         return self._abandon_reason
 
+    @property
+    def active_seats(self) -> tuple[str, ...]:
+        """这一趟**实际要跑的**名单（开场卡确认时 = 用户编制；答案轮 = 缩编结果）。
+
+        `seats`（用户编制）永远不动：R7 与复述卡要的是"这一轮请了谁"，
+        不是"这一趟跑了谁"（`04` C8）。
+        """
+
+        return self._active_seats or self._seats
+
     def abandon(self, reason: str) -> None:
         """放弃这一轮：幂等、终点，**只记第一次**的原因。
 
@@ -304,12 +316,13 @@ class Round:
         if not unique_seats:
             raise ShapeError("席位编制不能为空")
         self._seats = unique_seats
+        self._active_seats = unique_seats  # 开场卡确认：这一趟就是用户编制
         self._begin_seat_round()
         self._advance_to(Step.SEATS_RUNNING)
 
     def attest(self, review: SeatReview) -> None:
         self._require_step(Step.SEATS_RUNNING)
-        if review.seat_id not in self._seats:
+        if review.seat_id not in self.active_seats:
             raise UnknownSeat(seat_id=review.seat_id)
         self._seat_reviews = self._seat_reviews + (
             replace(review, pass_index=self._seat_round_count),
@@ -328,7 +341,7 @@ class Round:
         """这一轮还没交回意见的席位。崩了重进只补这些，不重跑已交回的（计划 §3.11）。"""
 
         done = {review.seat_id for review in self.current_reviews}
-        return tuple(seat for seat in self._seats if seat not in done)
+        return tuple(seat for seat in self.active_seats if seat not in done)
 
     def revise_claims(self, claims: tuple[Claim, ...] | list[Claim]) -> None:
         """开场卡纠正：只改标签 / 去处 / 假设 / 决策者，不改文本、原话片段与编号。"""
@@ -379,7 +392,12 @@ class Round:
         self._draft = draft
         self._advance_to(Step.AWAITING_CONFIRM, waiting_on=WaitingOn.DRAFT)
 
-    def submit_answers(self, answer_set: AnswerSet) -> None:
+    def submit_answers(
+        self,
+        answer_set: AnswerSet,
+        *,
+        active_seats: tuple[str, ...] | list[str] | None = None,
+    ) -> None:
         questionnaire = self._questionnaire
         if (
             self._step is not Step.AWAITING_ANSWERS
@@ -396,6 +414,16 @@ class Round:
         for question_id in touched:
             if question_id not in known:
                 raise UnknownQuestion(question_id=question_id)
+        if active_seats is not None:
+            # C8 缩编：这一趟只跑名单里的席位。名单必须在**用户编制**之内（R7 不许破），
+            # 也不能是空的（宁多勿缺：空了就整趟没人跑，等于静默漏面）。
+            narrowed = tuple(dict.fromkeys(active_seats))
+            if not narrowed:
+                raise ShapeError("缩编后的席位名单不能为空")
+            outside = [seat for seat in narrowed if seat not in self._seats]
+            if outside:
+                raise UnknownSeat(seat_id=outside[0])
+            self._active_seats = narrowed
         self._begin_seat_round()
         self._answer_sets = self._answer_sets + (answer_set,)
         self._advance_to(Step.SEATS_RUNNING)

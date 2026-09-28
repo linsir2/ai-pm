@@ -3,3 +3,5 @@ title = "数据规模与性能"
 focus = "量级、耗时上限、同步与异步的分界、分页与批处理"
 always_on = true
 trigger_keywords = []
+sections = ["s8", "s10"]
+fields = ["acceptance", "io"]

@@ -3,3 +3,5 @@ title = "业务规则"
 focus = "状态流转、筛选口径、边界条件、异常处理"
 always_on = true
 trigger_keywords = []
+sections = ["s5", "s6", "s9"]
+fields = ["rules", "exceptions"]

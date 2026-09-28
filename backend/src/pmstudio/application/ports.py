@@ -42,6 +42,9 @@ class SeatDefinition:
     focus: str
     trigger_keywords: tuple[str, ...] = ()
     always_on: bool = False
+    #: 这个席位负责哪几章 / 哪些功能字段（`01` F16）。缩编与"这一趟请了谁"都用它。
+    sections: tuple[str, ...] = ()
+    fields: tuple[str, ...] = ()
 
 
 @runtime_checkable

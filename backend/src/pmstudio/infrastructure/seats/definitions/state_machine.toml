@@ -3,3 +3,5 @@ title = "状态机与流转"
 focus = "对象有哪些状态、谁能改、非法流转怎么拦、回滚与重试"
 always_on = false
 trigger_keywords = ["状态", "流转", "审核", "审批", "工作流", "驳回", "撤销", "回滚", "草稿", "发布", "上架", "下架"]
+sections = ["s5", "s6"]
+fields = ["rules", "exceptions"]

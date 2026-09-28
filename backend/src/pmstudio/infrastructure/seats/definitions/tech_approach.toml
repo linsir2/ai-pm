@@ -3,3 +3,5 @@ title = "技术方案"
 focus = "需求与方案的区分、依赖引入成本、可运维性、备选方案"
 always_on = true
 trigger_keywords = []
+sections = ["s7", "s9"]
+fields = ["dependencies", "rules"]

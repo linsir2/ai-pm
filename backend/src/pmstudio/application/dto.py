@@ -136,6 +136,7 @@ class RoundView:
     waiting_on: str
     seat_round_count: int
     seats: tuple[str, ...]
+    active_seats: tuple[str, ...]
     nominated_seats: tuple[SeatSuggestionView, ...]
     available_seats: tuple[SeatSuggestionView, ...]
     claims: tuple[ClaimView, ...]
@@ -281,6 +282,7 @@ def round_view(
         waiting_on=str(round_.waiting_on),
         seat_round_count=round_.seat_round_count,
         seats=tuple(round_.seats),
+        active_seats=tuple(round_.active_seats),
         nominated_seats=nominated,
         available_seats=_available_seats(
             round_,

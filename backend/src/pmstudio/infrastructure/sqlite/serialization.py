@@ -514,6 +514,8 @@ def round_to_payload(round_: Round) -> dict:
         "user_input": round_.user_input,
         "claims": [claim_to_json(claim) for claim in round_.claims],
         "seats": list(round_.seats),
+        # 这一趟实际跑的名单（缩编结果）；老行没有这个键，读回落回 seats
+        "active_seats": list(round_.active_seats),
         "nominated_seats": [
             {"seat_id": item.seat_id, "why": item.why} for item in round_.nominated_seats
         ],
@@ -561,6 +563,7 @@ def round_from_payload(
         waiting_on=waiting_on,
         claims=tuple(claim_from_json(item) for item in payload["claims"]),
         seats=tuple(payload["seats"]),
+        active_seats=tuple(payload.get("active_seats") or payload["seats"]),
         # 老行里没有这个键（席位提名是后加的）：给空元组，读回来照样能跑
         nominated_seats=tuple(
             SeatNomination(seat_id=item["seat_id"], why=item["why"])

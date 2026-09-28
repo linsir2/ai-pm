@@ -78,6 +78,21 @@ def round_with_seats() -> Round:
     return round_
 
 
+def round_with_seat_list(seats: tuple[str, ...]) -> Round:
+    round_ = round_with_claims()
+    round_.submit_opening(seats=seats)
+    return round_
+
+
+def answer_skipped() -> AnswerSet:
+    return AnswerSet(
+        form_id=FormId("f1"),
+        answers=(),
+        answered_at=NOW,
+        skipped=(QuestionId("q1"),),
+    )
+
+
 def make_questionnaire(form_id: str = "f1", *, target: Target | None = None) -> Questionnaire:
     return Questionnaire(
         form_id=FormId(form_id),
@@ -577,3 +592,42 @@ def test_abandoned_round_refuses_every_other_action():
 def test_abandon_requires_a_reason():
     with pytest.raises(ShapeError):
         round_with_seats().abandon("   ")
+
+
+# —— P5c Task 7：这一趟实际要跑的名单 ——
+
+
+def test_active_seats_default_to_the_full_roster():
+    round_ = round_with_seats()
+
+    assert round_.active_seats == round_.seats
+    assert round_.pending_seats == round_.seats
+
+
+def test_answer_round_can_narrow_the_active_seats():
+    """C8：答完一批只请相关席位；用户编制（`seats`）不动，R7 与复述卡不受影响。"""
+
+    round_ = round_with_seat_list(("seat.a", "seat.b", "seat.c"))
+    round_.integrate(questionnaire=make_questionnaire())
+    round_.submit_answers(answer_skipped(), active_seats=("seat.b",))
+
+    assert round_.seats == ("seat.a", "seat.b", "seat.c")  # 编制不变
+    assert round_.active_seats == ("seat.b",)
+    assert round_.pending_seats == ("seat.b",)
+
+
+def test_attest_rejects_a_seat_that_is_not_active_this_pass():
+    round_ = round_with_seat_list(("seat.a", "seat.b"))
+    round_.integrate(questionnaire=make_questionnaire())
+    round_.submit_answers(answer_skipped(), active_seats=("seat.b",))
+
+    with pytest.raises(UnknownSeat):
+        round_.attest(SeatReview(seat_id="seat.a", basis="x", opinions=()))
+
+
+def test_narrowed_seats_must_stay_inside_the_roster():
+    round_ = round_with_seat_list(("seat.a",))
+    round_.integrate(questionnaire=make_questionnaire())
+
+    with pytest.raises(UnknownSeat):
+        round_.submit_answers(answer_skipped(), active_seats=("seat.z",))
