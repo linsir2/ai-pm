@@ -68,7 +68,9 @@ class OpinionDraft(BaseModel):
 
 class SeatPacket(BaseModel):
     basis: str
-    opinions: list[OpinionDraft] = Field(default_factory=list, max_length=8)
+    #: 上限跟着提示词走：`seat_review.md` 允许"最多 5 条判断"，加上疑问一共 12 条。
+    #: 真跑实测：5 判断 + 5 疑问 = 10 条，旧的 8 条上限直接把整轮打死（报告 F4）。
+    opinions: list[OpinionDraft] = Field(default_factory=list, max_length=12)
 
 
 class TargetDraft(BaseModel):
@@ -143,10 +145,12 @@ class DroppedOpinionDraft(BaseModel):
 class IntegrationPacket(BaseModel):
     questions: list[QuestionDraft] = Field(default_factory=list, max_length=12)
     list_items: list[ListItemDraft] = Field(default_factory=list, max_length=20)
-    proposals: list[ProposalDraft] = Field(default_factory=list, max_length=30)
+    #: 一棵完整功能树 12 个字段；30 条装不下 3 棵（36），真跑里 44 条提案被整包判死（报告 F2）。
+    proposals: list[ProposalDraft] = Field(default_factory=list, max_length=60)
     dropped_opinions: list[DroppedOpinionDraft] = Field(
         default_factory=list,
-        max_length=30,
+        #: 7 个席位 × 单席位 12 条 = 84——"一条都不许默默丢掉"要在数学上成立（报告 F11）。
+        max_length=84,
         description="你没采用的席位意见：给出地址与原因；**一条都不许默默丢掉**",
     )
 
