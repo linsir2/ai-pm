@@ -48,7 +48,11 @@ LABEL_HINTS: dict[ClaimLabel, str] = {
 LABELS_TEXT = "\n".join(
     f"- {label.value}（{LABEL_TITLES[label]}）：{LABEL_HINTS[label]}" for label in ClaimLabel
 )
-SECTIONS_TEXT = "\n".join(f"- {spec.section_id} {spec.title}" for spec in SECTIONS)
+# 章节表：**只给短 id 与标题**，并明说"section_id 只能填前面那个短 id"。
+# 真模型实测：写成 `section_id: "s3 用户与受众"`（把整行抄进来了）→ 未知章节 → 整轮 502。
+SECTIONS_TEXT = "\n".join(f"- {spec.section_id} {spec.title}" for spec in SECTIONS) + (
+    "\n（section_id 只能填上面那个短 id，如 s3；**不要带标题、不要带空格**）"
+)
 
 # 章节槽：section 级内容也可以指定"落到哪个槽"（目前只有 s8 的六项表态）。
 # 与功能字段表分开列，免得模型把槽名当功能字段。
