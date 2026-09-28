@@ -217,3 +217,161 @@ def test_empty_top_level_array_is_not_rebuilt():
 
     with pytest.raises(PacketParseError):
         schemas.parse_packet_trimmed("[]", schemas.IntegrationPacket, purpose="integration")
+
+
+# —— 字段级归一化（P8）：形状能机械判的就地修，内容与写入语义一律不动 ——
+
+
+def seat_packet_json(*, evidence_refs: object) -> str:
+    return json.dumps(
+        {
+            "basis": "读了 s1–s13 与 E1",
+            "opinions": [
+                {
+                    "local_id": "O1",
+                    "form": "judgment",
+                    "about": "量级",
+                    "claim": "60 秒内完成",
+                    "because": "同类做法",
+                    "evidence_refs": evidence_refs,
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_null_list_field_becomes_empty_list():
+    """真跑实测（P7 验证留样 7）：席位把 `evidence_refs` 写成 `null` → 整席位判死。"""
+
+    packet, _ = schemas.parse_packet_trimmed(
+        seat_packet_json(evidence_refs=None), schemas.SeatPacket, purpose="seat_review"
+    )
+
+    assert packet.opinions[0].evidence_refs == []
+
+
+def test_single_string_becomes_a_one_item_list():
+    packet, _ = schemas.parse_packet_trimmed(
+        seat_packet_json(evidence_refs="E1"), schemas.SeatPacket, purpose="seat_review"
+    )
+
+    assert packet.opinions[0].evidence_refs == ["E1"]
+
+
+def test_null_on_a_defaulted_field_falls_back_to_the_default():
+    raw = json.dumps(
+        {
+            "questions": [
+                {
+                    "kind": None,
+                    "title": "t",
+                    "why": "w",
+                    "consequence_if_skipped": "c",
+                    "target": {"zone": "body", "section_id": "s1"},
+                }
+            ],
+            "list_items": None,
+            "proposals": [],
+            "dropped_opinions": None,
+        },
+        ensure_ascii=False,
+    )
+
+    packet, _ = schemas.parse_packet_trimmed(
+        raw, schemas.IntegrationPacket, purpose="integration"
+    )
+
+    assert packet.questions[0].kind == "gap"
+    assert packet.list_items == []
+    assert packet.dropped_opinions == []
+
+
+def test_write_semantics_fields_are_never_defaulted():
+    """`op` 写歪了可能把 remove 变成 add——这类宁可失败（有重装兜）。"""
+
+    raw = json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": [
+                {
+                    "op": None,
+                    "entry_id": "r1#01",
+                    "target": {"zone": "body", "section_id": "s1"},
+                    "text": "撤下这条",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(PacketParseError):
+        schemas.parse_packet_trimmed(raw, schemas.IntegrationPacket, purpose="integration")
+
+
+def test_seat_opinion_form_is_never_defaulted():
+    """`form` 决定这条意见进不进账本（有没有编号）——不许用默认值悄悄改。"""
+
+    raw = json.dumps(
+        {
+            "basis": "读了 s1–s13",
+            "opinions": [
+                {
+                    "local_id": "O1",
+                    "form": None,
+                    "about": "a",
+                    "claim": "c",
+                    "because": "b",
+                    "evidence_refs": [],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(PacketParseError):
+        schemas.parse_packet_trimmed(raw, schemas.SeatPacket, purpose="seat_review")
+
+
+def test_content_fields_are_never_invented():
+    raw = json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": [
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s1"},
+                    "text": None,
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(PacketParseError):
+        schemas.parse_packet_trimmed(raw, schemas.IntegrationPacket, purpose="integration")
+
+
+def test_array_rebuild_and_field_normalisation_compose():
+    """顶层是数组 + 里面字段写歪：两道归一化要能叠加（P7 × P8）。"""
+
+    payload = json.dumps(
+        [
+            {"handle": "seat.x:O1", "reason": "与文档重复"},
+            {"text": "t", "target": {"zone": "body", "section_id": "s1"}, "reason": "r"},
+        ],
+        ensure_ascii=False,
+    )
+
+    packet, _ = schemas.parse_packet_trimmed(
+        payload, schemas.IntegrationPacket, purpose="integration"
+    )
+
+    assert len(packet.dropped_opinions) == 1
+    assert len(packet.list_items) == 1

@@ -5,7 +5,8 @@ import copy
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from types import UnionType
+from typing import Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -231,6 +232,84 @@ def _normalize_payload(payload: object, *, model: type[BaseModel], purpose: str)
     )
 
 
+#: 这几个字段**不适用**"null → 用默认值"：
+#: `op` / `entry_id` 决定写/改/删哪一条；`form` 决定这条意见进不进账本（有没有编号）。
+_WRITE_SEMANTICS_FIELDS = frozenset({"op", "entry_id", "form"})
+
+
+def _is_model(annotation: object) -> bool:
+    return isinstance(annotation, type) and issubclass(annotation, BaseModel)
+
+
+def _allows_none(annotation: object) -> bool:
+    return annotation is type(None) or type(None) in get_args(annotation)  # noqa: E721
+
+
+def _normalize_value(value: object, *, annotation: object) -> object:
+    """按注解归一化一个值：列表字段收 `null` / 单个字符串；嵌套报文递归进去。"""
+
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        inner = [item for item in get_args(annotation) if item is not type(None)]
+        if value is None or len(inner) != 1:
+            return value
+        return _normalize_value(value, annotation=inner[0])
+    if origin is list:
+        args = get_args(annotation)
+        item_type = args[0] if args else object
+        if value is None:
+            return []
+        if isinstance(value, str) and item_type is str:
+            return [value]
+        if isinstance(value, list) and _is_model(item_type):
+            return [
+                _normalize_model(item, model=item_type) if isinstance(item, dict) else item
+                for item in value
+            ]
+        return value
+    if _is_model(annotation) and isinstance(value, dict):
+        return _normalize_model(value, model=annotation)
+    return value
+
+
+def _normalize_model(payload: object, *, model: type[BaseModel]) -> object:
+    """按字段表过一遍：先按注解修形状，再让"非 Optional + 有默认值"的 `null` 用默认值。"""
+
+    if not isinstance(payload, dict):
+        return payload
+    fixed: dict[str, object] = {}
+    for name, value in payload.items():
+        spec = model.model_fields.get(name)
+        if spec is None:
+            fixed[name] = value  # 多余的键交给 pydantic（默认忽略）
+            continue
+        normalized = _normalize_value(value, annotation=spec.annotation)
+        if (
+            normalized is None
+            and name not in _WRITE_SEMANTICS_FIELDS
+            and not spec.is_required()
+            and spec.default is not None
+            and not _allows_none(spec.annotation)
+        ):
+            continue  # 用 schema 的默认值
+        fixed[name] = normalized
+    return fixed
+
+
+def _normalize_fields(payload: object, *, model: type[BaseModel]) -> object:
+    """字段级归一化：机械可判的就地修，**内容字段与写入语义一律不动**。
+
+    真跑实测（P7 验证留样 7）：席位把 `evidence_refs` 写成 `null` → 整席位判死。
+    三档规则（`02` §11.0.9）：
+    ① 列表字段收到 `null` → `[]`（空列表在本仓库有明确定义：没依据就按"它提议的"处理）；
+    ② `list[str]` 收到字符串 → 单元素列表（"E4" 就是一个编号）；
+    ③ 非 Optional + 有默认值的字段收到 `null` → 用默认值（"没给值"用分类默认，不猜内容）；
+    黑名单（`op` / `entry_id` / `form`）例外——那三个用默认值会**悄悄改语义**。
+    """
+
+    return _normalize_model(payload, model=model)
+
+
 def parse_packet[T: BaseModel](text: str, model: type[T], *, purpose: str) -> T:
     try:
         payload = json.loads(text)
@@ -239,6 +318,7 @@ def parse_packet[T: BaseModel](text: str, model: type[T], *, purpose: str) -> T:
             f"模型返回的不是合法 JSON：{error.msg}", purpose=purpose, offset=error.pos
         ) from error
     payload = _normalize_payload(payload, model=model, purpose=purpose)
+    payload = _normalize_fields(payload, model=model)
     try:
         return model.model_validate(payload)
     except ValidationError as error:
@@ -275,6 +355,7 @@ def parse_packet_trimmed[T: BaseModel](
             f"模型返回的不是合法 JSON：{error.msg}", purpose=purpose, offset=error.pos
         ) from error
     payload = _normalize_payload(payload, model=model, purpose=purpose)
+    payload = _normalize_fields(payload, model=model)
     try:
         return model.model_validate(payload), ()
     except ValidationError as error:

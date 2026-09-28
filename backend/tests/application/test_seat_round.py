@@ -33,8 +33,10 @@ OVER_CAP_SEAT_REPLY = json.dumps(
     ensure_ascii=False,
 )
 
-#: 真跑 P7 验证里的真实坏包：`evidence_refs` 写成了 `null`（不是数组）→ schema 过不了
-NULL_REFS_SEAT_REPLY = json.dumps(
+#: 一个 schema 过不了的席位包：`claim`（内容字段）写成 `null`。
+#: 为什么不拿"真跑里那个 `evidence_refs: null`"当坏包了：P8 把它归一成 `[]`（有明确定义的降级），
+#: 再用它当"坏包"就测不到重装了。内容字段**不许凭空造**，所以它仍然是坏的。
+UNPARSABLE_SEAT_REPLY = json.dumps(
     {
         "basis": "读了 s1–s13 全文与 E1",
         "opinions": [
@@ -42,9 +44,9 @@ NULL_REFS_SEAT_REPLY = json.dumps(
                 "local_id": "O1",
                 "form": "judgment",
                 "about": "量级与耗时的关系",
-                "claim": "100 万行 3 秒不成立",
+                "claim": None,
                 "because": "单次导出的常见上限是 60 秒",
-                "evidence_refs": None,
+                "evidence_refs": ["E1"],
             }
         ],
     },
@@ -270,14 +272,14 @@ async def test_run_seat_round_truncates_and_traces_when_the_repack_still_overflo
 
 
 async def test_run_seat_round_repacks_when_a_seat_packet_is_unparsable():
-    """真跑 P7 验证实测：某个席位的 `evidence_refs` 写成了 `null` → 整轮 `席位失败` 判死。
+    """某个席位的报文 schema 过不了（内容字段 `claim` 写成 `null`）→ 整轮 `席位失败`。
 
     解析错和超限一样是**可修复的错**：该席位重装一次就好了（其余席位不动）。
     """
 
     harness = Harness(
         replies={"claims": claims_reply()},
-        seat_replies={SEAT: [NULL_REFS_SEAT_REPLY, SEAT_REPLY]},
+        seat_replies={SEAT: [UNPARSABLE_SEAT_REPLY, SEAT_REPLY]},
     )
     harness.seed_project()
     round_id = await started_round(harness)
@@ -299,7 +301,7 @@ async def test_run_seat_round_still_fails_when_the_seat_repack_also_fails():
 
     harness = Harness(
         replies={"claims": claims_reply()},
-        seat_replies={SEAT: [NULL_REFS_SEAT_REPLY, NULL_REFS_SEAT_REPLY]},
+        seat_replies={SEAT: [UNPARSABLE_SEAT_REPLY, UNPARSABLE_SEAT_REPLY]},
     )
     harness.seed_project()
     round_id = await started_round(harness)
