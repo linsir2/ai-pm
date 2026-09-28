@@ -590,18 +590,101 @@ def test_section_slot_target_is_accepted():
 
 
 def test_section_slot_with_unknown_name_is_rejected():
-    """写错槽名仍然是失败：章节槽只有六个，不许糊一个上去。"""
+    """写错槽名不是"猜一个"：那一条被丢掉并留痕，**同一批里其它提案照常处理**。"""
 
-    with pytest.raises(PacketParseError) as error:
+    result = assembly.assemble(
+        packet(
+            proposals=[
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s8", "field": "不存在的槽"},
+                    "text": "随便写点什么",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                },
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s8", "field": "performance"},
+                    "text": "5 万条 60 秒内可下载",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                },
+            ]
+        ),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [proposal.text for proposal in result.proposals] == ["5 万条 60 秒内可下载"]
+    assert len(result.dropped) == 1
+    dropped = result.dropped[0]
+    assert dropped.source is DropSource.ASSEMBLY
+    assert dropped.seat_id is None
+    assert dropped.handle == "提案 #1"
+    assert "去处不合法" in dropped.reason and "不存在的槽" in dropped.reason
+
+
+def test_bad_target_question_is_dropped_while_others_survive():
+    """题目写错去处也一样：丢那一条、留痕，别的题照常出。"""
+
+    result = assembly.assemble(
+        packet(
+            questions=[
+                question_draft(
+                    target={"zone": "body", "section_id": "s2", "field": "goal"},
+                    title="这题去处写错了",
+                ),
+                question_draft(title="这题去处是对的"),
+            ]
+        ),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [question.title for question in result.questions] == ["这题去处是对的"]
+    assert [(item.handle, item.source) for item in result.dropped] == [
+        ("题目 #1", DropSource.ASSEMBLY)
+    ]
+    assert "去处不合法" in result.dropped[0].reason
+
+
+def test_bad_target_in_a_list_item_is_dropped_too():
+    """清单项（本批装不下的那些）写错去处也照此办理：丢一条、留痕。"""
+
+    result = assembly.assemble(
+        packet(
+            list_items=[
+                {
+                    "text": "这条去处写错了",
+                    "target": {"zone": "body", "section_id": "s1", "field": "one_liner"},
+                    "reason": "本批只问 5 题，这条留到下一轮",
+                }
+            ]
+        ),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert result.list_items == ()
+    assert [item.handle for item in result.dropped] == ["清单项 #1"]
+
+
+def test_bad_evidence_ref_is_still_fatal():
+    """边界：**去处**写错可以降级，**编号**写错仍然整轮失败（内容没有出处 = 不可追溯）。"""
+
+    with pytest.raises(PacketParseError):
         assembly.assemble(
             packet(
                 proposals=[
                     {
                         "op": "add",
-                        "target": {"zone": "body", "section_id": "s8", "field": "不存在的槽"},
-                        "text": "随便写点什么",
+                        "target": {"zone": "body", "section_id": "s2"},
+                        "text": "引用了不存在的编号",
                         "origin_type": "derived",
-                        "evidence_refs": ["E1"],
+                        "evidence_refs": ["E404"],
                     }
                 ]
             ),
@@ -609,5 +692,3 @@ def test_section_slot_with_unknown_name_is_rejected():
             document=document_with_feature(),
             ledger=ledger_with_two_entries(),
         )
-
-    assert "槽" in error.value.message

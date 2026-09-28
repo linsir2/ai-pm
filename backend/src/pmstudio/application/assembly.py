@@ -163,9 +163,16 @@ def assemble(
     proposals: list[Proposal] = []
     feature_questions: list[Question] = []
     pending_features: dict[str, list[str]] = {}
+    pass_index = round_.seat_round_count
+    dropped: list[DroppedItem] = []
+    used_handles: set[str] = set()
 
     for index, draft in enumerate(packet.proposals, start=1):
-        target = _target(draft.target)
+        target = _target_or_drop(
+            draft.target, dropped=dropped, pass_index=pass_index, what="提案", index=index
+        )
+        if target is None:
+            continue
         refs = _refs(draft.evidence_refs, known=known)
         slug = str(target.feature_slug) if target.feature_slug is not None else None
         if slug is not None and slug not in existing_features and slug not in authorized:
@@ -202,26 +209,37 @@ def assemble(
             )
         )
 
-    pass_index = round_.seat_round_count
-    dropped: list[DroppedItem] = []
-    used_handles: set[str] = set()
-    ordered = feature_questions + [
-        _question(
-            item,
-            known=known,
-            ledger=ledger,
-            reviews=round_.current_reviews,
-            pass_index=pass_index,
-            dropped=dropped,
-            used_handles=used_handles,
+    ordered = list(feature_questions)
+    for index, item in enumerate(packet.questions, start=1):
+        target = _target_or_drop(
+            item.target, dropped=dropped, pass_index=pass_index, what="题目", index=index
         )
-        for item in packet.questions
-    ]
+        if target is None:
+            continue
+        ordered.append(
+            _question(
+                item,
+                target=target,
+                known=known,
+                ledger=ledger,
+                reviews=round_.current_reviews,
+                pass_index=pass_index,
+                dropped=dropped,
+                used_handles=used_handles,
+            )
+        )
     kept = [
         replace(question, question_id=QuestionId(f"q{index}"))
         for index, question in enumerate(ordered[:MAX_QUESTIONS_PER_BATCH], start=1)
     ]
-    list_items = [_list_item(item) for item in packet.list_items]
+    list_items: list[ListItem] = []
+    for index, item in enumerate(packet.list_items, start=1):
+        target = _target_or_drop(
+            item.target, dropped=dropped, pass_index=pass_index, what="清单项", index=index
+        )
+        if target is None:
+            continue
+        list_items.append(ListItem(text=item.text, target=target, reason=item.reason))
     list_items += [
         ListItem(text=item.title, target=item.target, reason="本批只问 5 题，这条留到下一轮")
         for item in ordered[MAX_QUESTIONS_PER_BATCH:]
@@ -456,6 +474,36 @@ def _target(draft: schemas.TargetDraft) -> Target:
         ) from error
 
 
+def _target_or_drop(
+    draft: schemas.TargetDraft,
+    *,
+    dropped: list[DroppedItem],
+    pass_index: int,
+    what: str,
+    index: int,
+) -> Target | None:
+    """去处写错：丢**这一条**并留痕，不放整轮失败（2026-09-28 作者拍板）。
+
+    为什么它跟"编号写错"不一样：编号写错 = 内容没有出处，追溯链断了（GB1）→ 必须失败；
+    **去处**写错只是"不知道该放哪儿"，那条内容不进文档，但其它内容与整轮进度不该被它拖死
+    （真模型实测：一次笔误让两次整合都过不了校验，整轮降级、所有席位疑问掉进 s11）。
+    """
+
+    try:
+        return _target(draft)
+    except PacketParseError as error:
+        dropped.append(
+            DroppedItem(
+                handle=f"{what} #{index}",
+                reason=error.message,
+                source=DropSource.ASSEMBLY,
+                seat_id=None,
+                pass_index=pass_index,
+            )
+        )
+        return None
+
+
 def _refs(raw: Sequence[str], *, known: frozenset[EvidenceId]) -> tuple[EvidenceId, ...]:
     refs = tuple(EvidenceId(item) for item in raw)
     if not refs:
@@ -540,6 +588,7 @@ def _proposal(
 def _question(
     draft: schemas.QuestionDraft,
     *,
+    target: Target,
     known: frozenset[EvidenceId],
     ledger: EvidenceLedger,
     reviews: Sequence[SeatReview],
@@ -558,7 +607,6 @@ def _question(
     解析不出的地址只丢归因、写进 `dropped` 留痕：归属写错不该把一道好题判死。
     """
 
-    target = _target(draft.target)
     refs = tuple(EvidenceId(item) for item in draft.evidence_refs)
     unknown = [str(ref) for ref in refs if ref not in known]
     if unknown:
@@ -606,10 +654,6 @@ def _question(
         raise PacketParseError(
             f"题目过不了领域校验：{error.message}", purpose=PURPOSE, title=draft.title
         ) from error
-
-
-def _list_item(draft: schemas.ListItemDraft) -> ListItem:
-    return ListItem(text=draft.text, target=_target(draft.target), reason=draft.reason)
 
 
 def _entry_exists(document: Document, entry_id: str) -> bool:

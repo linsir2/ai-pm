@@ -495,3 +495,66 @@ async def test_second_pass_only_runs_the_narrowed_seats():
     round_ = harness.rounds.get(round_id)
     assert round_.active_seats == (SEAT,)
     assert round_.seats == (SEAT, OTHER_SEAT)  # 用户编制不动
+
+
+# —— 2026-09-28 作者拍板：去处写错只丢那一条 ——
+
+
+def packet_with_one_bad_target() -> str:
+    """真模型实测的报文形状：一条去处写错（`s2 + goal`），一条正常（s8 的槽）。"""
+
+    return json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": [
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s2", "field": "goal"},
+                    "text": "这条去处写错了",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                    "rationale": "模型把功能字段名当成章节字段用了",
+                },
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s8", "field": "performance"},
+                    "text": "5 万条 60 秒内可下载",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                    "rationale": "量级在 1 万级",
+                },
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_bad_target_loses_one_item_not_the_whole_round():
+    """去处写错一条：只丢那一条并留痕，同一批里其它提案照常出草案卡（不重试、不降级）。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": packet_with_one_bad_target()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.AWAITING_CONFIRM  # 没有整轮降级
+    assert round_.draft is not None
+    assert [proposal.text for proposal in round_.draft.proposals] == ["5 万条 60 秒内可下载"]
+    assert not any(
+        str(proposal.target.section_id) == "s11" for proposal in round_.draft.proposals
+    )
+    assert [
+        (item.handle, item.source.value)
+        for item in round_.dropped
+        if item.handle == "提案 #1"
+    ] == [("提案 #1", "assembly")]
+    assert "去处不合法" in next(
+        item.reason for item in round_.dropped if item.handle == "提案 #1"
+    )
+    # 一次就过：不再"两次都过不了校验"
+    assert harness.gateway.purposes.count("integration") == 1

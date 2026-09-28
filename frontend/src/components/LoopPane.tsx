@@ -112,7 +112,8 @@ export function LoopPane({
             {unplaced.length > 0 && (
               <div className="packet__drops">
                 <p className="packet__counts packet__counts--drops">
-                  另有 {unplaced.length} 条留痕不属于这一趟（更早那趟的、或地址对不上号的）
+                  另有 {unplaced.length} 条留痕没挂到某个席位包上
+                  （去处写错的、更早那趟的、或地址对不上号的）
                 </p>
                 <ul className="drops">
                   {unplaced.map((item) => (
