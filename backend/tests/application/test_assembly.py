@@ -692,3 +692,91 @@ def test_bad_evidence_ref_is_still_fatal():
             document=document_with_feature(),
             ledger=ledger_with_two_entries(),
         )
+
+
+# —— 2026-09-28 拍板：`origin.type` 按**账本**算，不采信模型自报 ——
+
+
+def ledger_with_an_untraceable_judgment() -> EvidenceLedger:
+    """E1 用户输入 + E2 席位判断**自己没有任何依据**（真模型实测里 E9/E10 就是这个形状）。
+
+    这种判断在账本里是 `agent_proposed`：它是对的，但回溯不到用户输入——
+    按 `02` §4.1 的设计，用它的内容只能以"它提议的"出现（默认不勾）。
+    """
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做一个订单导出功能",
+        source=EvidenceSource(round_id=ROUND_ID, raw_span="想做个订单导出的功能"),
+        now=NOW,
+    )
+    ledger.record(
+        kind=EvidenceKind.AGENT_PROPOSED,
+        text="所有外部调用要接链路追踪",
+        source=EvidenceSource(seat_id=SEAT, rationale="纯专业判断：外部调用没有追踪就只能靠猜"),
+        now=NOW,
+    )
+    return ledger
+
+
+def slot_proposal(*, refs: list[str], origin_type: str = "derived") -> dict:
+    """一条落到 s8 章节槽的提案（不用新功能授权，所以能直接进草案）。"""
+
+    return {
+        "op": "add",
+        "target": {"zone": "body", "section_id": "s8", "field": "performance"},
+        "text": "5 万条 60 秒内可下载",
+        "origin_type": origin_type,
+        "evidence_refs": refs,
+        "rationale": "量级在 1 万级",
+    }
+
+
+def test_untraceable_derived_proposal_is_downgraded_to_proposed():
+    """模型说"derived"，但依据全是席位自己的判断（回溯不到用户输入）→ 降级成"它提议的"。
+
+    真模型实测：这类提案进了"它替你判断的"那组，用户勾了、提交时才撞
+    `invariant:E4 回溯不到用户输入或问卷答案`——卡片上一个字都没提示。
+    """
+
+    result = assembly.assemble(
+        packet(proposals=[slot_proposal(refs=["E2"])]),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_an_untraceable_judgment(),
+    )
+
+    assert [proposal.origin.type for proposal in result.proposals] == [
+        OriginType.PROPOSED
+    ]
+
+
+def test_traceable_derived_proposal_stays_derived():
+    """能回溯到用户输入的，照旧是"它替你判断的"（不误伤）。"""
+
+    result = assembly.assemble(
+        packet(proposals=[slot_proposal(refs=["E2"])]),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),  # E2 是 agent_derived，链上有 E1
+    )
+
+    assert [proposal.origin.type for proposal in result.proposals] == [
+        OriginType.DERIVED
+    ]
+
+
+def test_user_origin_is_checked_too():
+    """模型说"user"，依据却全是席位判断：同样是撒谎，一样降级。"""
+
+    result = assembly.assemble(
+        packet(proposals=[slot_proposal(refs=["E2"], origin_type="user")]),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_an_untraceable_judgment(),
+    )
+
+    assert [proposal.origin.type for proposal in result.proposals] == [
+        OriginType.PROPOSED
+    ]

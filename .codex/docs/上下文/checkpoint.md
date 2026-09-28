@@ -484,3 +484,25 @@ DELETE FROM documents WHERE project_id = 'p-449cdee9';
 - 两个选项：**①（推荐）装配层按账本算 `origin.type`**：refs 回溯不到 user_input / card_answer 的，
   一律降级成 `proposed`（设计里本来就写着，只是没实现；纯代码、可测）；② 保持现状，
   只在草案卡上标"这条不可追溯"，让用户自己决定——但那还是会把 409 留给用户。
+
+### 追加（2026-09-28 三轮：①落地 + E4 修复 + 清库 + 闭环跑到底）
+
+作者拍板："按照你推荐的来；可以删掉"。
+
+1. **来源分组按账本算**（推荐项 ① 落地）：`assembly._origin_type()` 用
+   `TraceabilityChecker` 检查——模型自报 `user`/`derived` 但回溯不到 `user_input`/`card_answer` 的，
+   一律降级成 `proposed`（默认不勾）；提交端的 `E4` 不变式一字未动。
+   测试：装配层 3 条（降级 / 不误伤可追溯的 / `user` 也查）+ 用例级 1 条
+   （真模型那一幕：一条可追溯 + 一条不可追溯 → 分组正确，**勾选后写入成功，不再 409**）。
+2. **删掉我误建的项目**：备份到 `/tmp/pmstudio-backup-1790577110.db` 后，
+   `DELETE FROM rounds/evidence_ledgers/document_versions/documents WHERE project_id='p-449cdee9'`。
+   现在库里只剩作者自己的 `p-edc2b350 · 产品文档工作台`（1 版 + 1 轮，原样）。
+3. **修 `.env` 的引号**：`PMSTUDIO_MODEL_PARAMS` 的值必须带单引号，否则 `source .env` 会把 `{`
+   当命令（`dev.py` 自己的解析器没事）。`.env.example` 已改成带引号的写法并注明原因（learnings L19）。
+4. **闭环第一次跑到底**（关思考、默认 90 秒超时、真模型）：
+   claims → **4 个席位 × 3 趟**（第 2 趟 4 个、第 3 趟缩编到 3 个）→ 2 批问卷 → 草案
+   → **`confirm` 写入成功 v2**；15 次调用共 **235.8 秒**，最慢一次 41.9s（90 秒上限有 2 倍余量）。
+   这一轮的 s11 里挂着 3 条〔未决·阻塞〕（问卷已满两批，剩余题目按 C6 显式化）——符合设计。
+
+**至此 P5c 的三条线（韧性 / 留样与 eval / 缩编）都跑通了真模型，且没有已知的阻断问题。**
+下一步建议：跑完整 8 条 eval（关思考后估计 15 分钟内），把"提示词没退化"这件事第一次量化。

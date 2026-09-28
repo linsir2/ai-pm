@@ -558,3 +558,77 @@ async def test_bad_target_loses_one_item_not_the_whole_round():
     )
     # 一次就过：不再"两次都过不了校验"
     assert harness.gateway.purposes.count("integration") == 1
+
+
+def packet_with_an_untraceable_judgment() -> str:
+    """真模型实测的形状：一条有依据（E1 用户输入），一条依据是"没依据的席位判断"。
+
+    第二条以前会被标成 `derived` 进"它替你判断的"那组，用户勾了 → 提交时 409
+    （`invariant:E4 回溯不到用户输入`）。现在装配层按账本算，它落到"它提议的"。
+    """
+
+    return json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": [
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s8", "field": "performance"},
+                    "text": "5 万条 60 秒内可下载",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                    "rationale": "量级在 1 万级",
+                },
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s8", "field": "observability"},
+                    "text": "外部调用都要接链路追踪",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E2"],  # E2 = 席位自己的判断，且它没有依据
+                    "rationale": "外部调用没有追踪就只能靠猜",
+                },
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_untraceable_proposal_lands_in_proposed_and_confirm_succeeds():
+    """不可追溯的那条落"它提议的"；用户照样勾选提交 → 写入成功（不再 409）。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": packet_with_an_untraceable_judgment()},
+        seat_replies={
+            SEAT: json.dumps(
+                {
+                    "basis": "读了 s1–s13 与 E1",
+                    "opinions": [
+                        {
+                            "local_id": "O1",
+                            "form": "judgment",
+                            "about": "可观测性",
+                            "claim": "外部调用都要接链路追踪",
+                            "because": "纯专业判断（不引用依据）",
+                            "evidence_refs": [],
+                            "basis_note": "没有可引用的编号，这是经验判断",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        },
+    )
+    round_id = await round_in_seat_pass(harness)
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.draft is not None
+    by_text = {proposal.text: proposal.origin.type.value for proposal in round_.draft.proposals}
+    assert by_text["5 万条 60 秒内可下载"] == "derived"
+    assert by_text["外部调用都要接链路追踪"] == "proposed"
+
+    accepted = tuple(str(proposal.proposal_id) for proposal in round_.draft.proposals)
+    result = await harness.confirm_draft()(round_id=round_id, accepted=accepted)
+
+    assert result.version.version_no == 2  # 写进去了：不再被 invariant:E4 拦住

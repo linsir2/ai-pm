@@ -27,6 +27,7 @@ from pmstudio.domain.round.questionnaire import (
     QuestionType,
 )
 from pmstudio.domain.round.round import DroppedItem, DropSource, Round
+from pmstudio.domain.services.traceability import TraceabilityChecker
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
@@ -188,6 +189,7 @@ def assemble(
                 index=index,
                 round_id=round_.round_id,
                 document=document,
+                ledger=ledger,
             )
         )
 
@@ -546,6 +548,7 @@ def _proposal(
     index: int,
     round_id: RoundId,
     document: Document,
+    ledger: EvidenceLedger,
 ) -> Proposal:
     try:
         op = WriteOp(draft.op)
@@ -573,7 +576,7 @@ def _proposal(
             target=target,
             text=draft.text.strip(),
             origin=Origin(
-                type=OriginType(draft.origin_type),
+                type=_origin_type(draft.origin_type, refs=refs, ledger=ledger),
                 refs=refs,
                 rationale=draft.rationale,
             ),
@@ -583,6 +586,24 @@ def _proposal(
         raise PacketParseError(
             f"提案过不了领域校验：{error.message}", purpose=PURPOSE, proposal_index=index
         ) from error
+
+
+def _origin_type(
+    claimed: str, *, refs: tuple[EvidenceId, ...], ledger: EvidenceLedger
+) -> OriginType:
+    """来源分组**按账本算**，不采信模型自报（`02` §4.1）。
+
+    模型把"依据全是席位自己的判断"的内容标成 `derived`（甚至 `user`）时，
+    它会进"它替你判断的"那一组；用户勾了、提交时才撞 `invariant:E4`（真模型实测过）。
+    规则：说 `user` / `derived` 的，必须真能回溯到用户输入或问卷答案，否则降级成 `proposed`
+    （"它提议的"，默认不勾）——这正是 `02` §4.1 早就写着的口径。
+    """
+
+    origin = OriginType(claimed)
+    if origin not in (OriginType.USER, OriginType.DERIVED):
+        return origin
+    result = TraceabilityChecker().check(refs, ledger=ledger)
+    return origin if result.traceable else OriginType.PROPOSED
 
 
 def _question(
