@@ -3,6 +3,7 @@
 
 import copy
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -169,6 +170,67 @@ class Overflow:
     dropped: int
 
 
+#: 顶层数组的元素 → 容器。**顺序本身是判据的一部分**：命中即停，先查特征最强的键。
+#: 题面特征（`title` / `consequence_if_skipped`）必须排在 `evidence_refs` 前面——
+#: 题目也可能带依据编号，先看题面才能把它和提案分开。
+_SIGNATURES: dict[type[BaseModel], tuple[tuple[str, tuple[frozenset[str], ...]], ...]] = {
+    IntegrationPacket: (
+        ("dropped_opinions", (frozenset({"handle"}),)),
+        ("questions", (frozenset({"title"}), frozenset({"consequence_if_skipped"}))),
+        ("list_items", (frozenset({"text", "target", "reason"}),)),
+        ("proposals", (frozenset({"evidence_refs"}), frozenset({"op"}))),
+    ),
+}
+
+
+def _top_level_keys(model: type[BaseModel]) -> tuple[str, ...]:
+    """这个报文顶层允许的键（形状指引要照着它说话）。"""
+
+    return tuple(model.model_fields)
+
+
+def _container_of_item(item: Mapping[str, object], *, model: type[BaseModel]) -> str | None:
+    """一个元素该归到哪个容器？命中不了任何签名就返回 None——调用方判死，**不猜**。"""
+
+    keys = set(item)
+    for container, signatures in _SIGNATURES.get(model, ()):
+        if any(signature <= keys for signature in signatures):
+            return container
+    return None
+
+
+def _normalize_payload(payload: object, *, model: type[BaseModel], purpose: str) -> object:
+    """顶层是数组时补上外层对象壳；补不了就抛"形状错"（带指引）。
+
+    真跑实测（留样 15 / 66）：模型把整包回成**一个数组**（元素是 QuestionDraft），
+    旧写法直接 `model_type` 判死整轮。数组是**漏了外壳**，不是内容错——
+    只要每个元素能用签名唯一归位，就机械补壳；有元素归不了位（或这个报文没有签名表）照旧判死。
+
+    为什么只给 `IntegrationPacket` 开这个口子：它的四个容器都有默认值，补壳不需要造任何字段；
+    `ClaimsPacket`（必填 `basis` + 至少一个席位）与 `SeatPacket`（必填 `basis`）一补就得
+    **凭空造必填字段**——那是编内容，不是修形状。
+    """
+
+    if not isinstance(payload, list) or not payload:
+        return payload  # 空数组不重建：空返回不等于没意见（L2），交给原路判死
+    if model in _SIGNATURES:
+        buckets: dict[str, list[object]] = {}
+        for item in payload:
+            if not isinstance(item, dict):
+                break
+            container = _container_of_item(item, model=model)
+            if container is None:
+                break
+            buckets.setdefault(container, []).append(item)
+        else:
+            return buckets
+    raise PacketParseError(
+        "模型把整包返回成了数组，无法唯一归位到任何一类内容",
+        purpose=purpose,
+        packet_shape={"got": "array", "expected_keys": _top_level_keys(model)},
+    )
+
+
 def parse_packet[T: BaseModel](text: str, model: type[T], *, purpose: str) -> T:
     try:
         payload = json.loads(text)
@@ -176,6 +238,7 @@ def parse_packet[T: BaseModel](text: str, model: type[T], *, purpose: str) -> T:
         raise PacketParseError(
             f"模型返回的不是合法 JSON：{error.msg}", purpose=purpose, offset=error.pos
         ) from error
+    payload = _normalize_payload(payload, model=model, purpose=purpose)
     try:
         return model.model_validate(payload)
     except ValidationError as error:
@@ -211,6 +274,7 @@ def parse_packet_trimmed[T: BaseModel](
         raise PacketParseError(
             f"模型返回的不是合法 JSON：{error.msg}", purpose=purpose, offset=error.pos
         ) from error
+    payload = _normalize_payload(payload, model=model, purpose=purpose)
     try:
         return model.model_validate(payload), ()
     except ValidationError as error:
