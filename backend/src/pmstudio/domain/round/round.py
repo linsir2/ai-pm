@@ -112,6 +112,7 @@ class Round:
         abandon_reason: str | None = None,
         active_seats: tuple[str, ...] = (),
         deferred: tuple[Question, ...] = (),
+        carried_sources: dict[str, str] | None = None,
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -135,6 +136,8 @@ class Round:
         self._active_seats = tuple(active_seats)
         #: 轮内未决队列：本批被 5 题上限挤掉的题（下一批优先问；出草案时落 s11）
         self._deferred = tuple(deferred)
+        #: 这一轮把哪些 s11 未决条目问回来了（question_id → entry_id）：答完要机械撤下它们
+        self._carried_sources = dict(carried_sources or {})
 
     @classmethod
     def start(
@@ -376,6 +379,20 @@ class Round:
     def clear_deferred(self) -> tuple[Question, ...]:
         taken, self._deferred = self._deferred, ()
         return taken
+
+    def remember_carried(self, questions: Sequence[Question]) -> None:
+        """记住"这条题来自哪条 s11 未决条目"。
+
+        为什么不能只看当前问卷：问卷一批换一批，下一批就看不到上一批的 `from_entry` 了；
+        而"答完要撤下哪条未决条目"必须留到出草案那一刻才算得出来。
+        """
+
+        for item in questions:
+            if item.from_entry is not None:
+                self._carried_sources[str(item.question_id)] = item.from_entry
+
+    def carried_sources(self) -> dict[str, str]:
+        return dict(self._carried_sources)
 
     @property
     def current_reviews(self) -> tuple[SeatReview, ...]:

@@ -113,7 +113,11 @@ def parse_open_item(text: str) -> tuple[str, str, bool] | None:
 
 
 def deferred_from_open_items(
-    document: Document, *, ledger: EvidenceLedger, limit: int
+    document: Document,
+    *,
+    ledger: EvidenceLedger,
+    limit: int,
+    skip_entries: frozenset[str] = frozenset(),
 ) -> tuple[Question, ...]:
     """文档 s11 里**最老的** N 条未决条目 → carried 题（跨轮队列就是这些条目本身）。
 
@@ -130,6 +134,9 @@ def deferred_from_open_items(
     carried: list[Question] = []
     for block in section.blocks:
         for entry in block.entries:
+            if str(entry.entry_id) in skip_entries:
+                # 这一轮已经问过它了（答没答都要等出草案那一刻才处理）——别再问一遍
+                continue
             parsed = parse_open_item(entry.text)
             if parsed is None:
                 continue

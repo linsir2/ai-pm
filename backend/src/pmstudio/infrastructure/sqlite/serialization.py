@@ -544,6 +544,8 @@ def round_to_payload(round_: Round) -> dict:
         ],
         # 轮内未决队列（老行没有这个键 → 读侧 .get）
         "deferred_questions": [_question_to_json(item) for item in round_.deferred],
+        # 这一轮问回来的 s11 未决条目（老行没有这个键 → 读侧 .get）
+        "carried_sources": round_.carried_sources(),
         "failure": _failure_to_json(round_.failure),
         "confirmed_version_no": round_.confirmed_version_no,
         "abandon_reason": round_.abandon_reason,
@@ -596,6 +598,7 @@ def round_from_payload(
         deferred=tuple(
             _question_from_json(item) for item in payload.get("deferred_questions", ())
         ),
+        carried_sources=dict(payload.get("carried_sources") or {}),
     )
 
 

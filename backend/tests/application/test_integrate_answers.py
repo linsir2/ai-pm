@@ -4,13 +4,15 @@ import pytest
 
 from pmstudio.application.errors import PacketParseError
 from pmstudio.application.use_cases import AnswerInput
+from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.round.draft import OriginType
 from pmstudio.domain.round.questionnaire import AnswerSet
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
-from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, FormId, QuestionId
-from pmstudio.domain.shared.writing import BlockKind
+from pmstudio.domain.shared.ids import EntryId, EvidenceId, FeatureSlug, FormId, QuestionId
+from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_seat
 from tests.support.harness import Harness
 
@@ -830,3 +832,109 @@ async def test_deferred_queue_is_flushed_to_s11_when_the_round_stops_asking():
     )
     for title in still_queued:
         assert title in s11
+
+
+def seed_open_item(harness: Harness, *, entry_id: str, text: str) -> None:
+    """往项目的 s11 里预置一条未决条目（模拟"前几轮留下的"）。"""
+
+    document = harness.documents.get(PROJECT)
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-seed",
+                entry_id=EntryId(entry_id),
+                op=WriteOp.ADD,
+                target=Target.body("s11"),
+                text=text,
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.QUESTION,
+            )
+        ],
+        now=NOW,
+        summary="测试：预置未决项",
+        authorized_new_features=frozenset(),
+    )
+    harness.documents.save(document)
+
+
+OPEN_ITEM_TEXT = (
+    "〔未决·阻塞〕点检完成率的统计口径（未决定，待决人：PM；跳过后果：报表口径不清）"
+)
+
+
+async def test_an_open_item_is_asked_in_the_next_round_with_its_entry_id():
+    """跨轮队列 = s11 未决条目：这一轮把它问回来，并记住它来自哪条条目。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": questionnaire_packet()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    seed_open_item(harness, entry_id="r0#open01", text=OPEN_ITEM_TEXT)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    questions = harness.rounds.get(round_id).questionnaire.questions
+    assert questions[0].title == "点检完成率的统计口径"
+    assert questions[0].from_entry == "r0#open01"
+    assert questions[0].blocking is True
+
+
+async def test_answering_an_open_item_retires_it_from_s11():
+    """真跑实测：s11 只涨不消（3→13），ready 永远过不了（报告 F14）。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [questionnaire_packet(), draft_packet()],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    seed_open_item(harness, entry_id="r0#open01", text=OPEN_ITEM_TEXT)
+    authorize_order_export(harness, round_id)
+    await harness.integrate_round()(round_id=round_id)
+    question = harness.rounds.get(round_id).questionnaire.questions[0]
+
+    await harness.submit_answers()(
+        round_id=round_id,
+        form_id="f1",
+        answers=(AnswerInput(question_id=str(question.question_id), text="按设备台数算"),),
+        skipped=(),
+    )
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.draft is not None
+    removals = [item for item in round_.draft.proposals if str(item.op) == "remove"]
+    assert [str(item.entry_id) for item in removals] == ["r0#open01"]
+    assert "本轮已回答" in removals[0].text
+    assert removals[0].origin.type is OriginType.SYSTEM_DEFAULT
+
+
+async def test_skipping_an_open_item_does_not_retire_it():
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [questionnaire_packet(), draft_packet()],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    seed_open_item(harness, entry_id="r0#open01", text=OPEN_ITEM_TEXT)
+    authorize_order_export(harness, round_id)
+    await harness.integrate_round()(round_id=round_id)
+    question = harness.rounds.get(round_id).questionnaire.questions[0]
+
+    await harness.submit_answers()(
+        round_id=round_id,
+        form_id="f1",
+        answers=(),
+        skipped=(str(question.question_id),),
+    )
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert [item for item in round_.draft.proposals if str(item.op) == "remove"] == []

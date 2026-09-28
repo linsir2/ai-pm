@@ -86,3 +86,45 @@ def test_old_payload_without_deferred_reads_as_an_empty_queue():
     )
 
     assert back.deferred == ()
+
+
+def test_carried_sources_survive_the_questionnaire_being_replaced():
+    """问卷下一批会被覆盖，但"这道题来自哪条未决条目"必须留着（答完要撤下它）。"""
+
+    round_ = make_round()
+    round_.remember_carried(
+        [replace(question("A"), question_id=QuestionId("q1"), from_entry="r0#open01")]
+    )
+    round_.remember_carried(
+        [replace(question("B"), question_id=QuestionId("q2"), from_entry="r0#open02")]
+    )
+
+    assert round_.carried_sources() == {"q1": "r0#open01", "q2": "r0#open02"}
+
+
+def test_carried_sources_round_trip_and_old_payload_is_empty():
+    round_ = make_round()
+    round_.remember_carried(
+        [replace(question("A"), question_id=QuestionId("q1"), from_entry="r0#open01")]
+    )
+    payload = round_to_payload(round_)
+    back = round_from_payload(
+        payload,
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        created_at=NOW,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+    assert back.carried_sources() == {"q1": "r0#open01"}
+
+    payload.pop("carried_sources")
+    old = round_from_payload(
+        payload,
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        created_at=NOW,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+    assert old.carried_sources() == {}

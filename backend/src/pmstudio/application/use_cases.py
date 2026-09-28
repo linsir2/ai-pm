@@ -16,6 +16,7 @@ from pmstudio.application.agents.schemas import Overflow
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.assembly import (
     NEW_FEATURE_YES,
+    OPEN_QUESTION_HOME,
     Assembly,
     assemble,
     deferred_from_open_items,
@@ -95,7 +96,7 @@ from pmstudio.domain.ports import (
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
-from pmstudio.domain.round.draft import Proposal
+from pmstudio.domain.round.draft import Origin, OriginType, Proposal
 from pmstudio.domain.round.questionnaire import (
     MAX_QUESTIONNAIRES,
     MAX_QUESTIONS_PER_BATCH,
@@ -535,6 +536,56 @@ MAX_SEAT_ATTEMPTS = 2
 #: 每批 5 题里留 2 个位置还老账；真跑里每轮新增未决 2–4 条，2×2 批 ≈ 打平。
 MAX_OPEN_ITEMS_PER_BATCH = 2
 
+
+@dataclass(frozen=True, slots=True)
+class IntegrationResult:
+    """整合这一趟的产物。两个 carried 分开报，别让调用方猜哪个是哪个。"""
+
+    assembled: Assembly
+    gaps: tuple[str, ...]
+    #: 来自**轮内队列**的题（要按"真被问出去"的数量出队）
+    carried_from_queue: tuple[Question, ...] = ()
+    #: 来自**文档 s11 未决条目**的题（要记住来源：答完撤下那条条目）
+    carried_from_open_items: tuple[Question, ...] = ()
+
+def _retire_answered_open_items(
+    round_: Round, *, ledger: EvidenceLedger, start_index: int
+) -> tuple[Proposal, ...]:
+    """这一轮**被回答过**、且来自 s11 未决条目的题 → 各出一条 `remove` 把未决项撤下。
+
+    机械做，不问模型：真跑里模型连"没采用的席位意见"都漏填，这种"记账"的活不能指望它。
+    没回答（跳过）的不撤——它还该留在 s11 里等下一轮。
+    """
+
+    answered = {
+        str(answer.question_id)
+        for answer_set in round_.answer_sets
+        for answer in answer_set.answers
+    }
+    mapping = answer_eids(ledger=ledger)
+    sources = round_.carried_sources()
+    proposals: list[Proposal] = []
+    index = start_index
+    for question_id in sorted(answered):
+        entry_id = sources.get(question_id)
+        eid = mapping.get(question_id)
+        if entry_id is None or eid is None:
+            continue
+        proposals.append(
+            Proposal(
+                proposal_id=ProposalId(f"p{index:02d}"),
+                entry_id=EntryId(entry_id),
+                op=WriteOp.REMOVE,
+                target=Target.body(OPEN_QUESTION_HOME),
+                text="本轮已回答，撤下这条未决项",
+                origin=Origin(OriginType.SYSTEM_DEFAULT, (EvidenceId(eid),)),
+                kind=BlockKind.QUESTION,
+            )
+        )
+        index += 1
+    return tuple(proposals)
+
+
 def _open_item_defaults(
     round_: Round,
     questions: Sequence[Question],
@@ -680,7 +731,8 @@ class IntegrateRound:
         self._events = events
 
     async def __call__(self, *, round_id: RoundId) -> None:
-        assembled, gaps, carried = await self._integrate_with_repair(round_id=round_id)
+        result = await self._integrate_with_repair(round_id=round_id)
+        assembled, gaps = result.assembled, result.gaps
 
         with self._uow:
             round_ = self._rounds.get(round_id)
@@ -689,9 +741,18 @@ class IntegrateRound:
             # 只有**真被问出去**的那几条才从轮内队列出队（carried 里还混着 s11 来的题）
             asked = {question_key(item) for item in assembled.questions}
             round_.take_deferred(
-                sum(1 for item in carried if question_key(item) in asked)
+                sum(
+                    1
+                    for item in result.carried_from_queue
+                    if question_key(item) in asked
+                )
             )
             round_.defer(assembled.deferred)
+            # 记住这一轮问回来的 s11 未决条目（答完要撤下它们；下一批也不再重复问）
+            # 注意用**装配后**的题：那时 question_id 才和答案对得上（carried 还带着占位 q0）
+            round_.remember_carried(
+                tuple(item for item in assembled.questions if item.from_entry is not None)
+            )
             proposals = list(assembled.proposals)
             degraded = 0
             if assembled.degrade_reason is not None:
@@ -767,6 +828,14 @@ class IntegrateRound:
                         )
                     )
                     gaps += [f"未决（本批没排上）：{item.title}" for item in leftover]
+                # 被回答过的未决项：机械出 remove 把它撤下（不指望模型自觉，`02` §11.0.10）
+                proposals += list(
+                    _retire_answered_open_items(
+                        round_,
+                        ledger=ledger,
+                        start_index=_next_proposal_index(proposals),
+                    )
+                )
             dropped = _dropped_items_for(
                 round_,
                 assembled=assembled,
@@ -795,6 +864,7 @@ class IntegrateRound:
         validation_error = ""
         carried: tuple[Question, ...] = ()
         carried_from_queue: tuple[Question, ...] = ()
+        carried_from_open_items: tuple[Question, ...] = ()
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
         for attempt in range(1, MAX_INTEGRATION_ATTEMPTS + 1):
             round_ = self._rounds.get(round_id)
@@ -804,12 +874,13 @@ class IntegrateRound:
             if attempt == 1:
                 # 跨轮队列 = 文档 s11 里最老的 N 条未决条目；轮内队列 = 本批没问上的题
                 carried_from_queue = round_.peek_deferred(MAX_QUESTIONS_PER_BATCH)
-                carried = (
-                    deferred_from_open_items(
-                        document, ledger=ledger, limit=MAX_OPEN_ITEMS_PER_BATCH
-                    )
-                    + carried_from_queue
+                carried_from_open_items = deferred_from_open_items(
+                    document,
+                    ledger=ledger,
+                    limit=MAX_OPEN_ITEMS_PER_BATCH,
+                    skip_entries=frozenset(round_.carried_sources().values()),
                 )
+                carried = carried_from_open_items + carried_from_queue
             answered, _, skipped = render_answers(
                 round_, ledger=self._evidence.get(round_.project_id)
             ).partition("--")
@@ -891,15 +962,16 @@ class IntegrateRound:
                     if seat_questions(round_.current_reviews):
                         # 有可救的东西就别判死：席位的疑问原样落成 s11 开放问题，
                         # 走草案卡让用户自己决定（04-未决 C9；与 C6/C7 的降级同一套语义）。
-                        return (
-                            Assembly(
+                        return IntegrationResult(
+                            assembled=Assembly(
                                 questions=(),
                                 list_items=(),
                                 proposals=(),
                                 degrade_reason=reason,
                             ),
-                            (),
-                            carried_from_queue,
+                            gaps=(),
+                            carried_from_queue=carried_from_queue,
+                            carried_from_open_items=carried_from_open_items,
                         )
                     fail_round(
                         rounds=self._rounds,
@@ -931,7 +1003,12 @@ class IntegrateRound:
                     reason=error.message,
                 )
                 raise
-            return assembled, gaps, carried_from_queue
+            return IntegrationResult(
+                assembled=assembled,
+                gaps=gaps,
+                carried_from_queue=carried_from_queue,
+                carried_from_open_items=carried_from_open_items,
+            )
         raise AssertionError("不可能走到这里")
 
 
