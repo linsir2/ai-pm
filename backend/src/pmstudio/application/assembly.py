@@ -4,6 +4,7 @@
 专业判断不在这一层（那是席位与整合者的事），文档规则也不在这一层（那是 `Document` 的事）。
 """
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -80,10 +81,75 @@ def normalize(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
-def _question_key(question: Question) -> tuple[str, str]:
+def question_key(question: Question) -> tuple[str, str]:
     """题目的身份：**同一个去处 + 同一个问法**算同一件事（与 eval 的重复题判据同一口径）。"""
 
     return (question.target.label(), " ".join(question.title.split()))
+
+
+#: s11 未决条目的标准文本（`open_question_proposal` 写进去的那个格式）：
+#: 可选的阻塞标记 + 标题 + （未决定，待决人：…；跳过后果：…）
+_OPEN_ITEM = re.compile(
+    r"^(?:〔未决·阻塞〕)?(?P<title>.+?)（未决定，待决人：[^；]+；跳过后果：(?P<consequence>.*)）$"
+)
+
+
+def parse_open_item(text: str) -> tuple[str, str, bool] | None:
+    """s11 未决条目的标准文本 → `(标题, 跳过后果, 是否阻塞)`；解析不了返回 None。
+
+    格式是我们自己写进去的（有测试钉住）；用户手写的条目、老版本写的条目都可能长别的样子——
+    那就**跳过**（调用方把它算进缺口），绝不猜。
+    """
+
+    stripped = text.strip()
+    match = _OPEN_ITEM.match(stripped)
+    if match is None:
+        return None
+    return (
+        match.group("title"),
+        match.group("consequence"),
+        stripped.startswith(BLOCKING_MARK),
+    )
+
+
+def deferred_from_open_items(
+    document: Document, *, ledger: EvidenceLedger, limit: int
+) -> tuple[Question, ...]:
+    """文档 s11 里**最老的** N 条未决条目 → carried 题（跨轮队列就是这些条目本身）。
+
+    每一条都记住 `from_entry`：它被回答之后，装配层要机械地出一条 `remove` 把它撤下
+    （`02` §11.0.10），这样 s11 才不会只涨不消。
+    """
+
+    view = document.view()
+    section = next(
+        (item for item in view.sections if str(item.section_id) == OPEN_QUESTION_HOME), None
+    )
+    if section is None:
+        return ()
+    carried: list[Question] = []
+    for block in section.blocks:
+        for entry in block.entries:
+            parsed = parse_open_item(entry.text)
+            if parsed is None:
+                continue
+            title, consequence, blocking = parsed
+            carried.append(
+                Question(
+                    question_id=QuestionId("q0"),  # 占位：assemble 统一重编号
+                    target=Target.body(OPEN_QUESTION_HOME),
+                    type=QuestionType.TEXT,
+                    kind=QuestionKind.DECISION if blocking else QuestionKind.GAP,
+                    title=title,
+                    why="这是前几轮留下的未决项，这一轮把它定下来",
+                    consequence_if_skipped=consequence,
+                    blocking=blocking,
+                    from_entry=str(entry.entry_id),
+                )
+            )
+            if len(carried) >= limit:
+                return tuple(carried)
+    return tuple(carried)
 
 
 def _seat_of_handle(handle: str, *, seats: frozenset[str]) -> str | None:
@@ -223,10 +289,10 @@ def assemble(
 
     # carried 排最前：上一批/上一轮没问上的题**优先问**（`02` §11.0.10）
     ordered = list(carried)
-    seen_questions = {_question_key(item) for item in ordered}
+    seen_questions = {question_key(item) for item in ordered}
     for item in feature_questions:
         ordered.append(item)
-        seen_questions.add(_question_key(item))
+        seen_questions.add(question_key(item))
     for index, item in enumerate(packet.questions, start=1):
         target = _target_or_drop(
             item.target, dropped=dropped, pass_index=pass_index, what="题目", index=index
@@ -243,9 +309,9 @@ def assemble(
             dropped=dropped,
             used_handles=used_handles,
         )
-        if _question_key(question) in seen_questions:
+        if question_key(question) in seen_questions:
             continue  # 模型又问了同一件事：留 carried 那份，丢新出的
-        seen_questions.add(_question_key(question))
+        seen_questions.add(question_key(question))
         ordered.append(question)
     kept = [
         replace(question, question_id=QuestionId(f"q{index}"))

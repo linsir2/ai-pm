@@ -3,6 +3,8 @@ import pytest
 from pmstudio.application import assembly
 from pmstudio.application.agents import schemas
 from pmstudio.application.errors import PacketParseError
+from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import OriginType
@@ -16,7 +18,7 @@ from pmstudio.domain.round.questionnaire import (
     QuestionType,
 )
 from pmstudio.domain.round.round import DropSource, Round
-from pmstudio.domain.shared.ids import EvidenceId, FormId, ProjectId, QuestionId
+from pmstudio.domain.shared.ids import EntryId, EvidenceId, FormId, ProjectId, QuestionId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import (
@@ -856,3 +858,75 @@ def test_a_carried_question_is_not_asked_twice_by_the_model():
 
     assert [item.title for item in result.questions] == ["上一批没问上的题"]
     assert result.deferred == ()  # 模型重复问的那条被丢掉，不是又排进队列
+
+
+# —— 跨轮队列 = 文档 s11 的未决条目（P9-B）——
+
+
+def document_with_open_items(items: list[str]) -> Document:
+    """造一批 s11 未决条目。`items` 是 `"entry_id|文本"`，文本用我们自己的标准格式。"""
+
+    document = make_document()
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id=f"i{index}",
+                entry_id=EntryId(entry_id),
+                op=WriteOp.ADD,
+                target=Target.body("s11"),
+                text=text,
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.QUESTION,
+            )
+            for index, (entry_id, text) in enumerate(
+                (item.split("|", 1) for item in items), start=1
+            )
+        ],
+        now=NOW,
+        summary="干跑",
+        authorized_new_features=frozenset(),
+    )
+    return document
+
+
+def test_parse_open_item_reads_our_own_format():
+    text = "〔未决·阻塞〕点检完成率的统计口径（未决定，待决人：PM；跳过后果：报表口径不清）"
+
+    title, consequence, blocking = assembly.parse_open_item(text)
+
+    assert title == "点检完成率的统计口径"
+    assert consequence == "报表口径不清"
+    assert blocking is True
+
+
+def test_parse_open_item_rejects_a_foreign_line():
+    assert assembly.parse_open_item("这条是用户手写的普通条目") is None
+
+
+def test_oldest_open_items_become_carried_questions_with_their_entry_id():
+    document = document_with_open_items(
+        [
+            "r1#open01|〔未决·阻塞〕A（未决定，待决人：PM；跳过后果：后果A）",
+            "r2#open01|B（未决定，待决人：PM；跳过后果：后果B）",
+        ]
+    )
+
+    carried = assembly.deferred_from_open_items(
+        document, ledger=ledger_with_two_entries(), limit=1
+    )
+
+    assert len(carried) == 1  # 只取最老的一条
+    assert carried[0].title == "A"
+    assert carried[0].from_entry == "r1#open01"  # 记住来源：答完要撤下它
+    assert carried[0].type is QuestionType.TEXT  # 结构已丢 → 按开放题重出
+    assert carried[0].blocking is True  # 阻塞标记跟着走
+
+
+def test_unparsable_open_items_are_skipped_not_crashed():
+    document = document_with_open_items(["r1#open01|用户手写的一行"])
+
+    carried = assembly.deferred_from_open_items(
+        document, ledger=ledger_with_two_entries(), limit=5
+    )
+
+    assert carried == ()

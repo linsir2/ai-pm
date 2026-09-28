@@ -18,10 +18,12 @@ from pmstudio.application.assembly import (
     NEW_FEATURE_YES,
     Assembly,
     assemble,
+    deferred_from_open_items,
     degraded_question_proposals,
     downgraded_question_proposals,
     draft_of,
     open_question_proposals,
+    question_key,
     questionnaire_of,
     seat_questions,
     unaccounted_drops,
@@ -529,6 +531,10 @@ MAX_CLAIMS_ATTEMPTS = 2
 #: 而整轮重跑要付 4–6 个席位的代价（真跑实测：188 次席位调用里多出一倍是重跑）。
 MAX_SEAT_ATTEMPTS = 2
 
+#: 每批从文档 s11 里挑几条最老的未决项来问（跨轮队列的"消化速度"）。
+#: 每批 5 题里留 2 个位置还老账；真跑里每轮新增未决 2–4 条，2×2 批 ≈ 打平。
+MAX_OPEN_ITEMS_PER_BATCH = 2
+
 def _open_item_defaults(
     round_: Round,
     questions: Sequence[Question],
@@ -680,9 +686,11 @@ class IntegrateRound:
             round_ = self._rounds.get(round_id)
             ledger = self._evidence.get(round_.project_id)
             now = self._clock.now()
-            # carried 排在本批最前，所以必然都被问出去了 → 从队列里取走同样多；
-            # 本批新挤出来的题进队列（队列不设硬上限：体积由每批题目数决定，个位数）
-            round_.take_deferred(len(carried))
+            # 只有**真被问出去**的那几条才从轮内队列出队（carried 里还混着 s11 来的题）
+            asked = {question_key(item) for item in assembled.questions}
+            round_.take_deferred(
+                sum(1 for item in carried if question_key(item) in asked)
+            )
             round_.defer(assembled.deferred)
             proposals = list(assembled.proposals)
             degraded = 0
@@ -786,14 +794,22 @@ class IntegrateRound:
     async def _integrate_with_repair(self, *, round_id: RoundId):  # type: ignore[no-untyped-def]
         validation_error = ""
         carried: tuple[Question, ...] = ()
+        carried_from_queue: tuple[Question, ...] = ()
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
         for attempt in range(1, MAX_INTEGRATION_ATTEMPTS + 1):
             round_ = self._rounds.get(round_id)
-            # carried 只算一次：重装时模型看到的是同一份"要优先问的题"（队列在事务里才消费）
-            if attempt == 1:
-                carried = round_.peek_deferred(MAX_QUESTIONS_PER_BATCH)
             document = self._documents.get(round_.project_id)
             ledger = self._evidence.get(round_.project_id)
+            # carried 只算一次：重装时模型看到的是同一份"要优先问的题"（队列在事务里才消费）
+            if attempt == 1:
+                # 跨轮队列 = 文档 s11 里最老的 N 条未决条目；轮内队列 = 本批没问上的题
+                carried_from_queue = round_.peek_deferred(MAX_QUESTIONS_PER_BATCH)
+                carried = (
+                    deferred_from_open_items(
+                        document, ledger=ledger, limit=MAX_OPEN_ITEMS_PER_BATCH
+                    )
+                    + carried_from_queue
+                )
             answered, _, skipped = render_answers(
                 round_, ledger=self._evidence.get(round_.project_id)
             ).partition("--")
@@ -883,7 +899,7 @@ class IntegrateRound:
                                 degrade_reason=reason,
                             ),
                             (),
-                            carried,
+                            carried_from_queue,
                         )
                     fail_round(
                         rounds=self._rounds,
@@ -915,7 +931,7 @@ class IntegrateRound:
                     reason=error.message,
                 )
                 raise
-            return assembled, gaps, carried
+            return assembled, gaps, carried_from_queue
         raise AssertionError("不可能走到这里")
 
 
