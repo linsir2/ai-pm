@@ -418,3 +418,38 @@ async def test_analyzer_dedups_repeated_seat_picks():
 def test_claims_packet_requires_at_least_one_seat():
     with pytest.raises(ValidationError):
         ClaimsPacket.model_validate({"basis": "读了文档", "claims": [], "seats": []})
+
+
+async def test_analyzer_keeps_known_seats_and_reports_unknown_ones():
+    """真跑实测：分析者提名 `seat.observability`（目录里没有）→ 两次重装都失败 → 轮次创建不了。
+
+    新口径：目录外的那条**丢提名、留痕**，剩下的席位照跑；只有一条都不剩才判死。
+    """
+
+    reply = json.dumps(
+        {
+            "basis": "读了文档",
+            "claims": [
+                {
+                    "text": "要做一个订单导出功能",
+                    "raw_span": "想做个订单导出的功能",
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                }
+            ],
+            "seats": [
+                {"seat_id": "seat.observability", "why": "s8 有可观测性槽位"},
+                {"seat_id": SEAT, "why": "你说到了数据量"},
+            ],
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"claims": reply})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert analysis.seats == (SeatNomination(seat_id=SEAT, why="你说到了数据量"),)
+    assert [item.handle for item in analysis.dropped] == ["席位提名 seat.observability"]
+    assert "目录里没有" in analysis.dropped[0].reason

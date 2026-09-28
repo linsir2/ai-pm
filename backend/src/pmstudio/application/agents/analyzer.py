@@ -26,7 +26,7 @@ from pmstudio.application.ports import (
     SeatCatalog,
 )
 from pmstudio.domain.round.claim import Assumption, Claim
-from pmstudio.domain.round.round import SeatNomination
+from pmstudio.domain.round.round import DroppedItem, DropSource, SeatNomination
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import RoundId
 from pmstudio.domain.shared.label import ClaimLabel
@@ -36,10 +36,11 @@ PURPOSE = "claims"
 
 @dataclass(frozen=True, slots=True)
 class Analysis:
-    """一次分析的全部产出：主张 + 席位提名。"""
+    """一次分析的全部产出：主张 + 席位提名 + 被丢掉的提名留痕。"""
 
     claims: tuple[Claim, ...]
     seats: tuple[SeatNomination, ...]
+    dropped: tuple[DroppedItem, ...] = ()
 
 
 def normalize(text: str) -> str:
@@ -190,32 +191,43 @@ class ClaimAnalyzer:
             )
         )
         packet = schemas.parse_packet(reply.text, schemas.ClaimsPacket, purpose=self.PURPOSE)
+        seats, dropped = nominations_from_packet(packet, catalog=self._catalog)
         return Analysis(
             claims=claims_from_packet(packet, user_input=user_input),
-            seats=nominations_from_packet(packet, catalog=self._catalog),
+            seats=seats,
+            dropped=dropped,
         )
 
 
 def nominations_from_packet(
     packet: schemas.ClaimsPacket, *, catalog: SeatCatalog
-) -> tuple[SeatNomination, ...]:
-    """模型挑的席位 → 领域值对象。目录里没有的 id 直接判整轮失败。
+) -> tuple[tuple[SeatNomination, ...], tuple[DroppedItem, ...]]:
+    """模型挑的席位 → 领域值对象 + **丢掉的那几条提名的留痕**。
 
-    为什么不"悄悄丢掉"：挑到不存在的席位说明它没看目录，这一轮的编制就不可信了；
-    按这个仓库一贯的规矩（raw_span 编造、引用不存在的编号都判死），宁可整轮失败可重试。
+    真跑实测（`.codex/runs/2026-09-28/报告.md` F13）：目录里没有 `seat.observability`
+    （s8 的**章节槽**里有这个名字），模型照着章节槽提名它 → 两次重装都失败 →
+    **连轮次都创建不了**。一条提名写错，不该把整轮打死。
+
+    所以口径改成：目录外的那条**丢提名 + 留痕**，其余照跑；只有"一条都不剩"才判死
+    （`04-未决.md` R7：一轮至少要有一个席位）。
     """
 
     known = {seat.seat_id for seat in catalog.all()}
     picked: list[SeatNomination] = []
+    dropped: list[DroppedItem] = []
     seen: set[str] = set()
-    for index, item in enumerate(packet.seats, start=1):
+    for item in packet.seats:
         if item.seat_id not in known:
-            raise PacketParseError(
-                "席位提名里出现了目录里没有的席位",
-                purpose=PURPOSE,
-                seat_id=item.seat_id,
-                position=index,
+            dropped.append(
+                DroppedItem(
+                    handle=f"席位提名 {item.seat_id}",
+                    reason="目录里没有这个席位（席位只能从目录里挑），已丢弃该条提名",
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                )
             )
+            continue
         if item.seat_id in seen:
             continue
         seen.add(item.seat_id)
@@ -228,8 +240,17 @@ def nominations_from_packet(
                 seat_id=item.seat_id,
             ) from error
     if not picked:
-        raise PacketParseError("这一轮一个席位都没挑", purpose=PURPOSE)
-    return tuple(picked)
+        unknown = sorted({item.seat_id for item in packet.seats})
+        raise PacketParseError(
+            "这一轮挑的席位一个都不在目录里："
+            + "、".join(unknown)
+            + "——目录里没有这些席位",
+            purpose=PURPOSE,
+            seat_id=unknown[0] if unknown else None,
+            seat_ids=unknown,
+            position=1,
+        )
+    return tuple(picked), tuple(dropped)
 
 
 def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tuple[Claim, ...]:

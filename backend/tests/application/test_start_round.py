@@ -195,3 +195,44 @@ async def test_start_round_does_not_repair_a_gateway_failure():
 
     assert len(harness.gateway.requests) == 1  # 只调了一次
     assert harness.rounds.get(round_id).step is Step.FAILED
+
+
+def claims_reply_with_seats(*seat_ids: str) -> str:
+    claim = {
+        "text": "要做一个订单导出功能",
+        "raw_span": "想做个订单导出的功能",
+        "label": "need",
+        "zone": "body",
+        "section_id": "s5",
+    }
+    return json.dumps(
+        {
+            "basis": "读了空文档与本轮输入",
+            "claims": [claim],
+            "seats": [
+                {"seat_id": seat_id, "why": "读完这段输入，这个专业面要表态"}
+                for seat_id in seat_ids
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_round_survives_a_seat_id_that_is_not_in_the_catalog():
+    """真跑实测：目录里没有 `seat.observability`，模型却提名它 → 轮次创建不了（报告 F13）。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply_with_seats("seat.observability", "seat.data_scale")}
+    )
+    harness.seed_project()
+    use_case = harness.start_round()
+
+    round_id = await use_case.create(project_id=PROJECT, user_input=INPUT)
+    await use_case.analyze(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert [item.seat_id for item in round_.nominated_seats] == ["seat.data_scale"]
+    assert any("seat.observability" in item.handle for item in round_.dropped)
+    assert round_.step is Step.CLAIMS_READY
+    # 只调了一次：不再为了一个不存在的席位把整轮重装两遍
+    assert len([call for call in harness.prompts.calls if call[0] == "analyzer"]) == 1

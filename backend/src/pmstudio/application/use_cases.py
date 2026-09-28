@@ -249,6 +249,8 @@ class StartRound:
             round_.attach_claims(assigned)
             # 席位名单跟着主张一起落：它是这一次判断的产物，重试/刷新都该看得见
             round_.nominate(analysis.seats)
+            # 被丢掉的提名（目录里没有的席位）留痕：丢人不丢轮，但要说清丢了谁
+            round_.note_dropped(analysis.dropped)
             authorize_named_features(round_, assigned, document=document)
             self._evidence_writer.save(ledger)
             self._round_writer.save(round_)
