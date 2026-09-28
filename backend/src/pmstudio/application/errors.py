@@ -60,6 +60,17 @@ class UnknownRound(ApplicationError):
         )
 
 
+class UnknownEvidenceId(ApplicationError):
+    """查询用：这个项目里没有这个编号。
+
+    与 `domain` 的 `UnknownEvidence` 不是一回事——那是"内容引用了不存在的编号"
+    （不变量违规，409）；这里是"你要查的这个编号不存在"（资源不在，404）。
+    """
+
+    def __init__(self, eid: object) -> None:
+        super().__init__(f"这个项目里没有编号 {eid}", code="unknown_evidence", eid=str(eid))
+
+
 class RoundBusy(ApplicationError):
     """同一个 round 上已经有一个动作在跑。
 

@@ -244,6 +244,11 @@ class Harness:
 
         return GetVersionDiff(documents=self.documents)
 
+    def get_evidence(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import GetEvidence
+
+        return GetEvidence(documents=self.documents, evidence=self.evidences)
+
     def rollback_version(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import RollbackVersion
 

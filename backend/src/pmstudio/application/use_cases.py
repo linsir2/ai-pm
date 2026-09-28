@@ -37,6 +37,7 @@ from pmstudio.application.context import (
 from pmstudio.application.deliverable import Deliverable, render_markdown
 from pmstudio.application.dto import (
     DiffView,
+    EvidenceLookupView,
     ProjectSummaryView,
     ReadinessItemView,
     RollbackResult,
@@ -44,12 +45,14 @@ from pmstudio.application.dto import (
     VersionListView,
     WorkspaceView,
     diff_view,
+    evidence_lookup_view,
     readiness_view,
     round_view,
+    used_by_entries,
     version_summary_view,
     workspace_view,
 )
-from pmstudio.application.errors import ApplicationError, PacketParseError
+from pmstudio.application.errors import ApplicationError, PacketParseError, UnknownEvidenceId
 from pmstudio.application.events import (
     DOC_CHANGED,
     GENERATION_FAILED,
@@ -1198,6 +1201,29 @@ class RollbackVersion:
             )
         )
         return RollbackResult(version_no=result.version.version_no, document=view)
+
+
+class GetEvidence:
+    """按编号查处方：原话、来路（哪一轮 / 哪个席位 / 哪道题）、链条、以及"现在被谁用着"。
+
+    只读：账本 + 文档投影。单项目几千条以内是 O(n) 扫描，不建索引（索引层是另一件事）。
+    """
+
+    def __init__(self, *, documents: DocumentReader, evidence: EvidenceReader) -> None:
+        self._documents = documents
+        self._evidence = evidence
+
+    async def __call__(self, *, project_id: ProjectId, eid: str) -> EvidenceLookupView:
+        ledger = self._evidence.get(project_id)
+        evidence = next((item for item in ledger.evidences() if str(item.eid) == eid), None)
+        if evidence is None:
+            raise UnknownEvidenceId(eid)
+        view = self._documents.get(project_id).view()
+        return evidence_lookup_view(
+            evidence,
+            chain=ledger.chain(evidence.eid),
+            used_by=used_by_entries(view, evidence.eid),
+        )
 
 
 class GetRound:

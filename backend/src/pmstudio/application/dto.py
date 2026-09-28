@@ -7,17 +7,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
-from pmstudio.application.deliverable import TRIGGER_LABELS
+from pmstudio.application.deliverable import KIND_LABELS, TRIGGER_LABELS, summarize_line
 from pmstudio.application.ports import SeatCatalog, SeatDefinition
 from pmstudio.domain.authoring.diff import diff_snapshots
 from pmstudio.domain.authoring.readiness import ReadinessItem
 from pmstudio.domain.authoring.version import Version
-from pmstudio.domain.authoring.views import DocumentView
+from pmstudio.domain.authoring.views import BlockView, DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Proposal
 from pmstudio.domain.round.opinion import OpinionForm, SeatReview
 from pmstudio.domain.round.round import DropSource, Round
 from pmstudio.domain.services.scope_guard import ScopeGuard
+from pmstudio.domain.shared.ids import EvidenceId
 
 SEAT_COMPLETED = "completed"
 SEAT_PENDING = "pending"
@@ -227,6 +228,34 @@ class RollbackResult:
     document: DocumentView
 
 
+@dataclass(frozen=True, slots=True)
+class ChainItemView:
+    eid: str
+    kind: str
+    kind_label: str
+    text: str
+    summary: str
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceLookupView:
+    """按编号查处方：原话、来路、链条、以及"现在被谁用着"（`04` F5）。"""
+
+    eid: str
+    kind: str
+    kind_label: str
+    text: str
+    summary: str
+    raw_span: str | None
+    rationale: str | None
+    derived_from: tuple[str, ...]
+    round_id: str | None
+    seat_id: str | None
+    question_id: str | None
+    chain: tuple[ChainItemView, ...]
+    used_by: tuple[str, ...]
+
+
 def round_view(
     round_: Round,
     *,
@@ -358,6 +387,60 @@ def diff_view(before: Version, after: Version) -> DiffView:
             )
             for group in diff_snapshots(before.snapshot, after.snapshot)
         ),
+    )
+
+
+def _chain_item_view(evidence) -> ChainItemView:  # type: ignore[no-untyped-def]
+    return ChainItemView(
+        eid=str(evidence.eid),
+        kind=evidence.kind.value,
+        kind_label=KIND_LABELS[evidence.kind],
+        text=evidence.text,
+        summary=summarize_line(evidence.text),
+    )
+
+
+def used_by_entries(view: DocumentView, eid: EvidenceId) -> tuple[str, ...]:
+    """文档里哪些条目引用了这个编号（界面据此滚到那条内容并闪一下）。"""
+
+    def walk(block: BlockView) -> list:
+        found = [entry for entry in block.entries if eid in entry.refs]
+        for child in block.children:
+            found += walk(child)
+        return found
+
+    entries = [
+        entry
+        for section in view.sections
+        for block in section.blocks
+        for entry in walk(block)
+    ]
+    entries += [entry for entry in view.preference_entries if eid in entry.refs]
+    return tuple(str(entry.entry_id) for entry in entries)
+
+
+def evidence_lookup_view(
+    evidence,  # type: ignore[no-untyped-def]
+    *,
+    chain: Sequence,  # type: ignore[type-arg]
+    used_by: tuple[str, ...],
+) -> EvidenceLookupView:
+    source = evidence.source
+    return EvidenceLookupView(
+        eid=str(evidence.eid),
+        kind=evidence.kind.value,
+        kind_label=KIND_LABELS[evidence.kind],
+        text=evidence.text,
+        summary=summarize_line(evidence.text),
+        # 原话只在界面上给（点编号能看），导出里没有（`04` D5）
+        raw_span=source.raw_span,
+        rationale=source.rationale,
+        derived_from=tuple(str(ref) for ref in source.derived_from),
+        round_id=None if source.round_id is None else str(source.round_id),
+        seat_id=source.seat_id,
+        question_id=None if source.question_id is None else str(source.question_id),
+        chain=tuple(_chain_item_view(item) for item in chain),
+        used_by=used_by,
     )
 
 
