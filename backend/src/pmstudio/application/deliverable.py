@@ -204,9 +204,14 @@ def _unfinished(readiness: Sequence[ReadinessItem]) -> str:
     return "\n".join(lines)
 
 
-def _summarize(text: str) -> str:
+def summarize_line(text: str) -> str:
+    """一句话摘要：章节、出处附录、出处查询共用同一条压缩规则。"""
+
     flat = " ".join(text.split())
     return flat if len(flat) <= SUMMARY_LIMIT else f"{flat[:SUMMARY_LIMIT]}…"
+
+
+_summarize = summarize_line  # 兼容既有调用点
 
 
 def _has_entries(section: SectionView) -> bool:

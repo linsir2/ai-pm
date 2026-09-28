@@ -7,8 +7,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
+from pmstudio.application.deliverable import TRIGGER_LABELS
 from pmstudio.application.ports import SeatCatalog, SeatDefinition
+from pmstudio.domain.authoring.diff import diff_snapshots
 from pmstudio.domain.authoring.readiness import ReadinessItem
+from pmstudio.domain.authoring.version import Version
 from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Proposal
@@ -172,6 +175,58 @@ class WorkspaceView:
     readiness: tuple[ReadinessItemView, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class VersionSummaryView:
+    """版本列表里的一行（底栏版本历史抽屉读它）。"""
+
+    version_no: int
+    trigger: str
+    trigger_label: str
+    summary: str
+    created_at: datetime
+    changed_block_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VersionListView:
+    versions: tuple[VersionSummaryView, ...]
+    current: int
+
+
+@dataclass(frozen=True, slots=True)
+class EntrySnapshotView:
+    entry_id: str
+    text: str
+    refs: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ChangedEntryView:
+    before: EntrySnapshotView
+    after: EntrySnapshotView
+
+
+@dataclass(frozen=True, slots=True)
+class DiffGroupView:
+    target_label: str
+    added: tuple[EntrySnapshotView, ...]
+    removed: tuple[EntrySnapshotView, ...]
+    changed: tuple[ChangedEntryView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DiffView:
+    from_version_no: int
+    to_version_no: int
+    groups: tuple[DiffGroupView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RollbackResult:
+    version_no: int
+    document: DocumentView
+
+
 def round_view(
     round_: Round,
     *,
@@ -260,6 +315,49 @@ def readiness_view(item: ReadinessItem) -> ReadinessItemView:
         title=item.title,
         detail=item.detail,
         severity=item.severity.value,
+    )
+
+
+def version_summary_view(version: Version) -> VersionSummaryView:
+    return VersionSummaryView(
+        version_no=version.version_no,
+        trigger=version.trigger.value,
+        trigger_label=TRIGGER_LABELS[version.trigger],
+        summary=version.summary,
+        created_at=version.created_at,
+        changed_block_ids=tuple(str(item) for item in version.changed_block_ids),
+    )
+
+
+def _entry_snapshot_view(item) -> EntrySnapshotView:  # type: ignore[no-untyped-def]
+    return EntrySnapshotView(
+        entry_id=str(item.entry_id),
+        text=item.text,
+        refs=tuple(str(ref) for ref in item.refs),
+    )
+
+
+def diff_view(before: Version, after: Version) -> DiffView:
+    """两个版本 → 界面要的形状（分组、前后对照、编号照抄）。"""
+
+    return DiffView(
+        from_version_no=before.version_no,
+        to_version_no=after.version_no,
+        groups=tuple(
+            DiffGroupView(
+                target_label=group.target_label,
+                added=tuple(_entry_snapshot_view(item) for item in group.added),
+                removed=tuple(_entry_snapshot_view(item) for item in group.removed),
+                changed=tuple(
+                    ChangedEntryView(
+                        before=_entry_snapshot_view(item.before),
+                        after=_entry_snapshot_view(item.after),
+                    )
+                    for item in group.changed
+                ),
+            )
+            for group in diff_snapshots(before.snapshot, after.snapshot)
+        ),
     )
 
 

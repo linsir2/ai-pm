@@ -120,6 +120,25 @@ class ProposalCommitter:
             advisories=(),
         )
 
+    def rollback_to(
+        self, *, project_id: ProjectId, version_no: int, now: datetime, summary: str
+    ) -> CommitResult:
+        """回到某一版：产生**新**一版（`trigger=rollback`），旧版本一个都不删（D6）。
+
+        与手改一样，落盘仍然只经过这一个文件里的 `DocumentWriter`
+        （守卫 `test_write_path.py` 盯着白名单）；编排层、AI 都拿不到这条路径。
+        """
+
+        with self._uow:
+            document: Document = self._documents.get(project_id)
+            version = document.rollback_to(version_no, now=now, summary=summary)
+            self._writer.save(document)
+        return CommitResult(
+            version=version,
+            written_block_ids=version.changed_block_ids,
+            advisories=(),
+        )
+
     def _resolve(self, round_: Round, accepted: Sequence[ProposalId]) -> tuple[Proposal, ...]:
         draft = round_.draft
         if draft is None:

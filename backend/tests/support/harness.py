@@ -234,6 +234,26 @@ class Harness:
 
         return GetRound(rounds=self.rounds, evidence=self.evidences, catalog=self.seats)
 
+    def get_versions(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import GetVersions
+
+        return GetVersions(documents=self.documents)
+
+    def get_version_diff(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import GetVersionDiff
+
+        return GetVersionDiff(documents=self.documents)
+
+    def rollback_version(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import RollbackVersion
+
+        return RollbackVersion(
+            committer=self.committer(),
+            documents=self.documents,
+            clock=self.clock,
+            events=self.events,
+        )
+
     def export_markdown(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import ExportMarkdown
 

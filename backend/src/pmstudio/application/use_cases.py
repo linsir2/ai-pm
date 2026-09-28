@@ -36,12 +36,17 @@ from pmstudio.application.context import (
 )
 from pmstudio.application.deliverable import Deliverable, render_markdown
 from pmstudio.application.dto import (
+    DiffView,
     ProjectSummaryView,
     ReadinessItemView,
+    RollbackResult,
     RoundView,
+    VersionListView,
     WorkspaceView,
+    diff_view,
     readiness_view,
     round_view,
+    version_summary_view,
     workspace_view,
 )
 from pmstudio.application.errors import ApplicationError, PacketParseError
@@ -1124,6 +1129,75 @@ class ListProjects:
 
     async def __call__(self) -> tuple[ProjectSummaryView, ...]:
         return self._index.list_summaries()
+
+
+class GetVersions:
+    """列版本。读聚合里的 `versions`（快照也读出来；单项目几百版以内没问题）。"""
+
+    def __init__(self, *, documents: DocumentReader) -> None:
+        self._documents = documents
+
+    async def __call__(self, *, project_id: ProjectId) -> VersionListView:
+        document: Document = self._documents.get(project_id)
+        return VersionListView(
+            versions=tuple(version_summary_view(item) for item in document.versions),
+            current=document.current_version.version_no,
+        )
+
+
+class GetVersionDiff:
+    """两个版本的差异：纯函数算（`domain/authoring/diff.py`），这一层只负责取两个版本。"""
+
+    def __init__(self, *, documents: DocumentReader) -> None:
+        self._documents = documents
+
+    async def __call__(
+        self, *, project_id: ProjectId, from_version_no: int, to_version_no: int
+    ) -> DiffView:
+        document: Document = self._documents.get(project_id)
+        # 版本号不存在 → UnknownVersion → 404（api/errors.py 的映射）
+        before = document.version(from_version_no)
+        after = document.version(to_version_no)
+        return diff_view(before, after)
+
+
+class RollbackVersion:
+    """回到某一版：写入只经过 `ProposalCommitter`，写完推 `doc.changed` 让界面重读。"""
+
+    def __init__(
+        self,
+        *,
+        committer: ProposalCommitter,
+        documents: DocumentReader,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._committer = committer
+        self._documents = documents
+        self._clock = clock
+        self._events = events
+
+    async def __call__(self, *, project_id: ProjectId, version_no: int) -> RollbackResult:
+        result: CommitResult = self._committer.rollback_to(
+            project_id=project_id,
+            version_no=version_no,
+            now=self._clock.now(),
+            summary=f"回到 v{version_no}",
+        )
+        view = self._documents.get(project_id).view()
+        self._events.publish(
+            Event(
+                name=DOC_CHANGED,
+                project_id=str(project_id),
+                payload={
+                    "version_no": result.version.version_no,
+                    "written_block_ids": [str(item) for item in result.written_block_ids],
+                    "summary": result.version.summary,
+                },
+                occurred_at=self._clock.now(),
+            )
+        )
+        return RollbackResult(version_no=result.version.version_no, document=view)
 
 
 class GetRound:
