@@ -92,6 +92,30 @@ def test_recorder_survives_a_broken_write(tmp_path):
     )  # 不抛
 
 
+def test_recorder_survives_usage_that_cannot_be_serialized(tmp_path):
+    """usage 里混进不可序列化的对象时只吞掉，不许往上炸（真模型踩过）。"""
+
+    connection = database.connect(tmp_path / "pm.db")
+    recorder = SqliteModelCallRecorder(connection)
+
+    class _Weird:
+        pass
+
+    recorder.record(
+        round_id="r1",
+        purpose="claims",
+        model="m",
+        prompt_sha="x",
+        prompt_text="p",
+        reply_text="{}",
+        usage={"details": _Weird()},
+        duration_ms=1,
+        created_at=NOW,
+    )  # 不抛
+
+    assert recorder.recent(round_id="r1") == ()
+
+
 def test_schema_creates_the_table_on_an_old_db(tmp_path):
     """老库不用迁移：`connect()` 每次都跑 `schema.sql`（全是 CREATE TABLE IF NOT EXISTS）。"""
 

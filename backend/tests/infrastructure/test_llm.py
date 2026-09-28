@@ -368,6 +368,53 @@ class _RecordingRecorder:
         self.rows.append(row)
 
 
+class _NotJsonSerializable:
+    """litellm 的 usage 里真有这种东西（`CompletionTokensDetailsWrapper`）。"""
+
+    def __repr__(self) -> str:
+        return "<wrapper 12>"
+
+
+async def test_gateway_records_usage_that_is_not_json_serializable(monkeypatch):
+    """真模型实测：usage 里是 pydantic 包装对象，直接 json.dumps 会炸。
+
+    留样是旁路，**不许把这一轮搞失败**；转成能写的形状（字符串）记下来就行。
+    """
+
+    async def scripted(**kwargs):
+        class _Message:
+            content = '{"ok": true}'
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "provider-model"
+            usage = {"total_tokens": 7, "completion_tokens_details": _NotJsonSerializable()}
+
+        return _Response()
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", scripted)
+    recorder = _RecordingRecorder()
+    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
+
+    reply = await gateway.complete(
+        ModelRequest(
+            purpose="claims",
+            messages=(ModelMessage(role="user", content="x"),),
+            schema_name="ClaimsPacket",
+            response_schema={"type": "object"},
+        )
+    )
+
+    assert reply.text == '{"ok": true}'
+    assert recorder.rows[0]["usage"] == {
+        "total_tokens": 7,
+        "completion_tokens_details": "<wrapper 12>",
+    }
+
+
 async def test_gateway_records_the_call_when_a_recorder_is_given(monkeypatch):
     """留样：谁、哪一轮、提示词原文、回复、用量、耗时（`02` §5.3）。"""
 

@@ -554,3 +554,60 @@ def test_declared_opinion_is_not_reported_twice():
     )
 
     assert drops == ()
+
+
+# —— 真模型实测踩到：章节槽（P5a）在报文层不可达 ——
+
+
+def test_section_slot_target_is_accepted():
+    """整合者往 s8 的章节槽里写（`{"section_id": "s8", "field": "compatibility"}`）必须能过。
+
+    真模型实测：报文层要求"field 必须配 feature_slug"，于是整合两次都失败、整轮降级；
+    P5a 定义的六个槽对 AI 路径根本不可达。
+    """
+
+    result = assembly.assemble(
+        packet(
+            proposals=[
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s8", "field": "compatibility"},
+                    "text": "只支持 Chrome 与 Safari 最近两个大版本",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                }
+            ]
+        ),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    proposal = result.proposals[0]
+    assert str(proposal.target.section_id) == "s8"
+    assert proposal.target.field == "compatibility"
+    assert proposal.kind is BlockKind.NFR  # 槽的类型来自槽表，不信模型给的 kind
+
+
+def test_section_slot_with_unknown_name_is_rejected():
+    """写错槽名仍然是失败：章节槽只有六个，不许糊一个上去。"""
+
+    with pytest.raises(PacketParseError) as error:
+        assembly.assemble(
+            packet(
+                proposals=[
+                    {
+                        "op": "add",
+                        "target": {"zone": "body", "section_id": "s8", "field": "不存在的槽"},
+                        "text": "随便写点什么",
+                        "origin_type": "derived",
+                        "evidence_refs": ["E1"],
+                    }
+                ]
+            ),
+            round_=round_with_two_seats_attested(),
+            document=document_with_feature(),
+            ledger=ledger_with_two_entries(),
+        )
+
+    assert "槽" in error.value.message

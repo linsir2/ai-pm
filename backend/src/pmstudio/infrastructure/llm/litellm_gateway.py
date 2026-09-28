@@ -163,10 +163,27 @@ class LiteLLMGateway:
             prompt_sha=hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
             prompt_text=prompt,
             reply_text=reply_text,
-            usage=usage,
+            # litellm 的 usage 里可能混着 pydantic 包装对象（真模型实测踩到过）：
+            # 先转成 JSON 能写的形状，别让留样把这一轮搞失败。
+            usage=_jsonable(usage),
             duration_ms=duration_ms,
             created_at=datetime.now(UTC),
         )
+
+
+def _jsonable(value: object) -> object:
+    """把任意值转成 `json.dumps` 写得出来的形状（认不出来的就 `str()`）。"""
+
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(item) for item in value]
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return _jsonable(dump())
+    return str(value)
 
 
 def strip_fence(text: str) -> str:

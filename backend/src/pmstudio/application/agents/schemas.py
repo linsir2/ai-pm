@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, ValidationError
 from pmstudio.application.errors import PacketParseError
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import FeatureSlug, SectionId
-from pmstudio.domain.shared.sections import FEATURE_HOME
+from pmstudio.domain.shared.sections import FEATURE_HOME, section_slot
 from pmstudio.domain.shared.target import Target
 
 Label = Literal["fact", "need", "goal", "constraint", "preference", "guess", "decision"]
@@ -169,9 +169,15 @@ def target_of(draft: TargetDraft) -> Target:
         return Target.preference()
     section = SectionId(draft.section_id) if draft.section_id else FEATURE_HOME
     if draft.field is not None:
-        if draft.feature_slug is None:
-            raise ShapeError("字段名必须和 feature_slug 一起给")
-        return Target.feature_field(FeatureSlug(draft.feature_slug), draft.field)
+        if draft.feature_slug is not None:
+            return Target.feature_field(FeatureSlug(draft.feature_slug), draft.field)
+        # 没有 feature_slug 时，field 只能是**章节槽**（s8 的六块，P5a）。
+        # 真模型实测：这里以前一律要求 feature_slug，于是六个槽对 AI 路径根本不可达。
+        if section_slot(section, draft.field) is None:
+            raise ShapeError(
+                f"{section} 没有名为 {draft.field} 的章节槽；功能字段必须和 feature_slug 一起给"
+            )
+        return Target.body(section, field=draft.field)
     if draft.feature_slug is not None:
         return Target.body(section, feature_slug=FeatureSlug(draft.feature_slug))
     return Target.body(section)

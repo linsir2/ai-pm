@@ -61,8 +61,10 @@ class SqliteModelCallRecorder:
                     created_at.isoformat(),
                 ),
             )
-        except sqlite3.Error:
-            # 旁路：记不上就算了，不许把这一轮搞失败
+        except (sqlite3.Error, TypeError, ValueError):
+            # 旁路：记不上就算了，不许把这一轮搞失败。
+            # TypeError/ValueError 是防 `json.dumps` 撞上不可序列化的对象（真模型踩过一次：
+            # litellm 的 usage 里有 pydantic 包装对象，那一次整个轮次被留样搞失败了）。
             return
 
     def recent(
