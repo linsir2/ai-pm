@@ -11,6 +11,9 @@ class Step(StrEnum):
     AWAITING_CONFIRM = "awaiting_confirm"
     DONE = "done"
     FAILED = "failed"
+    #: 人主动不要这一轮了（`02` §7）。与 FAILED 的区别：失败是"系统出问题、可重试"，
+    #: 放弃是"人不想要了、别再跑"——所以它是终点，没有出口，也不写 failure。
+    ABANDONED = "abandoned"
 
 
 class WaitingOn(StrEnum):
@@ -28,6 +31,7 @@ LEGAL_ADVANCES: dict[Step, frozenset[Step]] = {
     Step.AWAITING_CONFIRM: frozenset({Step.DONE}),
     Step.DONE: frozenset(),
     Step.FAILED: frozenset(),
+    Step.ABANDONED: frozenset(),
 }
 
 MAX_SEAT_ROUNDS = 3

@@ -539,6 +539,7 @@ def round_to_payload(round_: Round) -> dict:
         ],
         "failure": _failure_to_json(round_.failure),
         "confirmed_version_no": round_.confirmed_version_no,
+        "abandon_reason": round_.abandon_reason,
     }
 
 
@@ -581,6 +582,8 @@ def round_from_payload(
         dropped=_dropped_from_payload(payload),
         failure=_failure_from_json(payload["failure"]),
         confirmed_version_no=payload["confirmed_version_no"],
+        # 老行里没有这个键（放弃是后加的）
+        abandon_reason=payload.get("abandon_reason"),
     )
 
 

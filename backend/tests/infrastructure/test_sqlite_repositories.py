@@ -386,3 +386,36 @@ def test_round_payload_without_dropped_key_still_loads():
     )
 
     assert loaded.dropped == ()
+
+
+def test_abandon_reason_round_trips(repos):
+    """放弃这一轮的原因要跟着轮次落库、读回来一致（`01` F15）。"""
+
+    _, rounds, _, _, uow = repos
+    round_ = make_round()
+    round_.abandon("用户不想等了")
+    with uow:
+        rounds.save(round_)
+
+    loaded = rounds.get(round_.round_id)
+    assert loaded.step is Step.ABANDONED
+    assert loaded.abandon_reason == "用户不想等了"
+
+
+def test_round_payload_without_abandon_key_still_loads():
+    """老行里没有这个键：读成 None，不炸。"""
+
+    round_ = make_round()
+    payload = serialization.round_to_payload(round_)
+    payload.pop("abandon_reason")
+
+    loaded = serialization.round_from_payload(
+        payload,
+        round_id=round_.round_id,
+        project_id=round_.project_id,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+
+    assert loaded.abandon_reason is None

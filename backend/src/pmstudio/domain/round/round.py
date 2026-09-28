@@ -108,6 +108,7 @@ class Round:
         failure: Failure | None = None,
         confirmed_version_no: int | None = None,
         dropped: tuple[DroppedItem, ...] = (),
+        abandon_reason: str | None = None,
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -127,6 +128,7 @@ class Round:
         self._failure = failure
         self._confirmed_version_no = confirmed_version_no
         self._dropped = tuple(dropped)
+        self._abandon_reason = abandon_reason
 
     @classmethod
     def start(
@@ -229,6 +231,25 @@ class Round:
         """
 
         return self._dropped
+
+    @property
+    def abandon_reason(self) -> str | None:
+        return self._abandon_reason
+
+    def abandon(self, reason: str) -> None:
+        """放弃这一轮：幂等、终点，**只记第一次**的原因。
+
+        已经 done / failed / abandoned 的一轮什么都不做（终态不可改）。
+        空原因要报错——"为什么放弃"是这条记录唯一的用处。
+        """
+
+        if self._step in (Step.DONE, Step.FAILED, Step.ABANDONED):
+            return
+        if not reason.strip():
+            raise ShapeError("放弃要写清原因")
+        self._abandon_reason = reason.strip()
+        self._waiting_on = WaitingOn.NONE
+        self._step = Step.ABANDONED
 
     @property
     def write_scope(self) -> frozenset[Target]:

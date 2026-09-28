@@ -523,3 +523,57 @@ def test_dropped_handle_shape_is_not_validated_on_purpose():
 
     assert item.seat_id is None
     assert item.handle == "查不到:O9"
+
+
+# —— P5c Task 2：放弃这一轮 ——
+
+
+def test_abandon_is_a_terminal_state_with_a_reason():
+    """放弃是人主动不要了：终点、带原因、不进 failure（那会让人以为可以重试）。"""
+
+    round_ = round_with_seats()
+    round_.abandon("用户不想等了")
+
+    assert round_.step is Step.ABANDONED
+    assert round_.abandon_reason == "用户不想等了"
+    assert round_.failure is None
+    assert round_.waiting_on is WaitingOn.NONE
+
+
+def test_abandon_is_idempotent():
+    round_ = round_with_seats()
+    round_.abandon("第一次")
+    round_.abandon("第二次")
+
+    assert round_.abandon_reason == "第一次"  # 第一次说的算
+
+
+def test_abandon_does_not_overwrite_failed_or_done():
+    round_ = round_with_seats()
+    round_.fail("系统炸了")
+    round_.abandon("放弃")
+
+    assert round_.step is Step.FAILED  # 终态不可改：失败点只有一个
+    assert round_.abandon_reason is None
+
+
+def test_abandoned_round_refuses_every_other_action():
+    round_ = round_with_seats()
+    round_.abandon("不做了")
+
+    with pytest.raises(IllegalStepTransition):
+        round_.integrate(draft=make_draft())
+    with pytest.raises(NotAwaitingAnswers):
+        round_.submit_answers(
+            AnswerSet(
+                form_id=FormId("f1"),
+                answers=(),
+                answered_at=NOW,
+                skipped=(QuestionId("q1"),),
+            )
+        )
+
+
+def test_abandon_requires_a_reason():
+    with pytest.raises(ShapeError):
+        round_with_seats().abandon("   ")

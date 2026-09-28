@@ -44,6 +44,8 @@ RESUME_ROUTES: dict[str, str] = {
     Step.AWAITING_ANSWERS.value: END,
     Step.AWAITING_CONFIRM.value: END,
     Step.DONE.value: END,
+    # 放弃是终点：`retry` 一个已放弃的轮不该 500，也不该复活它
+    Step.ABANDONED.value: END,
     # 兜底：老库里的坏行（step=failed）也得有个出口，否则路由表 KeyError → 500。
     # 正常路径进不来——`Round.resume()` 会先把坏 `at_step` 拦下来（04-未决 C9）。
     Step.FAILED.value: END,
