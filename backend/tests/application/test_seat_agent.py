@@ -283,3 +283,36 @@ async def test_seat_reviewer_reports_overflow_instead_of_failing():
 
     assert len(outcome.review.opinions) == 12
     assert outcome.overflow == (schemas.Overflow(container="opinions", kept=12, dropped=2),)
+
+
+async def test_seat_accepts_zero_padded_evidence_ids():
+    """`E08` 是 `E8` 的另一种写法，不是编造编号（报告 F3）。"""
+
+    reply = json.dumps(
+        {
+            "basis": "读了 s1–s13 与 E8",
+            "opinions": [
+                {
+                    "local_id": "O1",
+                    "form": "judgment",
+                    "about": "脱敏口径",
+                    "claim": "手机号强制掩码",
+                    "because": "用户选的就是脱敏",
+                    "evidence_refs": ["E08"],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    reviewer = SeatReviewer(model=gateway_for(reply), prompts=RecordingPrompts())
+
+    outcome = await reviewer.review(
+        seat=make_seat(),
+        document_state="# 文档",
+        claims="…",
+        opinions_so_far="…",
+        answered="…",
+        known_eids=frozenset({EvidenceId("E8")}),
+    )
+
+    assert outcome.review.opinions[0].evidence_refs == (EvidenceId("E8"),)

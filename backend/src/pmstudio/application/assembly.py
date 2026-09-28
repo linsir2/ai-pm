@@ -11,6 +11,7 @@ from datetime import datetime
 from pmstudio.application.agents import schemas
 from pmstudio.application.context import seat_entry_handle
 from pmstudio.application.errors import PacketParseError, unknown_ref_message
+from pmstudio.application.evidence_refs import candidates_for, normalize_ref
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS, field_spec
 from pmstudio.domain.provenance.evidence import EvidenceSource
@@ -507,12 +508,17 @@ def _target_or_drop(
 
 
 def _refs(raw: Sequence[str], *, known: frozenset[EvidenceId]) -> tuple[EvidenceId, ...]:
-    refs = tuple(EvidenceId(item) for item in raw)
+    # 归一化写法（E08 → E8）后再校验：写法差异不该判死整轮，编造编号照样判死（报告 F3）。
+    refs = tuple(EvidenceId(normalize_ref(item, known=known)) for item in raw)
     if not refs:
         raise PacketParseError("提案必须带 evidence_refs", purpose=PURPOSE)
     unknown = [str(ref) for ref in refs if ref not in known]
     if unknown:
-        raise PacketParseError(unknown_ref_message(unknown), purpose=PURPOSE)
+        raise PacketParseError(
+            unknown_ref_message(unknown),
+            purpose=PURPOSE,
+            candidates=[candidates_for(item, known=known) for item in unknown],
+        )
     return refs
 
 
@@ -628,11 +634,13 @@ def _question(
     解析不出的地址只丢归因、写进 `dropped` 留痕：归属写错不该把一道好题判死。
     """
 
-    refs = tuple(EvidenceId(item) for item in draft.evidence_refs)
+    refs = tuple(EvidenceId(normalize_ref(item, known=known)) for item in draft.evidence_refs)
     unknown = [str(ref) for ref in refs if ref not in known]
     if unknown:
         raise PacketParseError(
-            unknown_ref_message(unknown, what="题目的依据编号不存在"), purpose=PURPOSE
+            unknown_ref_message(unknown, what="题目的依据编号不存在"),
+            purpose=PURPOSE,
+            candidates=[candidates_for(item, known=known) for item in unknown],
         )
     by_handle = {
         seat_entry_handle(review.seat_id, opinion.local_id): review.seat_id

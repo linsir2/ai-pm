@@ -19,6 +19,11 @@ def unknown_ref_message(
             f"{what}：{listed}；`seat.xxx:O1` 是席位条目地址，"
             "不是出处编号——请改引它「依据」里那些 E 编号，或者留空"
         )
+    if any(item.startswith("r-") and "#" in item for item in unknown):
+        return (
+            f"{what}：{listed}；`r-xxxx#01` 是**提案编号**，不是出处编号——"
+            "出处编号只在上面那份清单里（形如 E12）"
+        )
     return f"{what}：{listed}"
 
 

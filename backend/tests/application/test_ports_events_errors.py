@@ -9,6 +9,7 @@ from pmstudio.application.errors import (
     PacketParseError,
     UnknownProject,
     UnknownRound,
+    unknown_ref_message,
 )
 from pmstudio.application.events import (
     DOC_CHANGED,
@@ -127,3 +128,10 @@ def test_application_errors_carry_machine_readable_codes():
     assert UnknownProject("p9").code == "unknown_project"
     assert UnknownRound("r9").code == "unknown_round"
     assert UnknownRound("r9").details["round_id"] == "r9"
+def test_unknown_ref_message_explains_proposal_ids():
+    """真跑里模型把 `r-f2a00f4e#08` 当出处编号写——提示要说清那是另一个命名空间。"""
+
+    message = unknown_ref_message(["r-f2a00f4e#08"], what="意见引用了不存在的编号")
+
+    assert "提案编号" in message
+    assert "E" in message

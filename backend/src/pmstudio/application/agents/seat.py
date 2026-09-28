@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
 from pmstudio.application.errors import PacketParseError, unknown_ref_message
+from pmstudio.application.evidence_refs import candidates_for, normalize_ref
 from pmstudio.application.ports import (
     ModelGateway,
     ModelMessage,
@@ -137,8 +138,12 @@ def review_from_packet(
         seen.add(local_id)
         # 机械翻译：模型有时把问卷题号（q3）当出处编号写；答案的出处编号是 E 编号。
         # 翻译过去才是它想表达的意思（不翻译就是整轮失败——真模型冒烟实测过一次）。
+        # 再归一化写法（E08 → E8）：只认能落回账本的那种写法，落不回照样判死（GB1）。
         mapping = answer_eids or {}
-        refs = tuple(EvidenceId(mapping.get(ref, ref)) for ref in draft.evidence_refs)
+        refs = tuple(
+            EvidenceId(normalize_ref(mapping.get(ref, ref), known=known_eids))
+            for ref in draft.evidence_refs
+        )
         unknown = [str(ref) for ref in refs if ref not in known_eids]
         if unknown:
             raise PacketParseError(
@@ -146,6 +151,9 @@ def review_from_packet(
                 purpose=PURPOSE,
                 seat_id=seat_id,
                 local_id=local_id,
+                candidates=[
+                    candidates_for(item, known=known_eids) for item in unknown
+                ],
             )
         note = (draft.basis_note or "").strip() or None
         if not refs and note is None:

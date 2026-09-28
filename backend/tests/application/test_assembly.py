@@ -780,3 +780,18 @@ def test_user_origin_is_checked_too():
     assert [proposal.origin.type for proposal in result.proposals] == [
         OriginType.PROPOSED
     ]
+
+
+def test_proposal_with_zero_padded_ref_passes():
+    """真跑实测：把 `E8` 写成 `E08` 会让整轮 502（报告 F3）——归一化后照常进卡片。"""
+
+    result = assembly.assemble(
+        packet(proposals=[slot_proposal(refs=["E002"])]),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),  # 账本里是 E2
+    )
+
+    assert [proposal.origin.refs for proposal in result.proposals] == [
+        (EvidenceId("E2"),)
+    ]
