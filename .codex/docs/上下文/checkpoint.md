@@ -597,3 +597,48 @@ cd backend && set -a && . ./.env && set +a && PMSTUDIO_TRACE_MODEL=1 uv run pyth
 （不再把"跑出本轮去处"当失败），硬约束继续由领域层与决策题守着；`no_duplicate_questions` 那条
 给提示词补一个"两件事合并成一题"的真例（L13 的规矩：真踩过就固化进提示词）。
 两条都落地的话，第三轮这份报告就是 8/8。
+
+### 追加（2026-09-28 P5d：claims 重装一圈 + 真模型验证）
+
+作者拍板第三项（"你推荐的第三项，给我出完整的实现报告，用 writing-plans，好好设计，然后实现"）。
+计划：`docs/plans/2026-09-28-P5d-报文不合格的重装.md`（按 writing-plans 写：Goal/Architecture/
+Spec/Global Constraints + T1–T4 的逐步 TDD + 自检）。
+
+**三个提交**
+
+| 提交 | 内容 |
+|---|---|
+| `e4948fb` | `application/repair.py::repair_note()`（纯函数）+ 复述错误带 `position` |
+| `ec40969` | `analyzer.md` 加 `$validation_error` 槽、`analyze(..., validation_error="")`（与整合者同形状） |
+| `f8e5a63` | `StartRound.analyze` 重装一圈（`MAX_CLAIMS_ATTEMPTS = 2`） |
+
+**口径**（写进 `02` §7 的调用上限表 + 新增 §11.0.5）：claims 报文不合格 → 带上一次错在哪
+再调一次 → 两次都过不了才 `fail_round`（理由"主张两次都过不了校验：…"）；**网关类失败不重装**
+（网关自己已经 3 次尝试 + 退避）。纠错指引**不复制模型写错的那串**（只说第几条、哪个字段、要求）。
+
+**单测**：`523 passed` · `ruff` All checks passed · 前端 `tsc` 干净 + `97 passed`。
+新增四条行为钉子：重装带指引 / 指引不回喂错串 / 两次失败判死且理由写明 / 网关失败只调一次。
+
+**真模型验证（完整 8 条 eval，第四轮）**：**7/8**，`100` 次模型调用、**一轮都没崩**
+（8 轮全部走到草案或问卷）。唯一红的 `case-a-orders` 是 `no_duplicate_questions`
+（`s8.availability` 问了两遍）——与 P5d 无关的老问题，见上一节。
+
+**重装真的用上了（一次，而且救回一整轮）**：
+
+```
+r-a95e8bdc（就是 edge-long）：claims 调了 2 次；第一次报
+  「主张 c1 过不了领域校验：未知章节：s1 背景与问题」
+第二次写对 → 那一轮一路走到 awaiting_confirm（出了草案），failure=None。
+```
+
+我按留样回放了一次那条坏报文来定性：5 条复述的 `raw_span` **全部能对齐原文**（复述没问题），
+席位 id 也全合法——死的只是 `section_id` 照抄了整行标题。这条规矩本来就在提示词里
+（`SECTIONS_TEXT` 末行："section_id 只能填上面那个短 id，如 s3；不要带标题、不要带空格"），
+模型还是偶尔照抄整行；**这次正是重装兜住的**。
+
+**遗留（都不在 P5d 范围，等拍板）**
+
+1. `no_duplicate_questions`：第四次跑了，第三次复发（`edge-one-constraint` → `edge-long` →
+   `case-a-orders`，每次换一条用例）。提示词那条规矩已经加过，实测不够——建议**装配层机械去重**
+   （同一去处只留第一道，其余写进 `Round.dropped` 留痕），或承认它是抖动把断言改宽。
+2. `no_unauthorized_features` 与 `02` §3① 的口径冲突（上一节详述）。
