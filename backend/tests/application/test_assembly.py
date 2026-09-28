@@ -295,7 +295,9 @@ def test_assemble_creates_feature_subtree_only_when_authorized():
     assert question.asked_by == (SEAT,)
 
 
-def test_assemble_keeps_first_five_questions_and_degrades_the_rest():
+def test_assemble_keeps_first_five_questions_and_defers_the_rest():
+    """前 5 题进问卷，其余进**轮内队列**（不是 list_items——那个没人读，真跑里它们会消失）。"""
+
     drafts = [
         {
             "kind": "gap",
@@ -324,8 +326,8 @@ def test_assemble_keeps_first_five_questions_and_degrades_the_rest():
         "q4",
         "q5",
     ]
-    assert len(result.list_items) == 2
-    assert result.list_items[0].reason.startswith("本批只问 5 题")
+    assert [item.title for item in result.deferred] == ["问题 6？", "问题 7？"]
+    assert result.list_items == ()
 
 
 def test_assemble_rejects_unknown_evidence_refs():
@@ -795,3 +797,62 @@ def test_proposal_with_zero_padded_ref_passes():
     assert [proposal.origin.refs for proposal in result.proposals] == [
         (EvidenceId("E2"),)
     ]
+
+
+# —— 轮内未决队列（P9）：超上限的题进 deferred，carried 题优先问 ——
+
+
+def carried_question(title: str = "上一批没问上的题") -> Question:
+    return Question(
+        question_id=QuestionId("q0"),
+        target=Target.body("s8"),
+        type=QuestionType.TEXT,
+        title=title,
+        why="本批上限，留到下一批",
+        consequence_if_skipped="继续留在队列里",
+    )
+
+
+def test_overflow_questions_are_returned_as_deferred_not_list_items():
+    """真跑实测：它们原来被写成 list_items（理由"留到下一轮"），但没人读（报告 F12）。"""
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(title=f"第 {index} 题") for index in range(1, 8)]),
+        round_=round_with_two_seats_attested(),
+        document=make_document(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [item.title for item in result.questions] == [f"第 {i} 题" for i in range(1, 6)]
+    assert [item.title for item in result.deferred] == ["第 6 题", "第 7 题"]
+    assert result.list_items == ()  # 不是"清单项"，是"没问上的题"
+
+
+def test_carried_questions_are_asked_before_the_new_ones():
+    result = assembly.assemble(
+        packet(questions=[question_draft(title="新题 A"), question_draft(title="新题 B")]),
+        round_=round_with_two_seats_attested(),
+        document=make_document(),
+        ledger=ledger_with_two_entries(),
+        carried=(carried_question("上一批没问上的题"),),
+    )
+
+    assert [item.title for item in result.questions] == [
+        "上一批没问上的题",
+        "新题 A",
+        "新题 B",
+    ]
+    assert [str(item.question_id) for item in result.questions] == ["q1", "q2", "q3"]
+
+
+def test_a_carried_question_is_not_asked_twice_by_the_model():
+    result = assembly.assemble(
+        packet(questions=[question_draft(title="上一批没问上的题")]),
+        round_=round_with_two_seats_attested(),
+        document=make_document(),
+        ledger=ledger_with_two_entries(),
+        carried=(carried_question("上一批没问上的题"),),
+    )
+
+    assert [item.title for item in result.questions] == ["上一批没问上的题"]
+    assert result.deferred == ()  # 模型重复问的那条被丢掉，不是又排进队列

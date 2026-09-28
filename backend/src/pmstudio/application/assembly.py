@@ -64,6 +64,8 @@ class Assembly:
     questions: tuple[Question, ...]
     list_items: tuple[ListItem, ...]
     proposals: tuple[Proposal, ...]
+    #: 本批没问上的题（进轮内队列；不是"清单项"）
+    deferred: tuple[Question, ...] = ()
     #: 这一趟没进卡片的意见。三个来源合成一条通道（`04` C5 后半）：
     #: 模型申报的丢弃 / 归因对不上号 / 装配层核出来"根本没交代去处"。
     dropped: tuple[DroppedItem, ...] = ()
@@ -76,6 +78,12 @@ class Assembly:
 
 def normalize(text: str) -> str:
     return " ".join(text.split()).casefold()
+
+
+def _question_key(question: Question) -> tuple[str, str]:
+    """题目的身份：**同一个去处 + 同一个问法**算同一件事（与 eval 的重复题判据同一口径）。"""
+
+    return (question.target.label(), " ".join(question.title.split()))
 
 
 def _seat_of_handle(handle: str, *, seats: frozenset[str]) -> str | None:
@@ -154,6 +162,7 @@ def assemble(
     round_: Round,
     document: Document,
     ledger: EvidenceLedger,
+    carried: Sequence[Question] = (),
 ) -> Assembly:
     known = frozenset(evidence.eid for evidence in ledger.evidences())
     existing_features = frozenset(
@@ -212,29 +221,38 @@ def assemble(
             )
         )
 
-    ordered = list(feature_questions)
+    # carried 排最前：上一批/上一轮没问上的题**优先问**（`02` §11.0.10）
+    ordered = list(carried)
+    seen_questions = {_question_key(item) for item in ordered}
+    for item in feature_questions:
+        ordered.append(item)
+        seen_questions.add(_question_key(item))
     for index, item in enumerate(packet.questions, start=1):
         target = _target_or_drop(
             item.target, dropped=dropped, pass_index=pass_index, what="题目", index=index
         )
         if target is None:
             continue
-        ordered.append(
-            _question(
-                item,
-                target=target,
-                known=known,
-                ledger=ledger,
-                reviews=round_.current_reviews,
-                pass_index=pass_index,
-                dropped=dropped,
-                used_handles=used_handles,
-            )
+        question = _question(
+            item,
+            target=target,
+            known=known,
+            ledger=ledger,
+            reviews=round_.current_reviews,
+            pass_index=pass_index,
+            dropped=dropped,
+            used_handles=used_handles,
         )
+        if _question_key(question) in seen_questions:
+            continue  # 模型又问了同一件事：留 carried 那份，丢新出的
+        seen_questions.add(_question_key(question))
+        ordered.append(question)
     kept = [
         replace(question, question_id=QuestionId(f"q{index}"))
         for index, question in enumerate(ordered[:MAX_QUESTIONS_PER_BATCH], start=1)
     ]
+    # 没问上的题进轮内队列（不是"清单项"）：下一批优先问，出草案时落 s11
+    deferred = tuple(ordered[MAX_QUESTIONS_PER_BATCH:])
     list_items: list[ListItem] = []
     for index, item in enumerate(packet.list_items, start=1):
         target = _target_or_drop(
@@ -243,12 +261,9 @@ def assemble(
         if target is None:
             continue
         list_items.append(ListItem(text=item.text, target=target, reason=item.reason))
-    list_items += [
-        ListItem(text=item.title, target=item.target, reason="本批只问 5 题，这条留到下一轮")
-        for item in ordered[MAX_QUESTIONS_PER_BATCH:]
-    ]
     return Assembly(
         questions=tuple(kept),
+        deferred=deferred,
         list_items=tuple(list_items),
         proposals=tuple(proposals),
         dropped=tuple(dropped)
