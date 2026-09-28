@@ -1,5 +1,6 @@
 """Round 聚合：一轮怎么推进，全在这里。LangGraph 的 state 只放 round_id 与 step。"""
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
@@ -327,6 +328,15 @@ class Round:
         self._seat_reviews = self._seat_reviews + (
             replace(review, pass_index=self._seat_round_count),
         )
+
+    def note_dropped(self, items: Iterable[DroppedItem]) -> None:
+        """记一条留痕。与 `integrate(dropped=…)` 同一个口子，只是**不必在整合那一步**。
+
+        谁用：席位轮的超限截断、claims 里被丢掉的目录外席位提名。
+        为什么是追加而不是集合：留痕是历史记录，同一件事发生两次就该有两条。
+        """
+
+        self._dropped = self._dropped + tuple(items)
 
     @property
     def current_reviews(self) -> tuple[SeatReview, ...]:
