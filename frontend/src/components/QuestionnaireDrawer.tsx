@@ -29,6 +29,8 @@ export function QuestionnaireDrawer({
   const unanswered = unansweredCount(round, drafts);
   const answered = round.questions.length - unanswered;
   const conflicts = round.questions.filter((question) => question.kind === "conflict").length;
+  // 归因对不上号的留痕：新通道里 `source === "assembly"` 的那些
+  const unattributed = round.dropped.filter((item) => item.source === "assembly");
 
   return (
     <aside className="drawer" role="dialog" aria-modal="false" aria-labelledby="drawer-title">
@@ -44,10 +46,10 @@ export function QuestionnaireDrawer({
       </header>
 
       <div className="drawer__body">
-        {round.dropped_attributions.length > 0 && (
+        {unattributed.length > 0 && (
           <p className="drawer__note" aria-label="未能解析的归因">
-            有 {round.dropped_attributions.length} 条席位条目没能对上号（
-            {round.dropped_attributions.join("、")}
+            有 {unattributed.length} 条席位条目没能对上号（
+            {unattributed.map((item) => item.handle).join("、")}
             ），这几条没算作「谁问的」——题目本身没受影响。
           </p>
         )}

@@ -1,4 +1,6 @@
 import type { SeatPacketView } from "../api/types";
+import type { DroppedView } from "../api/types";
+import { dropHeadline } from "../document/dropped";
 import { opinionFormText } from "../labels";
 import { EvidenceChip } from "./EvidenceChip";
 
@@ -7,10 +9,13 @@ export function SeatPacketCard({
   packet,
   order,
   running,
+  drops = [],
 }: {
   packet: SeatPacketView;
   order: number;
   running: boolean;
+  /** 这个席位这一趟"没进卡片"的意见（原因由后端留痕，界面只摆出来）。 */
+  drops?: DroppedView[];
 }) {
   const pending = packet.status !== "completed";
   const stateText = pending ? (running ? "正在交回…" : "待启动") : "已完成";
@@ -46,6 +51,22 @@ export function SeatPacketCard({
               {packet.question_count > 0 && <span>疑问 {packet.question_count} 个</span>}
               <span className="muted">第 {packet.pass_index} 轮</span>
             </p>
+          )}
+
+          {drops.length > 0 && (
+            <div className="packet__drops">
+              <p className="packet__counts packet__counts--drops">
+                {dropHeadline(packet, drops)}
+              </p>
+              <ul className="drops">
+                {drops.map((item) => (
+                  <li className="drop" key={`${item.handle}-${item.reason}`}>
+                    <span className="mono small">{item.handle}</span>
+                    <span className="drop__reason">{item.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
 
           <ul className="opinions">

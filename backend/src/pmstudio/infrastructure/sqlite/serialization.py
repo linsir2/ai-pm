@@ -384,7 +384,7 @@ def questionnaire_to_json(questionnaire: Questionnaire) -> dict:
             {"text": item.text, "target": target_to_json(item.target), "reason": item.reason}
             for item in questionnaire.list_items
         ],
-        "dropped": list(questionnaire.dropped),
+        # 留痕不写在这里：`Round.dropped` 是唯一通道（老行的读法见 _legacy_dropped）
     }
 
 
@@ -401,8 +401,6 @@ def questionnaire_from_json(data: dict) -> Questionnaire:
             )
             for item in data["list_items"]
         ),
-        # 老行里没有这个键：读成空元组
-        dropped=tuple(data.get("dropped", ())),
     )
 
 
@@ -580,8 +578,21 @@ def round_from_payload(
             FeatureSlug(slug): EvidenceId(eid)
             for slug, eid in payload["authorized_new_features"].items()
         },
-        # 老行里没有这个键（留痕是后加的）：给空元组，读回来照样能跑
-        dropped=tuple(
+        dropped=_dropped_from_payload(payload),
+        failure=_failure_from_json(payload["failure"]),
+        confirmed_version_no=payload["confirmed_version_no"],
+    )
+
+
+def _dropped_from_payload(payload: dict) -> tuple[DroppedItem, ...]:
+    """留痕：新行读 `dropped`；老行读问卷上那串裸字符串，迁移成 `assembly` 条目。
+
+    老行里没有新键（留痕是后加的），但**不许静默丢历史**——用户过两天回来还要查得到。
+    """
+
+    items = payload.get("dropped")
+    if items:
+        return tuple(
             DroppedItem(
                 handle=item["handle"],
                 reason=item["reason"],
@@ -589,8 +600,17 @@ def round_from_payload(
                 seat_id=item.get("seat_id"),
                 pass_index=int(item.get("pass_index", 1)),
             )
-            for item in payload.get("dropped", ())
-        ),
-        failure=_failure_from_json(payload["failure"]),
-        confirmed_version_no=payload["confirmed_version_no"],
+            for item in items
+        )
+    questionnaire = payload.get("questionnaire") or {}
+    pass_index = int(payload.get("seat_round_count", 1)) or 1
+    return tuple(
+        DroppedItem(
+            handle=str(handle),
+            reason="归因对不上号（旧记录：只留了地址，没留原因）",
+            source=DropSource.ASSEMBLY,
+            seat_id=None,
+            pass_index=pass_index,
+        )
+        for handle in questionnaire.get("dropped", ())
     )

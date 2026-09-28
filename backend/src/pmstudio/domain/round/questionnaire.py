@@ -93,12 +93,7 @@ class Questionnaire:
     round_id: RoundId
     questions: tuple[Question, ...]
     list_items: tuple[ListItem, ...] = ()
-    dropped: tuple[str, ...] = ()
-    """归因解析不上的席位条目地址（形如 `seat.x:O1`）。
-
-    留痕用：模型写了"这道题来自哪条席位意见"，装配层对不上号时把原文记在这儿，
-    界面上能看见"这几条没算数"，也就是 `04-未决.md` C5 要的"丢弃要留痕"的一半。
-    """
+    # 留痕不挂在这里：`Round.dropped` 是唯一通道（`04-未决.md` C5）
 
     def __post_init__(self) -> None:
         if not self.questions:

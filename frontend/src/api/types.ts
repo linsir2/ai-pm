@@ -79,6 +79,15 @@ export interface SeatPacketView {
   question_count: number;
 }
 
+/** 一条"没进卡片"的留痕：地址、席位、第几趟、原因、来源（`04` C5 后半）。 */
+export interface DroppedView {
+  handle: string;
+  seat_id: string | null;
+  pass_index: number;
+  reason: string;
+  source: "integrator" | "assembly" | "unaccounted" | string;
+}
+
 export interface QuestionView {
   question_id: string;
   kind: "gap" | "conflict" | "decision" | string;
@@ -141,10 +150,10 @@ export interface RoundView {
   available_seats: SeatSuggestionView[];
   claims: ClaimView[];
   seat_packets: SeatPacketView[];
+  /** 这一轮没进卡片的意见（三个来源合成一条通道，`04` C5 后半）。 */
+  dropped: DroppedView[];
   questions: QuestionView[];
   list_items: string[];
-  /** 模型写了"这题来自哪条席位意见"但装配层对不上号的条目（留痕，不是错误）。 */
-  dropped_attributions: string[];
   draft: DraftView | null;
   advisories: string[];
   failure_reason: string | null;

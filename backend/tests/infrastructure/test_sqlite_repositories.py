@@ -233,10 +233,12 @@ def test_summary_updated_at_comes_from_the_database(repos):
     assert summary.updated_at.tzinfo == UTC
 
 
-def test_questionnaire_dropped_attribution_round_trips(repos):
-    """归因留痕（`dropped`）要跟着轮次落库、读回来一致。"""
+def test_legacy_questionnaire_dropped_migrates_into_round_dropped():
+    """老库里留痕挂在问卷上（裸字符串）：读回来变成 `Round.dropped` 里的 assembly 条目。
 
-    _, rounds, _, _, uow = repos
+    P5b 把留痕收口成一条通道（`04` C5）：旧行不许炸，历史留痕也不许静默丢。
+    """
+
     round_ = make_round()
     round_.integrate(
         questionnaire=Questionnaire(
@@ -252,40 +254,24 @@ def test_questionnaire_dropped_attribution_round_trips(repos):
                     consequence_if_skipped="按同步实现",
                 ),
             ),
-            dropped=("seat.nope:O1",),
         )
     )
-    with uow:
-        rounds.save(round_)
+    payload = serialization.round_to_payload(round_)
+    payload.pop("dropped", None)  # 假装这是新字段出现之前存下的行
+    payload["questionnaire"]["dropped"] = ["seat.nope:O1"]
 
-    loaded = rounds.get(round_.round_id)
-    assert loaded.questionnaire is not None
-    assert loaded.questionnaire.dropped == ("seat.nope:O1",)
-
-
-def test_questionnaire_without_dropped_key_still_loads(repos):
-    """老行里没有这个键：读成空元组，不炸。"""
-
-    data = serialization.questionnaire_to_json(
-        Questionnaire(
-            form_id=FormId("f1"),
-            round_id=RoundId("r1"),
-            questions=(
-                Question(
-                    question_id=QuestionId("q1"),
-                    target=Target.body("s8"),
-                    type=QuestionType.TEXT,
-                    title="单次导出的最大行数是多少？",
-                    why="量级决定同步还是异步",
-                    consequence_if_skipped="按同步实现",
-                ),
-            ),
-        )
+    loaded = serialization.round_from_payload(
+        payload,
+        round_id=round_.round_id,
+        project_id=round_.project_id,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
     )
-    data.pop("dropped", None)
 
-    loaded = serialization.questionnaire_from_json(data)
-    assert loaded.dropped == ()
+    assert [(item.handle, item.source) for item in loaded.dropped] == [
+        ("seat.nope:O1", DropSource.ASSEMBLY)
+    ]
 
 
 def test_question_blocking_round_trips_and_defaults_to_false(repos):

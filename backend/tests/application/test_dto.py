@@ -308,8 +308,6 @@ def test_round_view_exposes_dropped_channel():
         ("seat.nope:O1", None, 1, "assembly", "归因对不上号：这一轮没有这条席位条目"),
         ("seat.data_scale:O2", "seat.data_scale", 1, "integrator", "与文档已有内容重复"),
     ]
-    # 过渡期：旧字段仍是新通道的派生视图（Task 10 收口后删掉）
-    assert view.dropped_attributions == ("seat.nope:O1",)
     assert dto.round_view(make_round()).dropped == ()
 
 

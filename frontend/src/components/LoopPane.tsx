@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 
 import { integrationSummary } from "../api/payload";
 import type { RoundView } from "../api/types";
+import { dropsFor, unplacedDrops } from "../document/dropped";
 import { claimLabelText, compactTarget } from "../labels";
 import { labelCounts, rewritesOf } from "../state/progress";
 import { ProgressSteps } from "./ProgressSteps";
@@ -30,6 +31,8 @@ export function LoopPane({
   const running = pending !== null;
   const counts = labelCounts(round);
   const integrated = round.questions.length > 0 || round.draft !== null;
+  // 挂不到任何席位包上的留痕（地址写歪、或归因对不上号）：闭环区末尾单独一行
+  const unplaced = unplacedDrops(round.dropped, round.seat_packets);
 
   return (
     <div className="loop__scroll">
@@ -90,9 +93,25 @@ export function LoopPane({
                 packet={packet}
                 order={order + 1}
                 running={running}
+                drops={dropsFor(packet, round.dropped)}
                 key={`${packet.seat_id}-${packet.pass_index}`}
               />
             ))}
+            {unplaced.length > 0 && (
+              <div className="packet__drops">
+                <p className="packet__counts packet__counts--drops">
+                  另有 {unplaced.length} 条留痕不属于这一趟（更早那趟的、或地址对不上号的）
+                </p>
+                <ul className="drops">
+                  {unplaced.map((item) => (
+                    <li className="drop" key={`${item.handle}-${item.reason}`}>
+                      <span className="mono small">{item.handle}</span>
+                      <span className="drop__reason">{item.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </Node>
         )}
 

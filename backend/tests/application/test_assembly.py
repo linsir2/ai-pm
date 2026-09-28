@@ -385,25 +385,6 @@ def test_questionnaire_of_returns_none_without_questions():
     assert assembly.questionnaire_of(ROUND_ID, FormId("f1"), (), ()) is None
 
 
-def test_questionnaire_carries_the_dropped_attribution():
-    """归因解析不上的要跟着问卷走一趟，界面上才看得到"这几条没算数是为什么"。"""
-
-    question = Question(
-        question_id=QuestionId("q1"),
-        target=Target.body("s8"),
-        type=QuestionType.TEXT,
-        title="单次导出的最大行数是多少？",
-        why="量级决定同步还是异步",
-        consequence_if_skipped="按同步实现",
-    )
-    questionnaire = assembly.questionnaire_of(
-        ROUND_ID, FormId("f1"), (question,), (), dropped=("seat.nope:O1",)
-    )
-    assert questionnaire is not None
-    assert questionnaire.dropped == ("seat.nope:O1",)
-    assert assembly.questionnaire_of(ROUND_ID, FormId("f1"), (question,), ()).dropped == ()
-
-
 def round_after_skipping_a_question():
     """走一遍"出问卷 → 跳过那道题"，回到席位轮。"""
 

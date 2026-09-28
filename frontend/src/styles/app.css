@@ -1926,3 +1926,37 @@ a {
 .diff__change {
   margin-bottom: var(--space-1);
 }
+
+/* ── 留痕：每个席位包底下"它说的 N 条里，M 条没进卡片"（P5b） ────────── */
+.packet__drops {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline);
+  border-radius: 8px;
+  background: var(--app-bg);
+}
+
+.packet__counts--drops {
+  margin: 0 0 var(--space-1);
+  color: var(--open);
+}
+
+.drops {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.drop {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--step-1);
+  line-height: 1.6;
+}
+
+.drop__reason {
+  color: var(--muted);
+}

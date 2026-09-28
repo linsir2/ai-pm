@@ -243,8 +243,6 @@ def questionnaire_of(
     form_id: FormId,
     questions: Sequence[Question],
     list_items: Sequence[ListItem],
-    *,
-    dropped: Sequence[str] = (),
 ) -> Questionnaire | None:
     if not questions:
         return None
@@ -253,7 +251,6 @@ def questionnaire_of(
         round_id=round_id,
         questions=tuple(questions),
         list_items=tuple(list_items),
-        dropped=tuple(dropped),
     )
 
 
