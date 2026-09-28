@@ -632,3 +632,74 @@ async def test_untraceable_proposal_lands_in_proposed_and_confirm_succeeds():
     result = await harness.confirm_draft()(round_id=round_id, accepted=accepted)
 
     assert result.version.version_no == 2  # 写进去了：不再被 invariant:E4 拦住
+
+
+def packet_with_a_dropped_middle_proposal() -> str:
+    """三条提案、中间那条去处不合法（会被装配层丢掉）→ 编号出现空洞（p01、p03）。"""
+
+    return json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": [
+                {
+                    "op": "add",
+                    "target": {
+                        "zone": "body",
+                        "section_id": "s5",
+                        "feature_slug": "order-export",
+                        "field": "acceptance",
+                    },
+                    "text": "5 万条 60 秒内可下载",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                },
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s9", "field": "compatibility"},
+                    "text": "这条的去处不合法（s9 没有这个槽）",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                },
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s1"},
+                    "text": "现状：导出靠手工复制",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                    "kind": "bullet_list",
+                },
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_open_question_ids_do_not_collide_with_kept_proposals():
+    """真跑实测（P7 验证）：装配层丢一条 → 编号有空洞 → 后面按 `len+1` 续编就撞号，
+    `DuplicateProposalId` 把整轮打成 500（`p15` 重复）。
+
+    编号必须按"现有最大编号 + 1"续，而不是按条数续。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [questionnaire_packet(), packet_with_a_dropped_middle_proposal()],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    await harness.integrate_round()(round_id=round_id)  # 出问卷
+    await harness.submit_answers()(
+        round_id=round_id, form_id="f1", answers=(), skipped=("q1",)
+    )  # 跳过那道题
+    await harness.run_seat_round()(round_id=round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    draft = harness.rounds.get(round_id).draft
+    ids = [str(proposal.proposal_id) for proposal in draft.proposals]
+    assert len(ids) == len(set(ids))  # 不撞号
+    assert ids == ["p01", "p03", "p04"]  # p02 那条被丢了，续编从 p04 起

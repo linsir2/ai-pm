@@ -568,6 +568,22 @@ def _overflow_items(
     )
 
 
+def _next_proposal_index(proposals: Sequence[Proposal]) -> int:
+    """续编提案编号：**现有最大编号 + 1**，不是 `len + 1`。
+
+    装配层会把去处不合法 / 与既有内容重复的提案**丢掉**，编号因此出现空洞
+    （p01、p03…）。真跑实测（P7 验证）：按条数续编会撞上后面那条的编号，
+    `DuplicateProposalId` 把整轮打成 500（`p15` 重复）。
+    """
+
+    numbers = [
+        int(text)
+        for text in (str(item.proposal_id)[1:] for item in proposals)
+        if text.isdigit()
+    ]
+    return max(numbers, default=0) + 1
+
+
 def _stop_asking_reason(round_: Round) -> str | None:
     """该不该停止追问？两个闸门，谁先到算谁，理由写进证据与缺口行里。
 
@@ -629,7 +645,7 @@ class IntegrateRound:
                     ledger=ledger,
                     round_id=round_id,
                     now=now,
-                    start_index=len(proposals) + 1,
+                    start_index=_next_proposal_index(proposals),
                     reason=assembled.degrade_reason,
                 )
                 degraded = len(degraded_proposals)
@@ -637,7 +653,9 @@ class IntegrateRound:
             system_defaults = _system_defaults(round_, ledger=ledger, now=now)
             proposals += list(
                 open_question_proposals(
-                    round_, system_defaults=system_defaults, start_index=len(proposals) + 1
+                    round_,
+                    system_defaults=system_defaults,
+                    start_index=_next_proposal_index(proposals),
                 )
             )
             questions = assembled.questions
@@ -664,7 +682,7 @@ class IntegrateRound:
                     downgraded_question_proposals(
                         questions,
                         system_defaults=system_defaults,
-                        start_index=len(proposals) + 1,
+                        start_index=_next_proposal_index(proposals),
                         round_id=round_id,
                         reason=stop_reason,
                     )
