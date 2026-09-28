@@ -229,6 +229,17 @@ async def retry(request: Request, round_id: str):  # type: ignore[no-untyped-def
     return as_json(view)
 
 
+@router.post("/rounds/{round_id}/abandon")
+async def abandon_round(request: Request, round_id: str):  # type: ignore[no-untyped-def]
+    """放弃这一轮：先记状态、再取消正在跑的模型调用（`02` §7）。
+
+    它**不走 `runner.run()`**：被那条路拦住的正是"重试"，而放弃恰恰是重试之外的另一个出口。
+    """
+
+    view = await services_of(request).abandon_round(round_id=RoundId(round_id))
+    return as_json(view)
+
+
 @router.get("/events")
 async def events(request: Request) -> StreamingResponse:
     stream = services_of(request).stream

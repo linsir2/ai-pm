@@ -10,6 +10,7 @@ from pmstudio.api.errors import body_for, status_for
 from pmstudio.application.errors import ApplicationError
 from pmstudio.application.ports import EventStream, RoundOrchestrator
 from pmstudio.application.use_cases import (
+    AbandonRound,
     CreateProject,
     EditEntry,
     ExportMarkdown,
@@ -29,6 +30,7 @@ from pmstudio.domain.shared.errors import DomainError
 @dataclass(frozen=True, slots=True)
 class ApiServices:
     runner: RoundOrchestrator
+    abandon_round: AbandonRound
     create_project: CreateProject
     workspace: GetWorkspace
     list_projects: ListProjects

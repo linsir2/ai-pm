@@ -19,12 +19,14 @@ export function LoopPane({
   round,
   pending,
   onRetry,
+  onAbandon,
   onOpenQuestionnaire,
   onOpenDraft,
 }: {
   round: RoundView;
   pending: string | null;
   onRetry: () => void;
+  onAbandon: () => void;
   onOpenQuestionnaire: () => void;
   onOpenDraft: () => void;
 }) {
@@ -41,7 +43,12 @@ export function LoopPane({
         <span className="loop__hint">只展示结构化产出</span>
       </div>
 
-      <RoundStatus round={round} pending={pending} onRetry={onRetry} />
+      <RoundStatus
+        round={round}
+        pending={pending}
+        onRetry={onRetry}
+        onAbandon={onAbandon}
+      />
       <ProgressSteps round={round} />
 
       <ol className="timeline">

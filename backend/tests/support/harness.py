@@ -337,6 +337,7 @@ class Harness:
 
         return ApiServices(
             runner=self.runner(),
+            abandon_round=self.abandon_round(),
             create_project=self.create_project(),
             workspace=self.get_workspace(),
             list_projects=self.list_projects(),

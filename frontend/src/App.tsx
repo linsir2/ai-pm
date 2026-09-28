@@ -233,6 +233,9 @@ export default function App() {
             onRetry={() => {
               if (round !== null) void data.retry(round.round_id);
             }}
+            onAbandon={() => {
+              if (shownRound !== null) void data.abandon(shownRound.round_id);
+            }}
           />
 
           <BottomStrip

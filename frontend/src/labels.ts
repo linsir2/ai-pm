@@ -67,6 +67,7 @@ export const STEP_TEXT: Record<string, string> = {
   awaiting_confirm: "等你确认草案",
   done: "这一轮写完了",
   failed: "这一轮失败了",
+  abandoned: "这一轮已放弃",
 };
 
 export const WAITING_TEXT: Record<string, string> = {

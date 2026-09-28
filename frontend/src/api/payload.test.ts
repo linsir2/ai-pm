@@ -243,9 +243,17 @@ describe("awaitingMode", () => {
     ).toBe("loading");
   });
 
-  it("结束与失败各有各的样子", () => {
+  it("结束、失败与放弃各有各的样子", () => {
     expect(awaitingMode({ ...base, step: "done" } as RoundView)).toBe("done");
     expect(awaitingMode({ ...base, step: "failed" } as RoundView)).toBe("failed");
+    // 放弃是终点，不是"还在跑"——否则输入框会被永远锁住
+    expect(
+      awaitingMode({
+        ...base,
+        step: "abandoned",
+        waiting_on: "none",
+      } as unknown as RoundView),
+    ).toBe("abandoned");
   });
 });
 

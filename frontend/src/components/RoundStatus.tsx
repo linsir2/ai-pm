@@ -5,12 +5,20 @@ export function RoundStatus({
   round,
   pending,
   onRetry,
+  onAbandon,
 }: {
   round: RoundView;
   pending: string | null;
   onRetry: () => void;
+  onAbandon: () => void;
 }) {
   const running = pending !== null;
+  // 能放弃的时机：有人正在跑，或者这一轮停在"席位在跑 / 刚抽完主张"（可能卡在模型上）
+  const canAbandon =
+    pending !== null ||
+    round.step === "seats_running" ||
+    round.step === "claims_ready" ||
+    round.step === "started";
   // 失败的原因写在下面一行，这时再报"在等谁"只会让人误以为还有人要动手。
   const waiting =
     round.step === "seats_running" || round.step === "failed"
@@ -32,8 +40,21 @@ export function RoundStatus({
       >
         继续/重试
       </button>
+      {canAbandon && round.step !== "failed" && round.step !== "done" && (
+        <button
+          type="button"
+          className="btn btn--sm btn--ghost"
+          onClick={onAbandon}
+          title="不要这一轮了：会取消正在跑的模型调用，文档一个字节都不改"
+        >
+          放弃这一轮
+        </button>
+      )}
       {round.failure_reason !== null && (
         <span className="statusline__fail">失败原因：{round.failure_reason}</span>
+      )}
+      {round.step === "abandoned" && (
+        <span className="statusline__fail">已放弃：{round.abandon_reason}</span>
       )}
     </div>
   );

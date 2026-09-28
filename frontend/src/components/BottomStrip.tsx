@@ -21,7 +21,9 @@ export function BottomStrip({
   onRetry: () => void;
 }) {
   const [text, setText] = useState("");
-  const accepting = mode === "input" || mode === "done";
+  // 放弃也是终点：不妨碍开下一轮（这一轮不再占用输入框）
+  const accepting =
+    mode === "input" || mode === "done" || mode === "failed" || mode === "abandoned";
   const canSubmit = accepting && pending === null && text.trim() !== "";
 
   const submit = () => {
@@ -130,6 +132,16 @@ function RightActions({
           {pending === "retry" ? "正在接着跑…" : "接着跑这一轮"}
         </button>
         <span className="input__hint">只补没交回的席位，编号不会重发。</span>
+      </div>
+    );
+  }
+
+  if (mode === "abandoned") {
+    return (
+      <div className="row">
+        <span className="input__hint">
+          这一轮已经放弃，不影响文档；想接着做就重新输入一轮。
+        </span>
       </div>
     );
   }

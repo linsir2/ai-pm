@@ -8,7 +8,8 @@ export type Step =
   | "awaiting_answers"
   | "awaiting_confirm"
   | "done"
-  | "failed";
+  | "failed"
+  | "abandoned";
 
 export type WaitingOn = "none" | "opening_card" | "questionnaire" | "draft_card";
 
@@ -157,6 +158,8 @@ export interface RoundView {
   draft: DraftView | null;
   advisories: string[];
   failure_reason: string | null;
+  /** 放弃这一轮的原因（终点状态；失败另有 failure_reason）。 */
+  abandon_reason: string | null;
   confirmed_version_no: number | null;
   form_id: string | null;
 }

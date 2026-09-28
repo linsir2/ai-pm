@@ -12,6 +12,7 @@ from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.ports import ModelGateway
 from pmstudio.application.use_cases import (
+    AbandonRound,
     ConfirmDraft,
     CreateProject,
     EditEntry,
@@ -193,6 +194,14 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     )
     services = ApiServices(
         runner=runner,
+        abandon_round=AbandonRound(
+            rounds=rounds,
+            round_writer=rounds,
+            uow=uow,
+            clock=clock,
+            events=bus,
+            canceller=runner,
+        ),
         create_project=CreateProject(factory=factory, index=index, clock=clock, ids=ids),
         workspace=GetWorkspace(
             documents=documents,

@@ -25,7 +25,8 @@ export type AwaitingMode =
   | "draft"
   | "loading"
   | "done"
-  | "failed";
+  | "failed"
+  | "abandoned";
 
 /** 可以直接改到的标签。猜测与决策要补字段（假设 / 拍板人），复述卡改不了。 */
 const BASE_LABELS = ["fact", "need", "goal", "constraint", "preference"];
@@ -153,6 +154,7 @@ export function buildOpeningBody(
 export function awaitingMode(round: RoundView | null): AwaitingMode {
   if (round === null) return "input";
   if (round.step === "failed") return "failed";
+  if (round.step === "abandoned") return "abandoned";
   if (round.step === "done") return "done";
   if (round.waiting_on === "opening_card") return "opening";
   if (round.waiting_on === "questionnaire") {

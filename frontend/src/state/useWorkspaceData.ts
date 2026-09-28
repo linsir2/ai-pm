@@ -30,6 +30,8 @@ export function useWorkspaceData() {
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  // 我们自己取消掉的那条在途请求会以网络错误回来——别把它当"连不上后端"弹出来
+  const abandoning = useRef(false);
   // 点跨轮编号时临时切过去看的那一轮（只读；"回到最新"就清掉）
   const [historyRound, setHistoryRound] = useState<RoundView | null>(null);
   const selected = useRef<string | null>(null);
@@ -131,6 +133,7 @@ export function useWorkspaceData() {
       try {
         await work();
       } catch (error) {
+        if (abandoning.current) return; // 是我们自己取消的这一轮，不弹错
         dispatch({ type: "error", message: describe(error) });
       } finally {
         setPending(null);
@@ -210,6 +213,19 @@ export function useWorkspaceData() {
       }),
     [run],
   );
+
+  /** 放弃这一轮：不动 pending（那条在途请求由 abandoning 标志位接住）。 */
+  const abandon = useCallback(async (roundId: string) => {
+    abandoning.current = true;
+    dispatch({ type: "error", message: null });
+    try {
+      dispatch({ type: "round", round: await api.abandonRound(roundId) });
+    } catch (error) {
+      dispatch({ type: "error", message: describe(error) });
+    } finally {
+      abandoning.current = false;
+    }
+  }, []);
 
   /** 手改文档：很快的一次写，但也给"正在写"的反馈，失败要看得见。 */
   const editEntry = useCallback(async (body: EditBody): Promise<EditResult | null> => {
@@ -304,6 +320,7 @@ export function useWorkspaceData() {
     submitAnswers,
     confirm,
     retry,
+    abandon,
     editEntry,
     rollback,
     viewRound,

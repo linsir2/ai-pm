@@ -21,6 +21,7 @@ export function LoopColumn({
   onSkipAll,
   onConfirm,
   onRetry,
+  onAbandon,
 }: {
   round: RoundView | null;
   doc: DocumentView | null;
@@ -35,6 +36,7 @@ export function LoopColumn({
   onSkipAll: () => void;
   onConfirm: () => void;
   onRetry: () => void;
+  onAbandon: () => void;
 }) {
   const drawerOpen =
     history == null &&
@@ -77,6 +79,7 @@ export function LoopColumn({
           round={round}
           pending={pending}
           onRetry={onRetry}
+          onAbandon={onAbandon}
           onOpenQuestionnaire={() => drafts.setCollapsed(false)}
           onOpenDraft={() => drafts.setCollapsed(false)}
         />
