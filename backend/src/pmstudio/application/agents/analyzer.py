@@ -239,6 +239,7 @@ def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tupl
                 "主张里的原话片段在用户输入里找不到（复述必须能跳回原文）",
                 purpose=PURPOSE,
                 claim_id=claim_id,
+                position=index,
                 raw_span=draft.raw_span,
             )
         try:

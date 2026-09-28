@@ -301,6 +301,42 @@ def test_claims_from_packet_requires_at_least_one_claim():
         ClaimsPacket.model_validate({"basis": "读了文档", "claims": []})
 
 
+async def test_analyzer_reports_the_position_of_the_bad_span():
+    """错误细节要能说清"第几条"，重装才点得准（只有 `claim_id=c2` 也说不太清）。"""
+
+    reply = json.dumps(
+        {
+            "basis": "读了文档",
+            "claims": [
+                {
+                    "text": "要做一个订单导出功能",
+                    "raw_span": "想做个订单导出的功能",
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                },
+                {
+                    "text": "要做通知",
+                    "raw_span": "帮我搞个通知吧",  # 用户没这么说过
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                },
+            ],
+            "seats": [{"seat_id": SEAT, "why": "你说到了数据量"}],
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"claims": reply})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    with pytest.raises(PacketParseError) as exc:
+        await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert exc.value.details["claim_id"] == "c2"
+    assert exc.value.details["position"] == 2
+
+
 async def test_analyzer_refuses_a_seat_that_is_not_in_the_catalog():
     """挑了目录里没有的席位 → 整轮失败。
 
