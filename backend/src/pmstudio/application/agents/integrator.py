@@ -33,6 +33,11 @@ LIMITS_TEXT = "\n".join(
         "优先保留 s5 功能字段与验收标准",
         "- dropped_opinions 一轮最多 84 条（7 席 × 12 条）："
         "没采用的席位意见一条都不许默默丢掉",
+        "- **本轮主张点名过的功能已授权**：内容必须落到 "
+        "{zone: body, section_id: s5, feature_slug: <那个功能>, field: <功能字段>}；"
+        "拿不准也别降级成章节级（章节级只用来写目标/范围/受众这类整章内容）",
+        "- 一条功能内容都没有时，先把主张点到的每个功能写成 name / one_liner / goal / "
+        "audience / exceptions / acceptance 里的至少一条，别让 s5 空着",
         "- evidence_refs 里**只许出现 E 开头的出处编号**（E1、E9…），只能是清单里已有的；"
         "席位条目（seat.xxx:O2）是地址不是编号，写进来算校验不过",
         "- 每条提案必须带 evidence_refs（至少一条 E 编号）；题目的 evidence_refs 可以留空"
@@ -82,6 +87,7 @@ class Integrator:
         "section_slots",
         "schema_json",
         "validation_error",
+        "authorized_features",
     )
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
@@ -99,6 +105,7 @@ class Integrator:
         entry_ids: str,
         validation_error: str = "",
         round_id: RoundId | None = None,
+        authorized_features: str = "",
     ) -> IntegrationOutcome:
         schema = schemas.IntegrationPacket.model_json_schema()
         prompt = self._prompts.render(
@@ -114,6 +121,7 @@ class Integrator:
             section_slots=SECTION_SLOTS_TEXT,
             schema_json=json.dumps(schema, ensure_ascii=False),
             validation_error=validation_error,
+            authorized_features=authorized_features,
         )
         reply = await self._model.complete(
             ModelRequest(

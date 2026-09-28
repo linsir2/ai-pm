@@ -4,6 +4,9 @@
 ## 当前文档
 $document_state
 
+## 本轮已授权的功能（主张点名过，可以直接写它的功能字段）
+$authorized_features
+
 ## 本轮主张（带编号）
 $claims
 

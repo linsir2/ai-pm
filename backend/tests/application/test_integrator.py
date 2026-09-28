@@ -20,6 +20,31 @@ def test_integrator_limits_forbid_the_same_question_twice():
     assert "同一件事不要问两遍" in LIMITS_TEXT
     assert "两件不同的事" in LIMITS_TEXT
 
+
+def test_limits_say_authorized_features_must_land_in_feature_fields():
+    """真跑实测（报告 F1）：主张点名的功能已授权，模型却把内容降级成章节级 → s5 整章空。"""
+
+    assert "已授权" in LIMITS_TEXT
+    assert "功能字段" in LIMITS_TEXT
+
+
+async def test_integrator_passes_the_authorized_feature_list():
+    gateway = ScriptedModelGateway(replies={"integration": INTEGRATION_REPLY})
+    prompts = RecordingPrompts()
+    integrator = Integrator(model=gateway, prompts=prompts)
+
+    await integrator.integrate(
+        document_state="# 文档",
+        claims="…",
+        opinions="…",
+        answered="…",
+        skipped="…",
+        entry_ids="…",
+        authorized_features="- order-export（被 E4 点名，已授权）：直接写它的功能字段",
+    )
+
+    assert "order-export" in prompts.calls[0][1]["authorized_features"]
+
 INTEGRATION_REPLY = json.dumps(
     {
         "questions": [

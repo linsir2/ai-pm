@@ -568,6 +568,28 @@ def _overflow_items(
     )
 
 
+def _render_authorized_features(round_: Round, *, document: Document) -> str:
+    """给整合者看的"本轮已授权的功能"清单（报告 F1 的直接解药）。
+
+    主张点名过的功能在切分阶段就已经授权（`authorize_named_features`），但提示词里原来只说
+    "不许新建功能子树"——模型于是整轮都不产功能候选，s5 就空着。这里把已授权的点名列出来：
+    **这些功能视为已存在，可以直接写它的功能字段**。
+    """
+
+    lines = [
+        f"- {slug}（被 {eid} 点名，已授权）：直接写它的功能字段"
+        for slug, eid in sorted(round_.authorized_feature_basis.items())
+    ]
+    existing = sorted(
+        str(block.feature_slug)
+        for block in document.features()
+        if block.feature_slug is not None
+    )
+    if existing:
+        lines.append("- 文档里已有的功能：" + "、".join(existing))
+    return "\n".join(lines) or "（这一轮没有点名任何功能）"
+
+
 def _next_proposal_index(proposals: Sequence[Proposal]) -> int:
     """续编提案编号：**现有最大编号 + 1**，不是 `len + 1`。
 
@@ -727,6 +749,9 @@ class IntegrateRound:
             ).partition("--")
             view = document.view()
             try:
+                authorized_features = _render_authorized_features(
+                    round_, document=document
+                )
                 outcome = await self._integrator.integrate(
                     document_state=render_document_state(
                         view, readiness=self._checker.check(view)
@@ -740,6 +765,7 @@ class IntegrateRound:
                     entry_ids=render_existing_entries(document),
                     validation_error=validation_error,
                     round_id=round_id,
+                    authorized_features=authorized_features,
                 )
                 if outcome.overflow and attempt < MAX_INTEGRATION_ATTEMPTS:
                     # 超限是可修复的错：先让它自己精简一次，第二次才截断（报告 F2/F11）。

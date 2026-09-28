@@ -703,3 +703,38 @@ async def test_open_question_ids_do_not_collide_with_kept_proposals():
     ids = [str(proposal.proposal_id) for proposal in draft.proposals]
     assert len(ids) == len(set(ids))  # 不撞号
     assert ids == ["p01", "p03", "p04"]  # p02 那条被丢了，续编从 p04 起
+
+
+CLAIMS_REPLY_WITH_FEATURE = json.dumps(
+    {
+        "basis": "读了空文档",
+        "claims": [
+            {
+                "text": "要做一个订单导出功能",
+                "raw_span": "想做个订单导出的功能",
+                "label": "need",
+                "zone": "body",
+                "section_id": "s5",
+                "feature_slug": "order-export",
+            }
+        ],
+        "seats": [{"seat_id": SEAT, "why": "导出要评估数据量与耗时"}],
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_integration_prompt_carries_the_features_named_by_this_round_claims():
+    """主张点名的功能已授权 → 提示词里必须写明，否则模型把内容降级成章节级（报告 F1）。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY_WITH_FEATURE, "integration": questionnaire_packet()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    slots = harness.prompts.calls[-1][1]
+    assert "order-export" in slots["authorized_features"]
+    assert "已授权" in slots["authorized_features"]
