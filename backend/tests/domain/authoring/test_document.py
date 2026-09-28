@@ -386,3 +386,73 @@ def test_apply_refuses_a_candidate_state_that_would_not_load():
         )
 
     assert document.current_version.version_no == 1  # 一个字节没变
+
+
+# —— P5b Task 5：回退不许写出"读不回来"的文档 ——
+
+
+def _document_with_a_deleted_feature() -> Document:
+    """v1 空骨架 → v2 建了功能 → v3 又把功能删了（墓碑 `feat-order-export`）。"""
+
+    document = new_document()
+    apply(
+        document,
+        instruction(
+            target=Target.feature_field("order-export", "name"),
+            entry_id="en-name",
+            text="订单导出",
+        ),
+        authorized=("order-export",),
+    )
+    apply(
+        document,
+        instruction(
+            target=Target.body("s5", feature_slug="order-export"),
+            entry_id="feat-order-export",
+            text="删功能",
+            op=WriteOp.REMOVE,
+        ),
+    )
+    return document
+
+
+def test_D6_rollback_after_delete_keeps_document_readable():
+    """删过东西再回退：活着的块不许与墓碑撞 id。
+
+    落库时不会炸（rollback_to 当时不跑校验），但下次读回来重建聚合会抛
+    DuplicateBlockId——整个项目打不开。这条测试钉死这一点。
+    """
+
+    document = _document_with_a_deleted_feature()
+
+    document.rollback_to(2, now=NOW, summary="回到功能还在的那一版")
+
+    # 重新构造一次聚合——`SqliteDocumentRepository.get()` 做的正是这件事
+    reread = Document(
+        document_id=document.document_id,
+        project_id=document.project_id,
+        title=document.title,
+        blocks=document.blocks,
+        versions=document.versions,
+        preference_entries=document.preference_entries,
+        tombstones=document.tombstones,
+        created_at=document.current_version.created_at,
+    )
+
+    assert any(str(block.block_id) == "feat-order-export" for block in reread.blocks)
+    assert [str(block.block_id) for block in reread.tombstones] == []
+    assert reread.current_version.trigger is VersionTrigger.ROLLBACK
+
+
+def test_D6_rollback_keeps_tombstones_for_ids_that_stay_deleted():
+    """回退到更早的一版：那时删掉的块仍然是墓碑——它的 id 不许被重新用。"""
+
+    document = _document_with_a_deleted_feature()
+
+    document.rollback_to(1, now=NOW, summary="回到空骨架")
+
+    # 删功能是连子块一起埋的：功能根 + 它的字段块
+    assert [str(block.block_id) for block in document.tombstones] == [
+        "feat-order-export",
+        "feat-order-export.name",
+    ]

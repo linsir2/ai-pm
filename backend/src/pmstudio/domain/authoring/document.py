@@ -278,10 +278,36 @@ class Document:
         return version
 
     def rollback_to(self, version_no: int, *, now: datetime, summary: str) -> Version:
+        """回到某一版：产生**新**一版，旧版本一个都不删（D6）。
+
+        两处必须一起做，否则会写出"落库没事、读回来炸"的文档（P5b §0.1 发现 1）：
+
+        1. **重算墓碑**：活过来的块不能再算墓碑——`_validate` 要求"活块 id"与"墓碑 id"
+           不重叠，重叠的话下次重建聚合就抛 DuplicateBlockId，整个项目打不开；
+        2. **候选状态先过校验**：与 `apply()` 同一条规矩，坏状态不许落进聚合。
+        """
+
         target = self.version(version_no)
+        restored = target.snapshot.blocks
+        preference_entries = target.snapshot.preference_entries
+        alive = {block.block_id for block in restored}
+        tombstones = tuple(
+            block for block in self._tombstones if block.block_id not in alive
+        )
+        Document(
+            document_id=self._document_id,
+            project_id=self._project_id,
+            title=self._title,
+            blocks=restored,
+            versions=self._versions,
+            preference_entries=preference_entries,
+            tombstones=tombstones,
+            created_at=self._created_at,
+        )
         before = _signature(self._blocks, self._preference_entries)
-        self._blocks = target.snapshot.blocks
-        self._preference_entries = target.snapshot.preference_entries
+        self._blocks = restored
+        self._preference_entries = preference_entries
+        self._tombstones = tombstones
         after = _signature(self._blocks, self._preference_entries)
         changed = tuple(
             sorted(
