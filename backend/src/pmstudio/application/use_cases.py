@@ -71,6 +71,7 @@ from pmstudio.application.ports import (
     SeatDefinition,
     WorkspaceIndex,
 )
+from pmstudio.application.repair import repair_note
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
@@ -187,7 +188,8 @@ class StartRound:
         return round_id
 
     async def analyze(self, *, round_id: RoundId) -> None:
-        # 读取不开事务：模型调用不能包在事务里，也没必要读到同一快照
+        # 读取不开事务：模型调用不能包在事务里，也没必要读到同一快照。
+        # 重装期间这一轮没有任何写入，所以文档现状与用户输入读一次就够。
         round_ = self._rounds.get(round_id)
         document = self._documents.get(round_.project_id)
         user_input = round_.user_input
@@ -195,21 +197,47 @@ class StartRound:
         document_state = render_document_state(
             view, readiness=self._checker.check(view)
         )
-        try:
-            analysis = await self._analyzer.analyze(
-                user_input=user_input, document_state=document_state, round_id=round_id
-            )
-        except ApplicationError as error:
-            fail_round(
-                rounds=self._rounds,
-                round_writer=self._round_writer,
-                uow=self._uow,
-                events=self._events,
-                clock=self._clock,
-                round_id=round_id,
-                reason=error.message,
-            )
-            raise
+        repair = ""
+        for attempt in range(1, MAX_CLAIMS_ATTEMPTS + 1):
+            try:
+                analysis = await self._analyzer.analyze(
+                    user_input=user_input,
+                    document_state=document_state,
+                    round_id=round_id,
+                    validation_error=repair,
+                )
+                break
+            except PacketParseError as error:
+                if attempt == MAX_CLAIMS_ATTEMPTS:
+                    # 两次都过不了：判这一轮失败。claims 是一轮的地基——没有主张就没有编号
+                    # 与去处，硬编一份出来比失败更糟（GB1）。理由里写清重装过，便于复盘。
+                    reason = f"主张两次都过不了校验：{error.message}"
+                    fail_round(
+                        rounds=self._rounds,
+                        round_writer=self._round_writer,
+                        uow=self._uow,
+                        events=self._events,
+                        clock=self._clock,
+                        round_id=round_id,
+                        reason=reason,
+                    )
+                    raise PacketParseError(reason, purpose="claims") from error
+                # 重装要带上"上一次错在哪"——只给要求，不复制模型写错的那串
+                repair = repair_note(error)
+            except ApplicationError as error:
+                # 网关那类（超时 / 供应商 5xx）：网关自己已经重试 3 次，重装帮不上忙
+                fail_round(
+                    rounds=self._rounds,
+                    round_writer=self._round_writer,
+                    uow=self._uow,
+                    events=self._events,
+                    clock=self._clock,
+                    round_id=round_id,
+                    reason=error.message,
+                )
+                raise
+        else:
+            raise AssertionError("不可能走到这里")
         with self._uow:
             round_ = self._rounds.get(round_id)
             document = self._documents.get(round_.project_id)
@@ -445,6 +473,11 @@ class RunSeatRound:
 
 
 MAX_INTEGRATION_ATTEMPTS = 2
+
+#: claims 也允许"重装一次"：真模型是抖的（同一份输入换个采样就过），让用户手动点重试
+#: 是把成本推给人。与整合者同一个口径——**必须带上一次错在哪**（`repair_note`），
+#: 否则只是拿同一句提示词再撞一堵墙（`learnings.md` L13）。
+MAX_CLAIMS_ATTEMPTS = 2
 
 
 def _stop_asking_reason(round_: Round) -> str | None:

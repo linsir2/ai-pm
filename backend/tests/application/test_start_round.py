@@ -121,3 +121,77 @@ async def test_start_round_bad_unparsable_claims_mark_the_round_failed():
         await use_case.analyze(round_id=round_id)
 
     assert harness.rounds.get(round_id).step is Step.FAILED
+
+
+def claims_reply_with_an_invented_span() -> str:
+    """复述里有一句用户没说过的话——重装要能救回来（真模型抖动就是这么来的）。"""
+
+    return json.dumps(
+        {
+            "basis": "读了文档",
+            "claims": [
+                {
+                    "text": "要做一个订单导出功能",
+                    "raw_span": "帮我搞个导出吧",  # 用户没这么说过
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                }
+            ],
+            "seats": [{"seat_id": "seat.data_scale", "why": "你说到了数据量"}],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_start_round_repairs_once_when_the_claims_packet_is_unusable():
+    harness = Harness(
+        replies={"claims": [claims_reply_with_an_invented_span(), claims_reply()]}
+    )
+    harness.seed_project()
+    use_case = harness.start_round()
+
+    round_id = await use_case.create(project_id=PROJECT, user_input=INPUT)
+    await use_case.analyze(round_id=round_id)
+
+    calls = [call for call in harness.prompts.calls if call[0] == "analyzer"]
+    assert len(calls) == 2  # 第一次 + 重装一次
+    assert calls[0][1]["validation_error"] == ""  # 第一次没有"上一次"
+    note = calls[1][1]["validation_error"]
+    assert "第 1 条主张（c1）" in note
+    assert "帮我搞个导出吧" not in note  # 不复制写错的那串
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.CLAIMS_READY
+    assert len(round_.claims) == 2  # 落下来的是第二次那份
+
+
+async def test_start_round_fails_after_the_one_repair():
+    harness = Harness(replies={"claims": claims_reply_with_an_invented_span()})
+    harness.seed_project()
+    use_case = harness.start_round()
+
+    round_id = await use_case.create(project_id=PROJECT, user_input=INPUT)
+    with pytest.raises(PacketParseError) as exc:
+        await use_case.analyze(round_id=round_id)
+
+    assert "两次都过不了校验" in exc.value.message
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.FAILED
+    assert "两次都过不了校验" in round_.failure.reason
+    assert harness.events.names[-1] == GENERATION_FAILED
+    assert len(harness.evidences.get(PROJECT)) == 0  # 账本零写入
+
+
+async def test_start_round_does_not_repair_a_gateway_failure():
+    """网关类失败不重装：网关自己已经重试 3 次，报文重装解决不了超时与 5xx。"""
+
+    harness = Harness(replies={})  # 脚本里没有 claims 的回复 → ModelCallFailed
+    harness.seed_project()
+    use_case = harness.start_round()
+
+    round_id = await use_case.create(project_id=PROJECT, user_input=INPUT)
+    with pytest.raises(ModelCallFailed):
+        await use_case.analyze(round_id=round_id)
+
+    assert len(harness.gateway.requests) == 1  # 只调了一次
+    assert harness.rounds.get(round_id).step is Step.FAILED
