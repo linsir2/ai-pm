@@ -196,3 +196,47 @@ export interface EditResult {
   entry_id: string;
   document: DocumentView;
 }
+
+export interface VersionSummaryView {
+  version_no: number;
+  trigger: "confirm" | "manual" | "rollback" | string;
+  trigger_label: string;
+  summary: string;
+  created_at: string;
+  changed_block_ids: string[];
+}
+
+export interface VersionListView {
+  versions: VersionSummaryView[];
+  current: number;
+}
+
+export interface EntrySnapshotView {
+  entry_id: string;
+  text: string;
+  refs: string[];
+}
+
+export interface ChangedEntryView {
+  before: EntrySnapshotView;
+  after: EntrySnapshotView;
+}
+
+export interface DiffGroupView {
+  target_label: string;
+  added: EntrySnapshotView[];
+  removed: EntrySnapshotView[];
+  changed: ChangedEntryView[];
+}
+
+export interface DiffView {
+  from_version_no: number;
+  to_version_no: number;
+  groups: DiffGroupView[];
+}
+
+/** 回到某一版的返回：新版本号 + 新文档（与手改同一条路）。 */
+export interface RollbackResult {
+  version_no: number;
+  document: DocumentView;
+}

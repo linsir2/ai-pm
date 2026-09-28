@@ -16,6 +16,7 @@ import { Onboarding } from "./components/Onboarding";
 import { SideRail } from "./components/SideRail";
 import { Banner, Skeleton } from "./components/States";
 import { TopBar } from "./components/TopBar";
+import { VersionDrawer } from "./components/VersionDrawer";
 import { useRoundDrafts } from "./state/useRoundDrafts";
 import { useWorkspaceData } from "./state/useWorkspaceData";
 
@@ -30,6 +31,7 @@ export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">(() =>
     window.localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light",
   );
+  const [versionsOpen, setVersionsOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
 
@@ -132,6 +134,7 @@ export default function App() {
             connection={state.connection}
             onSelectProject={data.selectProject}
             onExport={() => void data.exportMarkdown()}
+            onOpenVersions={() => setVersionsOpen(true)}
             theme={theme}
             onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
           />
@@ -208,6 +211,17 @@ export default function App() {
               if (round !== null) void data.retry(round.round_id);
             }}
           />
+
+          {versionsOpen && (
+            <div className="overlay-slot">
+              <VersionDrawer
+                projectId={project.project_id}
+                current={doc?.version_no ?? project.version_no}
+                onRollback={data.rollback}
+                onCollapse={() => setVersionsOpen(false)}
+              />
+            </div>
+          )}
         </div>
 
         {state.error !== null && (

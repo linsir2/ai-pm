@@ -1823,3 +1823,106 @@ a {
     padding-top: var(--space-5);
   }
 }
+
+/* ── 版本历史（P5b）：入口在顶栏版本条上，抽屉挂在闭环栏那一格 ─────────── */
+/* 挂载点：让 `.drawer` 的 absolute 定位落在闭环区，而不是整页（与问卷/草案同一条视觉规矩） */
+.overlay-slot {
+  grid-area: loop;
+  position: relative;
+  z-index: 6;
+}
+
+.versionbar__link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.versions {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.version__pick {
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.version__pick--on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.version__confirm {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--step-1);
+  color: var(--gap);
+}
+
+.diff {
+  border-top: var(--hairline);
+  padding-top: var(--space-3);
+}
+
+.diff__title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--step-3);
+}
+
+.diff__group {
+  margin-bottom: var(--space-3);
+}
+
+.diff__label {
+  margin: 0 0 var(--space-1);
+  font-size: var(--step-2);
+  color: var(--muted);
+}
+
+.diff__line {
+  margin: 0;
+  padding: 2px var(--space-2);
+  border-radius: 6px;
+  font-size: var(--step-2);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.diff__line--add {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.diff__line--del {
+  background: color-mix(in srgb, var(--gap) 8%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--gap) 45%, transparent);
+}
+
+.diff__change {
+  margin-bottom: var(--space-1);
+}

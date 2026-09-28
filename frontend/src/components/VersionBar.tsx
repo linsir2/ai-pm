@@ -6,10 +6,12 @@ export function VersionBar({
   project,
   document: doc,
   readiness = [],
+  onOpenVersions,
 }: {
   project: ProjectSummaryView | null;
   document: DocumentView | null;
   readiness?: ReadinessItemView[];
+  onOpenVersions?: () => void;
 }) {
   if (project === null) return null;
   const version = doc === null ? project.version_no : doc.version_no;
@@ -23,6 +25,14 @@ export function VersionBar({
         {" · "}
         {headline}
       </span>
+      {onOpenVersions !== undefined && (
+        <>
+          {" · "}
+          <button type="button" className="versionbar__link" onClick={onOpenVersions}>
+            版本历史
+          </button>
+        </>
+      )}
     </span>
   );
 }

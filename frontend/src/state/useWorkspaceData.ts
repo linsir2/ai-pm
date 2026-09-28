@@ -228,6 +228,24 @@ export function useWorkspaceData() {
 
   const dismissError = useCallback(() => dispatch({ type: "error", message: null }), []);
 
+  /** 回到某一版：与手改同一条路——后端写完返回整份文档，界面不猜。 */
+  const rollback = useCallback(async (versionNo: number) => {
+    const projectId = selected.current;
+    if (projectId === null) return;
+    dispatch({ type: "error", message: null });
+    try {
+      const result = await api.rollbackVersion(projectId, versionNo);
+      dispatch({ type: "document", document: result.document });
+      setProjects((list) =>
+        list.map((item) =>
+          item.project_id === projectId ? { ...item, version_no: result.version_no } : item,
+        ),
+      );
+    } catch (error) {
+      dispatch({ type: "error", message: describe(error) });
+    }
+  }, []);
+
   /** 导出交付用 Markdown：浏览器下载一份 deliverable-v{n}.md。 */
   const exportMarkdown = useCallback(async () => {
     const projectId = selected.current;
@@ -255,6 +273,7 @@ export function useWorkspaceData() {
     confirm,
     retry,
     editEntry,
+    rollback,
     dismissError,
     refreshDocument,
     exportMarkdown,

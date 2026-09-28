@@ -2,10 +2,13 @@
 
 import type {
   ConfirmResponse,
+  DiffView,
   DocumentView,
   EditResult,
   ProjectSummaryView,
+  RollbackResult,
   RoundView,
+  VersionListView,
   WorkspaceView,
 } from "./types";
 
@@ -114,6 +117,18 @@ export const api = {
     request<DocumentView>(`/projects/${projectId}/document`),
 
   getRound: (roundId: string) => request<RoundView>(`/rounds/${roundId}`),
+
+  versions: (projectId: string) =>
+    request<VersionListView>(`/projects/${projectId}/versions`),
+
+  versionDiff: (projectId: string, from: number, to: number) =>
+    request<DiffView>(`/projects/${projectId}/versions/${from}/diff?to=${to}`),
+
+  rollbackVersion: (projectId: string, versionNo: number) =>
+    request<RollbackResult>(`/projects/${projectId}/versions/${versionNo}/rollback`, {
+      method: "POST",
+      body: "{}",
+    }),
 
   startRound: (projectId: string, input: string) =>
     request<RoundView>(`/projects/${projectId}/rounds`, {

@@ -12,6 +12,7 @@ export function TopBar({
   connection,
   onSelectProject,
   onExport,
+  onOpenVersions,
   theme,
   onToggleTheme,
 }: {
@@ -23,6 +24,7 @@ export function TopBar({
   connection: "idle" | "open" | "lost";
   onSelectProject: (projectId: string) => void;
   onExport: () => void;
+  onOpenVersions?: () => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
 }) {
@@ -59,7 +61,12 @@ export function TopBar({
               </option>
             ))}
           </select>
-          <VersionBar project={project} document={doc} readiness={readiness} />
+          <VersionBar
+            project={project}
+            document={doc}
+            readiness={readiness}
+            onOpenVersions={onOpenVersions}
+          />
           {roundStep !== null && <span className="pill-step">{stepText(roundStep)}</span>}
           <button type="button" className="btn btn--sm" onClick={onExport}>
             导出
