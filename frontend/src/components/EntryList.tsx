@@ -118,7 +118,8 @@ function EntryRow({
   }
 
   return (
-    <li className="entry">
+    // 锚点：跨轮编号跳转要"滚到引用它的那条内容"（id 由 entry_id 来，稳定）
+    <li className="entry" id={`entry-${entry.entry_id}`}>
       <span className="entry__text">{entry.text}</span>
       <span className="entry__refs">
         {canEdit && (

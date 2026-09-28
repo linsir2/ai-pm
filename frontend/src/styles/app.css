@@ -1960,3 +1960,21 @@ a {
 .drop__reason {
   color: var(--muted);
 }
+
+/* ── 跨轮编号（P5b）：本地查不到的编号也可以点，后端查得到 ─────────────── */
+.chip--remote {
+  border-style: dashed;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* 历史轮横幅：把"你看的不是最新那一轮"说清楚，并给出回程 */
+.loop__history {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: var(--hairline);
+  background: color-mix(in srgb, var(--open) 8%, var(--app-bg));
+}

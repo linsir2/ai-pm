@@ -11,3 +11,16 @@ export function jumpToEvidence(eid: string): boolean {
   }, 700);
   return true;
 }
+
+/** 点编号查到"这条编号被哪些内容用着"之后：滚到那条内容。 */
+export function jumpToEntry(entryId: string): boolean {
+  const target = document.getElementById(`entry-${entryId}`);
+  if (target === null) return false;
+
+  target.scrollIntoView({ block: "center", behavior: "smooth" });
+  target.dataset.flash = "on";
+  window.setTimeout(() => {
+    delete target.dataset.flash;
+  }, 700);
+  return true;
+}

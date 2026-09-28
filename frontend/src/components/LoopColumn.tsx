@@ -15,6 +15,7 @@ export function LoopColumn({
   mode,
   pending,
   drafts,
+  history = null,
   onSubmitOpening,
   onSubmitAnswers,
   onSkipAll,
@@ -23,9 +24,12 @@ export function LoopColumn({
 }: {
   round: RoundView | null;
   doc: DocumentView | null;
-  mode: AwaitingMode;
+  /** null = 只看不算数（正在看历史轮：不出开场卡、不出抽屉）。 */
+  mode: AwaitingMode | null;
   pending: string | null;
   drafts: RoundDrafts;
+  /** 正在看历史轮（只读）时给出的横幅；null = 正常看当前这一轮。 */
+  history?: { roundId: string; onBack: () => void } | null;
   onSubmitOpening: () => void;
   onSubmitAnswers: () => void;
   onSkipAll: () => void;
@@ -33,10 +37,21 @@ export function LoopColumn({
   onRetry: () => void;
 }) {
   const drawerOpen =
+    history == null &&
     !drafts.collapsed && (mode === "questionnaire" || mode === "draft") && round !== null;
 
   return (
     <div className="loop">
+      {history != null && (
+        <div className="loop__history">
+          <span className="muted small">
+            正在看历史轮次 {history.roundId}（只读，不能在这里答题或写入）
+          </span>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={history.onBack}>
+            回到最新一轮
+          </button>
+        </div>
+      )}
       {mode === "opening" && round !== null ? (
         <OpeningCard
           round={round}

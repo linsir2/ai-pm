@@ -7,7 +7,12 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { ApiError, api } from "../api/client";
 import type { AnswersBody, EditBody, OpeningBody } from "../api/client";
-import type { EditResult, ProjectSummaryView, WorkspaceEvent } from "../api/types";
+import type {
+  EditResult,
+  ProjectSummaryView,
+  RoundView,
+  WorkspaceEvent,
+} from "../api/types";
 import { initialState, reduce } from "./workspace";
 import { useEvents } from "./useEvents";
 
@@ -25,6 +30,8 @@ export function useWorkspaceData() {
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  // 点跨轮编号时临时切过去看的那一轮（只读；"回到最新"就清掉）
+  const [historyRound, setHistoryRound] = useState<RoundView | null>(null);
   const selected = useRef<string | null>(null);
 
   const loadWorkspace = useCallback(async (projectId: string) => {
@@ -155,6 +162,7 @@ export function useWorkspaceData() {
       run("start", async () => {
         const projectId = selected.current;
         if (projectId === null) return;
+        setHistoryRound(null); // 推进当前这一轮的动作，先把历史视图关掉
         dispatch({ type: "round", round: await api.startRound(projectId, input) });
       }),
     [run],
@@ -180,6 +188,7 @@ export function useWorkspaceData() {
     (roundId: string, accepted: string[]) =>
       run("confirm", async () => {
         const result = await api.confirm(roundId, accepted);
+        setHistoryRound(null);
         dispatch({ type: "round", round: result.round });
         const projectId = selected.current;
         if (projectId !== null) await refreshDocument(projectId);
@@ -228,6 +237,28 @@ export function useWorkspaceData() {
 
   const dismissError = useCallback(() => dispatch({ type: "error", message: null }), []);
 
+  /** 提示一句话（查不到编号、回退失败…都走这里；界面不自己吞错误）。 */
+  const notify = useCallback(
+    (message: string) => dispatch({ type: "error", message }),
+    [],
+  );
+
+  /** 看历史轮（只读）：点跨轮编号时用。 */
+  const viewRound = useCallback(async (roundId: string) => {
+    dispatch({ type: "error", message: null });
+    try {
+      setHistoryRound(await api.getRound(roundId));
+    } catch (error) {
+      dispatch({ type: "error", message: describe(error) });
+    }
+  }, []);
+
+  const backToLatest = useCallback(() => {
+    setHistoryRound(null);
+    const projectId = selected.current;
+    if (projectId !== null) void loadWorkspace(projectId).catch(() => undefined);
+  }, [loadWorkspace]);
+
   /** 回到某一版：与手改同一条路——后端写完返回整份文档，界面不猜。 */
   const rollback = useCallback(async (versionNo: number) => {
     const projectId = selected.current;
@@ -261,6 +292,7 @@ export function useWorkspaceData() {
 
   return {
     state,
+    historyRound,
     projects,
     booting,
     bootError,
@@ -274,6 +306,9 @@ export function useWorkspaceData() {
     retry,
     editEntry,
     rollback,
+    viewRound,
+    backToLatest,
+    notify,
     dismissError,
     refreshDocument,
     exportMarkdown,

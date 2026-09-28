@@ -93,3 +93,22 @@ function firstText(entries: Entry[]): string | null {
   const hit = entries.find((entry) => entry.text.trim() !== "");
   return hit === undefined ? null : hit.text;
 }
+
+/** 一条内容落在哪一章（点编号想滚到那条内容时，得先切到它那一章）。
+
+   只做"换个摆法"：顺着投影走一遍，不做判断、不猜。 */
+export function sectionOfEntry(doc: DocumentView | null, entryId: string): string | null {
+  if (doc === null) return null;
+  if (doc.preference_entries.some((entry) => entry.entry_id === entryId)) {
+    return "preference";
+  }
+  const walk = (blocks: BlockView[]): boolean =>
+    blocks.some(
+      (block) =>
+        block.entries.some((entry) => entry.entry_id === entryId) || walk(block.children),
+    );
+  for (const section of doc.sections) {
+    if (walk(section.blocks)) return section.section_id;
+  }
+  return null;
+}

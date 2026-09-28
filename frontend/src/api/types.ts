@@ -249,3 +249,28 @@ export interface RollbackResult {
   version_no: number;
   document: DocumentView;
 }
+
+export interface ChainItemView {
+  eid: string;
+  kind: string;
+  kind_label: string;
+  text: string;
+  summary: string;
+}
+
+/** 按编号查处方：原话、来路、链条、被谁引用（点编号跨轮跳转靠它）。 */
+export interface EvidenceLookupView {
+  eid: string;
+  kind: string;
+  kind_label: string;
+  text: string;
+  summary: string;
+  raw_span: string | null;
+  rationale: string | null;
+  derived_from: string[];
+  round_id: string | null;
+  seat_id: string | null;
+  question_id: string | null;
+  chain: ChainItemView[];
+  used_by: string[];
+}

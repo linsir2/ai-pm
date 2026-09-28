@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockView, DocumentView } from "../api/types";
-import { chapterAnchors, groupFields, listFeatures } from "./structure";
+import { chapterAnchors, groupFields, listFeatures, sectionOfEntry } from "./structure";
 
 function entry(id: string, text: string) {
   return { entry_id: id, text, refs: ["E1"] };
@@ -86,5 +86,40 @@ describe("chapterAnchors", () => {
 
   it("没有功能的章节没有页内锚点", () => {
     expect(chapterAnchors(doc, "s1")).toEqual([]);
+  });
+});
+
+describe("sectionOfEntry", () => {
+  it("功能字段里的条目也要能找到它所在的那一章", () => {
+    const doc = {
+      sections: [
+        { section_id: "s1", title: "背景与问题", blocks: [] },
+        {
+          section_id: "s5",
+          title: "功能需求",
+          blocks: [
+            block({
+              block_id: "feat-order-export",
+              kind: "feature",
+              feature_slug: "order-export",
+              children: [
+                block({
+                  block_id: "feat-order-export.acceptance",
+                  kind: "acceptance",
+                  field: "acceptance",
+                  entries: [entry("en-ac1", "AC-1")],
+                }),
+              ],
+            }),
+          ],
+        },
+      ],
+      preference_entries: [entry("en-pref", "偏好")],
+    } as unknown as DocumentView;
+
+    expect(sectionOfEntry(doc, "en-ac1")).toBe("s5");
+    expect(sectionOfEntry(doc, "en-pref")).toBe("preference");
+    expect(sectionOfEntry(doc, "不存在")).toBeNull();
+    expect(sectionOfEntry(null, "en-ac1")).toBeNull();
   });
 });

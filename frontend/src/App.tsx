@@ -5,12 +5,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { buildEvidenceIndex } from "./api/evidence";
+import { ApiError, api } from "./api/client";
 import { awaitingMode, buildAnswers, buildOpeningBody } from "./api/payload";
 import { BottomStrip } from "./components/BottomStrip";
 import { DocumentPane } from "./components/DocumentPane";
 import { EditScope } from "./components/EditContext";
 import { EvidenceScope } from "./components/EvidenceContext";
-import { jumpToEvidence } from "./components/jump";
+import { jumpToEntry, jumpToEvidence } from "./components/jump";
+import { sectionOfEntry } from "./document/structure";
 import { LoopColumn } from "./components/LoopColumn";
 import { Onboarding } from "./components/Onboarding";
 import { SideRail } from "./components/SideRail";
@@ -38,6 +40,9 @@ export default function App() {
   const mode = awaitingMode(round);
   const project = state.project;
   const drafts = useRoundDrafts(round, mode);
+  // 点跨轮编号时会切到那一轮（只读）；其余时候看的都是当前这一轮
+  const shownRound = data.historyRound ?? round;
+  const readingHistory = data.historyRound !== null;
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -53,9 +58,37 @@ export default function App() {
   }, [pendingScroll, activeSection]);
 
   const evidence = useMemo(() => buildEvidenceIndex(round), [round]);
-  const jumpToEvidenceById = useCallback((eid: string) => {
-    void jumpToEvidence(eid);
-  }, []);
+  /** 点编号：先看本轮索引（快）→ 再问后端（跨轮 / 被谁用着）→ 能跳轮就跳轮，能滚内容就滚内容。 */
+  const jumpToEvidenceById = useCallback(
+    (eid: string) => {
+      if (jumpToEvidence(eid)) return;
+      const projectId = state.projectId;
+      if (projectId === null) return;
+      void (async () => {
+        try {
+          const hit = await api.evidence(projectId, eid);
+          const entryId = hit.used_by[0];
+          if (entryId !== undefined && doc !== null) {
+            const sectionId = sectionOfEntry(doc, entryId);
+            if (sectionId !== null) {
+              setActiveSection(sectionId);
+              setPendingScroll(`entry-${entryId}`);
+              window.setTimeout(() => void jumpToEntry(entryId), 320);
+              return;
+            }
+          }
+          if (hit.round_id !== null && hit.round_id !== shownRound?.round_id) {
+            await data.viewRound(hit.round_id);
+            return;
+          }
+          data.notify(`出处 ${eid}（${hit.kind_label}）：${hit.summary} —— 还没有落到任何内容里`);
+        } catch (error) {
+          data.notify(error instanceof ApiError ? error.message : String(error));
+        }
+      })();
+    },
+    [data, doc, shownRound, state.projectId],
+  );
 
   /** 点树上的一个节点：切到它所在的那一章，再滚到它。 */
   const openNode = useCallback((sectionId: string, targetId: string) => {
@@ -159,11 +192,16 @@ export default function App() {
           />
 
           <LoopColumn
-            round={round}
+            round={shownRound}
             doc={doc}
-            mode={mode}
+            mode={readingHistory ? null : mode}
             pending={data.pending}
             drafts={drafts}
+            history={
+              readingHistory && data.historyRound !== null
+                ? { roundId: data.historyRound.round_id, onBack: data.backToLatest }
+                : null
+            }
             onSubmitOpening={() =>
               round !== null &&
               void data.submitOpening(

@@ -5,6 +5,7 @@ import type {
   DiffView,
   DocumentView,
   EditResult,
+  EvidenceLookupView,
   ProjectSummaryView,
   RollbackResult,
   RoundView,
@@ -117,6 +118,12 @@ export const api = {
     request<DocumentView>(`/projects/${projectId}/document`),
 
   getRound: (roundId: string) => request<RoundView>(`/rounds/${roundId}`),
+
+  /** 按编号查处方：本地索引查不到时用它（跨轮编号、以及"这条现在被谁用着"）。 */
+  evidence: (projectId: string, eid: string) =>
+    request<EvidenceLookupView>(
+      `/projects/${projectId}/evidence/${encodeURIComponent(eid)}`,
+    ),
 
   versions: (projectId: string) =>
     request<VersionListView>(`/projects/${projectId}/versions`),
