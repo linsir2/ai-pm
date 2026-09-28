@@ -1,7 +1,9 @@
 """智能体之间唯一的通信形状。它同时做三件事：生成喂给模型的 `response_schema`、
 在提示词里内联展示、解析模型回复——所以它是 JSON Schema 的唯一真相源。"""
 
+import copy
 import json
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
@@ -155,6 +157,18 @@ class IntegrationPacket(BaseModel):
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Overflow:
+    """一处容器超限：保留了前 `kept` 条，溢出 `dropped` 条。
+
+    它只是"这一包太大了"的事实，不是错误——由调用方决定重装还是截断（`parse_packet_trimmed`）。
+    """
+
+    container: str
+    kept: int
+    dropped: int
+
+
 def parse_packet[T: BaseModel](text: str, model: type[T], *, purpose: str) -> T:
     try:
         payload = json.loads(text)
@@ -165,9 +179,82 @@ def parse_packet[T: BaseModel](text: str, model: type[T], *, purpose: str) -> T:
     try:
         return model.model_validate(payload)
     except ValidationError as error:
+        details: dict[str, object] = {"errors": error.errors()}
+        overflows = _overflows_of(error)
+        if overflows and _only_too_long(error):
+            # 严格解析也要把"给了几条、上限几条"带出去：重装指引靠它说人话（`repair_note`）。
+            first = overflows[0]
+            details["overflow"] = (
+                first.container,
+                first.kept + first.dropped,
+                first.kept,
+            )
         raise PacketParseError(
-            "模型返回的报文过不了 schema", purpose=purpose, errors=error.errors()
+            "模型返回的报文过不了 schema", purpose=purpose, **details
         ) from error
+
+
+def parse_packet_trimmed[T: BaseModel](
+    text: str, model: type[T], *, purpose: str
+) -> tuple[T, tuple[Overflow, ...]]:
+    """与 `parse_packet` 同口径，**只多一条**：容器超限不再判死整包。
+
+    规矩（真跑实测出来的，见 `.codex/runs/2026-09-28/报告.md` F2/F4/F11）：
+    - 只有当**所有**报错都是 `too_long` 时才截断；出现别的错照旧抛——"错就是错"不许放松；
+    - 截断保留**模型给出的前 N 条**：顺序就是它自己排的优先级，我们不替它重排；
+    - 溢出条数报回调用方，由用例层写成留痕（不静默丢）。
+    """
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise PacketParseError(
+            f"模型返回的不是合法 JSON：{error.msg}", purpose=purpose, offset=error.pos
+        ) from error
+    try:
+        return model.model_validate(payload), ()
+    except ValidationError as error:
+        overflows = _overflows_of(error)
+        if not overflows or not _only_too_long(error):
+            raise PacketParseError(
+                "模型返回的报文过不了 schema", purpose=purpose, errors=error.errors()
+            ) from error
+        trimmed = copy.deepcopy(payload)
+        for item in overflows:
+            trimmed[item.container] = trimmed[item.container][: item.kept]
+        try:
+            return model.model_validate(trimmed), tuple(overflows)
+        except ValidationError as second:
+            raise PacketParseError(
+                "模型返回的报文过不了 schema", purpose=purpose, errors=second.errors()
+            ) from second
+
+
+def _only_too_long(error: ValidationError) -> bool:
+    """这一包是不是**只有**容器超限这一种毛病？其它的错不许被截断掩盖。"""
+
+    return all(item.get("type") == "too_long" for item in error.errors())
+
+
+def _overflows_of(error: ValidationError) -> list[Overflow]:
+    """`too_long` 错误 → 每处"保留了前几条、溢出几条"（pydantic 的 ctx 里带着数字）。"""
+
+    found: list[Overflow] = []
+    for item in error.errors():
+        if item.get("type") != "too_long":
+            continue
+        location = item.get("loc", ())
+        context = item.get("ctx", {})
+        limit = int(context.get("max_length") or 0)
+        actual = int(context.get("actual_length") or len(item.get("input") or ()))
+        found.append(
+            Overflow(
+                container=str(location[0]) if location else "?",
+                kept=limit,
+                dropped=max(actual - limit, 0),
+            )
+        )
+    return found
 
 
 def target_of(draft: TargetDraft) -> Target:
