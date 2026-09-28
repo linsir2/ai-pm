@@ -114,6 +114,20 @@ async def run_case(services, case: dict) -> bool:  # type: ignore[no-untyped-def
     return passed
 
 
+async def run_one(services, case: dict) -> tuple[bool, str]:  # type: ignore[no-untyped-def]
+    """跑一条用例，**把它的异常兜住**，返回 `(过没过, 崩溃原因或空串)`。
+
+    真踩过：case-a 第一次真模型运行时复述对不上原文（`PacketParseError`）——那时异常直接
+    冒到 `main`，8 条用例在第 1 条就整体退出，连一份"哪几条红了"的报告都拿不到。
+    断言失败只是这一条红，模型抖动也是这一条红；两种都记成 FAIL，剩下的照跑。
+    """
+
+    try:
+        return await run_case(services, case), ""
+    except Exception as error:  # noqa: BLE001 —— 兜住才叫"全跑完再报"
+        return False, f"{type(error).__name__}: {error}"
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description="真模型 eval")
     parser.add_argument("--case", default=None, help="只跑某一条（按 name）")
@@ -143,7 +157,10 @@ async def main() -> int:
 
     results: list[tuple[str, bool]] = []
     for case in cases:
-        results.append((case["name"], await run_case(services, case)))
+        ok, crash = await run_one(services, case)
+        if crash:
+            show("崩溃", crash)  # 这一轮没跑完，没有断言可看，原因就是报告本身
+        results.append((case["name"], ok))
 
     passed = sum(1 for _, ok in results if ok)
     print(f"\n通过 {passed}/{len(results)}", flush=True)
