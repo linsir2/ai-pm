@@ -61,3 +61,42 @@ def test_settings_model_timeout_defaults_and_reads_env(tmp_path):
         Settings.from_env(
             {**base, "PMSTUDIO_MODEL_TIMEOUT": "0"}, default_db=tmp_path / "d.db"
         )
+
+
+def test_settings_model_params_reads_json(tmp_path):
+    """供应商特有参数（如 DashScope 关思考）走配置，不进代码。"""
+
+    settings = Settings.from_env(
+        {
+            "PMSTUDIO_MODEL": "m",
+            "PMSTUDIO_API_KEY": "k",
+            "PMSTUDIO_MODEL_PARAMS": '{"extra_body": {"enable_thinking": false}}',
+        },
+        default_db=tmp_path / "d.db",
+    )
+
+    assert settings.model_params == {"extra_body": {"enable_thinking": False}}
+    assert Settings.from_env(
+        {"PMSTUDIO_MODEL": "m", "PMSTUDIO_API_KEY": "k"}, default_db=tmp_path / "d.db"
+    ).model_params == {}
+
+
+def test_settings_model_params_bad_json_is_a_hard_error(tmp_path):
+    with pytest.raises(ConfigError, match="PMSTUDIO_MODEL_PARAMS"):
+        Settings.from_env(
+            {
+                "PMSTUDIO_MODEL": "m",
+                "PMSTUDIO_API_KEY": "k",
+                "PMSTUDIO_MODEL_PARAMS": "{不是 JSON}",
+            },
+            default_db=tmp_path / "d.db",
+        )
+    with pytest.raises(ConfigError, match="PMSTUDIO_MODEL_PARAMS"):
+        Settings.from_env(
+            {
+                "PMSTUDIO_MODEL": "m",
+                "PMSTUDIO_API_KEY": "k",
+                "PMSTUDIO_MODEL_PARAMS": "[1, 2]",
+            },
+            default_db=tmp_path / "d.db",
+        )

@@ -310,6 +310,54 @@ async def test_gateway_passes_timeout_and_disables_sdk_retries(monkeypatch):
     assert captured["num_retries"] == 0
 
 
+async def test_gateway_passes_model_params_but_never_lets_them_win(monkeypatch):
+    """供应商参数（如 `extra_body.enable_thinking=false`）原样传下去，
+    但**我们自己的键永远赢**：timeout / num_retries / model / messages 不许被配置改掉。"""
+
+    captured: dict = {}
+
+    async def scripted(**kwargs):
+        captured.update(kwargs)
+
+        class _Message:
+            content = "{}"
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "m"
+            usage = {}
+
+        return _Response()
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", scripted)
+    gateway = LiteLLMGateway(
+        model="m",
+        api_key="k",
+        timeout=30.0,
+        model_params={
+            "extra_body": {"enable_thinking": False},
+            "timeout": 999,  # 想覆盖我们的墙钟：不许
+            "num_retries": 5,  # 想打开 SDK 重试：不许
+        },
+    )
+
+    await gateway.complete(
+        ModelRequest(
+            purpose="claims",
+            messages=(ModelMessage(role="user", content="x"),),
+            schema_name="ClaimsPacket",
+            response_schema={"type": "object"},
+        )
+    )
+
+    assert captured["extra_body"] == {"enable_thinking": False}
+    assert captured["timeout"] == 30.0
+    assert captured["num_retries"] == 0
+
+
 async def _accept_and_hang(reader, writer):  # type: ignore[no-untyped-def]
     """静默服务端：接上就不说话，等客户端自己断开（超时后 httpx 会断）。"""
 

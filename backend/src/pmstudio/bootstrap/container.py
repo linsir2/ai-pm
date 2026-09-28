@@ -106,6 +106,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             api_base=settings.api_base,
             timeout=settings.model_timeout,
             recorder=recorder,
+            model_params=settings.model_params,
         )
     catalog = TomlSeatCatalog(SEATS_DIR)
     assigner = EvidenceAssigner()

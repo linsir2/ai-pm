@@ -52,6 +52,7 @@ class LiteLLMGateway:
         max_attempts: int = MAX_ATTEMPTS,
         backoff: tuple[float, ...] = BACKOFF_SECONDS,
         recorder: ModelCallRecorder | None = None,
+        model_params: Mapping[str, object] | None = None,
     ) -> None:
         self._model = model
         self._api_key = api_key
@@ -61,10 +62,13 @@ class LiteLLMGateway:
         self._backoff = backoff
         # 留样（`02` §5.3）：默认不接——没给 recorder 就什么都不记
         self._recorder = recorder
+        # 供应商特有参数（如 DashScope 关思考）：当**基底**用，我们自己的键永远覆盖它
+        self._model_params = dict(model_params or {})
 
     async def complete(self, request: ModelRequest) -> ModelReply:
         started = time.monotonic()
         kwargs: dict[str, object] = {
+            **self._model_params,
             "model": self._model,
             "messages": [
                 {"role": message.role, "content": message.content}
