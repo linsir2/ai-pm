@@ -307,3 +307,55 @@ status 空槽 1 条）。
   ④ `DraftId` 在 Task 1 类型清单里漏了 → 补进 `shared/ids.py`；
   ⑤ 若干测试里 `authorized=` 写错位置、`len(assignments)` 数错 → 按"测试错就修测试"的原则修正。
 - 下一步：写 P2 计划（application 用例 + SQLite 仓储 + LiteLLM 网关 + LangGraph + API/SSE + 前端最小集）。
+
+### 执行结果（2026-09-28，P5b：信任三件套）
+
+计划：`docs/plans/2026-09-24-P5b-信任三件套.md`（12 个任务，一步一提交，全部完成）。
+
+**做了什么**
+
+1. **留痕一条通道（T1–T3、T10）**：`Round.dropped[]`，三个来源——`integrator`（报文新增
+   `dropped_opinions[{handle, reason}]`）/ `assembly`（归因对不上号）/ `unaccounted`（装配层核出
+   "既没说丢、也没交代落到哪儿"）。每条带 `handle / seat_id / pass_index / reason / source`，
+   落库、进 DTO、闭环区每个席位包底下一行；`Questionnaire.dropped` 与 `RoundView.dropped_attributions`
+   收口退休（旧库问卷上的 `dropped` 兼容读 → 迁成 `assembly` 条目）。
+2. **版本三件（T4–T6、T8、T9）**：`domain/authoring/diff.py`（纯函数、按 `entry_id`）、
+   `GET /versions`、`GET /versions/{a}/diff?to=b`、`POST /versions/{n}/rollback`
+   （走 `ProposalCommitter.rollback_to`，写路径白名单不变）、前端版本抽屉（列表 / 差异 / 二次确认回退）。
+3. **出处查询（T7、T8、T11）**：`GET /projects/{id}/evidence/{eid}` 给原话、来路、链条、`used_by`；
+   前端本地索引查不到就查后端 → 有 `used_by` 滚到那条内容（`EntryList` 补 `id="entry-<id>"`），
+   只有 `round_id` 就切过去看那一轮（**只读** + 横幅 + 回到最新）。
+
+**验证（三条命令的真实输出）**
+
+- `cd backend && PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -p no:cacheprovider -o addopts=""`
+  → **440 passed**（P5b 之前是 398）；`python3 -m ruff check --no-cache .` → All checks passed。
+- `cd frontend && npx tsc --noEmit && npx vitest run` → tsc 干净、**97 passed**（之前 85）。
+- 端点白名单：**14 → 18**（`tests/api/test_openapi_contract.py` 同步更新）。
+- **真组装冒烟**（真 Settings + 真 SQLite + 真 container，非测试夹具）：列版本 200、
+  diff 200、回退 200（新版本号 2）、`?to=99` → 404 `unknown_version`、
+  不存在的编号 → 404 `unknown_evidence`；**回退后再读 workspace 仍 200**（这条以前会炸）。
+
+**执行中发现并修掉的真问题（方案里没写，是核验出来的）**
+
+1. **回退会让整个项目打不开**：`Document.rollback_to` 恢复旧快照时不动墓碑，而 `_validate`
+   要求"活块 id"与"墓碑 id"不重叠 → "建功能 → 删功能 → 回退到功能还在的那一版"写出一个
+   落库没事、下次 `get()` 重建聚合抛 `DuplicateBlockId` 的文档。已修（重算墓碑 + 候选状态先过校验）。
+2. **留痕只在"出问卷"那条路上活着**：`Assembly.dropped` 只在 `questionnaire_of(...)` 被消费，
+   走草案的一轮里全丢。现在两条路都写。
+3. **`EntryList` 的条目没有锚点**：`used_by` 拿到了 entry_id 也滚不过去。
+4. **diff 的功能名漂移**：功能名（「名称」字段）是分组标签的一部分，两版之间改名会让同一批条目
+   在两侧落到不同组、看着像"全删了又全加了"。修法：两版**共用一张功能名表**（`after` 优先）。
+
+**前端有两处按计划收窄**（都写进设计里了）：`unplacedDrops` 的口径是"挂不到**本趟**席位包上"
+（含更早那趟的留痕与地址对不上的），不是"说不清是哪一条"——闭环区只显示本趟席位包，
+更早那趟的留痕只能这样摆出来，不许静默消失。
+
+**下一步（P5c，按作者指定顺序）**
+
+1. **网关超时**（第一件事，否则真模型验证做不了）：`PMSTUDIO_MODEL_TIMEOUT`（默认 120 秒）
+   + 按 `TRANSIENT_HINTS` 重试。
+2. **放弃这一轮**：`Step.ABANDONED` + `task.cancel()`（模型调用在事务外，取消才安全）。
+3. **模型留样**（`PMSTUDIO_TRACE_MODEL=1`，可开关）+ **最小 eval**。
+4. **C8 答案轮缩编**（要先给席位 TOML 补 `sections` / `fields`，新增 `Round.active_seats`）。
+5. 最后**统一真模型验证**（P5a + P5b 的功能一起跑）。
