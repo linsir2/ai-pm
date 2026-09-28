@@ -107,3 +107,53 @@ def test_packet_shape_tells_the_model_the_object_it_owes():
 
     assert "数组" in note and "对象" in note
     assert "questions" in note and "dropped_opinions" in note
+
+
+def schema_error(kind: str, loc: tuple, **ctx: object) -> dict:
+    return {"type": kind, "loc": loc, "msg": "…", "ctx": ctx}
+
+
+def test_list_type_error_says_it_wants_a_list():
+    note = repair_note(
+        PacketParseError(
+            "模型返回的报文过不了 schema",
+            purpose="seat_review",
+            errors=[schema_error("list_type", ("opinions", 2, "evidence_refs"))],
+        )
+    )
+
+    assert "opinions.2.evidence_refs" in note
+    assert "数组" in note
+    assert "[]" in note  # 没有依据就写空数组
+
+
+def test_missing_field_says_which_one():
+    note = repair_note(
+        PacketParseError(
+            "模型返回的报文过不了 schema",
+            purpose="claims",
+            errors=[schema_error("missing", ("seats",), field_type="list")],
+        )
+    )
+
+    assert "seats" in note
+    assert "必填" in note
+
+
+def test_literal_error_lists_the_allowed_values():
+    note = repair_note(
+        PacketParseError(
+            "模型返回的报文过不了 schema",
+            purpose="seat_review",
+            errors=[
+                schema_error(
+                    "literal_error",
+                    ("opinions", 0, "form"),
+                    expected="'question' or 'judgment'",
+                )
+            ],
+        )
+    )
+
+    assert "opinions.0.form" in note
+    assert "question" in note and "judgment" in note

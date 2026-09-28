@@ -56,10 +56,7 @@ def repair_note(error: PacketParseError) -> str:
             '例如：{"questions": [ … ], "proposals": [ … ]}。不要只输出里面那个数组。'
         )
     elif "errors" in details:
-        lines.append(
-            f"过不了 schema 的字段：{_schema_paths(details['errors'])}。"
-            "字段名与取值都只能取 schema 里列出的那些。"
-        )
+        lines.append("过不了 schema 的字段（逐条改）：\n" + _schema_guidance(details["errors"]))
     elif "offset" in details:
         lines.append(
             "返回的内容不是一个完整的 JSON 对象：只输出那个对象，"
@@ -70,14 +67,36 @@ def repair_note(error: PacketParseError) -> str:
     return "\n".join(lines)
 
 
-def _schema_paths(errors: object, *, limit: int = 5) -> str:
-    """pydantic 的 `errors()` → `claims.2.label` 这种字段路径（最多列 `limit` 条）。"""
+#: pydantic 的错误类型 → 一句"这里该是什么形状"（模型看得懂才改得对）
+_TYPE_GUIDANCE = {
+    "list_type": "这里要是数组；没有内容就写 []（不要写 null）",
+    "string_type": "这里要是字符串",
+    "dict_type": "这里要是对象",
+    "model_type": "这里要是对象",
+    "missing": "是必填字段，必须给",
+    "literal_error": "取值只能从枚举里挑",
+    "int_type": "这里要是整数",
+    "bool_type": "这里要是 true / false",
+}
+
+
+def _schema_guidance(errors: object, *, limit: int = 4) -> str:
+    """`errors()` → 逐条"哪个字段 + 该是什么形状"（最多 `limit` 条）。
+
+    只报字段路径（旧写法）模型看不出欠什么：真跑里它把 `evidence_refs` 写成 `null`、
+    把 `form` 写成空，收到"字段路径"之后第二次照错（P8 口径）。
+    """
 
     if not isinstance(errors, list):
-        return "(未知字段)"
-    paths = [
-        ".".join(str(part) for part in (item.get("loc", ()) if isinstance(item, dict) else ()))
-        or "(根)"
-        for item in errors[:limit]
-    ]
-    return "、".join(paths) or "(未知字段)"
+        return "字段名与取值都只能取 schema 里列出的那些。"
+    lines: list[str] = []
+    for item in errors[:limit]:
+        if not isinstance(item, dict):
+            continue
+        path = ".".join(str(part) for part in item.get("loc", ())) or "(根)"
+        hint = _TYPE_GUIDANCE.get(str(item.get("type")), "")
+        expected = (item.get("ctx") or {}).get("expected")
+        if expected:
+            hint = f"{hint}（允许：{expected}）" if hint else f"允许：{expected}"
+        lines.append(f"- {path}：{hint or str(item.get('msg', ''))}")
+    return "\n".join(lines) or "字段名与取值都只能取 schema 里列出的那些。"
