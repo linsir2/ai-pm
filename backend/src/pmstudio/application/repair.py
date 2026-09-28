@@ -36,6 +36,16 @@ def repair_note(error: PacketParseError) -> str:
             "席位提名里有目录里没有的 id。seat_id 只能从上面的席位目录里原样照抄，"
             "连 `seat.` 前缀一起（目录里写的是 `seat.tech_approach`，就写 `seat.tech_approach`）。"
         )
+    elif "overflow" in details:
+        # 超限是**可修复的错**：只说"哪一包、给了几条、上限几条、按什么优先级删"。
+        # 放在 errors 分支之前：errors 只会列出字段路径，说不出"删到几条"。
+        container, got, limit = details["overflow"]  # type: ignore[misc]
+        lines.append(
+            f"你这一次给了 {got} 条 {container}，上限是 {limit} 条。"
+            f"请精简、合并或删到 {limit} 条以内：同一件事只说一次，"
+            "优先保留 s5 功能字段（name / one_liner / goal / audience / exceptions / acceptance）"
+            "与已经定下来的验收标准，删掉重复与推测。"
+        )
     elif "errors" in details:
         lines.append(
             f"过不了 schema 的字段：{_schema_paths(details['errors'])}。"

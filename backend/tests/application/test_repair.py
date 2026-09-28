@@ -68,3 +68,19 @@ def test_broken_json_asks_for_a_plain_json_object():
 
     assert "JSON" in note
     assert "围栏" in note
+
+
+def test_overflow_tells_the_model_how_many_to_cut():
+    """超限是**可修复的错**：指引要说清"你给了几条、上限几条、怎么精简"。"""
+
+    note = repair_note(
+        PacketParseError(
+            "模型返回的报文过不了 schema",
+            purpose="integration",
+            overflow=("proposals", 44, 60),
+        )
+    )
+
+    assert "44" in note and "60" in note
+    assert "proposals" in note
+    assert "精简" in note
