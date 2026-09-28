@@ -427,4 +427,18 @@ status 空槽 1 条）。
 
 **待作者拍板**：默认超时值/是否关思考；"去处写错要不要一条降级而不是整轮失败"（`04` G3 末尾）。
 
+**我自己的一个失误（如实记下）**：eval 第一次跑时把项目建进了**工作库**
+（`backend/data/pmstudio.db` 多了 `p-449cdee9 · eval · edge-vague`，停在草案卡）。
+原因是 `Settings.from_env()` 里 `PMSTUDIO_DB` 优先于 `default_db`，我却按 `default_db` 选临时库。
+**没有写进文档**（eval 不确认草案，只有空项目 + 一轮 + 它的出处）；
+脚本已修：eval 现在**覆盖**库路径（`replace(settings, db_path=…)`），并且**拒绝**跑在工作库上，
+另加三条离线测试。清理那一行（等你点头再执行）：
+
+```sql
+DELETE FROM rounds   WHERE project_id = 'p-449cdee9';
+DELETE FROM evidence_ledgers WHERE project_id = 'p-449cdee9';
+DELETE FROM document_versions WHERE project_id = 'p-449cdee9';
+DELETE FROM documents WHERE project_id = 'p-449cdee9';
+```
+
 **下一步**：按拍板调参数 → 跑完整 eval（8 条）→ 之后再考虑"从失败的那一次调用续跑"与索引层。

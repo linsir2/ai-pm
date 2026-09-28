@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,9 @@ from pmstudio.bootstrap.container import build_container  # noqa: E402
 from pmstudio.bootstrap.settings import Settings  # noqa: E402
 
 CASES_DIR = BACKEND_ROOT / "evals" / "cases"
+#: eval 默认跑在这个库上：**永远不碰工作库**（`Settings.from_env()` 里 PMSTUDIO_DB 优先级更高，
+#: 所以这里必须显式覆盖，不能只靠 default_db）。
+DEFAULT_EVAL_DB = Path("/tmp/pmstudio-eval.db")
 
 
 def load_cases(only: str | None) -> list[dict]:
@@ -49,6 +53,17 @@ def load_cases(only: str | None) -> list[dict]:
 
 def show(stage: str, detail: str = "") -> None:
     print(f"  [{stage}] {detail}".rstrip(), flush=True)
+
+
+def resolve_eval_db(chosen: str | None, *, working_db: Path) -> Path:
+    """eval 用哪个库：默认 /tmp，且**拒绝**跑在工作库上（会往里建项目和轮次）。"""
+
+    eval_db = Path(chosen) if chosen else DEFAULT_EVAL_DB
+    if eval_db.resolve() == working_db.resolve():
+        raise SystemExit(
+            f"拒绝：eval 不能跑在工作库上（{eval_db}）。换个路径，或用默认的 /tmp。"
+        )
+    return eval_db
 
 
 async def run_case(services, case: dict) -> bool:  # type: ignore[no-untyped-def]
@@ -102,6 +117,9 @@ async def run_case(services, case: dict) -> bool:  # type: ignore[no-untyped-def
 async def main() -> int:
     parser = argparse.ArgumentParser(description="真模型 eval")
     parser.add_argument("--case", default=None, help="只跑某一条（按 name）")
+    parser.add_argument(
+        "--db", default=None, help=f"eval 用的库（默认 {DEFAULT_EVAL_DB}，不会碰工作库）"
+    )
     args = parser.parse_args()
 
     cases = load_cases(args.case)
@@ -109,10 +127,19 @@ async def main() -> int:
         print(f"没有这条用例：{args.case}", file=sys.stderr)
         return 2
 
-    db_path = Path(os.environ.get("PMSTUDIO_EVAL_DB", "/tmp/pmstudio-eval.db"))
-    if db_path.exists():
-        db_path.unlink()  # 每次从干净库开始：eval 要可重复
-    services = build_container(Settings.from_env(default_db=db_path)).app.state.services
+    settings = Settings.from_env()
+    eval_db = resolve_eval_db(
+        args.db or os.environ.get("PMSTUDIO_EVAL_DB"), working_db=settings.db_path
+    )
+    if eval_db.exists():
+        eval_db.unlink()  # 每次从干净库开始：eval 要可重复
+    settings = replace(settings, db_path=eval_db)  # 不许被 .env 的 PMSTUDIO_DB 覆盖回去
+    print(
+        f"库：{eval_db} · 模型 {settings.model} · 超时 {settings.model_timeout}s"
+        f" · 留样 {'开' if settings.trace_model else '关'}",
+        flush=True,
+    )
+    services = build_container(settings).app.state.services
 
     results: list[tuple[str, bool]] = []
     for case in cases:
