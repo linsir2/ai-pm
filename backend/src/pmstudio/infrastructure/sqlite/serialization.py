@@ -352,6 +352,7 @@ def _question_to_json(question: Question) -> dict:
         "evidence_refs": _refs(question.evidence_refs),
         "asked_by": list(question.asked_by),
         "blocking": question.blocking,
+        "from_entry": question.from_entry,
     }
 
 
@@ -372,6 +373,8 @@ def _question_from_json(data: dict) -> Question:
         asked_by=tuple(data["asked_by"]),
         # 老行里没有这个键：按"非阻塞"读
         blocking=bool(data.get("blocking", False)),
+        # 老行里没有这个键：新题一律没有来源
+        from_entry=data.get("from_entry"),
     )
 
 
@@ -539,6 +542,8 @@ def round_to_payload(round_: Round) -> dict:
             }
             for item in round_.dropped
         ],
+        # 轮内未决队列（老行没有这个键 → 读侧 .get）
+        "deferred_questions": [_question_to_json(item) for item in round_.deferred],
         "failure": _failure_to_json(round_.failure),
         "confirmed_version_no": round_.confirmed_version_no,
         "abandon_reason": round_.abandon_reason,
@@ -587,6 +592,10 @@ def round_from_payload(
         confirmed_version_no=payload["confirmed_version_no"],
         # 老行里没有这个键（放弃是后加的）
         abandon_reason=payload.get("abandon_reason"),
+        # 老行里没有这个键（轮内未决队列是后加的）
+        deferred=tuple(
+            _question_from_json(item) for item in payload.get("deferred_questions", ())
+        ),
     )
 
 

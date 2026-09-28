@@ -57,6 +57,8 @@ class Question:
     #: 阻塞型：缺了它就交不出去（target 命中必填字段/必填章节）。由装配层的规则算，
     #: 不问模型；跳过的阻塞题落成 s11 开放问题时会带上 `〔未决·阻塞〕` 前缀。
     blocking: bool = False
+    #: 这条题来自哪条 s11 未决条目（下一轮把它问回来时才有值）；答完要机械撤下它
+    from_entry: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, QuestionKind):

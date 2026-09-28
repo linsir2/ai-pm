@@ -1,6 +1,6 @@
 """Round 聚合：一轮怎么推进，全在这里。LangGraph 的 state 只放 round_id 与 step。"""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
@@ -8,7 +8,7 @@ from enum import StrEnum
 from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.draft import Draft
 from pmstudio.domain.round.opinion import Opinion, SeatReview
-from pmstudio.domain.round.questionnaire import AnswerSet, Questionnaire
+from pmstudio.domain.round.questionnaire import AnswerSet, Question, Questionnaire
 from pmstudio.domain.round.step import LEGAL_ADVANCES, MAX_SEAT_ROUNDS, Step, WaitingOn
 from pmstudio.domain.shared.errors import (
     AlreadyAnswered,
@@ -111,6 +111,7 @@ class Round:
         dropped: tuple[DroppedItem, ...] = (),
         abandon_reason: str | None = None,
         active_seats: tuple[str, ...] = (),
+        deferred: tuple[Question, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -132,6 +133,8 @@ class Round:
         self._dropped = tuple(dropped)
         self._abandon_reason = abandon_reason
         self._active_seats = tuple(active_seats)
+        #: 轮内未决队列：本批被 5 题上限挤掉的题（下一批优先问；出草案时落 s11）
+        self._deferred = tuple(deferred)
 
     @classmethod
     def start(
@@ -337,6 +340,42 @@ class Round:
         """
 
         self._dropped = self._dropped + tuple(items)
+
+    # —— 轮内未决队列（P9）——
+
+    @property
+    def deferred(self) -> tuple[Question, ...]:
+        """本批没问上的题（先进先出）。它**不跨轮**：出草案或问卷到顶时一律落 s11。"""
+
+        return self._deferred
+
+    def defer(self, questions: Sequence[Question]) -> None:
+        """把没问上的题存进队列。去重按"同一个去处 + 同一个问法"，不是按 question_id。"""
+
+        seen = {
+            (item.target.label(), " ".join(item.title.split())) for item in self._deferred
+        }
+        fresh: list[Question] = []
+        for item in questions:
+            key = (item.target.label(), " ".join(item.title.split()))
+            if key in seen:
+                continue
+            seen.add(key)
+            fresh.append(item)
+        self._deferred = self._deferred + tuple(fresh)
+
+    def peek_deferred(self, limit: int) -> tuple[Question, ...]:
+        """只看不取（模型调用前用它算 carried）。"""
+
+        return self._deferred[:limit]
+
+    def take_deferred(self, limit: int) -> tuple[Question, ...]:
+        taken, self._deferred = self._deferred[:limit], self._deferred[limit:]
+        return taken
+
+    def clear_deferred(self) -> tuple[Question, ...]:
+        taken, self._deferred = self._deferred, ()
+        return taken
 
     @property
     def current_reviews(self) -> tuple[SeatReview, ...]:
