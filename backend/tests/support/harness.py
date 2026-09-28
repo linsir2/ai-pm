@@ -297,18 +297,39 @@ class Harness:
         return ListProjects(index=self.index)
 
     def runner(self):  # type: ignore[no-untyped-def]
+        """**缓存同一个实例**：`run()` 记下"这一轮在跑的任务"，`cancel()` 要能找到它。
+
+        每次 new 一个 runner，取消就落空了——真实现（`build_container`）本来就只造一个。
+        """
+
         from pmstudio.application.use_cases import GetRound
         from pmstudio.infrastructure.graph.graph import RoundRunner
 
-        return RoundRunner(
-            start_round=self.start_round(),
-            submit_opening=self.submit_opening(),
-            run_seat_round=self.run_seat_round(),
-            integrate_round=self.integrate_round(),
-            submit_answers=self.submit_answers(),
-            confirm_draft=self.confirm_draft(),
-            retry_round=self.retry_round(),
-            get_round=GetRound(rounds=self.rounds, evidence=self.evidences, catalog=self.seats),
+        if not hasattr(self, "_runner"):
+            self._runner = RoundRunner(
+                start_round=self.start_round(),
+                submit_opening=self.submit_opening(),
+                run_seat_round=self.run_seat_round(),
+                integrate_round=self.integrate_round(),
+                submit_answers=self.submit_answers(),
+                confirm_draft=self.confirm_draft(),
+                retry_round=self.retry_round(),
+                get_round=GetRound(
+                    rounds=self.rounds, evidence=self.evidences, catalog=self.seats
+                ),
+            )
+        return self._runner
+
+    def abandon_round(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import AbandonRound
+
+        return AbandonRound(
+            rounds=self.rounds,
+            round_writer=self.rounds,
+            uow=self.uow,
+            clock=self.clock,
+            events=self.events,
+            canceller=self.runner(),
         )
 
     def api_services(self, *, model_name: str):  # type: ignore[no-untyped-def]

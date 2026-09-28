@@ -136,3 +136,14 @@ class RoundOrchestrator(Protocol):
     """
 
     async def run(self, command: "RoundCommand") -> "RoundView": ...
+
+
+@runtime_checkable
+class RoundCanceller(Protocol):
+    """把正在跑的那一轮停下来（实现是 infrastructure 里的 `RoundRunner`）。
+
+    只有"放弃这一轮"用它。它不是写能力——取消只负责让正在等模型的那次调用停下来；
+    磁盘上的状态由 `AbandonRound` 写（写法只有一处）。
+    """
+
+    async def cancel(self, round_id: RoundId) -> None: ...

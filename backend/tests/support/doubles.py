@@ -58,6 +58,32 @@ def _next(script: list[str]) -> str:
     return script.pop(0) if len(script) > 1 else script[0]
 
 
+class HangingSeatGateway(ScriptedModelGateway):
+    """claims 照常返回，席位调用**挂住**（测取消与超时用）。
+
+    它模拟的是"provider 一直不返回"：那一刻整轮停在 `await` 上，
+    `RoundRunner.cancel()` 要能把这一轮从那儿拉回来。
+    """
+
+    def __init__(
+        self,
+        *,
+        replies: Mapping[str, str | Sequence[str]] = {},
+        hang_seconds: float = 30.0,
+    ) -> None:
+        super().__init__(replies=replies, seat_replies={})
+        self.seat_calls = 0
+        self._hang_seconds = hang_seconds
+
+    async def complete(self, request: ModelRequest) -> ModelReply:
+        if request.purpose == "seat_review":
+            self.requests.append(request)
+            self.seat_calls += 1
+            await asyncio.sleep(self._hang_seconds)
+            raise AssertionError("挂了这么久还被叫醒：取消没生效")
+        return await super().complete(request)
+
+
 class RecordingPrompts:
     """提示词库替身：记录每次 render 的槽位，返回可读的拼接文本。"""
 

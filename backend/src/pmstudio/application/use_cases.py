@@ -65,6 +65,7 @@ from pmstudio.application.ports import (
     EventPublisher,
     IdGenerator,
     ProjectFactory,
+    RoundCanceller,
     SeatCatalog,
     SeatDefinition,
     WorkspaceIndex,
@@ -1224,6 +1225,44 @@ class GetEvidence:
             chain=ledger.chain(evidence.eid),
             used_by=used_by_entries(view, evidence.eid),
         )
+
+
+class AbandonRound:
+    """放弃这一轮（`01` F15）：先写状态，再取消正在跑的任务。
+
+    顺序不能反：先取消的话，取消回来的那一刻状态还是"在跑"，界面会闪一下旧状态；
+    而且**写法只有这一处**——取消本身不写任何业务状态，它只让模型调用停下来。
+    """
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        uow: UnitOfWork,
+        clock: Clock,
+        events: EventPublisher,
+        canceller: RoundCanceller,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._uow = uow
+        self._clock = clock
+        self._events = events
+        self._canceller = canceller
+
+    async def __call__(
+        self, *, round_id: RoundId, reason: str = "用户放弃了这一轮"
+    ) -> RoundView:
+        with self._uow:
+            round_ = self._rounds.get(round_id)
+            round_.abandon(reason)
+            self._round_writer.save(round_)
+        _publish(self._events, self._clock, round_)
+
+        # 写完了再取消：取消会把那个任务炸在 await 点，而它不会碰业务状态。
+        await self._canceller.cancel(round_id)
+        return round_view(self._rounds.get(round_id))
 
 
 class GetRound:

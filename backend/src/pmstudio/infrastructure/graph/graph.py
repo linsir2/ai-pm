@@ -6,6 +6,7 @@
 - 节点与路由器**必须 async**（同步版本在这个 langgraph 上会挂死）。
 """
 
+import asyncio
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -27,6 +28,8 @@ from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.ids import ProjectId, RoundId
 
 __all__ = ["RESUME_ROUTES", "RoundCommand", "RoundRunner", "RoundState", "build_graph"]
+
+CANCEL_WAIT_SECONDS = 5.0
 
 
 class RoundState(TypedDict, total=False):
@@ -82,6 +85,8 @@ class RoundRunner:
         self._retry_round = retry_round
         self._get_round = get_round
         self._running_rounds: set[str] = set()
+        #: 这一轮正在跑的那个 asyncio 任务（`cancel()` 要按 round_id 找到它）
+        self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._graph = build_graph(self)
 
     @property
@@ -102,12 +107,20 @@ class RoundRunner:
             raise RoundBusy(round_id=key)
         if key:
             self._running_rounds.add(key)
+            current = asyncio.current_task()
+            if current is not None:
+                self._tasks[key] = current
         try:
             final: dict[str, Any] = await self._graph.ainvoke(
                 {"command": command, "round_id": key, "view": None}
             )
+        except asyncio.CancelledError:
+            # 取消**不吞**：谁取消的谁负责收尾（`AbandonRound` 先写 abandoned 再调 cancel），
+            # 吞掉会掩盖"进程正在关"这类外部取消。
+            raise
         finally:
             self._running_rounds.discard(key)
+            self._tasks.pop(key, None)
         view = final.get("view")
         if view is None:
             # 图停在"等人"的边上（例如 retry 后本来就是 claims_ready）——
@@ -117,6 +130,17 @@ class RoundRunner:
                 raise RuntimeError("这次调用既没有 round_id，也没有产生新的一轮")
             view = await self._get_round(round_id=RoundId(round_id))
         return view
+
+    async def cancel(self, round_id: RoundId) -> None:
+        """取消这一轮正在跑的任务。没有在跑的直接返回（它可能停在等人，或进程崩过）。"""
+
+        task = self._tasks.get(str(round_id))
+        if task is None or task.done():
+            return
+        task.cancel()
+        # 等它退出（让它把 CancelledError 传出去）。用 wait 不用 wait_for：
+        # wait_for 超时会**再取消一次**，那不是帮忙。
+        await asyncio.wait({task}, timeout=CANCEL_WAIT_SECONDS)
 
     # —— 节点与路由器：一律 async def ——
     async def node_start(self, state: RoundState) -> dict[str, Any]:

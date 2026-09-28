@@ -146,6 +146,7 @@ class RoundView:
     draft: DraftView | None
     advisories: tuple[str, ...]
     failure_reason: str | None
+    abandon_reason: str | None
     confirmed_version_no: int | None
     form_id: str | None
 
@@ -305,6 +306,7 @@ def round_view(
         draft=draft_view,
         advisories=advisories,
         failure_reason=round_.failure.reason if round_.failure is not None else None,
+        abandon_reason=round_.abandon_reason,
         confirmed_version_no=round_.confirmed_version_no,
         form_id=None if questionnaire is None else str(questionnaire.form_id),
     )
