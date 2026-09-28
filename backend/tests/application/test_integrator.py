@@ -28,6 +28,31 @@ def test_limits_say_authorized_features_must_land_in_feature_fields():
     assert "功能字段" in LIMITS_TEXT
 
 
+def test_limits_tell_the_model_to_process_open_items():
+    """未决项不能原样再留一遍：能定的写内容 + 出 remove；定不了的出题（P9-B）。"""
+
+    assert "未决" in LIMITS_TEXT
+    assert "remove" in LIMITS_TEXT
+
+
+async def test_integrator_passes_the_open_item_list():
+    gateway = ScriptedModelGateway(replies={"integration": INTEGRATION_REPLY})
+    prompts = RecordingPrompts()
+    integrator = Integrator(model=gateway, prompts=prompts)
+
+    await integrator.integrate(
+        document_state="# 文档",
+        claims="…",
+        opinions="…",
+        answered="…",
+        skipped="…",
+        entry_ids="…",
+        open_items="- [r0#open01] 点检完成率的统计口径（跳过后果：报表口径不清）",
+    )
+
+    assert "r0#open01" in prompts.calls[0][1]["open_items"]
+
+
 async def test_integrator_passes_the_authorized_feature_list():
     gateway = ScriptedModelGateway(replies={"integration": INTEGRATION_REPLY})
     prompts = RecordingPrompts()

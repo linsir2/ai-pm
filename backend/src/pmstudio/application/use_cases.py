@@ -668,6 +668,17 @@ def _render_authorized_features(round_: Round, *, document: Document) -> str:
     return "\n".join(lines) or "（这一轮没有点名任何功能）"
 
 
+def _render_open_items(carried: Sequence[Question]) -> str:
+    """给整合者看的"前几轮留下的未决项"清单（带 entry id，它才撤得对）。"""
+
+    lines = [
+        f"- [{item.from_entry}] {item.title}（跳过后果：{item.consequence_if_skipped}）"
+        for item in carried
+        if item.from_entry is not None
+    ]
+    return "\n".join(lines) or "（没有未决项）"
+
+
 def _next_proposal_index(proposals: Sequence[Proposal]) -> int:
     """续编提案编号：**现有最大编号 + 1**，不是 `len + 1`。
 
@@ -889,6 +900,7 @@ class IntegrateRound:
                 authorized_features = _render_authorized_features(
                     round_, document=document
                 )
+                open_items = _render_open_items(carried_from_open_items)
                 outcome = await self._integrator.integrate(
                     document_state=render_document_state(
                         view, readiness=self._checker.check(view)
@@ -903,6 +915,7 @@ class IntegrateRound:
                     validation_error=validation_error,
                     round_id=round_id,
                     authorized_features=authorized_features,
+                    open_items=open_items,
                 )
                 if outcome.overflow and attempt < MAX_INTEGRATION_ATTEMPTS:
                     # 超限是可修复的错：先让它自己精简一次，第二次才截断（报告 F2/F11）。

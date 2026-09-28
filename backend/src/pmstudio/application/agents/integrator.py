@@ -38,6 +38,9 @@ LIMITS_TEXT = "\n".join(
         "拿不准也别降级成章节级（章节级只用来写目标/范围/受众这类整章内容）",
         "- 一条功能内容都没有时，先把主张点到的每个功能写成 name / one_liner / goal / "
         "audience / exceptions / acceptance 里的至少一条，别让 s5 空着",
+        "- 上下文里列出的**未决项**本轮必须处理：能定的写内容，并出一条 "
+        "{op: remove, entry_id: <那条未决项的 id>} 把它撤下；定不了的出成题"
+        "（别原样再留一遍）",
         "- evidence_refs 里**只许出现 E 开头的出处编号**（E1、E9…），只能是清单里已有的；"
         "席位条目（seat.xxx:O2）是地址不是编号，写进来算校验不过",
         "- 每条提案必须带 evidence_refs（至少一条 E 编号）；题目的 evidence_refs 可以留空"
@@ -88,6 +91,7 @@ class Integrator:
         "schema_json",
         "validation_error",
         "authorized_features",
+        "open_items",
     )
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
@@ -106,6 +110,7 @@ class Integrator:
         validation_error: str = "",
         round_id: RoundId | None = None,
         authorized_features: str = "",
+        open_items: str = "",
     ) -> IntegrationOutcome:
         schema = schemas.IntegrationPacket.model_json_schema()
         prompt = self._prompts.render(
@@ -122,6 +127,7 @@ class Integrator:
             schema_json=json.dumps(schema, ensure_ascii=False),
             validation_error=validation_error,
             authorized_features=authorized_features,
+            open_items=open_items,
         )
         reply = await self._model.complete(
             ModelRequest(

@@ -880,6 +880,23 @@ async def test_an_open_item_is_asked_in_the_next_round_with_its_entry_id():
     assert questions[0].blocking is True
 
 
+async def test_open_items_are_rendered_for_the_integrator():
+    """模型要在提示词里看见"前几轮留下的未决项 + 它们的 entry id"，才撤得对（P9-B）。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": questionnaire_packet()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    seed_open_item(harness, entry_id="r0#open01", text=OPEN_ITEM_TEXT)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    slots = harness.prompts.calls[-1][1]
+    assert "点检完成率的统计口径" in slots["open_items"]
+    assert "r0#open01" in slots["open_items"]
+
+
 async def test_answering_an_open_item_retires_it_from_s11():
     """真跑实测：s11 只涨不消（3→13），ready 永远过不了（报告 F14）。"""
 
