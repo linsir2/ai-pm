@@ -148,6 +148,7 @@ class ClaimAnalyzer:
         "section_slots",
         "seat_catalog",
         "schema_json",
+        "validation_error",
     )
 
     def __init__(
@@ -163,6 +164,7 @@ class ClaimAnalyzer:
         user_input: str,
         document_state: str,
         round_id: RoundId | None = None,
+        validation_error: str = "",
     ) -> Analysis:
         schema = schemas.ClaimsPacket.model_json_schema()
         prompt = self._prompts.render(
@@ -175,6 +177,7 @@ class ClaimAnalyzer:
             section_slots=SECTION_SLOTS_TEXT,
             seat_catalog=render_seat_catalog(self._catalog.all()),
             schema_json=json.dumps(schema, ensure_ascii=False),
+            validation_error=validation_error,
         )
         reply = await self._model.complete(
             ModelRequest(

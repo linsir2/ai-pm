@@ -103,6 +103,23 @@ async def test_analyzer_sends_purpose_schema_and_all_prompt_slots():
     # 席位目录也要进上下文：模型得看见"有哪些席位"才好挑
     assert SEAT in slots["seat_catalog"]
     assert "管：" in slots["seat_catalog"]
+    assert slots["validation_error"] == ""  # 第一次不给错误
+
+
+async def test_analyzer_passes_validation_error_on_repair():
+    """重装时必须把"上一次错在哪"喂回去（与整合者 `validation_error` 同形状）。"""
+
+    gateway = ScriptedModelGateway(replies={"claims": CLAIMS_REPLY})
+    prompts = RecordingPrompts()
+    analyzer = make_analyzer(gateway, prompts)
+
+    await analyzer.analyze(
+        user_input=INPUT,
+        document_state="# 文档",
+        validation_error="第 4 条主张（c4）的 raw_span 在用户输入里找不到对应的连续原话。",
+    )
+
+    assert "第 4 条主张（c4）" in prompts.calls[0][1]["validation_error"]
 
 
 async def test_analyzer_bad_raw_span_must_appear_in_input():

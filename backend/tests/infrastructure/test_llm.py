@@ -35,6 +35,7 @@ def test_prompt_library_renders_slots_and_reports_missing():
         section_slots="- s8.performance（性能，章节槽）",
         seat_catalog="- seat.data_scale · 数据规模与性能 · 管：量级与耗时 · 常驻",
         schema_json="{}",
+        validation_error="",
     )
     assert "# 文档" in text
     assert "想做个导出" in text

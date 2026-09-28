@@ -55,5 +55,8 @@ $seat_catalog
 5. 不要发明用户没说的功能；不要替用户做业务口径决定；拿不准的用 guess 标出来。
 6. 输出必须符合下面的 JSON Schema，除了这个 JSON 不要输出任何别的东西。
 
+## 上一次的报错（第一次为空）
+$validation_error
+
 ## 输出 JSON Schema
 $schema_json
