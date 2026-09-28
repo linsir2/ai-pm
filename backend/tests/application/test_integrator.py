@@ -2,9 +2,21 @@ import json
 
 import pytest
 
-from pmstudio.application.agents.integrator import Integrator
+from pmstudio.application.agents.integrator import LIMITS_TEXT, Integrator
 from pmstudio.application.errors import PacketParseError
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway
+
+
+def test_integrator_limits_forbid_two_questions_for_the_same_place():
+    """eval 有一条结构性断言「同一个去处别问两遍」——提示词里必须有对应的规矩。
+
+    真模型实测（`edge-one-constraint`）：整合者就 s7 出了两道题（鉴权协议 / 幂等与超时），
+    `no_duplicate_questions` 直接判失败。**考一件没交代过的事是不公平的**，
+    所以这条规矩要写进硬规矩里（口径：断言要求的，提示词必须先说）。
+    """
+
+    assert "同一个去处" in LIMITS_TEXT
+    assert "只出一题" in LIMITS_TEXT
 
 INTEGRATION_REPLY = json.dumps(
     {

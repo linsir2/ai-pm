@@ -79,6 +79,7 @@ def test_analyzer_prompt_pins_the_two_raw_span_pitfalls():
     ① 不许用省略号把分开的两段拼成一条复述；
     ② 没有原话就不许写——「(隐含于上下文，仅提及订单)」这种**说明**被当原话填过一次，
        它比省略号拼段严重得多：那才是真编造。
+    ③ 席位 id 要连 `seat.` 前缀一起照抄（真模型写过裸名 `tech_approach`，整轮被判死）。
     """
 
     text = (PROMPTS / "analyzer.md").read_text(encoding="utf-8")
@@ -86,6 +87,7 @@ def test_analyzer_prompt_pins_the_two_raw_span_pitfalls():
     assert "省略号" in text
     assert "隐含于上下文" in text
     assert "连续" in text
+    assert "`seat.` 前缀" in text
 
 
 async def test_gateway_passes_model_key_base_and_schema(monkeypatch):
