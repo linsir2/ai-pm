@@ -109,6 +109,49 @@ async def edit_entry(request: Request, project_id: str, body: EditEntryRequest):
     return as_json(result)
 
 
+@router.get("/projects/{project_id}/versions")
+async def list_versions(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+    """版本列表：底栏的版本历史抽屉读它。只读，不产生版本。"""
+
+    return as_json(await services_of(request).get_versions(project_id=ProjectId(project_id)))
+
+
+@router.get("/projects/{project_id}/versions/{version_no}/diff")
+async def version_diff(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, version_no: int, to: int
+):
+    """两个版本的差异：`to` 是拿谁来比（不传由 FastAPI 直接 422）。"""
+
+    view = await services_of(request).get_version_diff(
+        project_id=ProjectId(project_id),
+        from_version_no=version_no,
+        to_version_no=to,
+    )
+    return as_json(view)
+
+
+@router.post("/projects/{project_id}/versions/{version_no}/rollback")
+async def rollback_version(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, version_no: int
+):
+    """回到这一版：产生**新**的一版（`trigger=rollback`），旧版本一个都不删。"""
+
+    return as_json(
+        await services_of(request).rollback_version(
+            project_id=ProjectId(project_id), version_no=version_no
+        )
+    )
+
+
+@router.get("/projects/{project_id}/evidence/{eid}")
+async def evidence_lookup(request: Request, project_id: str, eid: str):  # type: ignore[no-untyped-def]
+    """按编号查处方：原话、来路、链条、被谁引用（界面跨轮跳转靠它）。"""
+
+    return as_json(
+        await services_of(request).get_evidence(project_id=ProjectId(project_id), eid=eid)
+    )
+
+
 @router.post("/projects/{project_id}/rounds")
 async def start_round(request: Request, project_id: str, body: StartRoundRequest):  # type: ignore[no-untyped-def]
     view = await services_of(request).runner.run(

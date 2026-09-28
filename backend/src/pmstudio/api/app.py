@@ -14,10 +14,14 @@ from pmstudio.application.use_cases import (
     EditEntry,
     ExportMarkdown,
     GetDocument,
+    GetEvidence,
     GetReadiness,
     GetRound,
+    GetVersionDiff,
+    GetVersions,
     GetWorkspace,
     ListProjects,
+    RollbackVersion,
 )
 from pmstudio.domain.shared.errors import DomainError
 
@@ -33,6 +37,10 @@ class ApiServices:
     get_readiness: GetReadiness
     export_markdown: ExportMarkdown
     edit_entry: EditEntry
+    get_versions: GetVersions
+    get_version_diff: GetVersionDiff
+    rollback_version: RollbackVersion
+    get_evidence: GetEvidence
     stream: EventStream
     model_name: str
 

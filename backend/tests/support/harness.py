@@ -324,6 +324,10 @@ class Harness:
             get_readiness=self.get_readiness(),
             export_markdown=self.export_markdown(),
             edit_entry=self.edit_entry(),
+            get_versions=self.get_versions(),
+            get_version_diff=self.get_version_diff(),
+            rollback_version=self.rollback_version(),
+            get_evidence=self.get_evidence(),
             stream=self.events,
             model_name=model_name,
         )

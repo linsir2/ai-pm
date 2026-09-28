@@ -111,9 +111,17 @@ class UnknownEntry(ShapeError):
         super().__init__(f"找不到条目 {entry_id}", entry_id=str(entry_id))
 
 
-class UnknownVersion(ShapeError):
+class UnknownVersion(DomainError):
+    """找不到这个版本号。
+
+    以前它继承 `ShapeError`（→ 422）；但"读一个不存在的版本"是资源不在，不是形状写错，
+    所以给它自己的 code，由 `api/errors.py` 映射成 404（P5b 拍板点 5）。
+    """
+
     def __init__(self, version_no: object) -> None:
-        super().__init__(f"找不到版本 v{version_no}", version_no=str(version_no))
+        super().__init__(
+            f"找不到版本 v{version_no}", code="unknown_version", version_no=str(version_no)
+        )
 
 
 class UnknownFeatureField(ShapeError):

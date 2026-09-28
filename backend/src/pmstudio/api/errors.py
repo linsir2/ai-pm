@@ -6,6 +6,9 @@ from pmstudio.domain.shared.errors import DomainError, ShapeError
 CODE_STATUS = {
     "unknown_project": 404,
     "unknown_round": 404,
+    # 读一个不存在的版本 / 编号是"资源不在"，不是形状错误
+    "unknown_version": 404,
+    "unknown_evidence": 404,
     "model_call_failed": 502,
     "model_packet_unparsable": 502,
     "round_busy": 409,
