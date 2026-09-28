@@ -3,17 +3,28 @@
 真模型那条路（`scripts/eval.py`）只负责把一轮跑出来；判断全在这里，纯函数。
 """
 
+from dataclasses import replace
+
 from evals.assertions import EVAL_ASSERTIONS, check
 
 from pmstudio.application import dto
+from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
 from pmstudio.domain.round.questionnaire import (
     Question,
     Questionnaire,
     QuestionType,
 )
 from pmstudio.domain.round.round import DroppedItem, DropSource, Round
-from pmstudio.domain.shared.ids import EvidenceId, FormId, QuestionId
+from pmstudio.domain.shared.ids import (
+    DraftId,
+    EntryId,
+    EvidenceId,
+    FormId,
+    ProposalId,
+    QuestionId,
+)
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import ROUND_ID, make_round
 
 
@@ -46,6 +57,30 @@ def view_of(round_: Round):  # type: ignore[no-untyped-def]
     return dto.round_view(round_)
 
 
+def round_with_draft(*, out_of_scope: bool) -> Round:
+    """一张草案卡：`p02` 要么落在本轮去处里（s5），要么跑到 s8（席位替你判断的）。"""
+
+    round_ = make_round()
+    round_.integrate(
+        draft=Draft(
+            draft_id=DraftId("d1"),
+            round_id=ROUND_ID,
+            proposals=(
+                Proposal(
+                    proposal_id=ProposalId("p02"),
+                    entry_id=EntryId("r1#02"),
+                    op=WriteOp.ADD,
+                    target=Target.body("s8") if out_of_scope else Target.body("s5"),
+                    text="单次导出 60 秒内完成",
+                    origin=Origin(OriginType.DERIVED, (EvidenceId("E9"),), "同类导出的常见上限"),
+                    kind=BlockKind.NFR,
+                ),
+            ),
+        )
+    )
+    return round_
+
+
 def test_evidence_refs_must_be_eids():
     """题目与提案的编号都必须是 E 开头（P4 的坑：模型把 seat.x:O1 当编号写）。"""
 
@@ -68,7 +103,9 @@ def test_questions_must_stay_within_the_batch_limit():
     assert check({"type": "questions_at_most", "count": 5}, view) is None
 
 
-def test_no_duplicate_questions_on_the_same_target():
+def test_the_same_question_asked_twice_is_a_duplicate():
+    """真重复 = 同一去处 + **同一问法**（这里 helper 的标题是固定的，所以算重复）。"""
+
     view = view_of(
         round_with(
             [
@@ -82,6 +119,51 @@ def test_no_duplicate_questions_on_the_same_target():
 
     assert failure is not None
     assert "s8" in failure
+
+
+def test_two_different_questions_on_the_same_place_are_allowed():
+    """同一去处上的**两件不同的事**照问，不算重复（2026-09-28 作者拍板）。
+
+    真模型实测（第四轮完整 eval 的 `case-a`）：`s8.availability` 上出过
+    "幂等性与重试策略" 与 "对端不可用时的降级策略" 两道题——各自有选项与跳过后果，
+    合并会丢结构、丢掉任何一道都是把用户该填的题吞了。旧判据（只看去处）把它们判成重复，
+    三次复发（`edge-one-constraint` / `edge-long` / `case-a`）。
+    """
+
+    same_place = [
+        question("q1", target=Target.body("s8")),
+        question("q2", target=Target.body("s8")),
+    ]
+    same_place[1] = replace(same_place[1], title="对端不可用时的降级策略确认")
+
+    assert check({"type": "no_duplicate_questions"}, view_of(round_with(same_place))) is None
+
+
+def test_out_of_scope_items_are_labeled_when_both_surfaces_agree():
+    """跑出本轮去处的条目**允许存在**（`02` §3①），但卡片与顶部提示必须一致地标出来。"""
+
+    view = view_of(round_with_draft(out_of_scope=True))
+
+    assert view.advisories  # 顶部有提示
+    assert check({"type": "outside_scope_items_are_labeled"}, view) is None
+
+
+def test_out_of_scope_items_are_labeled_catches_a_silent_accept():
+    """顶部提示没了（卡片上还标着）→ 两处漂移，判失败。"""
+
+    view = view_of(round_with_draft(out_of_scope=True))
+
+    failure = check({"type": "outside_scope_items_are_labeled"}, replace(view, advisories=()))
+
+    assert failure is not None
+    assert "标注" in failure
+
+
+def test_out_of_scope_items_are_labeled_ignores_a_round_inside_its_scope():
+    view = view_of(round_with_draft(out_of_scope=False))
+
+    assert view.advisories == ()
+    assert check({"type": "outside_scope_items_are_labeled"}, view) is None
 
 
 def test_dropped_items_must_have_a_reason():

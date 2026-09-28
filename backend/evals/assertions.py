@@ -18,8 +18,14 @@ EVAL_ASSERTIONS: list[dict] = [
     {"type": "seats_at_most", "count": 7},
     {"type": "no_duplicate_questions"},
     {"type": "dropped_items_are_explained"},
-    {"type": "no_unauthorized_features"},
+    {"type": "outside_scope_items_are_labeled"},
 ]
+
+
+def normalized_title(text: str) -> str:
+    """标题归一化：空白与标点不参与判重（"这面怎么定？" 与 "这面怎么定" 是同一道题）。"""
+
+    return "".join(character for character in text if character.isalnum())
 
 
 def check(assertion: dict, view: RoundView) -> str | None:
@@ -65,20 +71,45 @@ def check(assertion: dict, view: RoundView) -> str | None:
         return None if not bad else f"这些提案没有依据：{'、'.join(bad)}"
 
     if kind == "no_duplicate_questions":
-        seen: dict[str, int] = {}
+        # 真重复 = **同一个去处 + 同一个问法**（2026-09-28 拍板）。
+        # 同一去处上的两件不同的事照问：各自有选项与跳过后果，合并会丢结构。
+        # 真模型实测（`case-a`）：`s8.availability` 上的"幂等性与重试策略"与
+        # "对端不可用时的降级策略"是两道题，旧的"只看去处"判据把它们判成了重复。
+        seen: dict[tuple[str, str], int] = {}
         for question in view.questions:
-            seen[question.target_label] = seen.get(question.target_label, 0) + 1
-        repeated = sorted(target for target, count in seen.items() if count > 1)
-        return None if not repeated else f"同一个去处问了两遍：{'、'.join(repeated)}"
+            key = (question.target_label, normalized_title(question.title))
+            seen[key] = seen.get(key, 0) + 1
+        repeated = sorted(
+            f"{target}｜{title}" for (target, title), count in seen.items() if count > 1
+        )
+        return None if not repeated else f"同一道题问了两遍：{'、'.join(repeated)}"
 
     if kind == "dropped_items_are_explained":
         bad = [item.handle for item in view.dropped if not item.reason.strip()]
         return None if not bad else f"这些留痕没写原因：{'、'.join(bad)}"
 
-    if kind == "no_unauthorized_features":
-        # 未授权的新功能会被 `ScopeGuard` 标成 advisory（草案卡上本来就会写）；
-        # eval 里把它当失败：这条结构守卫不该在真模型下失守。
-        return None if not view.advisories else f"跑出本轮去处：{'；'.join(view.advisories)}"
+    if kind == "outside_scope_items_are_labeled":
+        # 2026-09-28 拍板：跑出本轮去处**不拒绝**——`02` §3①（2026-09-22 定）写着
+        # "静默拒绝会让席位的专业判断整批白干"，只在草案卡顶部与每条提案上标注。
+        # 所以这条断言不再把"跑出本轮去处"当失败，改成盯**标注这条路没断**：
+        # ① 卡片上带标注的提案数 == 顶部提示数（两处不许漂移）；② 标注是人话。
+        #
+        # 它管不了、也不该管的那件事：**不得新增未授权功能子树**——那条硬约束由
+        # `assembly.assemble` 的 `pending_features` → `new_feature_yes` 决策题
+        # （用户点头才授权）与领域层的授权集合守着，
+        # 单测在 `tests/application/test_assembly.py` 的
+        # `test_assemble_creates_feature_subtree_only_when_authorized`。
+        proposals = view.draft.proposals if view.draft else ()
+        labeled = [proposal for proposal in proposals if proposal.warning]
+        if len(labeled) != len(view.advisories):
+            return (
+                f"跑出本轮去处的条目与顶部提示的标注对不上：卡片上标了 {len(labeled)} 条、"
+                f"顶部有 {len(view.advisories)} 条"
+            )
+        for text in view.advisories:
+            if "不在本轮去处里" not in text:
+                return f"这条标注没写清是跑出本轮去处：{text}"
+        return None
 
     raise ValueError(f"未知断言：{kind}")
 
