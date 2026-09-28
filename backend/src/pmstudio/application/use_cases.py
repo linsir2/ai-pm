@@ -96,6 +96,7 @@ from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.draft import Proposal
 from pmstudio.domain.round.questionnaire import (
     MAX_QUESTIONNAIRES,
+    MAX_QUESTIONS_PER_BATCH,
     Answer,
     AnswerSet,
     Question,
@@ -528,6 +529,26 @@ MAX_CLAIMS_ATTEMPTS = 2
 #: 而整轮重跑要付 4–6 个席位的代价（真跑实测：188 次席位调用里多出一倍是重跑）。
 MAX_SEAT_ATTEMPTS = 2
 
+def _open_item_defaults(
+    round_: Round,
+    questions: Sequence[Question],
+    *,
+    ledger: EvidenceLedger,
+    now: datetime,
+    reason: str,
+) -> dict[QuestionId, EvidenceId]:
+    """给"没排上的题"补 system_default 出处（编号在账本里，s11 提案才有东西可引用）。"""
+
+    defaults: dict[QuestionId, EvidenceId] = {}
+    for item in questions:
+        defaults[item.question_id] = ledger.record(
+            kind=EvidenceKind.SYSTEM_DEFAULT,
+            text=f"{item.title}（{reason}，未决定）",
+            source=EvidenceSource(round_id=round_.round_id, rationale=reason),
+            now=now,
+        )
+    return defaults
+
 
 def _truncation_items(
     seat_id: str,
@@ -653,12 +674,16 @@ class IntegrateRound:
         self._events = events
 
     async def __call__(self, *, round_id: RoundId) -> None:
-        assembled, gaps = await self._integrate_with_repair(round_id=round_id)
+        assembled, gaps, carried = await self._integrate_with_repair(round_id=round_id)
 
         with self._uow:
             round_ = self._rounds.get(round_id)
             ledger = self._evidence.get(round_.project_id)
             now = self._clock.now()
+            # carried 排在本批最前，所以必然都被问出去了 → 从队列里取走同样多；
+            # 本批新挤出来的题进队列（队列不设硬上限：体积由每批题目数决定，个位数）
+            round_.take_deferred(len(carried))
+            round_.defer(assembled.deferred)
             proposals = list(assembled.proposals)
             degraded = 0
             if assembled.degrade_reason is not None:
@@ -713,6 +738,27 @@ class IntegrateRound:
                     f"未决（{stop_reason}，不再追问）：{item.title}" for item in questions
                 ]
                 questions = ()
+            if not questions:
+                # 出草案这一支：轮内队列**一律清空落 s11**（队列只在轮内有活路）
+                leftover = list(round_.clear_deferred())
+                if leftover:
+                    defaults = _open_item_defaults(
+                        round_,
+                        leftover,
+                        ledger=ledger,
+                        now=now,
+                        reason="本批没排上",
+                    )
+                    proposals += list(
+                        downgraded_question_proposals(
+                            leftover,
+                            system_defaults=defaults,
+                            start_index=_next_proposal_index(proposals),
+                            round_id=round_id,
+                            reason="本批没排上",
+                        )
+                    )
+                    gaps += [f"未决（本批没排上）：{item.title}" for item in leftover]
             dropped = _dropped_items_for(
                 round_,
                 assembled=assembled,
@@ -739,9 +785,13 @@ class IntegrateRound:
 
     async def _integrate_with_repair(self, *, round_id: RoundId):  # type: ignore[no-untyped-def]
         validation_error = ""
+        carried: tuple[Question, ...] = ()
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
         for attempt in range(1, MAX_INTEGRATION_ATTEMPTS + 1):
             round_ = self._rounds.get(round_id)
+            # carried 只算一次：重装时模型看到的是同一份"要优先问的题"（队列在事务里才消费）
+            if attempt == 1:
+                carried = round_.peek_deferred(MAX_QUESTIONS_PER_BATCH)
             document = self._documents.get(round_.project_id)
             ledger = self._evidence.get(round_.project_id)
             answered, _, skipped = render_answers(
@@ -783,7 +833,11 @@ class IntegrateRound:
                     )
                     continue
                 assembled = assemble(
-                    outcome.packet, round_=round_, document=document, ledger=ledger
+                    outcome.packet,
+                    round_=round_,
+                    document=document,
+                    ledger=ledger,
+                    carried=carried,
                 )
                 # 截断掉的那几条要留痕 + 在草案卡缺口行里说清（"不静默丢"）。
                 assembled = replace(
@@ -829,6 +883,7 @@ class IntegrateRound:
                                 degrade_reason=reason,
                             ),
                             (),
+                            carried,
                         )
                     fail_round(
                         rounds=self._rounds,
@@ -860,7 +915,7 @@ class IntegrateRound:
                     reason=error.message,
                 )
                 raise
-            return assembled, gaps
+            return assembled, gaps, carried
         raise AssertionError("不可能走到这里")
 
 

@@ -738,3 +738,95 @@ async def test_integration_prompt_carries_the_features_named_by_this_round_claim
     slots = harness.prompts.calls[-1][1]
     assert "order-export" in slots["authorized_features"]
     assert "已授权" in slots["authorized_features"]
+
+
+# —— 轮内未决队列（P9）——
+
+
+def packet_with_questions(count: int, *, prefix: str = "") -> str:
+    return json.dumps(
+        {
+            "questions": [
+                question_draft() | {"title": f"{prefix}第 {index} 题"}
+                for index in range(1, count + 1)
+            ],
+            "list_items": [],
+            "proposals": [],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_questions_squeezed_out_by_the_batch_cap_come_back_next_batch():
+    """真跑实测：第 6 题起原来被写成"留到下一轮"的 list_items，然后随问卷被覆盖而消失。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [
+                packet_with_questions(7),
+                packet_with_questions(1, prefix="第二批"),
+            ],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+    first = harness.rounds.get(round_id).questionnaire
+    assert [item.title for item in first.questions] == [f"第 {i} 题" for i in range(1, 6)]
+    assert len(harness.rounds.get(round_id).deferred) == 2  # 第 6、7 题进了队列
+
+    await harness.submit_answers()(round_id=round_id, form_id="f1", answers=(), skipped=("q1",))
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)
+
+    second = harness.rounds.get(round_id).questionnaire
+    assert [item.title for item in second.questions] == ["第 6 题", "第 7 题", "第二批第 1 题"]
+    assert harness.rounds.get(round_id).deferred == ()
+
+
+async def test_deferred_queue_is_flushed_to_s11_when_the_round_stops_asking():
+    """走到闸门（问卷两批）时：队列**清空**，压在里面的题**一条不落**地进 s11。
+
+    队列刻意不设硬上限：上限之外的那部分只能在**问卷步骤**落地，而问卷那一支不写提案——
+    要么丢内容，要么借 `list_items` 复活"留到下一轮"的假承诺。体积本来就被
+    "每批题目数 × 批数"限住（个位数），所以不设上限。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [
+                packet_with_questions(12),  # 第 1 批：5 问 + 7 进队列
+                packet_with_questions(1, prefix="第二批"),
+                draft_packet(),  # 第 3 批：模型没新题，队列里的题要落 s11
+            ],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+    assert len(harness.rounds.get(round_id).deferred) == 7
+
+    await harness.submit_answers()(round_id=round_id, form_id="f1", answers=(), skipped=("q1",))
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)  # carried 优先问 → 还是问卷
+    still_queued = [item.title for item in harness.rounds.get(round_id).deferred]
+    assert still_queued  # 还有压着的
+
+    await harness.submit_answers()(round_id=round_id, form_id="f2", answers=(), skipped=("q1",))
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)  # 闸门：两批已满 → 降级 + 清队列
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.draft is not None
+    assert round_.deferred == ()
+    s11 = " ".join(
+        item.text for item in round_.draft.proposals if str(item.target.section_id) == "s11"
+    )
+    for title in still_queued:
+        assert title in s11
