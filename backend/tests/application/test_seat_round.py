@@ -3,7 +3,7 @@ import json
 import pytest
 
 from pmstudio.application.errors import ModelCallFailed
-from pmstudio.application.events import PACKET_EMITTED
+from pmstudio.application.events import GENERATION_FAILED, PACKET_EMITTED
 from pmstudio.application.use_cases import ClaimEdit
 from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.errors import ShapeError
@@ -13,6 +13,25 @@ from tests.support.builders import PROJECT, SEAT, make_seat
 from tests.support.harness import Harness
 
 SECOND_SEAT = "seat.permissions"
+
+#: 14 条意见 > 单席位上界 12：真跑里这种包会把整轮打死（报告 F4）
+OVER_CAP_SEAT_REPLY = json.dumps(
+    {
+        "basis": "读了 s1–s13 全文与 E1",
+        "opinions": [
+            {
+                "local_id": f"O{index}",
+                "form": "judgment",
+                "about": f"第 {index} 件事",
+                "claim": "……",
+                "because": "……",
+                "evidence_refs": ["E1"],
+            }
+            for index in range(1, 15)
+        ],
+    },
+    ensure_ascii=False,
+)
 
 SEAT_REPLY = json.dumps(
     {
@@ -187,3 +206,46 @@ async def test_run_seat_round_only_refills_seats_that_have_not_reported():
         if evidence.source.seat_id is not None
     ]
     assert len(judgment_eids) == len(set(judgment_eids))  # 编号没被重复占用
+
+
+async def test_run_seat_round_repacks_once_when_a_seat_returns_too_many_opinions():
+    """第一次超限 → 这一趟先重装（带上"你给了 14 条，上限 12"）→ 救回来就不截断。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={SEAT: [OVER_CAP_SEAT_REPLY, SEAT_REPLY]},
+    )
+    harness.seed_project()
+    round_id = await started_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    await harness.run_seat_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert len(round_.current_reviews) == 1
+    assert len(round_.current_reviews[0].opinions) == 1  # 落下来的是第二次那份
+    assert round_.dropped == ()                          # 没有截断，就没有截断留痕
+    assert [request.purpose for request in harness.gateway.requests].count("seat_review") == 2
+    assert harness.prompts.calls[-1][1]["validation_error"] != ""  # 重装带上了纠错指引
+    assert GENERATION_FAILED not in harness.events.names
+
+
+async def test_run_seat_round_truncates_and_traces_when_the_repack_still_overflows():
+    """两次都超限 → 截断保留 + 留痕，**整轮继续**（不再判死）。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={SEAT: [OVER_CAP_SEAT_REPLY, OVER_CAP_SEAT_REPLY]},
+    )
+    harness.seed_project()
+    round_id = await started_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    await harness.run_seat_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert len(round_.current_reviews[0].opinions) == 12
+    assert round_.pending_seats == ()
+    assert round_.step is Step.SEATS_RUNNING
+    assert any("超出单席位上限" in item.reason for item in round_.dropped)
+    assert GENERATION_FAILED not in harness.events.names

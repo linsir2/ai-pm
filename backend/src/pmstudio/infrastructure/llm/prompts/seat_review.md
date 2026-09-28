@@ -36,3 +36,6 @@ $answered
 
 ## 输出 JSON Schema
 $schema_json
+
+## 上一次的校验错误（第一次为空）
+$validation_error

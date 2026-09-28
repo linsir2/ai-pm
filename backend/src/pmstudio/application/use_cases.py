@@ -12,6 +12,7 @@ from datetime import datetime
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import Integrator
+from pmstudio.application.agents.schemas import Overflow
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.assembly import (
     NEW_FEATURE_YES,
@@ -425,19 +426,48 @@ class RunSeatRound:
     ) -> None:
         """一个席位：调模型（事务外）→ 交回就落库。`with uow` 里没有 await（守卫会拦）。"""
 
-        review = await self._reviewer.review(
-            seat=seat,
-            document_state=document_state,
-            claims=claims,
-            opinions_so_far=opinions_so_far,
-            answered=answered,
-            known_eids=known_eids,
-            answer_eids=answer_eids or {},
-            round_id=round_id,
-        )
+        validation_error = ""
+        for attempt in range(1, MAX_SEAT_ATTEMPTS + 1):
+            outcome = await self._reviewer.review(
+                seat=seat,
+                document_state=document_state,
+                claims=claims,
+                opinions_so_far=opinions_so_far,
+                answered=answered,
+                known_eids=known_eids,
+                answer_eids=answer_eids or {},
+                round_id=round_id,
+                validation_error=validation_error,
+            )
+            if outcome.overflow and attempt < MAX_SEAT_ATTEMPTS:
+                # **先重装、再截断**（报告 F4）：超限是可修复的错，先让它自己精简一次。
+                # 判定点放在用例层：重试策略归这里，席位 agent 只负责"报文 → 领域对象"。
+                first = outcome.overflow[0]
+                validation_error = repair_note(
+                    PacketParseError(
+                        "模型返回的报文过不了 schema",
+                        purpose="seat_review",
+                        overflow=(
+                            first.container,
+                            first.kept + first.dropped,
+                            first.kept,
+                        ),
+                    )
+                )
+                continue
+            break
+        review = outcome.review
         with self._uow:
             round_ = self._rounds.get(round_id)
             round_.attest(review)
+            # 被截断掉的意见要留痕（"一条都不许默默丢掉"）——它没进卡片，但要说清为什么。
+            round_.note_dropped(
+                _truncation_items(
+                    review.seat_id,
+                    outcome.overflow,
+                    pass_index=round_.seat_round_count,
+                )
+            )
             self._round_writer.save(round_)
             pass_index = round_.seat_round_count
             project_id = round_.project_id
@@ -478,6 +508,30 @@ MAX_INTEGRATION_ATTEMPTS = 2
 #: 是把成本推给人。与整合者同一个口径——**必须带上一次错在哪**（`repair_note`），
 #: 否则只是拿同一句提示词再撞一堵墙（`learnings.md` L13）。
 MAX_CLAIMS_ATTEMPTS = 2
+
+#: 单个席位也允许"重装一次"：超限（意见太多）与别的报文错都是可修复的，
+#: 而整轮重跑要付 4–6 个席位的代价（真跑实测：188 次席位调用里多出一倍是重跑）。
+MAX_SEAT_ATTEMPTS = 2
+
+
+def _truncation_items(
+    seat_id: str,
+    overflow: tuple[Overflow, ...],
+    *,
+    pass_index: int,
+) -> list[DroppedItem]:
+    """席位交回超上限被截断的那几条：留痕说清"第几条起没进卡片"。"""
+
+    return [
+        DroppedItem(
+            handle=f"{seat_id}:O{item.kept + 1}..O{item.kept + item.dropped}",
+            reason=f"超出单席位上限 {item.kept} 条，第 {item.kept + 1} 条起未进卡片",
+            source=DropSource.ASSEMBLY,
+            seat_id=seat_id,
+            pass_index=pass_index,
+        )
+        for item in overflow
+    ]
 
 
 def _stop_asking_reason(round_: Round) -> str | None:

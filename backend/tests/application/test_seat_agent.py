@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from pmstudio.application.agents import schemas
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.errors import PacketParseError
 from pmstudio.domain.round.opinion import OpinionForm
@@ -53,7 +54,7 @@ async def test_seat_reviewer_returns_opinions_with_forms_and_refs():
     prompts = RecordingPrompts()
     reviewer = SeatReviewer(model=gateway_for(), prompts=prompts)
 
-    review = await reviewer.review(
+    outcome = await reviewer.review(
         seat=make_seat(),
         document_state="# 文档",
         claims="- [E1] 需求 · s5 · 要做一个订单导出功能",
@@ -61,6 +62,7 @@ async def test_seat_reviewer_returns_opinions_with_forms_and_refs():
         answered="（这一轮还没有答过题）",
         known_eids=KNOWN,
     )
+    review = outcome.review
 
     assert review.seat_id == "seat.data_scale"
     assert review.basis.startswith("读了 s1–s13")
@@ -153,7 +155,7 @@ async def test_seat_reviewer_translates_question_ids_into_evidence_ids():
     )
     reviewer = SeatReviewer(model=gateway_for(reply), prompts=RecordingPrompts())
 
-    review = await reviewer.review(
+    outcome = await reviewer.review(
         seat=make_seat(),
         document_state="# 文档",
         claims="…",
@@ -162,6 +164,7 @@ async def test_seat_reviewer_translates_question_ids_into_evidence_ids():
         known_eids=frozenset({EvidenceId("E8")}),
         answer_eids={"q3": "E8"},
     )
+    review = outcome.review
 
     assert review.opinions[0].evidence_refs == (EvidenceId("E8"),)
 
@@ -172,7 +175,7 @@ async def test_seat_reviewer_empty_opinions_still_needs_basis():
     )
     reviewer = SeatReviewer(model=gateway_for(reply), prompts=RecordingPrompts())
 
-    review = await reviewer.review(
+    outcome = await reviewer.review(
         seat=make_seat(),
         document_state="# 文档",
         claims="…",
@@ -180,6 +183,7 @@ async def test_seat_reviewer_empty_opinions_still_needs_basis():
         answered="…",
         known_eids=frozenset(),
     )
+    review = outcome.review
     assert review.opinions == ()
     assert "本领域没有需要补的" in review.basis
 
@@ -208,7 +212,7 @@ async def test_seat_reviewer_opinion_without_any_basis_is_marked_as_proposed():
     )
     reviewer = SeatReviewer(model=gateway_for(reply), prompts=RecordingPrompts())
 
-    review = await reviewer.review(
+    outcome = await reviewer.review(
         seat=make_seat(),
         document_state="# 文档",
         claims="…",
@@ -216,6 +220,7 @@ async def test_seat_reviewer_opinion_without_any_basis_is_marked_as_proposed():
         answered="…",
         known_eids=KNOWN,
     )
+    review = outcome.review
 
     opinion = review.opinions[0]
     assert opinion.evidence_refs == ()
@@ -238,4 +243,43 @@ async def test_seat_reviewer_bad_empty_opinions_without_basis_is_a_packet_error(
             answered="…",
             known_eids=KNOWN,
         )
+
     assert "空意见必须给理由" in exc.value.message
+
+
+async def test_seat_reviewer_reports_overflow_instead_of_failing():
+    """真跑实测：席位给了 5 判断 + 5 疑问 = 10 条，旧的 8 条上限把整轮打死（报告 F4）。
+
+    新口径：超上限只截断并**报告**，由用例层决定要不要先重装一次。
+    """
+
+    reply = json.dumps(
+        {
+            "basis": "读了 s1–s13 与 E4",
+            "opinions": [
+                {
+                    "local_id": f"O{index}",
+                    "form": "judgment",
+                    "about": f"第 {index} 件事",
+                    "claim": "……",
+                    "because": "……",
+                    "evidence_refs": ["E4"],
+                }
+                for index in range(1, 15)  # 14 > 12
+            ],
+        },
+        ensure_ascii=False,
+    )
+    reviewer = SeatReviewer(model=gateway_for(reply), prompts=RecordingPrompts())
+
+    outcome = await reviewer.review(
+        seat=make_seat(),
+        document_state="# 文档",
+        claims="…",
+        opinions_so_far="…",
+        answered="…",
+        known_eids=KNOWN,
+    )
+
+    assert len(outcome.review.opinions) == 12
+    assert outcome.overflow == (schemas.Overflow(container="opinions", kept=12, dropped=2),)

@@ -5,6 +5,7 @@
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
 from pmstudio.application.errors import PacketParseError, unknown_ref_message
@@ -22,6 +23,17 @@ from pmstudio.domain.shared.ids import EvidenceId, RoundId
 PURPOSE = "seat_review"
 
 
+@dataclass(frozen=True, slots=True)
+class SeatOutcome:
+    """一个席位这一趟交回的东西：领域对象 + **报文被截断了几条**。
+
+    截断不是错误（`schemas.parse_packet_trimmed` 的语义）：整轮照跑，溢出由用例层写成留痕。
+    """
+
+    review: SeatReview
+    overflow: tuple[schemas.Overflow, ...] = ()
+
+
 class SeatReviewer:
     PURPOSE = PURPOSE
     PROMPT = "seat_review"
@@ -33,6 +45,7 @@ class SeatReviewer:
         "opinions_so_far",
         "answered",
         "schema_json",
+        "validation_error",
     )
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
@@ -50,7 +63,8 @@ class SeatReviewer:
         known_eids: frozenset[EvidenceId],
         answer_eids: Mapping[str, str] | None = None,
         round_id: RoundId | None = None,
-    ) -> SeatReview:
+        validation_error: str = "",
+    ) -> SeatOutcome:
         schema = schemas.SeatPacket.model_json_schema()
         prompt = self._prompts.render(
             self.PROMPT,
@@ -61,6 +75,7 @@ class SeatReviewer:
             opinions_so_far=opinions_so_far,
             answered=answered,
             schema_json=json.dumps(schema, ensure_ascii=False),
+            validation_error=validation_error,
         )
         reply = await self._model.complete(
             ModelRequest(
@@ -74,12 +89,17 @@ class SeatReviewer:
                 },
             )
         )
-        packet = schemas.parse_packet(reply.text, schemas.SeatPacket, purpose=self.PURPOSE)
-        return review_from_packet(
-            packet,
-            seat_id=seat.seat_id,
-            known_eids=known_eids,
-            answer_eids=answer_eids or {},
+        packet, overflow = schemas.parse_packet_trimmed(
+            reply.text, schemas.SeatPacket, purpose=self.PURPOSE
+        )
+        return SeatOutcome(
+            review=review_from_packet(
+                packet,
+                seat_id=seat.seat_id,
+                known_eids=known_eids,
+                answer_eids=answer_eids or {},
+            ),
+            overflow=overflow,
         )
 
 
