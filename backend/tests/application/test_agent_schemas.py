@@ -17,6 +17,17 @@ def test_claims_packet_schema_is_generated_with_required_fields():
     assert set(seat_props) == {"seat_id", "why"}
 
 
+def test_raw_span_field_carries_the_grounding_rule_in_its_description():
+    """`raw_span` 的规矩要写在字段上——这个 schema 会被内联进提示词，写在字段旁最不容易漂。"""
+
+    description = schemas.ClaimsPacket.model_json_schema()["$defs"]["ClaimDraft"][
+        "properties"
+    ]["raw_span"]["description"]
+
+    assert "连续" in description
+    assert "省略号" in description
+
+
 def test_seat_packet_requires_form_enum():
     schema = schemas.SeatPacket.model_json_schema()
     form = schema["$defs"]["OpinionDraft"]["properties"]["form"]

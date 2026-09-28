@@ -23,7 +23,13 @@ class AssumptionDraft(BaseModel):
 
 class ClaimDraft(BaseModel):
     text: str
-    raw_span: str = Field(description="逐字摘自用户输入，用来跳回原文")
+    raw_span: str = Field(
+        description=(
+            "逐字摘自用户输入、且连续出现的一段原话（用来跳回原文）："
+            "不许改写、不许用省略号把两段拼成一条，说明性文字（如「未提及」「隐含于上下文」）"
+            "不是原话，不许填在这里"
+        )
+    )
     label: Label
     zone: Zone = "body"
     section_id: str | None = None
