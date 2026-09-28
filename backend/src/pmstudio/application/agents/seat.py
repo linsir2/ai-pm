@@ -17,7 +17,7 @@ from pmstudio.application.ports import (
 )
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.shared.errors import DomainError
-from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.domain.shared.ids import EvidenceId, RoundId
 
 PURPOSE = "seat_review"
 
@@ -49,6 +49,7 @@ class SeatReviewer:
         answered: str,
         known_eids: frozenset[EvidenceId],
         answer_eids: Mapping[str, str] | None = None,
+        round_id: RoundId | None = None,
     ) -> SeatReview:
         schema = schemas.SeatPacket.model_json_schema()
         prompt = self._prompts.render(
@@ -67,7 +68,10 @@ class SeatReviewer:
                 messages=(ModelMessage(role="user", content=prompt),),
                 schema_name="SeatPacket",
                 response_schema=schema,
-                metadata={"seat_id": seat.seat_id},
+                metadata={
+                    "seat_id": seat.seat_id,
+                    **({} if round_id is None else {"round_id": str(round_id)}),
+                },
             )
         )
         packet = schemas.parse_packet(reply.text, schemas.SeatPacket, purpose=self.PURPOSE)

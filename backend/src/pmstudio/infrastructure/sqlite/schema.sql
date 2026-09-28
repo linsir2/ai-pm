@@ -36,3 +36,19 @@ CREATE TABLE IF NOT EXISTS evidence_ledgers (
   payload    TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- 模型留样（`02` §5.3）：默认不写，`PMSTUDIO_TRACE_MODEL=1` 时才记。
+-- 它不参与业务：写不进去也不影响这一轮；要清就直接 DELETE。
+CREATE TABLE IF NOT EXISTS model_calls (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  round_id    TEXT,
+  purpose     TEXT NOT NULL,
+  model       TEXT NOT NULL,
+  prompt_sha  TEXT NOT NULL,
+  prompt_text TEXT NOT NULL,
+  reply_text  TEXT NOT NULL,
+  usage_json  TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_model_calls_round ON model_calls(round_id, id);

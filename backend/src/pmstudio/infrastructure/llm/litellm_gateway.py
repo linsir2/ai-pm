@@ -103,6 +103,7 @@ class LiteLLMGateway:
                     reply_text="",
                     usage={},
                     duration_ms=int((time.monotonic() - started) * 1000),
+                    model=self._model,  # 没拿到回复，只有我们配的那个名字
                 )
                 raise ModelCallFailed(
                     f"模型调用失败：{type(error).__name__}"
@@ -137,6 +138,7 @@ class LiteLLMGateway:
             reply_text=reply.text,
             usage=reply.usage,
             duration_ms=int((time.monotonic() - started) * 1000),
+            model=reply.model,  # 供应商回填的模型名（能看出实际是哪个快照答的）
         )
         return reply
 
@@ -147,6 +149,7 @@ class LiteLLMGateway:
         reply_text: str,
         usage: Mapping[str, object],
         duration_ms: int,
+        model: str,
     ) -> None:
         """旁路留样：没接 recorder 就什么都不做（默认就是没接）。"""
 
@@ -156,7 +159,7 @@ class LiteLLMGateway:
         self._recorder.record(
             round_id=request.metadata.get("round_id"),
             purpose=request.purpose,
-            model=self._model,
+            model=model,
             prompt_sha=hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
             prompt_text=prompt,
             reply_text=reply_text,

@@ -45,6 +45,7 @@ from pmstudio.infrastructure.llm.litellm_gateway import LiteLLMGateway
 from pmstudio.infrastructure.llm.prompt_library import FilePromptLibrary
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.sqlite import database
+from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
@@ -97,8 +98,14 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
 
     prompts = FilePromptLibrary(PROMPTS_DIR)
     if gateway is None:
+        # 留样默认关（`PMSTUDIO_TRACE_MODEL=1` 才接）：库会长，且它是排查材料不是业务事实
+        recorder = SqliteModelCallRecorder(connection) if settings.trace_model else None
         gateway = LiteLLMGateway(
-            model=settings.model, api_key=settings.api_key, api_base=settings.api_base
+            model=settings.model,
+            api_key=settings.api_key,
+            api_base=settings.api_base,
+            timeout=settings.model_timeout,
+            recorder=recorder,
         )
     catalog = TomlSeatCatalog(SEATS_DIR)
     assigner = EvidenceAssigner()

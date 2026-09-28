@@ -196,7 +196,7 @@ class StartRound:
         )
         try:
             analysis = await self._analyzer.analyze(
-                user_input=user_input, document_state=document_state
+                user_input=user_input, document_state=document_state, round_id=round_id
             )
         except ApplicationError as error:
             fail_round(
@@ -404,6 +404,7 @@ class RunSeatRound:
             answered=answered,
             known_eids=known_eids,
             answer_eids=answer_eids or {},
+            round_id=round_id,
         )
         with self._uow:
             round_ = self._rounds.get(round_id)
@@ -598,6 +599,7 @@ class IntegrateRound:
                     skipped=skipped,
                     entry_ids=render_existing_entries(document),
                     validation_error=validation_error,
+                    round_id=round_id,
                 )
             except ApplicationError as error:
                 fail_round(

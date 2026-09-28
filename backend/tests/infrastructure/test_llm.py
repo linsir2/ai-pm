@@ -356,3 +356,57 @@ async def test_gateway_honours_the_timeout_against_a_silent_provider():
     assert time.monotonic() - start < 3.0
     assert exc.value.details["timeout_seconds"] == 1.0
     assert exc.value.details["purpose"] == "claims"
+
+
+class _RecordingRecorder:
+    """测试替身：只记下被交上来的那一行。"""
+
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+
+    def record(self, **row) -> None:  # type: ignore[no-untyped-def]
+        self.rows.append(row)
+
+
+async def test_gateway_records_the_call_when_a_recorder_is_given(monkeypatch):
+    """留样：谁、哪一轮、提示词原文、回复、用量、耗时（`02` §5.3）。"""
+
+    async def scripted(**kwargs):
+        class _Message:
+            content = '{"ok": true}'
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "provider-model"
+            usage = {"total_tokens": 7}
+
+        return _Response()
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", scripted)
+    recorder = _RecordingRecorder()
+    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
+
+    await gateway.complete(
+        ModelRequest(
+            purpose="seat_review",
+            messages=(ModelMessage(role="user", content="提示词"),),
+            schema_name="SeatPacket",
+            response_schema={"type": "object"},
+            metadata={"round_id": "r1", "seat_id": "seat.data_scale"},
+        )
+    )
+
+    assert len(recorder.rows) == 1
+    row = recorder.rows[0]
+    assert (row["round_id"], row["purpose"], row["model"]) == (
+        "r1",
+        "seat_review",
+        "provider-model",
+    )
+    assert row["reply_text"] == '{"ok": true}'
+    assert row["prompt_text"] == "提示词"
+    assert row["usage"] == {"total_tokens": 7}
+    assert row["duration_ms"] >= 0

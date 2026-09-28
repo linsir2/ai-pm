@@ -27,6 +27,7 @@ from pmstudio.application.ports import (
 from pmstudio.domain.round.claim import Assumption, Claim
 from pmstudio.domain.round.round import SeatNomination
 from pmstudio.domain.shared.errors import DomainError
+from pmstudio.domain.shared.ids import RoundId
 from pmstudio.domain.shared.label import ClaimLabel
 
 PURPOSE = "claims"
@@ -111,7 +112,13 @@ class ClaimAnalyzer:
         self._prompts = prompts
         self._catalog = catalog
 
-    async def analyze(self, *, user_input: str, document_state: str) -> Analysis:
+    async def analyze(
+        self,
+        *,
+        user_input: str,
+        document_state: str,
+        round_id: RoundId | None = None,
+    ) -> Analysis:
         schema = schemas.ClaimsPacket.model_json_schema()
         prompt = self._prompts.render(
             self.PROMPT,
@@ -130,6 +137,8 @@ class ClaimAnalyzer:
                 messages=(ModelMessage(role="user", content=prompt),),
                 schema_name="ClaimsPacket",
                 response_schema=schema,
+                # 留样按 round_id 归堆（`02` §5.3）：排查时要能一次捞出一整轮
+                metadata={} if round_id is None else {"round_id": str(round_id)},
             )
         )
         packet = schemas.parse_packet(reply.text, schemas.ClaimsPacket, purpose=self.PURPOSE)

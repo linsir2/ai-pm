@@ -8,6 +8,7 @@ import json
 from pmstudio.application.agents import schemas
 from pmstudio.application.context import FEATURE_FIELDS_TEXT, SECTION_SLOTS_TEXT
 from pmstudio.application.ports import ModelGateway, ModelMessage, ModelRequest, PromptLibrary
+from pmstudio.domain.shared.ids import RoundId
 
 PURPOSE = "integration"
 
@@ -67,6 +68,7 @@ class Integrator:
         skipped: str,
         entry_ids: str,
         validation_error: str = "",
+        round_id: RoundId | None = None,
     ) -> schemas.IntegrationPacket:
         schema = schemas.IntegrationPacket.model_json_schema()
         prompt = self._prompts.render(
@@ -89,6 +91,7 @@ class Integrator:
                 messages=(ModelMessage(role="user", content=prompt),),
                 schema_name="IntegrationPacket",
                 response_schema=schema,
+                metadata={} if round_id is None else {"round_id": str(round_id)},
             )
         )
         return schemas.parse_packet(reply.text, schemas.IntegrationPacket, purpose=self.PURPOSE)
