@@ -1,0 +1,5 @@
+{
+  "name": "edge-one-constraint",
+  "note": "边界：只有一条约束，没有功能",
+  "input": "这个功能必须在月底前上线。"
+}
