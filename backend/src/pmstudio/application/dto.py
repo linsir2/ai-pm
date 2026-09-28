@@ -257,6 +257,39 @@ class EvidenceLookupView:
     used_by: tuple[str, ...]
 
 
+def feature_coverage_advisory(round_: Round) -> str | None:
+    """这一轮"点到了功能、却一条功能内容都没有"的置顶告警（报告 F1）。
+
+    纯投影：只读 claims 与 draft，不写任何东西、不进文档——所以它只出现在**这一轮**的卡片上
+    （草案卡的最上面，前端 `DraftDrawer` 已经按这个顺序渲染 `advisories`）。
+
+    判据刻意保守（宁可漏报，不许骚扰）：
+    - 只有在"主张点名过功能"（claims 里有 `feature_slug`）时才可能报；
+    - 草案里**一条** s5 功能提案都没有，才报；
+    - 输入本来没提功能（如纯偏好那一轮）→ 不报。
+    """
+
+    if round_.draft is None:
+        return None
+    named = sorted(
+        {
+            str(claim.target.feature_slug)
+            for claim in round_.claims
+            if claim.target.feature_slug is not None
+        }
+    )
+    if not named:
+        return None
+    if any(proposal.target.feature_slug is not None for proposal in round_.draft.proposals):
+        return None
+    return (
+        f"⚠ 这一轮一条功能内容都没有：你点到了「{'、'.join(named)}」"
+        f"{len(named)} 个功能，但草案里 s5 没有任何提案。"
+        "要么这一轮补上功能内容（再提一轮，把每个功能一句话说清），"
+        "要么明确「这轮不写功能」。"
+    )
+
+
 def round_view(
     round_: Round,
     *,
@@ -270,7 +303,11 @@ def round_view(
     if round_.draft is not None:
         violations = ScopeGuard().check(round_.draft.proposals, write_scope=round_.write_scope)
         warnings = {str(item.proposal_id): item.message for item in violations}
-        advisories = tuple(f"{item.target.label()}：{item.message}" for item in violations)
+        # 置顶告警（报告 F1）："点到了功能、却一条功能内容都没有"比"哪条越界"更要紧
+        coverage = feature_coverage_advisory(round_)
+        advisories = ((coverage,) if coverage else ()) + tuple(
+            f"{item.target.label()}：{item.message}" for item in violations
+        )
         draft_view = _draft_view(round_.draft, warnings=warnings)
     questionnaire = round_.questionnaire
     nominated = _suggestions(round_, catalog=catalog, seat_titles=seat_titles)

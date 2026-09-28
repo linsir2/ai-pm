@@ -16,6 +16,7 @@ from pmstudio.domain.shared.ids import (
     DraftId,
     EntryId,
     EvidenceId,
+    FeatureSlug,
     FormId,
     ProjectId,
     ProposalId,
@@ -465,3 +466,80 @@ def test_selected_seats_win_over_the_nomination_once_the_round_started():
         "seat.export_import",
         "seat.data_scale",
     ]
+
+
+def round_for_coverage(*, claim_target: Target, proposal_target: Target) -> Round:
+    """一个"有主张、有草案"的轮次：用来验零功能候选告警。"""
+
+    round_ = Round.start(
+        round_id=ROUND_ID, project_id=ProjectId("p1"), user_input="想做个订单导出", now=NOW
+    )
+    round_.attach_claims((make_claim(eid=EvidenceId("E1"), target=claim_target),))
+    round_.submit_opening(seats=(SEAT,))
+    round_.integrate(
+        draft=Draft(
+            draft_id=DraftId("d1"),
+            round_id=ROUND_ID,
+            proposals=(
+                Proposal(
+                    proposal_id=ProposalId("p01"),
+                    entry_id=EntryId("r1#01"),
+                    op=WriteOp.ADD,
+                    target=proposal_target,
+                    text="现状：导出靠手工复制",
+                    origin=Origin(OriginType.USER, (EvidenceId("E1"),)),
+                    kind=BlockKind.TEXT,
+                ),
+            ),
+        )
+    )
+    return round_
+
+
+def test_advisory_when_claims_name_features_but_the_draft_has_none():
+    """真跑实测（报告 F1）：主张点了 5 个功能，草案 s5 一条没有，卡片上什么都不说。"""
+
+    round_ = round_for_coverage(
+        claim_target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+        proposal_target=Target.body("s1"),
+    )
+
+    advisory = dto.feature_coverage_advisory(round_)
+
+    assert advisory is not None
+    assert "order-export" in advisory
+    assert "s5" in advisory
+
+
+def test_no_advisory_when_the_draft_has_feature_content():
+    round_ = round_for_coverage(
+        claim_target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+        proposal_target=Target.feature_field(FeatureSlug("order-export"), "goal"),
+    )
+
+    assert dto.feature_coverage_advisory(round_) is None
+
+
+def test_no_advisory_when_the_input_never_mentioned_a_feature():
+    round_ = round_for_coverage(
+        claim_target=Target.body("s8"), proposal_target=Target.body("s1")
+    )
+
+    assert dto.feature_coverage_advisory(round_) is None
+
+
+def test_no_advisory_before_there_is_a_draft():
+    round_ = make_round()
+
+    assert dto.feature_coverage_advisory(round_) is None
+
+
+def test_round_view_puts_the_coverage_advisory_first():
+    round_ = round_for_coverage(
+        claim_target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+        proposal_target=Target.body("s1"),
+    )
+
+    view = dto.round_view(round_)
+
+    assert view.advisories[0].startswith("⚠")
