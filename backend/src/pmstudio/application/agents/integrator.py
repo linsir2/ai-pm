@@ -24,7 +24,10 @@ LIMITS_TEXT = "\n".join(
         "- 不许新建功能子树：席位想建新功能时，出一道具，kind=decision，"
         "选项 id 用 new_feature_yes / new_feature_no",
         "- target 必须落在 13 章内。三种写法别混：",
-        "  ① 章节级：{zone: body, section_id: s8}（配 kind，如 nfr）",
+        "  ① 章节级：{zone: body, section_id: s2}（配 kind，如 bullet_list）——"
+        "**章节级内容绝对不要给 field**：像 {section_id: s1, field: one_liner} 或 "
+        "{section_id: s2, field: goal} 都是错的（one_liner / goal 是「功能字段」，"
+        "只能在 s5 上配 feature_slug 用；s1/s2 这些章没有字段）",
         "  ② 章节槽：{zone: body, section_id: s8, field: compatibility}——只有 s8 有六个槽"
         "（performance / availability / security / compatibility / observability / cost），"
         "**这种写法不要给 feature_slug**；非功能需求优先落到对应的槽里",

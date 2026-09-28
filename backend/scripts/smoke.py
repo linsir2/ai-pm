@@ -135,10 +135,15 @@ async def run(client: httpx.AsyncClient) -> int:
         return 1
     version = confirmed.json()["version_no"]
     workspace = (await client.get(f"/api/projects/{project_id}/workspace")).json()
+    # "有内容"按**非空条目**算（空块不算）：s8 的六个槽永远在，按块判会把 s8 误报成有内容。
+    # 这条规则与后端 `ReadinessChecker` 和前端 `status.ts` 是同一条（01 §4）。
+    def has_entries(block: dict) -> bool:
+        return bool(block["entries"]) or any(has_entries(child) for child in block["children"])
+
     filled = [
         section["section_id"]
         for section in workspace["document"]["sections"]
-        if section["blocks"]
+        if any(has_entries(block) for block in section["blocks"])
     ]
     show("confirm", f"写入成功，版本 v{version}；有内容的章节：{'、'.join(filled)}")
     show("preference", f"偏好区 {len(workspace['document']['preference_entries'])} 条")
