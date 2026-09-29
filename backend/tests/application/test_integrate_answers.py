@@ -930,6 +930,28 @@ async def test_open_items_are_rendered_for_the_integrator():
     assert "r0#open01" in slots["open_items"]
 
 
+async def test_three_oldest_open_items_come_back_in_the_first_batch():
+    """F14：消化配额从 2 提到 3——一轮两批 ⇒ 最多消化 6 条未决项。
+
+    口径（C3）：**不设"必须清零"的目标**。一轮可能暴露十几条缺口，而一轮最多问 10 题，
+    产生大于消化是算术事实；未决清单是**随交付物一起给**的东西，不是假装能清零的东西。
+    """
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": questionnaire_packet()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    for index in range(1, 5):  # 预置 4 条：最老的 3 条该被问回，第 4 条继续在 s11 排队
+        seed_open_item(harness, entry_id=f"r0#open0{index}", text=OPEN_ITEM_TEXT)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    asked = harness.rounds.get(round_id).questionnaire.questions
+    carried = [item for item in asked if item.from_entry is not None]
+    assert [item.from_entry for item in carried] == ["r0#open01", "r0#open02", "r0#open03"]
+
+
 async def test_answering_an_open_item_retires_it_from_s11():
     """真跑实测：s11 只涨不消（3→13），ready 永远过不了（报告 F14）。"""
 
@@ -994,6 +1016,9 @@ async def test_open_items_answered_in_different_batches_are_all_retired():
     """真跑第 2 轮暴露：`question_id` 每一批都从 `q1` 重排——来源必须按 `form_id + question_id` 记。
 
     否则后一批的来源会覆盖前一批，"第一批答掉的那条未决项"永远撤不下来。
+
+    夹具说明（2026-09-29，每批配额 2 → 3 时同步扩了一条）：要验"**跨批**都要撤下来"，
+    未决条数必须**多过一批能吃下的量**。配额是 3，所以预置 4 条：第一批问 1–3 条，第二批问第 4 条。
     """
 
     harness = Harness(
@@ -1024,12 +1049,18 @@ async def test_open_items_answered_in_different_batches_are_all_retired():
         entry_id="r0#open03",
         text="〔未决·阻塞〕第三条未决（未决定，待决人：PM；跳过后果：后果三）",
     )
+    seed_open_item(
+        harness,
+        entry_id="r0#open04",
+        text="〔未决·阻塞〕第四条未决（未决定，待决人：PM；跳过后果：后果四）",
+    )
 
-    # 第一批：carried 前两条未决（每批上限 2）+ 模型那道题（都答掉）
+    # 第一批：carried 前三条未决（每批上限 3）+ 模型那道题（都答掉）
     await harness.integrate_round()(round_id=round_id)
     first = harness.rounds.get(round_id).questionnaire
     assert first.questions[0].from_entry == "r0#open01"
     assert first.questions[1].from_entry == "r0#open02"
+    assert first.questions[2].from_entry == "r0#open03"
     await harness.submit_answers()(
         round_id=round_id,
         form_id=str(first.form_id),
@@ -1041,10 +1072,10 @@ async def test_open_items_answered_in_different_batches_are_all_retired():
     )
     await harness.run_seat_round()(round_id=round_id)
 
-    # 第二批：carried 第三条未决（前两条已经问过，不再重复问）+ 模型那道题（都答掉）
+    # 第二批：carried 第四条未决（前三条已经问过，不再重复问）
     await harness.integrate_round()(round_id=round_id)
     second = harness.rounds.get(round_id).questionnaire
-    assert second.questions[0].from_entry == "r0#open03"
+    assert second.questions[0].from_entry == "r0#open04"
     await harness.submit_answers()(
         round_id=round_id,
         form_id=str(second.form_id),
@@ -1061,7 +1092,7 @@ async def test_open_items_answered_in_different_batches_are_all_retired():
     removals = sorted(
         str(item.entry_id) for item in round_.draft.proposals if str(item.op) == "remove"
     )
-    assert removals == ["r0#open01", "r0#open02", "r0#open03"]
+    assert removals == ["r0#open01", "r0#open02", "r0#open03", "r0#open04"]
 
 
 # —— 答案的身份：题面回历史的批、编号按 (轮次, 题号) 认（2026-09-29 拍板 D4）——
