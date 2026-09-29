@@ -3,6 +3,7 @@ import json
 import pytest
 
 from pmstudio.application.commands import RoundCommand
+from pmstudio.application.dto import RoundOutcomeView
 from pmstudio.application.errors import PacketParseError
 from pmstudio.application.use_cases import AnswerInput
 from pmstudio.domain.authoring.instruction import WriteInstruction
@@ -1719,3 +1720,55 @@ async def test_a_list_item_already_in_s11_is_not_landed_a_second_time():
     s11 = [item.text for item in draft.proposals if str(item.target.section_id) == "s11"]
     assert [text for text in s11 if "模板字段要不要可配置" in text] == []  # 不再落第二遍
     assert any("已经在 s11" in gap for gap in draft.gaps)
+
+
+# —— C4：出草案时算"连续几轮没采用席位提议"（P14）——
+
+
+async def test_writing_a_draft_records_how_many_rounds_ignored_the_proposals():
+    """判据在**历史**上：查最近几轮（只读投影）→ 纯函数算连续 → 存进这一轮。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": draft_packet()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    harness.index.set_round_outcomes(
+        str(PROJECT),
+        (
+            RoundOutcomeView("r3", "done", 2, 0),
+            RoundOutcomeView("r2", "done", 1, 0),
+            RoundOutcomeView("r1", "done", 3, 0),
+        ),
+    )
+
+    await harness.integrate_round()(round_id=round_id)
+
+    assert harness.rounds.get(round_id).proposal_ignore_streak == 3
+    view = await harness.get_round()(round_id=round_id)
+    assert view.advisories[0].startswith("⚠ 最近连续 3 轮")
+
+
+async def test_a_round_whose_history_took_a_proposal_has_no_streak():
+    """最近的轮次里只要**采用过**一条，连续计数就停在它前面——到不了阈值，也就不提示。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": draft_packet()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    harness.index.set_round_outcomes(
+        str(PROJECT),
+        (
+            RoundOutcomeView("r3", "done", 2, 0),
+            RoundOutcomeView("r2", "done", 2, 1),  # 这一轮采用了 → 断了
+        ),
+    )
+
+    await harness.integrate_round()(round_id=round_id)
+
+    assert harness.rounds.get(round_id).proposal_ignore_streak == 1  # 只有最近那一轮算数
+    view = await harness.get_round()(round_id=round_id)
+    assert view.advisories == ()  # 1 < 3 → 不说

@@ -138,6 +138,7 @@ class Round:
         retry_hint: str | None = None,
         proposed_offered: int | None = None,
         proposed_accepted: int | None = None,
+        proposal_ignore_streak: int = 0,
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -168,6 +169,7 @@ class Round:
         self._retry_hint = retry_hint
         self._proposed_offered = proposed_offered
         self._proposed_accepted = proposed_accepted
+        self._proposal_ignore_streak = proposal_ignore_streak
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -637,6 +639,15 @@ class Round:
         """"它提议的"这一组用户收了几条。"""
 
         return self._proposed_accepted
+
+    @property
+    def proposal_ignore_streak(self) -> int:
+        """出草案那一刻算出来的"最近连续几轮没采用席位提议"（算数的是整合用例，这里只存）。"""
+
+        return self._proposal_ignore_streak
+
+    def remember_proposal_ignore_streak(self, count: int) -> None:
+        self._proposal_ignore_streak = max(0, count)
 
     def authorize_new_feature(self, slug: FeatureSlug, *, basis: EvidenceId) -> None:
         if slug in self._authorized:

@@ -57,6 +57,7 @@ from pmstudio.application.dto import (
     WorkspaceView,
     diff_view,
     evidence_lookup_view,
+    proposal_ignore_streak,
     readiness_view,
     round_view,
     used_by_entries,
@@ -824,6 +825,7 @@ class IntegrateRound:
         uow: UnitOfWork,
         integrator: Integrator,
         catalog: SeatCatalog,
+        index: WorkspaceIndex,
         checker: ReadinessChecker,
         clock: Clock,
         ids: IdGenerator,
@@ -837,6 +839,7 @@ class IntegrateRound:
         self._uow = uow
         self._integrator = integrator
         self._catalog = catalog
+        self._index = index
         self._checker = checker
         self._clock = clock
         self._ids = ids
@@ -1032,6 +1035,10 @@ class IntegrateRound:
                 round_.remember_carried(form_id, questionnaire.questions)
                 round_.integrate(questionnaire=questionnaire, dropped=dropped)
             else:
+                # C4：出草案那一刻算一次"连续几轮没采用席位提议"（只读投影 + 纯函数）
+                round_.remember_proposal_ignore_streak(
+                    proposal_ignore_streak(self._index.recent_rounds(round_.project_id))
+                )
                 draft = draft_of(round_id, DraftId(self._ids.new("d")), proposals, gaps)
                 if draft is None:
                     raise ShapeError("整合既没有给出题目也没有给出提案")

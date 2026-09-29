@@ -169,6 +169,7 @@ class Harness:
             uow=self.uow,
             integrator=self.integrator,
             catalog=self.seats,
+            index=self.index,
             checker=self.readiness,
             clock=self.clock,
             ids=self.ids,

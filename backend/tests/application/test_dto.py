@@ -332,6 +332,67 @@ def test_round_view_says_where_retry_will_continue():
     assert view.retry_from == "从席位轮继续（已交回的不重跑）"
 
 
+# —— C4：连续几轮一条"它提议的"都没采用（P14）——
+
+
+def outcome(round_id: str, *, offered: int | None, accepted: int | None):
+    return dto.RoundOutcomeView(
+        round_id=round_id,
+        step="done",
+        proposed_offered=offered,
+        proposed_accepted=accepted,
+    )
+
+
+def test_three_rounds_without_taking_any_proposal_make_a_streak():
+    outcomes = (outcome("r3", offered=2, accepted=0), outcome("r2", offered=2, accepted=0),
+                outcome("r1", offered=1, accepted=0))
+
+    assert dto.proposal_ignore_streak(outcomes) == 3
+
+
+def test_a_round_that_took_one_proposal_breaks_the_streak():
+    outcomes = (outcome("r3", offered=2, accepted=1), outcome("r2", offered=2, accepted=0))
+
+    assert dto.proposal_ignore_streak(outcomes) == 0
+
+
+def test_a_round_that_never_confirmed_stops_the_count():
+    """没走到确认的轮什么也说明不了（C1）：不跨过去数。"""
+
+    outcomes = (outcome("r3", offered=None, accepted=None), outcome("r2", offered=2, accepted=0))
+
+    assert dto.proposal_ignore_streak(outcomes) == 0
+
+
+def test_a_round_with_nothing_offered_stops_the_count():
+    outcomes = (outcome("r3", offered=0, accepted=0), outcome("r2", offered=2, accepted=0))
+
+    assert dto.proposal_ignore_streak(outcomes) == 0
+
+
+def test_the_draft_card_says_it_out_loud_when_the_streak_hits_three():
+    round_ = round_for_coverage(
+        claim_target=Target.body("s1"),           # 没点功能 → 不会有"零功能候选"那句抢位置
+        proposal_target=Target.body("s1"),
+    )
+    round_.remember_proposal_ignore_streak(3)
+
+    view = dto.round_view(round_)
+
+    assert view.advisories[0].startswith("⚠ 最近连续 3 轮")
+    assert "少请几个席位" in view.advisories[0]
+
+
+def test_a_short_streak_keeps_quiet():
+    round_ = round_for_coverage(
+        claim_target=Target.body("s1"), proposal_target=Target.body("s1")
+    )
+    round_.remember_proposal_ignore_streak(2)
+
+    assert dto.round_view(round_).advisories == ()
+
+
 def test_retry_from_labels_follow_the_resume_routes():
     """这四句话对着 `RESUME_ROUTES`：认不出的 step 不猜（老库里的坏行）。"""
 

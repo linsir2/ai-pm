@@ -401,3 +401,14 @@ def test_payload_roundtrip_keeps_the_tally_and_old_rows_fall_back():
     del payload["proposed_accepted"]
     assert restored(payload).proposed_offered is None
     assert restored(payload).proposed_accepted is None
+
+
+def test_payload_roundtrip_keeps_the_ignore_streak_and_old_rows_default_to_zero():
+    round_ = round_with_a_draft()
+    round_.remember_proposal_ignore_streak(3)
+
+    payload = round_to_payload(round_)
+    assert restored(payload).proposal_ignore_streak == 3
+
+    del payload["proposal_ignore_streak"]  # 老行：没有这个键 → 0（不提示）
+    assert restored(payload).proposal_ignore_streak == 0

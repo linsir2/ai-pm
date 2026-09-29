@@ -321,6 +321,35 @@ def retry_from_label(step: str) -> str | None:
     return RETRY_FROM_LABELS.get(step)
 
 
+#: C4：连续几轮"给过它提议的、却一条都没被采用"，才值得提醒一句
+PROPOSAL_IGNORE_THRESHOLD = 3
+
+#: 那句话（**纯投影**：只有这一轮在等确认、且连续轮数到阈值时才出现）
+PROPOSAL_IGNORE_ADVISORY = (
+    "⚠ 最近连续 {n} 轮你一条「它提议的」都没采用——下次开场卡可以少请几个席位"
+    "（席位出题与判断照旧）"
+)
+
+
+def proposal_ignore_streak(outcomes: Sequence[RoundOutcomeView]) -> int:
+    """最近**连续**几轮"给过它提议的、但一条都没被采用"（C4 的判据）。
+
+    从最新往回数，遇到下面任一条就**停**（不跨过去数）：
+    - 那一轮没走到确认（`accepted is None`）——什么也说明不了；
+    - 那一轮压根没有"它提议的"（`offered` 是 None 或 0）——没给过，谈不上不采用；
+    - 那一轮采用了至少一条——streak 断了。
+    """
+
+    streak = 0
+    for outcome in outcomes:
+        if outcome.proposed_offered is None or outcome.proposed_accepted is None:
+            break
+        if outcome.proposed_offered <= 0 or outcome.proposed_accepted > 0:
+            break
+        streak += 1
+    return streak
+
+
 def round_view(
     round_: Round,
     *,
@@ -336,8 +365,16 @@ def round_view(
         warnings = {str(item.proposal_id): item.message for item in violations}
         # 置顶告警（报告 F1）："点到了功能、却一条功能内容都没有"比"哪条越界"更要紧
         coverage = feature_coverage_advisory(round_)
-        advisories = ((coverage,) if coverage else ()) + tuple(
-            f"{item.target.label()}：{item.message}" for item in violations
+        streak = round_.proposal_ignore_streak
+        ignore_hint = (
+            (PROPOSAL_IGNORE_ADVISORY.format(n=streak),)
+            if streak >= PROPOSAL_IGNORE_THRESHOLD
+            else ()
+        )
+        advisories = (
+            ((coverage,) if coverage else ())
+            + ignore_hint
+            + tuple(f"{item.target.label()}：{item.message}" for item in violations)
         )
         draft_view = _draft_view(round_.draft, warnings=warnings)
     questionnaire = round_.questionnaire

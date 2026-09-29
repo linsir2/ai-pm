@@ -161,6 +161,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         uow=uow,
         integrator=integrator,
         catalog=catalog,
+        index=index,
         checker=readiness,
         clock=clock,
         ids=ids,
