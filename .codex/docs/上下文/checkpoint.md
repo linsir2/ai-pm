@@ -827,3 +827,35 @@ r-a95e8bdc（就是 edge-long）：claims 调了 2 次；第一次报
 
 **运行口径**：`.env` 里 `PMSTUDIO_MODEL_TIMEOUT=180` 已经是当前基线；真跑库一律放 `/tmp`，
 **不许碰** `backend/data/pmstudio.db`。
+
+---
+
+## P11 · s11 条目带去处 · 答案不蒸发 · `kind` 必填（2026-09-29）
+
+**拍板**：先做 1、2（s11 带去处 + 答案不蒸发；`kind` 必填 + 断言放宽），第 3 条（analyzer 标互斥对子）排下一轮。
+计划 `docs/plans/2026-09-29-P11-s11条目带去处-答案不蒸发-conflict落点.md`。
+
+| 提交 | 内容 |
+|---|---|
+| `d442bcf` | `target_from_label()`：`Target.label()` 的反函数（认不出来返回 None，不猜） |
+| `ada346d` | s11 条目尾部带 `〔去处：<label>〕`；`parse_open_item` 改 `OpenItem` dataclass（老格式 `target_label=None`） |
+| `b05e7ec` | carried 题回到条目里写的去处（认不出回落 s11）+ 整合者的未决清单带上去处 |
+| `dc1dc7e` | 答案"落不落地"的判据从**来源**改成**去处**：carried 题的答案落回原章节 |
+| `27ee3d4` | `QuestionDraft.kind` 必填（默认值不再吞掉判断）+ 重装指引给三种取值与判据 |
+| `74c9cd9` | eval 断言放宽成 `contradiction_is_labelled`（conflict 或 decision） |
+| `4f13367` | **真跑抓到的洞**：`remove` 不算"引用了答案"（它只是记账） |
+
+**真跑验证**（`.codex/runs/2026-09-29/P11验证.md`，库 `/tmp/pmstudio-p11.db` = P10 库副本）：
+
+| 项 | 结果 |
+|---|---|
+| 单测 / lint | **669 passed** · `ruff` All checks passed · 端点 19 个未动 |
+| s11 带去处 | 新产生的未决条逐条带 `〔去处：s5/…〕`；导出的 v3 里出现 11 次；**老格式条目照旧回落 s11** |
+| carried 回原章节 | `q1 target=s5/device-inspection.exceptions`、`q2 target=s8.cost`（P10 时只能是 s11） |
+| 答案进正文 | E78 → `s8.cost`、E95 → `s5/device-inspection.exceptions`（P10 那四条答案一字未进文档）；另有 1 条纯机械落地（E79） |
+| `kind` 必填 | **模型第一次写出 `kind=conflict`**（"点检记录 E7 与 E8 冲突，如何裁决？"） |
+| eval | `edge-contradiction` **仍红**：5 题全 gap——定性为"用例输入是**张力**（100 万行 + 3 秒）不是**逻辑互斥**"；两个候选等拍板（换用例输入 / 撤掉这条 extra 断言） |
+| 残留复现 | **同去处、措辞近义**的两道题仍会各出一次（"…保存三年后的处置策略？" vs "…在三年后如何处置？"）——去重按归一问法撞不上，计划 §6 挂着 |
+
+**运行口径**：真跑库一律 `/tmp`（本轮用 P10 库的**副本** `/tmp/pmstudio-p11.db`），**不许碰**
+`backend/data/pmstudio.db`；`.env` 的 `PMSTUDIO_MODEL_TIMEOUT=180` 仍是当前基线。
