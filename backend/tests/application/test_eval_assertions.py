@@ -11,6 +11,7 @@ from pmstudio.application import dto
 from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
 from pmstudio.domain.round.questionnaire import (
     Question,
+    QuestionKind,
     Questionnaire,
     QuestionType,
 )
@@ -213,6 +214,24 @@ def test_the_two_surfaces_still_agree_when_the_zero_feature_advisory_is_also_the
 
     assert len(view.advisories) == 2  # 置顶告警 + 一条越界提示
     assert check({"type": "outside_scope_items_are_labeled"}, view) is None
+
+
+def test_a_contradiction_must_be_labelled_conflict():
+    """矛盾题与缺信息题在界面上分开显示（`document/status.ts`），所以判据要能看出 kind。
+
+    报告 F7：真跑里三批 15 道题 `kind` 全是 `gap`，一道 `conflict` 都没有——
+    提示词原来只写了"与文档既有结论冲突"。这条断言挂在 `06-edge-contradiction` 上。
+    """
+
+    gap = question("q1", target=Target.body("s8"))
+    conflict = replace(gap, kind=QuestionKind.CONFLICT, title="到底按量级还是按耗时？")
+
+    only_gap = view_of(round_with([gap]))
+    assert check({"type": "contradiction_is_labelled_conflict"}, only_gap) is not None
+    assert (
+        check({"type": "contradiction_is_labelled_conflict"}, view_of(round_with([conflict])))
+        is None
+    )
 
 
 def test_dropped_items_must_have_a_reason():

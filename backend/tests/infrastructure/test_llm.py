@@ -91,6 +91,22 @@ def test_analyzer_prompt_pins_the_two_raw_span_pitfalls():
     assert "`seat.` 前缀" in text
 
 
+def test_the_conflict_rule_covers_contradictions_inside_the_round():
+    """`conflict` 判据要覆盖"本轮输入内部互斥"，并给正反例（报告 F7）。
+
+    真跑里三批 15 道题 `kind` 全是 `gap`：提示词只写了"与**文档既有结论**冲突时 kind=conflict"，
+    最常发生的那种（同一轮输入里两句互斥，如"要 100 万行"+"必须 3 秒内"）没写进去。
+    另一半同样重要：**只是"还没定"不算矛盾**，别把 gap 全标成 conflict（前端把它们分开显示）。
+    """
+
+    from pmstudio.application.agents.integrator import LIMITS_TEXT
+
+    assert "本轮输入" in LIMITS_TEXT
+    assert "互斥" in LIMITS_TEXT
+    assert "不算矛盾" in LIMITS_TEXT  # 反例：还没定 = gap
+    assert "两侧" in LIMITS_TEXT  # 矛盾题要说清是哪两侧，选项才写得出来
+
+
 async def test_gateway_passes_model_key_base_and_schema(monkeypatch):
     captured: dict = {}
 

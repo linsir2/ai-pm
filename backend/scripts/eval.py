@@ -104,7 +104,12 @@ async def run_case(services, case: dict) -> bool:  # type: ignore[no-untyped-def
         return False
 
     passed = True
-    for assertion in case.get("assertions", EVAL_ASSERTIONS):
+    # `assertions` 是整份替换；`extra_assertions` 是在这条用例上**再加**一条
+    # （如矛盾用例额外查 kind=conflict）
+    assertions = list(case.get("assertions", EVAL_ASSERTIONS)) + list(
+        case.get("extra_assertions", ())
+    )
+    for assertion in assertions:
         failure = check(assertion, view)
         if failure is None:
             show("PASS", assertion["type"])

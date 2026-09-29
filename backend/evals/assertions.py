@@ -88,6 +88,20 @@ def check(assertion: dict, view: RoundView) -> str | None:
         bad = [item.handle for item in view.dropped if not item.reason.strip()]
         return None if not bad else f"这些留痕没写原因：{'、'.join(bad)}"
 
+    if kind == "contradiction_is_labelled_conflict":
+        # 2026-09-29：`conflict` 与 `gap` 在界面上是**分开显示**的（`document/status.ts` 把
+        # conflict / decision 当阻塞、gap 当"还差一点信息"），所以判据本身要能看出来。
+        # 这条只挂在"输入本来就自相矛盾"的用例上（`06-edge-contradiction`）——别的用例
+        # 本来就该全是 gap，挂上去就是假红。
+        labelled = [question for question in view.questions if question.kind == "conflict"]
+        if labelled:
+            return None
+        kinds = sorted({question.kind for question in view.questions})
+        return (
+            f"输入里两句互斥（量级与耗时），应该出一道 kind=conflict 的题，"
+            f"实际 {len(view.questions)} 道题的类型是 {kinds or '（没出题）'}"
+        )
+
     if kind == "outside_scope_items_are_labeled":
         # 2026-09-28 拍板：跑出本轮去处**不拒绝**——`02` §3①（2026-09-22 定）写着
         # "静默拒绝会让席位的专业判断整批白干"，只在草案卡顶部与每条提案上标注。
