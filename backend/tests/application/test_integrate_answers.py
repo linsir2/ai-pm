@@ -29,7 +29,16 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_seat
+from tests.support.builders import (
+    NOW,
+    PROJECT,
+    ROUND_ID,
+    SEAT,
+    document_with_feature,
+    make_document,
+    make_round,
+    make_seat,
+)
 from tests.support.harness import Harness
 
 CLAIMS_REPLY = json.dumps(
@@ -212,6 +221,59 @@ async def test_integrate_round_writes_draft_when_nothing_to_ask():
     assert round_.draft is not None
     assert round_.draft.proposals[0].kind.value == "bullet_list"  # 字段类型查 schema 表
     assert str(round_.draft.proposals[0].entry_id) == f"{round_id}#01"
+
+
+def test_the_progress_line_counts_required_feature_fields():
+    """F10：用户点确认前要看得见"这份文档离可交付还差多少"。"""
+
+    from pmstudio.application.use_cases import _feature_progress
+    from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS
+
+    line = _feature_progress(document_with_feature())  # order-export 只填了 one_liner
+
+    assert line is not None
+    assert line.startswith("s5 已填 1/")
+    assert str(len(REQUIRED_FEATURE_FIELDS)) in line
+
+
+def test_there_is_no_progress_line_without_any_feature():
+    """没有功能树就没有"必填字段补齐度"这回事——别在空文档上报一句 0/0。"""
+
+    from pmstudio.application.use_cases import _feature_progress
+
+    assert _feature_progress(make_document()) is None
+
+
+def test_dry_run_puts_the_progress_line_first():
+    """进度行走 `gaps` 这条既有通道（前端已经在渲染 gaps，一个字都不用改）。"""
+
+    from pmstudio.application.use_cases import dry_run
+
+    gaps = dry_run(document_with_feature(), (), round_=make_round(), now=NOW)
+
+    assert gaps[0].startswith("s5 已填 1/6 个必填字段")
+    assert "还有 5 个空着" in gaps[0]
+    assert any("仍然为空" in item for item in gaps[1:])  # 逐字段缺口照旧跟在后面
+
+
+async def test_the_draft_card_says_how_much_is_still_missing():
+    """草案卡的第一行缺口就是补齐度（F10），后面才是逐字段的"仍然为空"。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": draft_packet(field="io")},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    harness.documents.save(document_with_feature())  # 文档里已经有一棵 order-export
+
+    await harness.integrate_round()(round_id=round_id)
+
+    draft = harness.rounds.get(round_id).draft
+    assert draft is not None
+    assert draft.gaps[0].startswith("s5 已填 1/6 个必填字段")
+    assert "还有 5 个空着" in draft.gaps[0]
+    assert any("仍然为空" in item for item in draft.gaps[1:])
 
 
 async def test_integrate_round_repairs_once_when_validation_fails():

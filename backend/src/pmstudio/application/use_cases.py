@@ -85,6 +85,7 @@ from pmstudio.application.repair import repair_note
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
+from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS
 from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.ports import (
     DocumentReader,
@@ -1737,6 +1738,9 @@ def dry_run(
     """在内存深拷贝上跑一次 apply：预校验 + 算出"写入后还剩哪些必填缺口"。
 
     真是唯一真相源：干跑用的是 `Document.apply` 本尊，不是第二套规则。
+
+    返回的头一项是**补齐度**（有功能树时）：用户点确认前先看见"离可交付还差多少"（F10）；
+    后面才是逐字段的"仍然为空"。
     """
 
     probe = deepcopy(document)
@@ -1747,7 +1751,25 @@ def dry_run(
             summary="干跑：不落库",
             authorized_new_features=round_.authorized_new_features,
         )
-    return tuple(f"{gap.feature_slug}·{gap.title} 仍然为空" for gap in probe.gaps())
+    gaps = tuple(f"{gap.feature_slug}·{gap.title} 仍然为空" for gap in probe.gaps())
+    progress = _feature_progress(probe)
+    return gaps if progress is None else (progress, *gaps)
+
+
+def _feature_progress(probe: Document) -> str | None:
+    """草案卡上的补齐度：**必填**功能字段填了几个（F10）。纯投影，不改任何东西。
+
+    口径与就绪度同一本账（`REQUIRED_FEATURE_FIELDS`，6 个）：`gaps()` 数出来的就是它们的缺口，
+    所以"已填 = 总数 − 缺口数"天然对得上，不需要第二套算法。
+    没有功能树时返回 `None`——空文档报一句 `0/0` 只会让人以为出了什么大事。
+    """
+
+    features = probe.features()
+    if not features:
+        return None
+    total = len(features) * len(REQUIRED_FEATURE_FIELDS)
+    missing = len(probe.gaps())
+    return f"s5 已填 {total - missing}/{total} 个必填字段（还有 {missing} 个空着）"
 
 
 def _system_defaults(
