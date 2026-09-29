@@ -353,6 +353,19 @@ def assemble(
     for item in feature_questions:
         ordered.append(item)
         seen_questions.add(question_key(item))
+    # 本轮 carried 里那些**开放题**的去处：同一个去处上已经有前几轮留下的未决题在等，
+    # 模型再出一道措辞不同、说的其实是同一件事的新题，就让它让位（F15 残留）——先问老的那道，
+    # 答案才会落回它本来该落的地方。
+    #
+    # 两条限定，都是为了不踩 P6 的"同一去处上的两件事照问"：
+    # ① 只认**指到具体字段**的去处（`s8.cost` / `s5/xxx.exceptions`）。章节级去处（`s8`）太粗——
+    #    一个"成本"未决题会把整个 s8 的新题全压掉（既有用例当场抓到过这一点）；
+    # ② 只在 carried 与新题之间生效：普通新题之间照问。
+    carried_targets = {
+        item.target.label()
+        for item in carried
+        if item.type is QuestionType.TEXT and item.target.field is not None
+    }
     fresh: list[Question] = []
     for index, item in enumerate(packet.questions, start=1):
         target = _target_or_drop(
@@ -373,6 +386,22 @@ def assemble(
         if question_key(question) in seen_questions:
             continue  # 模型又问了同一件事：留 carried 那份，丢新出的
         seen_questions.add(question_key(question))
+        # 让位判定放在 `_question(...)` **之后**：归因（`used_handles`）得先照算，
+        # 否则这条题背后的席位意见会变成新的 unaccounted 留痕。
+        if question.target.label() in carried_targets:
+            dropped.append(
+                DroppedItem(
+                    handle=f"题目 #{index}",
+                    reason=(
+                        "同一个去处上本轮已经在问前几轮留下的未决题，先别重复问（措辞近义也算）："
+                        f"「{question.title}」"
+                    ),
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=pass_index,
+                )
+            )
+            continue
         fresh.append(question)
     # 引了**用户自己说过的话**的题排在模型自出的题前面（F12）：用户明确提的需求，
     # 不该被模型自己发现的题挤掉这一批的配额。`sorted` 稳定 → 同组内保持模型给的顺序。

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from pmstudio.application import assembly
@@ -1092,6 +1094,77 @@ def test_a_carried_question_is_not_asked_twice_by_the_model():
 
     assert [item.title for item in result.questions] == ["上一批没问上的题"]
     assert result.deferred == ()  # 模型重复问的那条被丢掉，不是又排进队列
+
+
+def test_a_fresh_question_gives_way_to_a_carried_question_on_the_same_target():
+    """F15 残留（P11 真跑复现两次）：同去处、措辞近义的两道题，只留 carried 那道。
+
+    `…保存三年后的处置策略？`（carried，`s8.cost`）与 `…在三年后如何处置？`（新出，`s8.cost`）——
+    归一问法撞不上，所以这条收口只针对"同一去处 + carried 是开放题"这一种**限定**情形。
+    """
+
+    carried = replace(
+        carried_question("点检照片保存三年后的处置策略？"),
+        target=Target.body("s8", field="cost"),
+        from_entry="r1#open01",
+    )
+    result = assembly.assemble(
+        packet(
+            questions=[
+                question_draft(
+                    title="点检照片在三年后如何处置？",
+                    target={"zone": "body", "section_id": "s8", "field": "cost"},
+                )
+            ]
+        ),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+        carried=(carried,),
+    )
+
+    assert [item.title for item in result.questions] == [carried.title]
+    assert any("先别重复问" in item.reason for item in result.dropped)
+    # 留痕要带**被丢题目的标题**，用户才查得到"哪句话没被问"
+    assert any("点检照片在三年后如何处置？" in item.reason for item in result.dropped)
+
+
+def test_two_different_things_on_the_same_place_are_still_both_asked():
+    """P6 定过的口径不许破：**普通**新题之间同去处照问（收口只对 carried 生效）。"""
+
+    result = assembly.assemble(
+        packet(
+            questions=[
+                question_draft(title="量级是多少？"),
+                question_draft(title="对端不可用时怎么降级？"),
+            ]
+        ),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert len(result.questions) == 2
+
+
+def test_a_section_level_carried_question_does_not_silence_the_whole_section():
+    """收口只认**指到具体字段**的去处：章节级未决题（`s8`）不许把整章的新题压掉。
+
+    这条是既有用例 `test_carried_questions_are_asked_before_the_new_ones` 当场抓出来的过度收口：
+    carried 只是"落在 s8 的一个问题"，不代表 s8 里别的字段也不能问了。
+    """
+
+    carried = replace(carried_question("上一批没问上的题"), from_entry="r1#open01")
+    result = assembly.assemble(
+        packet(questions=[question_draft(title="新题 A")]),  # 默认去处 s8（章节级）
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+        carried=(carried,),
+    )
+
+    assert [item.title for item in result.questions] == [carried.title, "新题 A"]
+    assert result.dropped == ()
 
 
 # —— 跨轮队列 = 文档 s11 的未决条目（P9-B）——
