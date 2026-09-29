@@ -1151,6 +1151,61 @@ def test_oldest_open_items_become_carried_questions_with_their_entry_id():
     assert carried[0].blocking is True  # 阻塞标记跟着走
 
 
+def test_a_carried_question_goes_back_to_its_own_section():
+    """带上去处的未决条问回来时回到**原章节**（P11 C1）。
+
+    不回到原章节，答案就只能落回 s11 或干脆不落——真跑 `p-0b212145` 里四条答案就是这么蒸发的。
+    """
+
+    document = document_with_open_items(
+        [
+            "r1#open01|〔未决·阻塞〕点检完成率的统计口径"
+            "（未决定，待决人：PM；跳过后果：报表口径不清）〔去处：s8.compatibility〕",
+        ]
+    )
+
+    carried = assembly.deferred_from_open_items(
+        document, ledger=ledger_with_two_entries(), limit=5
+    )
+
+    assert len(carried) == 1
+    assert carried[0].target == Target.body("s8", field="compatibility")
+    assert carried[0].from_entry == "r1#open01"
+    assert carried[0].title == "点检完成率的统计口径"
+    assert carried[0].blocking is True
+
+
+def test_a_carried_question_without_a_target_falls_back_to_s11():
+    """老格式条目（没有去处标记）：行为与 P10 完全一致（回落 s11），新老两套行为不许打架。"""
+
+    document = document_with_open_items(
+        ["r1#open01|〔未决·阻塞〕点检完成率的统计口径（未决定，待决人：PM；跳过后果：报表口径不清）"]
+    )
+
+    carried = assembly.deferred_from_open_items(
+        document, ledger=ledger_with_two_entries(), limit=5
+    )
+
+    assert carried[0].target == Target.body("s11")
+
+
+def test_a_carried_question_with_a_broken_target_falls_back_to_s11():
+    """去处写歪了（章节不存在 / 形状不完整）：**回落 s11**，绝不把内容塞进别人家章节。"""
+
+    document = document_with_open_items(
+        [
+            "r1#open01|A（未决定，待决人：PM；跳过后果：后果A）〔去处：s99〕",
+            "r2#open02|B（未决定，待决人：PM；跳过后果：后果B）〔去处：s5/〕",
+        ]
+    )
+
+    carried = assembly.deferred_from_open_items(
+        document, ledger=ledger_with_two_entries(), limit=5
+    )
+
+    assert [item.target for item in carried] == [Target.body("s11"), Target.body("s11")]
+
+
 def test_unparsable_open_items_are_skipped_not_crashed():
     document = document_with_open_items(["r1#open01|用户手写的一行"])
 

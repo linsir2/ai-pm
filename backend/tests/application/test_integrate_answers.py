@@ -1066,6 +1066,30 @@ async def test_open_items_answered_in_different_batches_are_all_retired():
 # —— 答案的身份：题面回历史的批、编号按 (轮次, 题号) 认（2026-09-29 拍板 D4）——
 
 
+def test_the_open_items_checklist_shows_where_each_item_belongs():
+    """给整合者看的未决清单要带**去处**（P11）：它看得见"这个去处已经有老问题在等"，就少重出一遍。"""
+
+    from pmstudio.application.use_cases import _render_open_items
+
+    carried = (
+        Question(
+            question_id=QuestionId("q1"),
+            target=Target.body("s8", field="compatibility"),
+            type=QuestionType.TEXT,
+            title="导出的兼容性口径",
+            why="前几轮留下的未决项",
+            consequence_if_skipped="先不兼容",
+            from_entry="r1#open01",
+        ),
+    )
+
+    text = _render_open_items(carried)
+
+    assert "〔去处：s8.compatibility〕" in text
+    assert "r1#open01" in text
+    assert "导出的兼容性口径" in text
+
+
 def test_skipped_question_defaults_use_its_own_batchs_title():
     """跳过的题补 system_default 出处时，文本要写**它自己那一批**的题面（计划 §0.1 第 4 处）。"""
 

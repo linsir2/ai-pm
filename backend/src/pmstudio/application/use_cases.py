@@ -689,10 +689,15 @@ def _render_authorized_features(round_: Round, *, document: Document) -> str:
 
 
 def _render_open_items(carried: Sequence[Question]) -> str:
-    """给整合者看的"前几轮留下的未决项"清单（带 entry id，它才撤得对）。"""
+    """给整合者看的"前几轮留下的未决项"清单（带 entry id，它才撤得对）。
+
+    也写上**去处**（P11）：让它在同一批里看得见"这个去处已经有老问题在等"，
+    少做一份"把同一件事重新问一遍"的活。
+    """
 
     lines = [
-        f"- [{item.from_entry}] {item.title}（跳过后果：{item.consequence_if_skipped}）"
+        f"- [{item.from_entry}] 〔去处：{item.target.label()}〕{item.title}"
+        f"（跳过后果：{item.consequence_if_skipped}）"
         for item in carried
         if item.from_entry is not None
     ]

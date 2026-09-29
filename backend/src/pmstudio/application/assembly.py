@@ -44,7 +44,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.sections import FEATURE_HOME, section_slot
-from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.target import Target, target_from_label
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 
 PURPOSE = "integration"
@@ -183,10 +183,14 @@ def deferred_from_open_items(
             if parsed is None:
                 continue
             title, consequence, blocking = parsed.title, parsed.consequence, parsed.blocking
+            # 去处回到**出题那一批**该落的地方（P11 C1）；认不出来才回落 s11，绝不猜
+            target = target_from_label(parsed.target_label or "") or Target.body(
+                OPEN_QUESTION_HOME
+            )
             carried.append(
                 Question(
                     question_id=QuestionId("q0"),  # 占位：assemble 统一重编号
-                    target=Target.body(OPEN_QUESTION_HOME),
+                    target=target,
                     type=QuestionType.TEXT,
                     kind=QuestionKind.DECISION if blocking else QuestionKind.GAP,
                     title=title,
