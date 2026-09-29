@@ -313,6 +313,60 @@ def test_skipped_questions_keep_their_own_batchs_title():
     assert "第二批的题：对端不可用时怎么降级？" in items[1].text
 
 
+def round_that_already_asked(title: str, *, target: Target | None = None) -> Round:
+    """这一轮已经问过一道题（题号 q1），用来验跨批去重。"""
+
+    round_ = make_round()
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f1"),
+            round_id=ROUND_ID,
+            questions=(
+                Question(
+                    question_id=QuestionId("q1"),
+                    target=target or Target.body("s8"),
+                    type=QuestionType.TEXT,
+                    title=title,
+                    why="量级决定同步还是异步",
+                    consequence_if_skipped="按同步实现",
+                ),
+            ),
+        )
+    )
+    return round_
+
+
+def test_a_question_already_asked_this_round_is_not_asked_again():
+    """同一轮里问过的题不再问第二遍——**已答与已跳过都算问过**（2026-09-29 拍板 D2）。
+
+    真跑里第一批量级那道题在第二批被原样再问一遍（报告 F6）。去重原来只看"carried + 本批"，
+    历史里问过的题不在种子里。
+    """
+
+    result = assembly.assemble(
+        packet(questions=[question_draft()]),  # 同一个去处 + 同一个问法
+        round_=round_that_already_asked("单次导出的最大行数是多少？"),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert result.questions == ()
+    assert result.deferred == ()
+
+
+def test_the_same_place_asked_differently_is_not_a_duplicate():
+    """挪一个问法就不是同一道题：同一去处上的另一件事照问（别把去重做过头）。"""
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(title="单次导出最多能有多少行？")]),
+        round_=round_that_already_asked("单次导出的最大行数是多少？"),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [str(item.question_id) for item in result.questions] == ["q2"]
+
+
 def test_question_from_unparsable_opinion_is_dropped_not_fatal():
     """归因解析不出来只丢归因、留痕，不判死整轮（题目本身可能没问题）。"""
 

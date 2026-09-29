@@ -110,9 +110,11 @@ def question_draft() -> dict:
     }
 
 
-def questionnaire_packet() -> str:
+def questionnaire_packet(*, title: str = "单次导出的最大行数是多少？") -> str:
+    draft = question_draft()
+    draft["title"] = title
     return json.dumps(
-        {"questions": [question_draft()], "list_items": [], "proposals": []},
+        {"questions": [draft], "list_items": [], "proposals": []},
         ensure_ascii=False,
     )
 
@@ -387,7 +389,11 @@ async def test_integrate_round_stops_asking_after_two_questionnaires():
     harness = Harness(
         replies={
             "claims": CLAIMS_REPLY,
-            "integration": [questionnaire_packet(), questionnaire_packet(), questionnaire_packet()],
+            "integration": [
+                questionnaire_packet(title="第一批：单次导出的最大行数是多少？"),
+                questionnaire_packet(title="第二批：对端不可用时要怎么降级？"),
+                questionnaire_packet(title="第三批：导出文件要不要留档？"),
+            ],
         },
         seat_replies={SEAT: SEAT_REPLY},
     )

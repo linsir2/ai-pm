@@ -308,6 +308,13 @@ def assemble(
     # carried 排最前：上一批/上一轮没问上的题**优先问**（`02` §11.0.10）
     ordered = list(carried)
     seen_questions = {question_key(item) for item in ordered}
+    # 本轮**问过的**题也进种子（含已跳过）：同一轮里问过就不再问第二遍（D2）。
+    # 原来只看"carried + 本批"，第一批量级那道题在第二批被原样再问一遍（报告 F6）。
+    seen_questions |= {
+        question_key(question)
+        for form in round_.questionnaire_history
+        for question in form.questions
+    }
     for item in feature_questions:
         ordered.append(item)
         seen_questions.add(question_key(item))
