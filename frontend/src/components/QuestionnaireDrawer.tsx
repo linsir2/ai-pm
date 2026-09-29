@@ -2,7 +2,7 @@
    交卷语义 —— 提交前可改，未答的按跳过交，后果由题面写明。 */
 
 import type { AnswerDraft } from "../api/payload";
-import { unansweredCount } from "../api/payload";
+import { answerBatchSummary, unansweredCount } from "../api/payload";
 import type { DocumentView, QuestionView, RoundView } from "../api/types";
 import { QUESTION_KIND_TEXT, QUESTION_TYPE_TEXT, targetText } from "../labels";
 import { EvidenceChip } from "./EvidenceChip";
@@ -36,7 +36,7 @@ export function QuestionnaireDrawer({
     <aside className="drawer" role="dialog" aria-modal="false" aria-labelledby="drawer-title">
       <header className="drawer__head">
         <h2 className="drawer__title" id="drawer-title">
-          问卷 · {round.questions.length} 题
+          问卷 · 已答 {answered}/{round.questions.length}
         </h2>
         {conflicts > 0 && <span className="tag tag--conflict">{conflicts} 个矛盾要你拍板</span>}
         <span className="topbar__spacer" />
@@ -46,6 +46,23 @@ export function QuestionnaireDrawer({
       </header>
 
       <div className="drawer__body">
+        {round.answer_sets.length > 0 && (
+          <section className="drawer__history" aria-label="本轮前几批你答过的">
+            <h3 className="drawer__subtitle">本轮前几批答过的</h3>
+            {round.answer_sets.map((batch) => (
+              <div className="drawer__batch" key={batch.form_id}>
+                <span className="muted small">{answerBatchSummary(batch)}</span>
+                {batch.answers.length > 0 && (
+                  <ul className="drawer__answers">
+                    {batch.answers.map((text) => (
+                      <li key={text}>{text}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </section>
+        )}
         {unattributed.length > 0 && (
           <p className="drawer__note" aria-label="未能解析的归因">
             有 {unattributed.length} 条席位条目没能对上号（

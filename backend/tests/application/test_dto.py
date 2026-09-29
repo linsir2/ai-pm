@@ -5,6 +5,8 @@ from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
+    Answer,
+    AnswerSet,
     Option,
     Question,
     Questionnaire,
@@ -670,3 +672,85 @@ def test_schema_view_freezes_the_shape():
     assert view.limits == dto.LimitsView(
         max_seat_rounds=3, max_questionnaires=2, max_open_items_per_batch=3
     )
+
+
+def question(question_id: str, title: str, *, options: bool = False) -> Question:
+    return Question(
+        question_id=QuestionId(question_id),
+        target=Target.body("s8"),
+        type=QuestionType.SINGLE if options else QuestionType.TEXT,
+        title=title,
+        why="量级决定同步还是异步",
+        consequence_if_skipped="按同步实现，超时风险由 PM 承担",
+        options=(Option("a", "自建机房"), Option("b", "云服务")) if options else (),
+    )
+
+
+def round_with_two_answer_batches() -> Round:
+    """一批：答 1 题（选了选项）+ 答 1 题（自由文本）+ 跳过 1 题；另一批：整批跳过。"""
+
+    round_ = Round.start(
+        round_id=ROUND_ID, project_id=ProjectId("p1"), user_input="想做个订单导出", now=NOW
+    )
+    round_.attach_claims((make_claim(eid=EvidenceId("E1")),))
+    round_.submit_opening(seats=(SEAT,))
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 E1", opinions=()))
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f-1"),
+            round_id=ROUND_ID,
+            questions=(
+                question("q1", "存储选哪家", options=True),
+                question("q2", "同步还是异步"),
+                question("q3", "记录保存几年"),
+            ),
+        )
+    )
+    round_.submit_answers(
+        AnswerSet(
+            form_id=FormId("f-1"),
+            answers=(
+                Answer(question_id=QuestionId("q1"), text="", selected=("a",)),
+                Answer(question_id=QuestionId("q2"), text="先同步，后面再说"),
+            ),
+            skipped=(QuestionId("q3"),),
+            answered_at=NOW,
+        ),
+        active_seats=(SEAT,),
+    )
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 E1", opinions=()))
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f-2"),
+            round_id=ROUND_ID,
+            questions=(question("q4", "要不要做多语言"),),
+        )
+    )
+    round_.submit_answers(
+        AnswerSet(
+            form_id=FormId("f-2"),
+            answers=(),
+            skipped=(QuestionId("q4"),),
+            answered_at=NOW,
+        ),
+        active_seats=(SEAT,),
+    )
+    return round_
+
+
+def test_answer_sets_projection_counts_each_batch_and_keeps_the_text():
+    """两批各自计数；跳过单独算；文本是「题目 → 选项；备注」这种人话，不是选项 id。"""
+
+    view = dto.round_view(round_with_two_answer_batches())
+
+    assert [item.form_id for item in view.answer_sets] == ["f-1", "f-2"]
+    first = view.answer_sets[0]
+    assert (first.answered, first.skipped) == (2, 1)
+    assert first.answers == ("存储选哪家 → 自建机房", "同步还是异步 → 先同步，后面再说")
+    second = view.answer_sets[1]
+    assert (second.answered, second.skipped) == (0, 1)
+    assert second.answers == ()
+
+
+def test_a_round_that_never_asked_has_no_answer_sets():
+    assert dto.round_view(make_round()).answer_sets == ()

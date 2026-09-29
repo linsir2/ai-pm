@@ -17,7 +17,12 @@ from pmstudio.domain.authoring.views import BlockView, DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Proposal
 from pmstudio.domain.round.opinion import OpinionForm, SeatReview
-from pmstudio.domain.round.questionnaire import MAX_OPEN_ITEMS_PER_BATCH, MAX_QUESTIONNAIRES
+from pmstudio.domain.round.questionnaire import (
+    MAX_OPEN_ITEMS_PER_BATCH,
+    MAX_QUESTIONNAIRES,
+    Answer,
+    Question,
+)
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import MAX_SEAT_ROUNDS
 from pmstudio.domain.services.scope_guard import ScopeGuard
@@ -132,7 +137,23 @@ class DraftView:
 
 
 @dataclass(frozen=True, slots=True)
+class AnswerBatchView:
+    """一批问卷的答题情况（`04-未决.md` F3）：答了几条、跳了几条、答了什么。
+
+    答案文本用 `answer_text` 渲染成人的话（与写进账本的那一条同一份口径），
+    **不带选项 id**——界面要给人看，不是要人读 id。
+    """
+
+    form_id: str
+    answered: int
+    skipped: int
+    answers: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RoundView:
+    """一轮的只读投影。"""
+
     round_id: str
     project_id: str
     user_input: str
@@ -158,6 +179,8 @@ class RoundView:
     abandon_reason: str | None
     confirmed_version_no: int | None
     form_id: str | None
+    #: 这一轮每一批问卷答了什么（`04-未决.md` F3）。没问过就是空。
+    answer_sets: tuple[AnswerBatchView, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +202,47 @@ class RoundOutcomeView:
     step: str
     proposed_offered: int | None
     proposed_accepted: int | None
+
+
+def answer_text(question: Question, answer: Answer) -> str:
+    """一条答案的人话写法：「题目 → 选项；备注」。
+
+    这是**唯一一份**：写进账本的那条出处（`use_cases`）与界面读的历史答案
+    （`answer_batches`）都用它，两处不能各渲染一套。
+    """
+
+    chosen = "、".join(
+        option.text for option in question.options if option.option_id in answer.selected
+    )
+    head = f"{question.title} → {chosen or answer.text.strip() or '（空答）'}"
+    note = answer.text.strip()
+    return f"{head}；备注：{note}" if chosen and note else head
+
+
+def answer_batches(round_: Round) -> tuple[AnswerBatchView, ...]:
+    """每一批问卷的答题情况。题面从**问卷历史**里按 `(批次, 题号)` 回查（不猜、不编）。"""
+
+    by_id: dict[tuple[str, str], Question] = {
+        (str(form.form_id), str(question.question_id)): question
+        for form in round_.questionnaire_history
+        for question in form.questions
+    }
+    batches: list[AnswerBatchView] = []
+    for answer_set in round_.answer_sets:
+        form_id = str(answer_set.form_id)
+        batches.append(
+            AnswerBatchView(
+                form_id=form_id,
+                answered=len(answer_set.answers),
+                skipped=len(answer_set.skipped),
+                answers=tuple(
+                    answer_text(by_id[(form_id, str(answer.question_id))], answer)
+                    for answer in answer_set.answers
+                    if (form_id, str(answer.question_id)) in by_id
+                ),
+            )
+        )
+    return tuple(batches)
 
 
 @dataclass(frozen=True, slots=True)
@@ -511,6 +575,7 @@ def round_view(
         abandon_reason=round_.abandon_reason,
         confirmed_version_no=round_.confirmed_version_no,
         form_id=None if questionnaire is None else str(questionnaire.form_id),
+        answer_sets=answer_batches(round_),
     )
 
 

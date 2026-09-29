@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   allProposalIds,
+  answerBatchSummary,
   awaitingMode,
   buildAnswers,
   buildClaimEdits,
@@ -266,5 +267,16 @@ describe("integrationSummary", () => {
     expect(
       integrationSummary({ ...round, questions: [], draft: null, list_items: [] } as unknown as RoundView),
     ).toBe("整合完成");
+  });
+});
+
+describe("answerBatchSummary", () => {
+  it("答了几条、跳了几条，一行说清", () => {
+    expect(answerBatchSummary({ form_id: "f1", answered: 2, skipped: 1, answers: [] })).toBe(
+      "已答 2 · 跳过 1",
+    );
+    expect(answerBatchSummary({ form_id: "f2", answered: 3, skipped: 0, answers: [] })).toBe(
+      "已答 3",
+    );
   });
 });

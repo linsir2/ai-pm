@@ -373,6 +373,30 @@ a {
   max-width: 68ch;
 }
 
+/* 问卷抽屉里"本轮前几批答过的" */
+.drawer__history {
+  border-bottom: var(--hairline);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.drawer__subtitle {
+  font-size: var(--step-1);
+  color: var(--empty);
+  margin: 0 0 var(--space-2);
+  font-weight: 500;
+}
+
+.drawer__batch + .drawer__batch {
+  margin-top: var(--space-2);
+}
+
+.drawer__answers {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  color: var(--muted);
+}
+
 .chapter__body {
   padding-top: var(--space-5);
   border-top: var(--hairline);

@@ -164,6 +164,15 @@ export interface RoundView {
   abandon_reason: string | null;
   confirmed_version_no: number | null;
   form_id: string | null;
+  /** 这一轮每一批问卷答了什么（F3）：答了几条、跳了几条、答的是什么。 */
+  answer_sets: AnswerBatchView[];
+}
+
+export interface AnswerBatchView {
+  form_id: string;
+  answered: number;
+  skipped: number;
+  answers: string[];
 }
 
 export interface ProjectSummaryView {

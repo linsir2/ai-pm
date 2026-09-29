@@ -56,6 +56,7 @@ from pmstudio.application.dto import (
     SchemaView,
     VersionListView,
     WorkspaceView,
+    answer_text,
     diff_view,
     evidence_lookup_view,
     proposal_ignore_streak,
@@ -1335,7 +1336,7 @@ class SubmitAnswers:
                 question = by_id[str(answer.question_id)]
                 eid = ledger.record(
                     kind=EvidenceKind.CARD_ANSWER,
-                    text=_answer_text(question, answer),
+                    text=answer_text(question, answer),
                     source=EvidenceSource(round_id=round_id, question_id=answer.question_id),
                     now=now,
                 )
@@ -2000,15 +2001,6 @@ def _system_defaults(
                 now=now,
             )
     return defaults
-
-
-def _answer_text(question: Question, answer: Answer) -> str:
-    chosen = "、".join(
-        option.text for option in question.options if option.option_id in answer.selected
-    )
-    head = f"{question.title} → {chosen or answer.text.strip() or '（空答）'}"
-    note = answer.text.strip()
-    return f"{head}；备注：{note}" if chosen and note else head
 
 
 def authorize_named_features(

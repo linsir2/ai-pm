@@ -5,7 +5,7 @@
    2. 草案默认勾选"你说过的 + 它替你判断的"，**它提议的默认不勾**。 */
 
 import { sectionIdOf } from "../labels";
-import type { ClaimView, DraftView, RoundView } from "./types";
+import type { AnswerBatchView, ClaimView, DraftView, RoundView } from "./types";
 
 export interface AnswerDraft {
   selected: string[];
@@ -68,6 +68,12 @@ export function unansweredCount(
   drafts: Record<string, AnswerDraft>,
 ): number {
   return buildAnswers(round, drafts).skipped.length;
+}
+
+/** 一批问卷答成什么样（F3）：一行字，给人看。 */
+export function answerBatchSummary(batch: AnswerBatchView): string {
+  const head = `已答 ${batch.answered}`;
+  return batch.skipped > 0 ? `${head} · 跳过 ${batch.skipped}` : head;
 }
 
 export function defaultAccepted(draft: DraftView): string[] {
