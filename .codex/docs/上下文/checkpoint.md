@@ -897,3 +897,39 @@ r-a95e8bdc（就是 edge-long）：claims 调了 2 次；第一次报
 
 **运行口径**：真跑库一律 `/tmp`（本轮 `/tmp/pmstudio-p12-eval06.db`），**不许碰**
 `backend/data/pmstudio.db`；`PMSTUDIO_MODEL_TIMEOUT=180` 仍是当前基线。
+
+## P13 · 续跑口径 · 清单项的去向 · 未决队列先吃堵交付的（2026-09-29）
+
+**拍板**：包 A「闭环自己能收的尾」——E3 剩余 + P12 留的"清单项去向 / s11 消化"两条；
+C4（跨轮统计）与 C6（继续深挖入口）**留 P14**（核验：前者要新查询、后者要新端点 + 前端）。
+计划 `docs/plans/2026-09-29-P13-续跑口径-清单项去向-未决队列优先级.md`。
+
+| 提交 | 内容 |
+|---|---|
+| `047a746` | 计划（待拍板） |
+| `168251a` | T1 `Round.retry_hint`：失败原因留到重试的第一次尝试（集成路径） |
+| `8a95a52` | T2 claims 路径同样带上；**没有 hint 就不开事务** |
+| `9d02392` | T3 走真图的钉子：整合失败后重试**不重跑席位** |
+| `c577221` | T4 `RoundView.failure_at_step` + `retry_from` |
+| `8504db8` | T5 没处理的清单项在出草案时落 s11（`open_item_proposal` 抽出共用格式） |
+| `5e90639` | T6 carried 先挑阻塞未决项，其次最老 |
+| `cd12db1` | T7 同一 `(去处, 归一化标题)` 不落第二遍 |
+
+**核验（推翻了 09-28 报告的一条旧结论）**：报告 F2"重试是整轮重来、会重跑 4 个席位"
+**已经不是事实**——`RunSeatRound` 只跑 `pending_seats`；P13 补了**走真图**的用例
+（`test_retry_after_a_failed_integration_does_not_re_run_the_seats`）钉住它。
+E3 真正缺的是"重试带上次报错"，T1/T2 收口。
+
+**口径**：`retry_hint` 只记**报文类**失败、**一次性**、网关类不递；`failure.reason` 给我们看、
+`retry_hint` 给模型看；清单项只在**出草案**那一刻落 s11 且**不标阻塞**；carried = 阻塞优先、其次最老；
+判重键 `(去处, 归一化标题)` 只跟**当前活跃**条目比。
+
+**执行中被既有用例挡回来两次**（改的都是实现/夹具，不是放宽断言）：
+1. T2 一开始无条件 `with self._uow:` → `test_start_round_records_claims_with_eids_in_two_transactions`
+   与 `test_run_seat_round_attests_and_numbers_judgments_only` 的 `uow.commits` 计数当场抓到
+   （"不许为只读开事务"）→ 改成**只有真的取到 hint 才开**。
+2. T6 第一版把局部变量命名成 `parsed`，与循环里的 `parse_open_item` 结果撞名 → 13 条用例
+   报 `'OpenItem' object has no attribute 'append'` → 改名 `collected`。
+
+**运行口径**：真跑库一律 `/tmp`，**不许碰** `backend/data/pmstudio.db`；
+`PMSTUDIO_MODEL_TIMEOUT=180` 仍是当前基线。
