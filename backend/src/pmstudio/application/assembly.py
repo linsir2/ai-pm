@@ -161,10 +161,14 @@ def deferred_from_open_items(
     limit: int,
     skip_entries: frozenset[str] = frozenset(),
 ) -> tuple[Question, ...]:
-    """文档 s11 里**最老的** N 条未决条目 → carried 题（跨轮队列就是这些条目本身）。
+    """文档 s11 里的未决条目 → carried 题，**先阻塞、其次最老**（P13 C5）。
 
     每一条都记住 `from_entry`：它被回答之后，装配层要机械地出一条 `remove` 把它撤下
     （`02` §11.0.10），这样 s11 才不会只涨不消。
+
+    为什么不是纯 FIFO：只有**阻塞**项决定 ready 不 ready（`readiness._open_questions`），
+    而 P10 真跑的算术是"消化 4 条 / 新增 18 条"——配额稀缺，就该先给堵交付的。
+    同龄之间保持文档顺序（稳定排序），不是把 FIFO 整个换掉。
     """
 
     view = document.view()
@@ -173,7 +177,7 @@ def deferred_from_open_items(
     )
     if section is None:
         return ()
-    carried: list[Question] = []
+    collected: list[Question] = []
     for block in section.blocks:
         for entry in block.entries:
             if str(entry.entry_id) in skip_entries:
@@ -187,7 +191,7 @@ def deferred_from_open_items(
             target = target_from_label(parsed.target_label or "") or Target.body(
                 OPEN_QUESTION_HOME
             )
-            carried.append(
+            collected.append(
                 Question(
                     question_id=QuestionId("q0"),  # 占位：assemble 统一重编号
                     target=target,
@@ -200,9 +204,8 @@ def deferred_from_open_items(
                     from_entry=str(entry.entry_id),
                 )
             )
-            if len(carried) >= limit:
-                return tuple(carried)
-    return tuple(carried)
+    collected.sort(key=lambda item: 0 if item.blocking else 1)
+    return tuple(collected[:limit])
 
 
 def _seat_of_handle(handle: str, *, seats: frozenset[str]) -> str | None:

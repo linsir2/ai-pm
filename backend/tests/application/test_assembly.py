@@ -1344,6 +1344,49 @@ def test_oldest_open_items_become_carried_questions_with_their_entry_id():
     assert carried[0].blocking is True  # 阻塞标记跟着走
 
 
+def test_a_blocking_open_item_jumps_ahead_of_older_hints():
+    """A3-①：只有阻塞项决定 ready 不 ready（`readiness._open_questions`）——配额先给它。
+
+    今天这个函数是**纯 FIFO**：两条非阻塞的老条目会把堵交付的那条挤出去，
+    而就绪度只看阻塞项——于是"永远 ready 不了"。
+    """
+
+    document = document_with_open_items(
+        [
+            "r0#open01|老的提示项（未决定，待决人：PM；跳过后果：无）〔去处：s8.cost〕",
+            "r0#open02|更老的提示项（未决定，待决人：PM；跳过后果：无）〔去处：s8.performance〕",
+            "r0#open03|〔未决·阻塞〕堵交付的那条（未决定，待决人：PM；跳过后果：交付不了）"
+            "〔去处：s5/order-export.acceptance〕",
+        ]
+    )
+
+    carried = assembly.deferred_from_open_items(
+        document, ledger=ledger_with_two_entries(), limit=1
+    )
+
+    assert [item.title for item in carried] == ["堵交付的那条"]
+    assert carried[0].blocking is True
+    assert carried[0].from_entry == "r0#open03"
+
+
+def test_two_blockers_keep_the_oldest_first():
+    """同龄之间仍然最老优先——不许把 FIFO 整个换成"阻塞优先"就算完。"""
+
+    document = document_with_open_items(
+        [
+            "r0#open01|〔未决·阻塞〕先提的（未决定，待决人：PM；跳过后果：一）〔去处：s8.cost〕",
+            "r0#open02|〔未决·阻塞〕后提的（未决定，待决人：PM；跳过后果：二）"
+            "〔去处：s8.performance〕",
+        ]
+    )
+
+    carried = assembly.deferred_from_open_items(
+        document, ledger=ledger_with_two_entries(), limit=1
+    )
+
+    assert [item.title for item in carried] == ["先提的"]
+
+
 def test_a_carried_question_goes_back_to_its_own_section():
     """带上去处的未决条问回来时回到**原章节**（P11 C1）。
 
