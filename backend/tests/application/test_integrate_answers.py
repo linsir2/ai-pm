@@ -7,7 +7,7 @@ from pmstudio.application.use_cases import AnswerInput
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
-from pmstudio.domain.round.draft import OriginType
+from pmstudio.domain.round.draft import Origin, OriginType, Proposal
 from pmstudio.domain.round.questionnaire import (
     Answer,
     AnswerSet,
@@ -23,6 +23,7 @@ from pmstudio.domain.shared.ids import (
     EvidenceId,
     FeatureSlug,
     FormId,
+    ProposalId,
     QuestionId,
     RoundId,
 )
@@ -1271,3 +1272,36 @@ async def test_a_landed_answer_does_not_repeat_after_the_draft_cites_it():
 
     proposals = harness.rounds.get(round_id).draft.proposals
     assert [item for item in proposals if item.text.startswith("用户已定：")] == []
+
+
+def test_a_mechanical_remove_does_not_count_as_citing_an_answer():
+    """机械撤下未决条（`remove`）只是**记账**：它不写任何内容，不能算"这条答案被引用了"（P11 T4）。
+
+    否则"carried 题的答案"天然会被它自己那条 remove 引走 → 机械落地永远不触发 → 结论照样蒸发
+    （真跑 `p-0b212145` 第二轮就是这么丢的：四条答案只留下一条 remove 的理由）。
+    """
+
+    from pmstudio.application.use_cases import _cited_eids
+
+    written = Proposal(
+        proposal_id=ProposalId("p01"),
+        entry_id=EntryId("r1#01"),
+        op=WriteOp.ADD,
+        target=Target.body("s2"),
+        text="目标：5 分钟送达率 ≥ 95%",
+        origin=Origin(OriginType.USER, (EvidenceId("E1"),)),
+        kind=BlockKind.TEXT,
+    )
+    retired = Proposal(
+        proposal_id=ProposalId("p02"),
+        entry_id=EntryId("r1#open01"),
+        op=WriteOp.REMOVE,
+        target=Target.body("s11"),
+        text="本轮已回答，撤下这条未决项",
+        origin=Origin(OriginType.SYSTEM_DEFAULT, (EvidenceId("E2"),)),
+        kind=BlockKind.QUESTION,
+    )
+
+    cited = _cited_eids([written, retired], [])
+
+    assert cited == frozenset({EvidenceId("E1")})

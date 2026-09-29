@@ -598,10 +598,19 @@ def _cited_eids(
 
     "答案要么被引用、要么机械落地"（`D3`）里的"被引用"就看它：这条答案的编号出现在
     提案或题目的依据里，就算整合者交代过它的去处了。
+
+    **`remove` 不算**（2026-09-29 P11 真跑抓到）：撤下未决条目只是记账，它不写任何内容；
+    把它算成"引用了这条答案"，carried 题的答案就会被它自己那条 remove 引走、
+    机械落地永远不触发，结论照样蒸发。
     """
 
     return frozenset(
-        [ref for proposal in proposals for ref in proposal.origin.refs]
+        [
+            ref
+            for proposal in proposals
+            if proposal.op is not WriteOp.REMOVE
+            for ref in proposal.origin.refs
+        ]
         + [ref for question in questions for ref in question.evidence_refs]
     )
 
