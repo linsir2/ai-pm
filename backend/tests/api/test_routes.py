@@ -90,6 +90,28 @@ async def test_health_reports_model():
     assert response.json() == {"status": "ok", "model": "openai/gpt-4o-mini"}
 
 
+async def test_manual_add_with_a_target_writes_the_slot_that_did_not_exist():
+    """手改也能给完整 target（`{section_id, field}`）：块还不存在就由 domain 建（F8-①）。"""
+
+    app, _ = make_client()
+    async with async_client(app) as client:
+        created = await client.post("/api/projects", json={"title": "订单中台"})
+        project_id = created.json()["project_id"]
+        response = await client.post(
+            f"/api/projects/{project_id}/edits",
+            json={
+                "op": "add",
+                "target": {"zone": "body", "section_id": "s8", "field": "performance"},
+                "text": "导出 5 万条 60 秒内完成",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["written_block_ids"] == ["s8.performance"]
+    assert body["version_no"] == 2
+
+
 async def test_schema_endpoint_returns_the_13_sections_and_the_limits():
     """界面上那些"前端自己抄了一份"的常量与说明，回后端这一份（`04-未决.md` F2）。"""
 

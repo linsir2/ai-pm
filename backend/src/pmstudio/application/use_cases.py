@@ -139,7 +139,7 @@ from pmstudio.domain.shared.ids import (
     QuestionId,
     RoundId,
 )
-from pmstudio.domain.shared.label import ClaimLabel
+from pmstudio.domain.shared.label import ClaimLabel, Zone
 from pmstudio.domain.shared.sections import FEATURE_HOME, SECTION_IDS
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
@@ -1516,14 +1516,15 @@ class EditEntry:
         op: WriteOp,
         entry_id: str | None = None,
         block_id: str | None = None,
+        target: Target | None = None,
         text: str = "",
     ) -> EditResult:
         with self._uow:
             document: Document = self._documents.get(project_id)
             ledger = self._evidence.get(project_id)
             now = self._clock.now()
-            target, existing = _resolve_manual_target(
-                document, op=op, entry_id=entry_id, block_id=block_id
+            resolved, existing = _resolve_manual_target(
+                document, op=op, entry_id=entry_id, block_id=block_id, requested=target
             )
             # 手改也要有出处：编号先发，内容才落得进去（GB1）。
             manual_eid = ledger.record(
@@ -1552,7 +1553,7 @@ class EditEntry:
                 instruction_id=f"manual-{manual_eid}",
                 entry_id=final_entry_id,
                 op=op,
-                target=target,
+                target=resolved,
                 text=instruction_text,
                 refs=refs,
                 kind=_manual_kind(document, block_id=block_id) if op is WriteOp.ADD else None,
@@ -1587,15 +1588,27 @@ class EditEntry:
 
 
 def _resolve_manual_target(
-    document: Document, *, op: WriteOp, entry_id: str | None, block_id: str | None
+    document: Document,
+    *,
+    op: WriteOp,
+    entry_id: str | None,
+    block_id: str | None,
+    requested: Target | None = None,
 ) -> tuple[Target, object | None]:
     """手改要落到哪个 target、动的是哪一条。
 
-    ADD 的 `block_id` 有三种给法：`preference-area`（偏好区）、某个块的 id（往这块加）、
-    某个章节 id（`s1`…`s13`：这一章还没有块，那就新开一段）。
+    ADD 有两种给法，二选一：
+
+    1. `requested`（复述卡那条路用的形状）：`{feature_slug, field}` → 落到"某个功能的某个字段"，
+       字段块**不存在就由 domain 自己建**（F8-①）；`{section_id, field}` → 落到章节槽；
+       `{section_id}` → 整章；偏好区 → 偏好区。
+    2. `block_id` 三种给法：`preference-area`（偏好区）、某个块的 id（往这块加）、
+       某个章节 id（`s1`…`s13`：这一章还没有块，那就新开一段）。
     """
 
     if op is WriteOp.ADD:
+        if requested is not None:
+            return _target_of_request(requested), None
         if block_id is None:
             raise ShapeError("加一条要先说加到哪一块")
         if block_id == MANUAL_PREFERENCE_BLOCK:
@@ -1617,6 +1630,20 @@ def _resolve_manual_target(
         if entry is not None:
             return _target_of_block(block), entry
     raise ShapeError(f"找不到条目 {entry_id}", entry_id=entry_id)
+
+
+def _target_of_request(requested: Target) -> Target:
+    """把接口层给的 target 归一成"写哪"。功能字段这一支由 domain 建块（F8-①）。"""
+
+    if requested.zone is Zone.PREFERENCE:
+        return Target.preference()
+    if requested.feature_slug is not None and requested.field is not None:
+        return Target.feature_field(requested.feature_slug, requested.field)
+    if requested.section_id is None:
+        raise ShapeError("target 说不清要落到哪")
+    if requested.field is not None:
+        return Target.body(requested.section_id, field=requested.field)
+    return Target.body(requested.section_id)
 
 
 def _target_of_block(block) -> Target:  # type: ignore[no-untyped-def]

@@ -53,4 +53,7 @@ class EditEntryRequest(BaseModel):
     op: Literal["add", "replace", "remove"]
     entry_id: str | None = None
     block_id: str | None = None
+    #: 加一条时也能给"落到哪"的完整形状（`{feature_slug, field}` / `{section_id, field}`）——
+    #: 字段块还不存在也能加（domain 自己建块，`04-未决.md` F8-①）。
+    target: TargetRequest | None = None
     text: str = ""

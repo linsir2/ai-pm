@@ -114,6 +114,16 @@ async def edit_entry(request: Request, project_id: str, body: EditEntryRequest):
         op=WriteOp(body.op),
         entry_id=body.entry_id,
         block_id=body.block_id,
+        target=(
+            None
+            if body.target is None
+            else Target(
+                zone=Zone(body.target.zone),
+                section_id=body.target.section_id,
+                feature_slug=body.target.feature_slug,
+                field=body.target.field,
+            )
+        ),
         text=body.text,
     )
     return as_json(result)

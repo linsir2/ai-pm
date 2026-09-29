@@ -9,7 +9,11 @@ import pytest
 from pmstudio.application.events import DOC_CHANGED
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceKind
-from pmstudio.domain.shared.errors import InvariantViolation, ShapeError
+from pmstudio.domain.shared.errors import (
+    FeatureRequiresUserNaming,
+    InvariantViolation,
+    ShapeError,
+)
 from pmstudio.domain.shared.ids import BlockId, EntryId, EvidenceId, ProjectId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
@@ -185,6 +189,62 @@ async def test_add_to_an_empty_chapter_opens_the_first_block(world):
     assert created[0].entries[0].text.startswith("现在的问题是需求散在聊天记录里")
     # 手写的那一块留痕：AI 之后不许静默改写它
     assert created[0].manually_edited is True
+
+
+async def test_add_creates_a_field_block_that_does_not_exist_yet(world):
+    """往「功能 · 验收标准」加一条：那块还不存在，domain 自己建块（F8-①）。
+
+    这是"手改能补一个还不存在的字段块"——不是新写入路径，还是 `apply_manual`。
+    """
+
+    before = world.documents.get(PROJECT)
+
+    result = await world.edit_entry()(
+        project_id=ProjectId(PROJECT),
+        op=WriteOp.ADD,
+        text="导出 5 万条 60 秒内完成",
+        target=Target.feature_field("order-export", "acceptance"),
+    )
+
+    after = world.documents.get(PROJECT)
+    assert result.version_no == before.current_version.version_no + 1
+    block = block_with_field(after, "acceptance")
+    assert [entry.text for entry in block.entries] == ["导出 5 万条 60 秒内完成"]
+    assert str(block.feature_slug) == "order-export"
+    # 手写的块留痕：AI 之后不许静默改写它
+    assert block.manually_edited is True
+
+
+async def test_add_to_an_unknown_feature_is_still_refused(world):
+    """功能只能由用户在主张里点名授权——手改**不准**凭空造一棵子树。"""
+
+    before = world.documents.get(PROJECT)
+
+    with pytest.raises(FeatureRequiresUserNaming):
+        await world.edit_entry()(
+            project_id=ProjectId(PROJECT),
+            op=WriteOp.ADD,
+            text="凭空写一句",
+            target=Target.feature_field("never-named", "name"),
+        )
+
+    # 失败的那次没有留下版本
+    now_version = world.documents.get(PROJECT).current_version.version_no
+    assert now_version == before.current_version.version_no
+
+
+async def test_add_into_a_section_slot_by_target_lands_in_that_slot(world):
+    """`{section_id, field}` 也能手写（s8 的六个槽）：与给 block_id 是同一条路。"""
+
+    await world.edit_entry()(
+        project_id=ProjectId(PROJECT),
+        op=WriteOp.ADD,
+        text="导出 5 万条 60 秒内完成",
+        target=Target.body("s8", field="performance"),
+    )
+
+    slot = world.documents.get(PROJECT).block(BlockId("s8.performance"))
+    assert [entry.text for entry in slot.entries] == ["导出 5 万条 60 秒内完成"]
 
 
 async def test_manual_edit_publishes_doc_changed(world):
