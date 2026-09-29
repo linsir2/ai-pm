@@ -11,23 +11,67 @@ from pmstudio.domain.shared.writing import BlockKind
 class SectionSpec:
     section_id: SectionId
     title: str
+    #: 这一章是干什么的（一句话）。界面章节头显示它，来源是本文件的唯一一份。
+    purpose: str
     allows_features: bool = False
 
 
 SECTIONS: tuple[SectionSpec, ...] = (
-    SectionSpec(SectionId("s1"), "背景与问题"),
-    SectionSpec(SectionId("s2"), "目标与非目标"),
-    SectionSpec(SectionId("s3"), "用户与受众"),
-    SectionSpec(SectionId("s4"), "范围与边界"),
-    SectionSpec(SectionId("s5"), "功能需求", allows_features=True),
-    SectionSpec(SectionId("s6"), "业务流程与交互"),
-    SectionSpec(SectionId("s7"), "数据与接口"),
-    SectionSpec(SectionId("s8"), "非功能需求"),
-    SectionSpec(SectionId("s9"), "技术方案与约束"),
-    SectionSpec(SectionId("s10"), "假设、约束与依赖"),
-    SectionSpec(SectionId("s11"), "风险与开放问题"),
-    SectionSpec(SectionId("s12"), "上线、验收与迭代"),
-    SectionSpec(SectionId("s13"), "版本历史"),
+    SectionSpec(
+        SectionId("s1"),
+        "背景与问题",
+        "为什么现在要做：现状有什么问题、不做会付出什么代价。",
+    ),
+    SectionSpec(
+        SectionId("s2"),
+        "目标与非目标",
+        "要达成什么、明确不做什么；目标要能被验收。",
+    ),
+    SectionSpec(
+        SectionId("s3"),
+        "用户与受众",
+        "给谁用：有哪些角色、各自在什么场景、痛点是什么。",
+    ),
+    SectionSpec(
+        SectionId("s4"),
+        "范围与边界",
+        "本期做到哪、本期不做哪、边界情况谁来处理。",
+    ),
+    SectionSpec(
+        SectionId("s5"),
+        "功能需求",
+        "每个功能一棵子树；必填 6 项：名称、一句话描述、服务的目标、面向角色、"
+        "异常与边界、验收标准。",
+        allows_features=True,
+    ),
+    SectionSpec(
+        SectionId("s6"),
+        "业务流程与交互",
+        "主流程与异常路径，按步骤写清谁在什么时候做什么。",
+    ),
+    SectionSpec(SectionId("s7"), "数据与接口", "有哪些实体、和外部怎么对接。"),
+    SectionSpec(
+        SectionId("s8"),
+        "非功能需求",
+        "六项表态：性能、可用性、安全、兼容、可观测、成本，各要有内容。",
+    ),
+    SectionSpec(SectionId("s9"), "技术方案与约束", "关键决策与备选，写清为什么这么选。"),
+    SectionSpec(
+        SectionId("s10"),
+        "假设、约束与依赖",
+        "假设要写「错了会怎样」；依赖要写「失联怎么办」。",
+    ),
+    SectionSpec(
+        SectionId("s11"),
+        "风险与开放问题",
+        "还没定的都放这儿；堵住交付的要标出来。",
+    ),
+    SectionSpec(
+        SectionId("s12"),
+        "上线、验收与迭代",
+        "怎么上线、怎么算验收通过、后续怎么迭代。",
+    ),
+    SectionSpec(SectionId("s13"), "版本历史", "不用手写，导出时由版本表生成。"),
 )
 
 SECTION_IDS: tuple[SectionId, ...] = tuple(spec.section_id for spec in SECTIONS)

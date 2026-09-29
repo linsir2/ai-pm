@@ -11,14 +11,18 @@ from pmstudio.application.deliverable import KIND_LABELS, TRIGGER_LABELS, summar
 from pmstudio.application.ports import SeatCatalog, SeatDefinition
 from pmstudio.domain.authoring.diff import diff_snapshots
 from pmstudio.domain.authoring.readiness import ReadinessItem
+from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.version import Version
 from pmstudio.domain.authoring.views import BlockView, DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Proposal
 from pmstudio.domain.round.opinion import OpinionForm, SeatReview
+from pmstudio.domain.round.questionnaire import MAX_OPEN_ITEMS_PER_BATCH, MAX_QUESTIONNAIRES
 from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.step import MAX_SEAT_ROUNDS
 from pmstudio.domain.services.scope_guard import ScopeGuard
 from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS
 
 SEAT_COMPLETED = "completed"
 SEAT_PENDING = "pending"
@@ -272,6 +276,90 @@ class EvidenceLookupView:
     question_id: str | None
     chain: tuple[ChainItemView, ...]
     used_by: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SlotSchemaView:
+    """章节槽（只有 s8 有六个）：界面靠它知道"这一章还有哪些固定的子块"。"""
+
+    name: str
+    title: str
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class SectionSchemaView:
+    section_id: str
+    title: str
+    #: 这一章是干什么的（`domain/shared/sections.py::SectionSpec.purpose` 的唯一一份）
+    purpose: str
+    allows_features: bool
+    slots: tuple[SlotSchemaView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureFieldSchemaView:
+    name: str
+    title: str
+    kind: str
+    multiple: bool
+    required: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LimitsView:
+    """三处上限：界面要显示"第 2/3 轮""已答 4/5"，不该自己抄一份。"""
+
+    max_seat_rounds: int
+    max_questionnaires: int
+    max_open_items_per_batch: int
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaView:
+    """`GET /schema`：现行结构（13 章 + 功能字段表 + 上限常量）。
+
+    它**不是**文档内容——`DocumentView` 才是；这里只是"这套结构长什么样"。
+    """
+
+    sections: tuple[SectionSchemaView, ...]
+    feature_fields: tuple[FeatureFieldSchemaView, ...]
+    limits: LimitsView
+
+
+def schema_view() -> SchemaView:
+    """把三张表与三个常量读出来。纯函数：无 IO、不开事务、不碰任何仓储。"""
+
+    return SchemaView(
+        sections=tuple(
+            SectionSchemaView(
+                section_id=str(spec.section_id),
+                title=spec.title,
+                purpose=spec.purpose,
+                allows_features=spec.allows_features,
+                slots=tuple(
+                    SlotSchemaView(name=slot.name, title=slot.title, kind=slot.kind.value)
+                    for slot in SECTION_SLOTS.get(spec.section_id, ())
+                ),
+            )
+            for spec in SECTIONS
+        ),
+        feature_fields=tuple(
+            FeatureFieldSchemaView(
+                name=spec.name,
+                title=spec.title,
+                kind=spec.kind.value,
+                multiple=spec.multiple,
+                required=spec.required,
+            )
+            for spec in FEATURE_FIELDS
+        ),
+        limits=LimitsView(
+            max_seat_rounds=MAX_SEAT_ROUNDS,
+            max_questionnaires=MAX_QUESTIONNAIRES,
+            max_open_items_per_batch=MAX_OPEN_ITEMS_PER_BATCH,
+        ),
+    )
 
 
 def feature_coverage_advisory(round_: Round) -> str | None:

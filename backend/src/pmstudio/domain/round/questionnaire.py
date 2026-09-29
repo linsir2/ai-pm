@@ -19,6 +19,14 @@ from pmstudio.domain.shared.target import Target
 MAX_QUESTIONS_PER_BATCH = 5
 MAX_QUESTIONNAIRES = 2
 
+#: 每批从文档 s11 里挑几条最老的未决项来问（跨轮队列的"消化速度"）。
+#: 每批 5 题里留 3 个位置还老账（一轮两批 ⇒ 最多消化 6 条）。
+#:
+#: 为什么定 3 而**不设"必须清零"的目标**：P10 真跑的算术是"removed 4 / added 18"——
+#: 一轮能暴露十几条缺口，而一轮最多问 10 题，产生速度天然大于消化速度。
+#: 把未决清单当成**随交付物一起给用户的东西**（阻塞项同时进就绪度），比假装能清零诚实。
+MAX_OPEN_ITEMS_PER_BATCH = 3
+
 
 class QuestionType(StrEnum):
     SINGLE = "single"

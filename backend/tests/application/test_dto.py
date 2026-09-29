@@ -633,3 +633,40 @@ def test_round_view_puts_the_coverage_advisory_first():
     view = dto.round_view(round_)
 
     assert view.advisories[0].startswith("⚠")
+
+
+def test_schema_view_freezes_the_shape():
+    """`GET /schema` 的形状：13 章（含说明与槽）、12 个功能字段、三个上限常量。"""
+
+    view = dto.schema_view()
+
+    assert [item.section_id for item in view.sections] == [f"s{i}" for i in range(1, 14)]
+    assert all(item.purpose.strip() for item in view.sections)
+    assert all(item.slots == () for item in view.sections if item.section_id != "s8")
+
+    s5 = next(item for item in view.sections if item.section_id == "s5")
+    assert s5.allows_features is True
+    s8 = next(item for item in view.sections if item.section_id == "s8")
+    assert [slot.name for slot in s8.slots] == [
+        "performance",
+        "availability",
+        "security",
+        "compatibility",
+        "observability",
+        "cost",
+    ]
+
+    assert len(view.feature_fields) == 12
+    assert [item.name for item in view.feature_fields][:2] == ["name", "one_liner"]
+    assert [item.name for item in view.feature_fields if item.required] == [
+        "name",
+        "one_liner",
+        "goal",
+        "audience",
+        "exceptions",
+        "acceptance",
+    ]
+
+    assert view.limits == dto.LimitsView(
+        max_seat_rounds=3, max_questionnaires=2, max_open_items_per_batch=3
+    )

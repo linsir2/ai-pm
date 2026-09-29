@@ -35,6 +35,16 @@ async def health(request: Request) -> dict[str, str]:
     return {"status": "ok", "model": services_of(request).model_name}
 
 
+@router.get("/schema")
+async def schema(request: Request):  # type: ignore[no-untyped-def]
+    """现行结构：13 章（含说明与槽）、功能字段表、三处上限。
+
+    界面不再自己抄一份字段中文名与上限常量——那两份的真相源在后端。
+    """
+
+    return as_json(await services_of(request).get_schema())
+
+
 @router.post("/projects", status_code=201)
 async def create_project(request: Request, body: CreateProjectRequest):  # type: ignore[no-untyped-def]
     summary = await services_of(request).create_project(title=body.title)

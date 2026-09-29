@@ -4,6 +4,7 @@ from tests.support.harness import Harness
 EXPECTED_PATHS = {
     "/api/health",
     "/api/events",
+    "/api/schema",
     "/api/projects",
     "/api/projects/{project_id}/workspace",
     "/api/projects/{project_id}/document",

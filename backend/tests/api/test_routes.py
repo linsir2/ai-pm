@@ -90,6 +90,25 @@ async def test_health_reports_model():
     assert response.json() == {"status": "ok", "model": "openai/gpt-4o-mini"}
 
 
+async def test_schema_endpoint_returns_the_13_sections_and_the_limits():
+    """界面上那些"前端自己抄了一份"的常量与说明，回后端这一份（`04-未决.md` F2）。"""
+
+    app, _ = make_client()
+    async with async_client(app) as client:
+        response = await client.get("/api/schema")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["sections"]) == 13
+    assert body["sections"][0]["purpose"]
+    assert len(body["feature_fields"]) == 12
+    assert body["limits"] == {
+        "max_seat_rounds": 3,
+        "max_questionnaires": 2,
+        "max_open_items_per_batch": 3,
+    }
+
+
 async def test_create_project_then_workspace():
     app, _ = make_client()
     async with async_client(app) as client:

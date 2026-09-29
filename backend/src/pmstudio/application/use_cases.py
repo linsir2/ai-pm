@@ -53,6 +53,7 @@ from pmstudio.application.dto import (
     ReadinessItemView,
     RollbackResult,
     RoundView,
+    SchemaView,
     VersionListView,
     WorkspaceView,
     diff_view,
@@ -60,6 +61,7 @@ from pmstudio.application.dto import (
     proposal_ignore_streak,
     readiness_view,
     round_view,
+    schema_view,
     used_by_entries,
     version_summary_view,
     workspace_view,
@@ -107,6 +109,7 @@ from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.draft import Origin, OriginType, Proposal
 from pmstudio.domain.round.questionnaire import (
+    MAX_OPEN_ITEMS_PER_BATCH,
     MAX_QUESTIONNAIRES,
     MAX_QUESTIONS_PER_BATCH,
     Answer,
@@ -557,15 +560,6 @@ MAX_CLAIMS_ATTEMPTS = 2
 #: 单个席位也允许"重装一次"：超限（意见太多）与别的报文错都是可修复的，
 #: 而整轮重跑要付 4–6 个席位的代价（真跑实测：188 次席位调用里多出一倍是重跑）。
 MAX_SEAT_ATTEMPTS = 2
-
-#: 每批从文档 s11 里挑几条最老的未决项来问（跨轮队列的"消化速度"）。
-#: 每批 5 题里留 3 个位置还老账（一轮两批 ⇒ 最多消化 6 条）。
-#:
-#: 为什么定 3 而**不设"必须清零"的目标**（C3）：P10 真跑的算术是"removed 4 / added 18"——
-#: 一轮能暴露十几条缺口，而一轮最多问 10 题，产生速度天然大于消化速度。
-#: 把未决清单当成**随交付物一起给用户的东西**（阻塞项同时进就绪度），比假装能清零诚实。
-MAX_OPEN_ITEMS_PER_BATCH = 3
-
 
 @dataclass(frozen=True, slots=True)
 class IntegrationResult:
@@ -1711,6 +1705,17 @@ class GetWorkspace:
             ledger=ledger,
             readiness=self._checker.check(view),
         )
+
+
+class GetSchema:
+    """现行结构：13 章（含说明与槽）、功能字段表、三处上限。
+
+    纯函数、不注入任何仓储——"读 schema 不可能开事务"是结构上的保证，不靠纪律
+    （与 `GetReadiness` 同源：只读用例拿不到写端口）。
+    """
+
+    async def __call__(self) -> SchemaView:
+        return schema_view()
 
 
 class GetReadiness:

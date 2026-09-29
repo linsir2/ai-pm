@@ -287,6 +287,11 @@ class Harness:
 
         return GetReadiness(documents=self.documents, checker=self.readiness)
 
+    def get_schema(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import GetSchema
+
+        return GetSchema()
+
     def get_document(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetDocument
 
@@ -357,6 +362,7 @@ class Harness:
             workspace=self.get_workspace(),
             list_projects=self.list_projects(),
             get_round=self.get_round(),
+            get_schema=self.get_schema(),
             get_document=self.get_document(),
             get_readiness=self.get_readiness(),
             export_markdown=self.export_markdown(),

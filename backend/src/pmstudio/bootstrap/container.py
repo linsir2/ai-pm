@@ -22,6 +22,7 @@ from pmstudio.application.use_cases import (
     GetEvidence,
     GetReadiness,
     GetRound,
+    GetSchema,
     GetVersionDiff,
     GetVersions,
     GetWorkspace,
@@ -227,6 +228,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         ),
         list_projects=ListProjects(index=index),
         get_round=get_round,
+        get_schema=GetSchema(),
         get_document=GetDocument(documents=documents),
         get_readiness=GetReadiness(documents=documents, checker=readiness),
         export_markdown=ExportMarkdown(

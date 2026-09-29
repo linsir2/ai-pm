@@ -19,6 +19,7 @@ from pmstudio.application.use_cases import (
     GetEvidence,
     GetReadiness,
     GetRound,
+    GetSchema,
     GetVersionDiff,
     GetVersions,
     GetWorkspace,
@@ -37,6 +38,7 @@ class ApiServices:
     workspace: GetWorkspace
     list_projects: ListProjects
     get_round: GetRound
+    get_schema: GetSchema
     get_document: GetDocument
     get_readiness: GetReadiness
     export_markdown: ExportMarkdown
