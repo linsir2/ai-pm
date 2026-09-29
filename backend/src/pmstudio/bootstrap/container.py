@@ -15,6 +15,7 @@ from pmstudio.application.use_cases import (
     AbandonRound,
     ConfirmDraft,
     CreateProject,
+    DigRound,
     EditEntry,
     ExportMarkdown,
     GetDocument,
@@ -191,6 +192,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     retry_round = RetryRound(
         rounds=rounds, round_writer=rounds, uow=uow, clock=clock, events=bus
     )
+    dig_round = DigRound(rounds=rounds, round_writer=rounds, uow=uow, clock=clock, events=bus)
     get_round = GetRound(rounds=rounds, evidence=evidences, catalog=catalog)
     runner = RoundRunner(
         start_round=start_round,
@@ -200,10 +202,12 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         submit_answers=submit_answers,
         confirm_draft=confirm_draft,
         retry_round=retry_round,
+        dig_round=dig_round,
         get_round=get_round,
     )
     services = ApiServices(
         runner=runner,
+        dig_round=dig_round,
         abandon_round=AbandonRound(
             rounds=rounds,
             round_writer=rounds,

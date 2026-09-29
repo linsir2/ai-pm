@@ -16,6 +16,7 @@ from pmstudio.application.dto import RoundView
 from pmstudio.application.errors import RoundBusy
 from pmstudio.application.use_cases import (
     ConfirmDraft,
+    DigRound,
     GetRound,
     IntegrateRound,
     RetryRound,
@@ -60,6 +61,8 @@ COMMAND_ROUTES: dict[str, str] = {
     "submit_answers": "answers",
     "confirm": "commit",
     "retry": "resume",
+    # 草案卡上的"继续深挖"：回到席位轮再问一批（P14 C6）
+    "dig": "dig",
 }
 
 
@@ -74,6 +77,7 @@ class RoundRunner:
         submit_answers: SubmitAnswers,
         confirm_draft: ConfirmDraft,
         retry_round: RetryRound,
+        dig_round: DigRound,
         get_round: GetRound,
     ) -> None:
         self._start_round = start_round
@@ -83,6 +87,7 @@ class RoundRunner:
         self._submit_answers = submit_answers
         self._confirm_draft = confirm_draft
         self._retry_round = retry_round
+        self._dig_round = dig_round
         self._get_round = get_round
         self._running_rounds: set[str] = set()
         #: 这一轮正在跑的那个 asyncio 任务（`cancel()` 要按 round_id 找到它）
@@ -193,6 +198,10 @@ class RoundRunner:
         await self._retry_round(round_id=RoundId(_round_id(state)))
         return {}
 
+    async def node_dig(self, state: RoundState) -> dict[str, Any]:
+        await self._dig_round(round_id=RoundId(_round_id(state)))
+        return {}
+
     async def route_by_command(self, state: RoundState) -> str:
         """返回 path_map 的**键**（命令种类），由 `COMMAND_ROUTES` 再映射到节点。"""
 
@@ -225,6 +234,7 @@ def build_graph(runner: RoundRunner) -> Any:
     graph.add_node("answers", runner.node_answers)
     graph.add_node("commit", runner.node_commit)
     graph.add_node("resume", runner.node_resume)
+    graph.add_node("dig", runner.node_dig)
 
     graph.set_conditional_entry_point(runner.route_by_command, COMMAND_ROUTES)
     graph.add_edge("start", "analyze")
@@ -235,4 +245,6 @@ def build_graph(runner: RoundRunner) -> Any:
     graph.add_edge("answers", "seat_round")
     graph.add_edge("commit", END)
     graph.add_conditional_edges("resume", runner.route_after_resume, RESUME_ROUTES)
+    # dig 之后按 step 继续走：seats_running → seat_round → integrate（与 resume 同一张表）
+    graph.add_conditional_edges("dig", runner.route_after_resume, RESUME_ROUTES)
     return graph.compile()

@@ -20,6 +20,7 @@ EXPECTED_PATHS = {
     "/api/rounds/{round_id}/answers",
     "/api/rounds/{round_id}/confirm",
     "/api/rounds/{round_id}/retry",
+    "/api/rounds/{round_id}/dig",
     "/api/rounds/{round_id}/abandon",
 }
 

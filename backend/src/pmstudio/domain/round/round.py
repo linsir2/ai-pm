@@ -140,6 +140,7 @@ class Round:
         proposed_accepted: int | None = None,
         proposal_ignore_streak: int = 0,
         extra_batches: int = 0,
+        extra_seat_rounds: int = 0,
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -172,6 +173,7 @@ class Round:
         self._proposed_accepted = proposed_accepted
         self._proposal_ignore_streak = proposal_ignore_streak
         self._extra_batches = extra_batches
+        self._extra_seat_rounds = extra_seat_rounds
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -271,7 +273,25 @@ class Round:
 
     @property
     def can_begin_seat_round(self) -> bool:
-        return self._seat_round_count < MAX_SEAT_ROUNDS
+        """还能不能再开一趟席位轮。
+
+        上限不是死的：用户每要求一次"继续深挖"（`dig`），就多一批问卷**和**一趟席位轮——
+        因为每一批答案后面都要跟一趟席位轮（缩编 + 重新表态），只放宽问卷会让用户在
+        "答完这一批"那一步直接走不动（`SeatRoundLimitReached`）。
+        """
+
+        return self._seat_round_count < self.seat_round_limit
+
+    @property
+    def seat_round_limit(self) -> int:
+        """这一轮的席位轮上限（`MAX_SEAT_ROUNDS` + dig 放行的趟数）。
+
+        **闸门与 `can_begin_seat_round` 必须看同一个数**：整合用例的"该不该停止追问"
+        也读它——否则用户 dig 之后，`submit_answers` 放行、整合这边的闸门却先响，
+        于是"继续深挖"照样被降级成 s11（真跑里踩到过）。
+        """
+
+        return MAX_SEAT_ROUNDS + self._extra_seat_rounds
 
     @property
     def authorized_new_features(self) -> frozenset[FeatureSlug]:
@@ -657,22 +677,30 @@ class Round:
 
         return self._extra_batches
 
+    @property
+    def extra_seat_rounds(self) -> int:
+        """随之放宽的席位轮额度（每一批答案后面都要跟一趟席位轮）。"""
+
+        return self._extra_seat_rounds
+
     def dig(self) -> None:
         """从草案卡回到提问：**把这一轮没问上的那些题重新问一遍**（P14 C6）。
 
         四件事，缺一不可：
         1. 清掉未确认的草案——文档**从没被写过**（写入只在确认那一刻发生），所以不用回滚；
         2. 问卷闸门 +1 批；
-        3. **新开一次席位轮**（席位要针对"用户还想再深挖"重新表态；到上限就明确报错）；
-        4. 回到 `seats_running`——轮内队列**保留**（出草案时已经不清空了），
-           于是下一趟整合会把这些题当 carried 真的问出来。
+        3. 席位轮额度也 +1——**每一批答案后面都要跟一趟席位轮**，只放宽问卷会让用户
+           "答完这一批"时撞上 `SeatRoundLimitReached`（常规两批流程已经用满 3 趟）；
+        4. 回到 `seats_running`，但**不新开**席位轮：`pending_seats` 已经是空的，
+           席位一个都不重跑，dig 只花一次整合调用；紧接着的整合会因为闸门放宽而把
+           轮内队列里的题（carried）真的端出来问——这才是"继续深挖"。
         """
 
         self._require_step(Step.AWAITING_CONFIRM)
         self._require_waiting(WaitingOn.DRAFT)
         self._draft = None
         self._extra_batches += 1
-        self._begin_seat_round()
+        self._extra_seat_rounds += 1
         self._advance_to(Step.SEATS_RUNNING)
 
     def authorize_new_feature(self, slug: FeatureSlug, *, basis: EvidenceId) -> None:
@@ -739,7 +767,7 @@ class Round:
 
     def _begin_seat_round(self) -> None:
         if not self.can_begin_seat_round:
-            raise SeatRoundLimitReached(limit=MAX_SEAT_ROUNDS)
+            raise SeatRoundLimitReached(limit=self.seat_round_limit)
         self._seat_round_count += 1
 
     def _require_step(self, target: Step) -> None:

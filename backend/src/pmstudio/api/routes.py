@@ -229,6 +229,17 @@ async def retry(request: Request, round_id: str):  # type: ignore[no-untyped-def
     return as_json(view)
 
 
+@router.post("/rounds/{round_id}/dig")
+async def dig(request: Request, round_id: str):  # type: ignore[no-untyped-def]
+    """草案卡上的"继续深挖"：回到席位轮再问一批（P14 C6）。
+
+    与 `/retry` 同款薄封装——真正的动作在 `DigRound` 与图的路由里。
+    """
+
+    view = await services_of(request).runner.run(RoundCommand(kind="dig", round_id=round_id))
+    return as_json(view)
+
+
 @router.post("/rounds/{round_id}/abandon")
 async def abandon_round(request: Request, round_id: str):  # type: ignore[no-untyped-def]
     """放弃这一轮：先记状态、再取消正在跑的模型调用（`02` §7）。

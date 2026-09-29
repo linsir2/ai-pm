@@ -116,7 +116,7 @@ from pmstudio.domain.round.questionnaire import (
     QuestionKind,
 )
 from pmstudio.domain.round.round import DroppedItem, DropSource, Round
-from pmstudio.domain.round.step import MAX_SEAT_ROUNDS, Step
+from pmstudio.domain.round.step import Step
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import (
     CommitResult,
@@ -808,7 +808,9 @@ def _stop_asking_reason(round_: Round) -> str | None:
     allowed = MAX_QUESTIONNAIRES + round_.extra_batches
     if len(round_.answer_sets) >= allowed:
         return f"问卷已满 {allowed} 批"
-    if round_.seat_round_count >= MAX_SEAT_ROUNDS:
+    # 席位轮闸门也认 dig 的额度：它必须与 `Round.can_begin_seat_round` 看同一个数，
+    # 否则用户 dig 之后会在整合这一步被立刻降级（真跑里踩到过）。
+    if round_.seat_round_count >= round_.seat_round_limit:
         return "已到席位轮上限"
     return None
 
@@ -1427,6 +1429,37 @@ class RetryRound:
             if round_.step is Step.FAILED:
                 round_.resume()
                 self._round_writer.save(round_)
+        _publish(self._events, self._clock, round_)
+
+
+class DigRound:
+    """用户主动"继续深挖"：从草案卡回到提问（P14 C6）。
+
+    与 `RetryRound` 同形状——一个事务里做**领域动作** + 发事件。**不碰文档**：
+    草案从没被确认过（写入只在确认那一刻发生），所以没有任何回滚要担心。
+    真正的"接着跑"由图的 `dig → seats_running → seat_round → integrate` 路由完成。
+    """
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        uow: UnitOfWork,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._uow = uow
+        self._clock = clock
+        self._events = events
+
+    async def __call__(self, *, round_id: RoundId) -> None:
+        with self._uow:
+            round_ = self._rounds.get(round_id)
+            round_.dig()
+            self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
 
 

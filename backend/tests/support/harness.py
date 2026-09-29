@@ -224,6 +224,17 @@ class Harness:
             events=self.events,
         )
 
+    def dig_round(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import DigRound
+
+        return DigRound(
+            rounds=self.rounds,
+            round_writer=self.rounds,
+            uow=self.uow,
+            clock=self.clock,
+            events=self.events,
+        )
+
     def create_project(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import CreateProject
 
@@ -316,6 +327,7 @@ class Harness:
                 submit_answers=self.submit_answers(),
                 confirm_draft=self.confirm_draft(),
                 retry_round=self.retry_round(),
+                dig_round=self.dig_round(),
                 get_round=GetRound(
                     rounds=self.rounds, evidence=self.evidences, catalog=self.seats
                 ),
@@ -339,6 +351,7 @@ class Harness:
 
         return ApiServices(
             runner=self.runner(),
+            dig_round=self.dig_round(),
             abandon_round=self.abandon_round(),
             create_project=self.create_project(),
             workspace=self.get_workspace(),

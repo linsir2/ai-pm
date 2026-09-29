@@ -1817,3 +1817,91 @@ async def test_the_deferred_queue_is_not_cleared_when_the_draft_is_written():
     # 队列里的题同时落了 s11（草案没确认之前，文档里什么都没有；这是给"不再深挖"的用户看的）
     s11 = [item.text for item in round_.draft.proposals if str(item.target.section_id) == "s11"]
     assert any("第三批第 6 题" in text for text in s11)
+
+
+async def test_dig_makes_the_round_ask_the_questions_it_had_to_drop():
+    """C6 的全部意义：dig 之后**又出问卷**，而且问的正是刚才没问上的那些题。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [
+                questionnaire_packet(title="第一批的问题？"),
+                questionnaire_packet(title="第二批的问题？"),
+                packet_with_questions(7, prefix="第三批"),
+                questionnaire_packet(title="深挖这一批？"),
+            ],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    await harness.integrate_round()(round_id=round_id)
+    for _ in range(2):
+        form = harness.rounds.get(round_id).questionnaire
+        await harness.submit_answers()(
+            round_id=round_id,
+            form_id=str(form.form_id),
+            answers=(),
+            skipped=tuple(str(item.question_id) for item in form.questions),
+        )
+        await harness.run_seat_round()(round_id=round_id)
+        await harness.integrate_round()(round_id=round_id)
+    assert harness.rounds.get(round_id).step is Step.AWAITING_CONFIRM
+
+    await harness.dig_round()(round_id=round_id)
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.AWAITING_ANSWERS
+    assert round_.extra_batches == 1
+    assert round_.draft is None
+    assert round_.deferred == ()  # 队列里的两条这趟被 carried 问上了
+    titles = [item.title for item in round_.questionnaire.questions]
+    assert "第三批第 6 题" in titles  # 刚才没问上的题，这次真的问出来了
+
+
+async def test_the_dig_command_goes_straight_to_a_new_questionnaire():
+    """走真图：`dig` → 席位轮（**零调用**）→ 整合 → 新问卷。
+
+    dig **不新开**席位轮：已交回的意见还在，用不着为"再问一批"重烧 3–6 次模型调用；
+    它只花一次整合调用，把队列里的题端出来。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [
+                questionnaire_packet(title="第一批的问题？"),
+                questionnaire_packet(title="第二批的问题？"),
+                packet_with_questions(7, prefix="第三批"),
+                questionnaire_packet(title="深挖这一批？"),
+            ],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    await harness.integrate_round()(round_id=round_id)
+    for _ in range(2):
+        form = harness.rounds.get(round_id).questionnaire
+        await harness.submit_answers()(
+            round_id=round_id,
+            form_id=str(form.form_id),
+            answers=(),
+            skipped=tuple(str(item.question_id) for item in form.questions),
+        )
+        await harness.run_seat_round()(round_id=round_id)
+        await harness.integrate_round()(round_id=round_id)
+    seats_before = harness.gateway.purposes.count("seat_review")
+
+    await harness.runner().run(RoundCommand(kind="dig", round_id=str(round_id)))
+
+    round_ = harness.rounds.get(round_id)
+    assert harness.gateway.purposes.count("seat_review") == seats_before  # 席位零重跑
+    assert round_.step is Step.AWAITING_ANSWERS
+    assert [item.title for item in round_.questionnaire.questions][:2] == [
+        "第三批第 6 题",
+        "第三批第 7 题",
+    ]

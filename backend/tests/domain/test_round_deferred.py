@@ -12,7 +12,7 @@ from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
 from pmstudio.domain.round.questionnaire import Option, Question, QuestionType
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import MAX_SEAT_ROUNDS, Step, WaitingOn
-from pmstudio.domain.shared.errors import IllegalStepTransition, SeatRoundLimitReached
+from pmstudio.domain.shared.errors import IllegalStepTransition
 from pmstudio.domain.shared.ids import (
     DraftId,
     EntryId,
@@ -184,8 +184,9 @@ def test_dig_sends_the_round_back_to_the_seat_round_with_a_spare_batch():
 
     assert round_.step is Step.SEATS_RUNNING
     assert round_.extra_batches == 1
+    assert round_.extra_seat_rounds == 1  # 批后那一趟席位轮也要放行
     assert round_.draft is None  # 旧草案作废（没确认写入，文档不受影响）
-    assert round_.seat_round_count == 2  # 新开一次席位轮
+    assert round_.seat_round_count == 1  # **不新开**席位轮：dig 只花一次整合调用
     assert round_.deferred == (question("这条没问上"),)  # 队列留着 → 下一趟问得回来
 
 
@@ -194,13 +195,23 @@ def test_dig_is_refused_when_the_round_is_not_awaiting_confirm():
         make_round().dig()
 
 
-def test_dig_is_refused_when_the_seat_rounds_are_used_up():
+def test_dig_keeps_the_next_seat_round_walkable_when_the_limit_is_reached():
+    """每批答案后面都要跟一趟席位轮：dig 放宽问卷额度，就**必须**同时放宽席位轮额度。
+
+    常规两批流程用满 3 趟（开场 1 + 每批答案后 1）；不放宽的话，用户答完 dig 那一批
+    就会撞 `SeatRoundLimitReached`——功能等于没有。
+    """
+
     round_ = round_awaiting_confirm()
     for _ in range(MAX_SEAT_ROUNDS - 1):
-        round_._begin_seat_round()  # 把这一轮的席位轮额度用满（测试内部手法）
+        round_._begin_seat_round()  # 把席位轮额度用满（测试内部手法）
+    assert round_.can_begin_seat_round is False
 
-    with pytest.raises(SeatRoundLimitReached):
-        round_.dig()
+    round_.dig()
+
+    assert round_.can_begin_seat_round is True
+    round_._begin_seat_round()  # 答完这一批后的那一趟（正常路径由 submit_answers 触发）
+    assert round_.seat_round_count == MAX_SEAT_ROUNDS + 1
 
 
 def test_payload_roundtrip_keeps_the_extra_batches():
@@ -219,6 +230,7 @@ def test_payload_roundtrip_keeps_the_extra_batches():
     assert restored.extra_batches == 1
 
     del payload["extra_batches"]  # 老行：没有这个键 → 0
+    del payload["extra_seat_rounds"]
     legacy = round_from_payload(
         payload,
         round_id=ROUND_ID,
@@ -228,3 +240,4 @@ def test_payload_roundtrip_keeps_the_extra_batches():
         waiting_on=round_.waiting_on,
     )
     assert legacy.extra_batches == 0
+    assert legacy.extra_seat_rounds == 0
