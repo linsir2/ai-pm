@@ -12,6 +12,7 @@ from pmstudio.domain.round.draft import Origin, OriginType, Proposal
 from pmstudio.domain.round.questionnaire import (
     Answer,
     AnswerSet,
+    ListItem,
     Question,
     QuestionKind,
     Questionnaire,
@@ -1606,3 +1607,73 @@ async def test_retry_after_a_failed_integration_does_not_re_run_the_seats():
     assert harness.gateway.purposes.count("seat_review") == seats_before  # 席位零重跑
     assert harness.rounds.get(round_id).retry_hint is None  # T1 的提示被用掉了
     assert harness.rounds.get(round_id).questionnaire is not None  # 接着跑到底了
+
+
+# —— 清单项的去向：出草案那一刻落 s11（A2，P13）——
+
+
+async def test_list_items_nobody_handled_land_in_s11_when_the_draft_is_written():
+    """清单项有去处：没被处理的那条，出草案时落 s11（非阻塞、带去处、跨轮看得见）。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [questionnaire_packet_with_a_list_item(), draft_packet()],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)  # 第一批：记下清单项
+    first = harness.rounds.get(round_id).questionnaire
+    await harness.submit_answers()(
+        round_id=round_id,
+        form_id=str(first.form_id),
+        answers=tuple(
+            AnswerInput(question_id=str(item.question_id), text="第一批的答案")
+            for item in first.questions
+        ),
+        skipped=(),
+    )
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)  # 第二批：出草案
+
+    draft = harness.rounds.get(round_id).draft
+    assert draft is not None
+    s11 = [
+        item.text for item in draft.proposals if str(item.target.section_id) == "s11"
+    ]
+    landed = [text for text in s11 if "模板字段要不要可配置" in text]
+    assert len(landed) == 1
+    assert not landed[0].startswith("〔未决·阻塞〕")  # C4：不堵交付
+    assert landed[0].endswith("〔去处：s8〕")  # 带去处：下一轮 carried 问得回原章节
+    assert "（未决定，待决人：PM；跳过后果：" in landed[0]  # s11 标准格式，能被解析回来
+    assert any("清单项" in gap for gap in draft.gaps)  # C7：用户看得见
+
+
+def test_a_list_item_the_draft_already_covers_is_not_written_to_s11():
+    """已经处理过的清单项不再落一遍（机械判据：同去处 + 归一化文本）。"""
+
+    from pmstudio.application.use_cases import _unhandled_list_items
+
+    round_ = make_round()
+    round_.remember_list_items(
+        (
+            ListItem(
+                text="模板字段要不要可配置？", target=Target.body("s8"), reason="本批装不下"
+            ),
+        )
+    )
+    covered = Proposal(
+        proposal_id=ProposalId("p01"),
+        entry_id=EntryId("r1#01"),
+        op=WriteOp.ADD,
+        target=Target.body("s8"),
+        text="模板字段要不要可配置？",
+        origin=Origin(OriginType.USER, (EvidenceId("E1"),), "用户说过"),
+        kind=BlockKind.TEXT,
+    )
+
+    assert _unhandled_list_items(round_, questions=(), proposals=(covered,)) == ()
+    assert _unhandled_list_items(round_, questions=(), proposals=()) == round_.list_items

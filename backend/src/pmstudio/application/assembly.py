@@ -648,15 +648,46 @@ def open_question_proposal(
     round_id: RoundId,
     rationale: str,
 ) -> Proposal:
+    """跳过/降级的**题** → s11 提案（文本格式见 `open_item_proposal`）。"""
+
+    return open_item_proposal(
+        title=question.title,
+        consequence=question.consequence_if_skipped,
+        blocking=question.blocking,
+        target_label=question.target.label(),
+        eid=eid,
+        index=index,
+        round_id=round_id,
+        rationale=rationale,
+    )
+
+
+def open_item_proposal(
+    *,
+    title: str,
+    consequence: str,
+    blocking: bool,
+    target_label: str,
+    eid: EvidenceId,
+    index: int,
+    round_id: RoundId,
+    rationale: str,
+) -> Proposal:
+    """一条 s11 未决条目（**文本格式只有这一处**）：题、被挤掉的题、没处理的清单项都走它。
+
+    格式必须能被 `parse_open_item` 认回来——那是下一轮 carried 挑得中它的前提：
+    `〔未决·阻塞〕?标题（未决定，待决人：PM；跳过后果：…）〔去处：<label>〕`。
+    """
+
     return Proposal(
         proposal_id=ProposalId(f"p{index:02d}"),
         entry_id=EntryId(f"{round_id}#open{index:02d}"),
         op=WriteOp.ADD,
         target=Target.body(OPEN_QUESTION_HOME),
         text=(
-            f"{BLOCKING_MARK if question.blocking else ''}{question.title}（未决定，待决人：PM；"
-            f"跳过后果：{question.consequence_if_skipped}）"
-            f"〔去处：{question.target.label()}〕"
+            f"{BLOCKING_MARK if blocking else ''}{title}（未决定，待决人：PM；"
+            f"跳过后果：{consequence}）"
+            f"〔去处：{target_label}〕"
         ),
         origin=Origin(OriginType.SYSTEM_DEFAULT, (eid,), rationale),
         kind=BlockKind.QUESTION,

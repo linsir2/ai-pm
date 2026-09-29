@@ -25,6 +25,8 @@ from pmstudio.application.assembly import (
     downgraded_question_proposals,
     draft_of,
     landed_answer_proposals,
+    normalize,
+    open_item_proposal,
     open_question_proposals,
     question_key,
     questionnaire_of,
@@ -106,6 +108,7 @@ from pmstudio.domain.round.questionnaire import (
     MAX_QUESTIONS_PER_BATCH,
     Answer,
     AnswerSet,
+    ListItem,
     Question,
     QuestionKind,
 )
@@ -748,6 +751,31 @@ def _render_list_items(round_: Round) -> str:
     return "\n".join(lines) or "（这一轮前面几批没有记下清单项）"
 
 
+def _unhandled_list_items(
+    round_: Round,
+    *,
+    questions: Sequence[Question],
+    proposals: Sequence[Proposal],
+) -> tuple[ListItem, ...]:
+    """这一轮记下的清单项里，**没人处理**的那些（A2）。
+
+    判据是机械的：`(去处, 归一化文本)` 已经出现在本轮的题目或提案里 → 算处理过。
+    宁可多记一条（保守），也不做相似度判断——"换句话说的同一件事"这里看不出来。
+    """
+
+    handled = {(question.target.label(), normalize(question.title)) for question in questions}
+    handled |= {(proposal.target.label(), normalize(proposal.text)) for proposal in proposals}
+    seen: set[tuple[str, str]] = set()
+    unhandled: list[ListItem] = []
+    for item in round_.list_items:
+        key = (item.target.label(), normalize(item.text))
+        if key in handled or key in seen:
+            continue
+        seen.add(key)
+        unhandled.append(item)
+    return tuple(unhandled)
+
+
 def _next_proposal_index(proposals: Sequence[Proposal]) -> int:
     """续编提案编号：**现有最大编号 + 1**，不是 `len + 1`。
 
@@ -922,6 +950,39 @@ class IntegrateRound:
                 )
                 proposals += list(landed.proposals)
                 gaps += list(landed.notes)
+                # 清单项的去向（A2）：没人处理的那些落 s11——非阻塞、带去处，
+                # 下一轮的 carried 才问得回原章节，不会"轮一结束就没了"。
+                unhandled = _unhandled_list_items(
+                    round_, questions=(), proposals=proposals
+                )
+                if unhandled:
+                    start = _next_proposal_index(proposals)
+                    for offset, item in enumerate(unhandled):
+                        eid = ledger.record(
+                            kind=EvidenceKind.SYSTEM_DEFAULT,
+                            text=f"{item.text}（清单项，本轮没处理）",
+                            source=EvidenceSource(
+                                round_id=round_id,
+                                rationale="清单项没被处理，落 s11 继续排队",
+                            ),
+                            now=now,
+                        )
+                        proposals.append(
+                            open_item_proposal(
+                                title=item.text,
+                                consequence="先搁着，不影响本轮交付",
+                                blocking=False,  # C4：清单项不堵交付
+                                target_label=item.target.label(),
+                                eid=eid,
+                                index=start + offset,
+                                round_id=round_id,
+                                rationale="清单项没被处理，落 s11 继续排队",
+                            )
+                        )
+                    gaps.append(
+                        f"还有 {len(unhandled)} 条清单项没被处理，已记进 s11（不阻塞交付）："
+                        + "；".join(item.text for item in unhandled[:3])
+                    )
             dropped = _dropped_items_for(
                 round_,
                 assembled=assembled,
