@@ -30,6 +30,9 @@ async def event_stream(
     stream: EventStream, *, heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS
 ) -> AsyncIterator[str]:
     iterator = stream.subscribe()
+    # 建流先发一行注释：`EventSource` 的 onopen 因此立刻到，顶栏不用等 15 秒心跳
+    # 才显示"已连接"（`04-未决.md` 界面侧-2）。
+    yield ": ready\n\n"
     while True:
         try:
             event = await asyncio.wait_for(anext(iterator), timeout=heartbeat_seconds)

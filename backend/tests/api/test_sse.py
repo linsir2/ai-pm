@@ -47,17 +47,37 @@ async def test_event_stream_formats_named_sse_frames():
 
     chunks = [chunk async for chunk in event_stream(stream, heartbeat_seconds=5)]
 
-    assert chunks[0].startswith("event: packet.emitted\ndata: ")
-    assert '"seat_id": "seat.data_scale"' in chunks[0]
-    assert chunks[0].endswith("\n\n")
+    # 第 0 个 chunk 现在固定是建流注释（下面那条用例钉它），业务事件从第 1 个开始
+    assert chunks[0] == ": ready\n\n"
+    assert chunks[1].startswith("event: packet.emitted\ndata: ")
+    assert '"seat_id": "seat.data_scale"' in chunks[1]
+    assert chunks[1].endswith("\n\n")
+
+
+async def test_event_stream_opens_with_a_ready_comment():
+    """建流立刻给一行注释：顶栏不必等 15 秒心跳才从"推送连接中"变成"已连接"。"""
+
+    async def first_chunk() -> str:
+        async for chunk in event_stream(IdleStream(), heartbeat_seconds=3600):
+            return chunk
+        return ""
+
+    assert await asyncio.wait_for(first_chunk(), timeout=1) == ": ready\n\n"
 
 
 async def test_event_stream_sends_heartbeat_when_idle():
     stream = IdleStream()
 
-    async def next_chunk() -> str:
+    async def chunks_before_heartbeat() -> list[str]:
+        chunks: list[str] = []
         async for chunk in event_stream(stream, heartbeat_seconds=0.01):
-            return chunk
-        return ""
+            chunks.append(chunk)
+            if chunk == ": ping\n\n":
+                return chunks
+        return chunks
 
-    assert await asyncio.wait_for(next_chunk(), timeout=1) == ": ping\n\n"
+    # 第 0 个是建流注释，心跳从第 1 个开始（建流注释不替代心跳）
+    assert await asyncio.wait_for(chunks_before_heartbeat(), timeout=1) == [
+        ": ready\n\n",
+        ": ping\n\n",
+    ]
