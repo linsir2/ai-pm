@@ -195,3 +195,23 @@ def test_an_empty_answer_lands_nothing():
 
     assert landed.proposals == ()
     assert landed.notes == ()
+
+
+def test_an_answer_about_an_unknown_feature_field_is_skipped_with_a_note():
+    """功能字段写错（`bogus-field`）时**不许把整轮打崩**：跳过 + 留一句话。
+
+    `Target` 对功能字段只校验"非空"（字段表是内容层的），所以这种题真的存在；
+    而这段落地代码跑在事务里，抛出去就是 500——用户刚答完题，不能因为一个字打错就全丢。
+    """
+
+    target = Target.feature_field(FeatureSlug("order-export"), "bogus-field")
+
+    landed = assembly.landed_answer_proposals(
+        round_with_one_answer(target=target),
+        ledger=ledger_with_the_answer(),
+        document=document(),
+    )
+
+    assert landed.proposals == ()
+    assert len(landed.notes) == 1
+    assert "bogus-field" in landed.notes[0]

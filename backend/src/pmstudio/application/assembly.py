@@ -635,6 +635,16 @@ def landed_answer_proposals(
                 continue
             if f"{answer_set.form_id}#{answer.question_id}" in carried:
                 continue  # 已有机械 remove 撤下那条未决项，别再 ADD（会当场对冲）
+            try:
+                kind = _kind_for(question.target, None)
+            except (PacketParseError, DomainError) as error:
+                # 题的去处在**内容层**不合法（如功能字段表里没有这个名字）：跳过并说清，
+                # 绝不把整轮打崩——用户刚答完题，一个字打错不该让这一趟全丢。
+                notes.append(
+                    f"「{question.title}」的答案没落进正文：去处 "
+                    f"{question.target.label()} 不合法（{error}）。"
+                )
+                continue
             landed.append(
                 Proposal(
                     proposal_id=ProposalId(f"p{index:02d}"),
@@ -647,7 +657,7 @@ def landed_answer_proposals(
                         (eid,),
                         "问卷答案机械落地（整合者没有引用它）",
                     ),
-                    kind=_kind_for(question.target, None),
+                    kind=kind,
                 )
             )
             index += 1
