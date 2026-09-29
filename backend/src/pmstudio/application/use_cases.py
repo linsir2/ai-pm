@@ -263,6 +263,8 @@ class StartRound:
                     clock=self._clock,
                     round_id=round_id,
                     reason=error.message,
+                    # 但"模型没返回 JSON / 空回复"这两类它**自己修得了**（网关带了 hint）
+                    hint=getattr(error, "hint", None),
                 )
                 raise
         else:
@@ -1143,6 +1145,9 @@ class IntegrateRound:
                     clock=self._clock,
                     round_id=round_id,
                     reason=error.message,
+                    # "模型没返回 JSON / 空回复"这两类它自己修得了（网关带了 hint）；
+                    # 超时 / 5xx 那类不带（`hint` 是 None）
+                    hint=error.hint,
                 )
                 raise
             except (PacketParseError, DomainError) as error:

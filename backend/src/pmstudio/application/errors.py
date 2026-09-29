@@ -44,11 +44,18 @@ class PacketParseError(ApplicationError):
 
 
 class ModelCallFailed(ApplicationError):
-    """网关调用本身失败（超时 / 鉴权 / 供应商错误）。"""
+    """网关调用本身失败（超时 / 鉴权 / 供应商错误）。
 
-    def __init__(self, message: str, *, purpose: str, **details: object) -> None:
+    `hint` 只给**模型自己能修**的那两种失败（空回复 / 不是 JSON）：重试时它会被递成
+    `validation_error`，省掉一次盲调。供应商那类（超时 / 5xx / 鉴权）不给——递了没用。
+    """
+
+    def __init__(
+        self, message: str, *, purpose: str, hint: str | None = None, **details: object
+    ) -> None:
         super().__init__(message, code="model_call_failed", purpose=purpose, **details)
         self.purpose = purpose
+        self.hint = hint
 
 
 class UnknownProject(ApplicationError):

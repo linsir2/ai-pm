@@ -126,7 +126,10 @@ class LiteLLMGateway:
         raw = (response.choices[0].message.content or "").strip()
         if not raw:
             raise ModelCallFailed(
-                "模型返回了空内容", purpose=request.purpose, model=self._model
+                "模型返回了空内容",
+                purpose=request.purpose,
+                model=self._model,
+                hint="上一次你什么都没返回。请只输出那个 JSON 对象，不要空回复。",
             )
         text = strip_fence(raw)
         if request.response_schema and not _is_json(text):
@@ -135,6 +138,11 @@ class LiteLLMGateway:
                 purpose=request.purpose,
                 model=self._model,
                 head=text[:120],
+                hint=(
+                    "上一次的回复不是合法 JSON"
+                    + (f"（开头是：{text[:120]}）" if text else "")
+                    + "。请只输出那个 JSON 对象：不要解释文字、不要代码块围栏。"
+                ),
             )
         reply = ModelReply(
             text=text,

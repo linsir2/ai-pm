@@ -261,3 +261,57 @@ async def test_retrying_after_a_claims_failure_carries_the_last_error():
     assert "上一次的报文没通过校验" in analyzer_calls[-1]["validation_error"]
     assert harness.rounds.get(round_id).retry_hint is None  # 用过就清
     assert harness.rounds.get(round_id).step is Step.CLAIMS_READY
+
+
+class NotJsonOnceGateway:
+    """第一次 claims 直接报"模型没按约定返回 JSON"（**带 hint**），之后交给内层脚本网关。
+
+    模仿真网关：非 JSON 是 `ModelCallFailed`，但它属于"模型自己能修"，所以带 hint。
+    **只失败一次**：网关类失败是立刻判死整轮的（网关自己已经重试 3 次），不走重装那一圈。
+    """
+
+    def __init__(self, inner) -> None:  # type: ignore[no-untyped-def]
+        self._inner = inner
+        self._left = 1
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        if request.purpose == "claims" and self._left > 0:
+            self._left -= 1
+            raise ModelCallFailed(
+                "模型没有按约定返回 JSON（结构化输出契约被破坏）",
+                purpose="claims",
+                hint="上一次的回复不是合法 JSON。请只输出那个 JSON 对象。",
+            )
+        return await self._inner.complete(request)
+
+
+async def test_a_not_json_failure_also_leaves_a_hint_for_the_retry():
+    """真跑抓到的口径漏洞：非 JSON 由**网关**判失败，但它仍然是"模型可修"，该留提示。
+
+    （P13 真跑实验：`max_tokens=12` 把 claims 的输出截断成非 JSON → 整轮失败，
+    这时按老的 C1"网关类不递"就白丢了一次可用的提示。）
+    """
+
+    from tests.support.doubles import ScriptedModelGateway
+
+    harness = Harness(
+        gateway=NotJsonOnceGateway(ScriptedModelGateway(replies={"claims": claims_reply()})),
+    )
+    harness.seed_project()
+    use_case = harness.start_round()
+    round_id = await use_case.create(project_id=PROJECT, user_input=INPUT)
+
+    with pytest.raises(ModelCallFailed):
+        await use_case.analyze(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.FAILED
+    assert round_.retry_hint is not None
+    assert "不是合法 JSON" in round_.retry_hint
+
+    await harness.retry_round()(round_id=round_id)
+    await use_case.analyze(round_id=round_id)
+
+    analyzer_calls = [slots for name, slots in harness.prompts.calls if name == "analyzer"]
+    assert "不是合法 JSON" in analyzer_calls[-1]["validation_error"]
+    assert harness.rounds.get(round_id).step is Step.CLAIMS_READY

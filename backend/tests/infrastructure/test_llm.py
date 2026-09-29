@@ -356,6 +356,66 @@ async def test_gateway_rejects_content_that_is_not_json(monkeypatch):
     assert "JSON" in exc.value.message
 
 
+async def test_gateway_hands_the_model_a_hint_when_the_reply_is_not_json(monkeypatch):
+    """P13 真跑抓到：非 JSON 原来被当成"网关类"、不带提示——可那恰恰是**模型自己能修**的一类。
+
+    带了 hint，重试时它就会变成第一次尝试的 `validation_error`（不再盲调）。
+    """
+
+    async def prose(**kwargs):
+        class _Message:
+            content = "我觉得这个功能应该……"
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "m"
+            usage = {}
+
+        return _Response()
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", prose)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+
+    with pytest.raises(ModelCallFailed) as exc:
+        await gateway.complete(
+            ModelRequest(
+                purpose="claims",
+                messages=(ModelMessage(role="user", content="x"),),
+                schema_name="ClaimsPacket",
+                response_schema={"type": "object"},
+            )
+        )
+
+    assert exc.value.hint is not None
+    assert "不是合法 JSON" in exc.value.hint
+    assert "不要代码块围栏" in exc.value.hint
+
+
+async def test_gateway_hands_no_hint_when_the_provider_itself_failed(monkeypatch):
+    """供应商那类（超时 / 5xx）：递进去没用，所以不给 hint。"""
+
+    async def boom(**kwargs):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", boom)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None, max_attempts=1)
+
+    with pytest.raises(ModelCallFailed) as exc:
+        await gateway.complete(
+            ModelRequest(
+                purpose="claims",
+                messages=(ModelMessage(role="user", content="x"),),
+                schema_name="ClaimsPacket",
+                response_schema={"type": "object"},
+            )
+        )
+
+    assert exc.value.hint is None
+
+
 # —— P5c Task 1：超时 ——
 
 
