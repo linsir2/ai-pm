@@ -353,6 +353,7 @@ def assemble(
     for item in feature_questions:
         ordered.append(item)
         seen_questions.add(question_key(item))
+    fresh: list[Question] = []
     for index, item in enumerate(packet.questions, start=1):
         target = _target_or_drop(
             item.target, dropped=dropped, pass_index=pass_index, what="题目", index=index
@@ -372,7 +373,17 @@ def assemble(
         if question_key(question) in seen_questions:
             continue  # 模型又问了同一件事：留 carried 那份，丢新出的
         seen_questions.add(question_key(question))
-        ordered.append(question)
+        fresh.append(question)
+    # 引了**用户自己说过的话**的题排在模型自出的题前面（F12）：用户明确提的需求，
+    # 不该被模型自己发现的题挤掉这一批的配额。`sorted` 稳定 → 同组内保持模型给的顺序。
+    ordered.extend(
+        sorted(
+            fresh,
+            key=lambda question: (
+                0 if _asks_user_something(question.evidence_refs, ledger=ledger) else 1
+            ),
+        )
+    )
     kept = [
         replace(question, question_id=QuestionId(f"q{index}"))
         for index, question in enumerate(
@@ -806,6 +817,18 @@ def _asking_seats(refs: Sequence[EvidenceId], *, ledger: EvidenceLedger) -> list
         if seat_id and seat_id not in seats:
             seats.append(seat_id)
     return seats
+
+
+def _asks_user_something(refs: Sequence[EvidenceId], *, ledger: EvidenceLedger) -> bool:
+    """这条题的依据里有没有**用户自己说过的话**（主张 / 问卷答案）——F12 的排序用它。
+
+    为什么看账本而不是看模型自报：`asked_by` 是席位，`origin` 是模型写的；
+    只有账本上的 `kind` 是"这句话真从用户那儿来"的机械证据。
+    """
+
+    return any(
+        ledger.get(ref).kind in {EvidenceKind.USER_INPUT, EvidenceKind.CARD_ANSWER} for ref in refs
+    )
 
 
 def _kind_for(target: Target, name: str | None) -> BlockKind:

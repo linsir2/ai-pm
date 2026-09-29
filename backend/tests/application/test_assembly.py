@@ -1023,6 +1023,64 @@ def test_carried_questions_are_asked_before_the_new_ones():
     assert [str(item.question_id) for item in result.questions] == ["q1", "q2", "q3"]
 
 
+def test_questions_backed_by_the_users_own_words_come_first():
+    """F12：用户明确提出的需求，不能被模型自己发现的题挤掉这一批的 5 题配额。"""
+
+    result = assembly.assemble(
+        packet(
+            questions=[
+                question_draft(title="模型自己发现的：要不要支持导出？", evidence_refs=["E2"]),
+                question_draft(title="用户说过的：量级是多少？", evidence_refs=["E1"]),
+            ]
+        ),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),  # E1 = 用户输入，E2 = 席位判断
+    )
+
+    assert [item.title for item in result.questions] == [
+        "用户说过的：量级是多少？",
+        "模型自己发现的：要不要支持导出？",
+    ]
+
+
+def test_the_user_backed_order_does_not_break_carried_first():
+    """carried（上一批没问上的）仍然排最前——P9 定的口径不许被 T1 挤掉。"""
+
+    carried = carried_question("上一批没问上的题")
+    result = assembly.assemble(
+        packet(
+            questions=[question_draft(title="用户说过的：量级是多少？", evidence_refs=["E1"])]
+        ),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+        carried=(carried,),
+    )
+
+    assert [item.title for item in result.questions][0] == carried.title
+
+
+def test_the_new_feature_decision_question_still_comes_before_the_users_named_ones():
+    """修订 R1：结构门（要不要新建子树）先问，别被 T1 的排序挤到后面去。"""
+
+    result = assembly.assemble(
+        packet(
+            proposals=[proposal_draft()],  # 未授权的 order-export → 装配层出一道决策题
+            questions=[question_draft(title="用户说过的：量级是多少？", evidence_refs=["E1"])],
+        ),
+        round_=make_round(),  # 这一轮没有授权 order-export
+        document=make_document(),  # 空文档
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [item.kind for item in result.questions] == [
+        QuestionKind.DECISION,
+        QuestionKind.GAP,
+    ]
+    assert result.questions[1].title == "用户说过的：量级是多少？"
+
+
 def test_a_carried_question_is_not_asked_twice_by_the_model():
     result = assembly.assemble(
         packet(questions=[question_draft(title="上一批没问上的题")]),
