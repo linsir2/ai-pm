@@ -557,8 +557,9 @@ def _retire_answered_open_items(
     没回答（跳过）的不撤——它还该留在 s11 里等下一轮。
     """
 
+    # 键带 form_id：同一轮每一批的 question_id 都从 q1 重排（真跑第 2 轮暴露过）
     answered = {
-        str(answer.question_id)
+        f"{answer_set.form_id}#{answer.question_id}": answer.question_id
         for answer_set in round_.answer_sets
         for answer in answer_set.answers
     }
@@ -566,9 +567,10 @@ def _retire_answered_open_items(
     sources = round_.carried_sources()
     proposals: list[Proposal] = []
     index = start_index
-    for question_id in sorted(answered):
-        entry_id = sources.get(question_id)
-        eid = mapping.get(question_id)
+    for key in sorted(answered):
+        question_id = answered[key]
+        entry_id = sources.get(key)
+        eid = mapping.get(str(question_id))
         if entry_id is None or eid is None:
             continue
         proposals.append(
@@ -759,11 +761,6 @@ class IntegrateRound:
                 )
             )
             round_.defer(assembled.deferred)
-            # 记住这一轮问回来的 s11 未决条目（答完要撤下它们；下一批也不再重复问）
-            # 注意用**装配后**的题：那时 question_id 才和答案对得上（carried 还带着占位 q0）
-            round_.remember_carried(
-                tuple(item for item in assembled.questions if item.from_entry is not None)
-            )
             proposals = list(assembled.proposals)
             degraded = 0
             if assembled.degrade_reason is not None:
@@ -854,13 +851,13 @@ class IntegrateRound:
                 produced_questions=assembled.questions,
                 ledger=ledger,
             )
+            form_id = FormId(self._ids.new("f"))
             questionnaire = questionnaire_of(
-                round_id,
-                FormId(self._ids.new("f")),
-                questions,
-                assembled.list_items,
+                round_id, form_id, questions, assembled.list_items
             )
             if questionnaire is not None:
+                # 记住这一批问回来的 s11 未决条目（键带 form_id：question_id 每批都从 q1 重排）
+                round_.remember_carried(form_id, questionnaire.questions)
                 round_.integrate(questionnaire=questionnaire, dropped=dropped)
             else:
                 draft = draft_of(round_id, DraftId(self._ids.new("d")), proposals, gaps)

@@ -955,3 +955,77 @@ async def test_skipping_an_open_item_does_not_retire_it():
 
     round_ = harness.rounds.get(round_id)
     assert [item for item in round_.draft.proposals if str(item.op) == "remove"] == []
+
+
+async def test_open_items_answered_in_different_batches_are_all_retired():
+    """真跑第 2 轮暴露：`question_id` 每一批都从 `q1` 重排——来源必须按 `form_id + question_id` 记。
+
+    否则后一批的来源会覆盖前一批，"第一批答掉的那条未决项"永远撤不下来。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [
+                questionnaire_packet(),
+                questionnaire_packet(),
+                draft_packet(),
+            ],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    seed_open_item(
+        harness,
+        entry_id="r0#open01",
+        text="〔未决·阻塞〕第一条未决（未决定，待决人：PM；跳过后果：后果一）",
+    )
+    seed_open_item(
+        harness,
+        entry_id="r0#open02",
+        text="〔未决·阻塞〕第二条未决（未决定，待决人：PM；跳过后果：后果二）",
+    )
+    seed_open_item(
+        harness,
+        entry_id="r0#open03",
+        text="〔未决·阻塞〕第三条未决（未决定，待决人：PM；跳过后果：后果三）",
+    )
+
+    # 第一批：carried 前两条未决（每批上限 2）+ 模型那道题（都答掉）
+    await harness.integrate_round()(round_id=round_id)
+    first = harness.rounds.get(round_id).questionnaire
+    assert first.questions[0].from_entry == "r0#open01"
+    assert first.questions[1].from_entry == "r0#open02"
+    await harness.submit_answers()(
+        round_id=round_id,
+        form_id=str(first.form_id),
+        answers=tuple(
+            AnswerInput(question_id=str(item.question_id), text="第一批的答案")
+            for item in first.questions
+        ),
+        skipped=(),
+    )
+    await harness.run_seat_round()(round_id=round_id)
+
+    # 第二批：carried 第三条未决（前两条已经问过，不再重复问）+ 模型那道题（都答掉）
+    await harness.integrate_round()(round_id=round_id)
+    second = harness.rounds.get(round_id).questionnaire
+    assert second.questions[0].from_entry == "r0#open03"
+    await harness.submit_answers()(
+        round_id=round_id,
+        form_id=str(second.form_id),
+        answers=tuple(
+            AnswerInput(question_id=str(item.question_id), text="第二批的答案")
+            for item in second.questions
+        ),
+        skipped=(),
+    )
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)  # 两批已满 → 降级 + 出草案
+
+    round_ = harness.rounds.get(round_id)
+    removals = sorted(
+        str(item.entry_id) for item in round_.draft.proposals if str(item.op) == "remove"
+    )
+    assert removals == ["r0#open01", "r0#open02", "r0#open03"]

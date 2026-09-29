@@ -23,7 +23,7 @@ from pmstudio.domain.shared.errors import (
     UnknownSeat,
     WaitingOnHuman,
 )
-from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, ProjectId, RoundId
+from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, FormId, ProjectId, RoundId
 from pmstudio.domain.shared.target import Target
 
 
@@ -380,16 +380,19 @@ class Round:
         taken, self._deferred = self._deferred, ()
         return taken
 
-    def remember_carried(self, questions: Sequence[Question]) -> None:
+    def remember_carried(self, form_id: FormId, questions: Sequence[Question]) -> None:
         """记住"这条题来自哪条 s11 未决条目"。
 
-        为什么不能只看当前问卷：问卷一批换一批，下一批就看不到上一批的 `from_entry` 了；
-        而"答完要撤下哪条未决条目"必须留到出草案那一刻才算得出来。
-        """
+    为什么不能只看当前问卷：问卷一批换一批，下一批就看不到上一批的 `from_entry` 了；
+    而"答完要撤下哪条未决条目"必须留到出草案那一刻才算得出来。
+
+    **键必须带 form_id**：`question_id` 在同一轮的每一批里都从 `q1` 重排，
+    只按 question_id 记会把上一批的来源覆盖掉（真跑第 2 轮暴露过）。
+    """
 
         for item in questions:
             if item.from_entry is not None:
-                self._carried_sources[str(item.question_id)] = item.from_entry
+                self._carried_sources[f"{form_id}#{item.question_id}"] = item.from_entry
 
     def carried_sources(self) -> dict[str, str]:
         return dict(self._carried_sources)

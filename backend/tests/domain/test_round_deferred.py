@@ -7,7 +7,7 @@
 from dataclasses import replace
 
 from pmstudio.domain.round.questionnaire import Option, Question, QuestionType
-from pmstudio.domain.shared.ids import QuestionId, RoundId
+from pmstudio.domain.shared.ids import FormId, QuestionId, RoundId
 from pmstudio.domain.shared.target import Target
 from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
 from tests.support.builders import NOW, PROJECT, ROUND_ID, make_round
@@ -93,19 +93,22 @@ def test_carried_sources_survive_the_questionnaire_being_replaced():
 
     round_ = make_round()
     round_.remember_carried(
-        [replace(question("A"), question_id=QuestionId("q1"), from_entry="r0#open01")]
+        FormId("f1"),
+        [replace(question("A"), question_id=QuestionId("q1"), from_entry="r0#open01")],
     )
     round_.remember_carried(
-        [replace(question("B"), question_id=QuestionId("q2"), from_entry="r0#open02")]
+        FormId("f1"),
+        [replace(question("B"), question_id=QuestionId("q2"), from_entry="r0#open02")],
     )
 
-    assert round_.carried_sources() == {"q1": "r0#open01", "q2": "r0#open02"}
+    assert round_.carried_sources() == {"f1#q1": "r0#open01", "f1#q2": "r0#open02"}
 
 
 def test_carried_sources_round_trip_and_old_payload_is_empty():
     round_ = make_round()
     round_.remember_carried(
-        [replace(question("A"), question_id=QuestionId("q1"), from_entry="r0#open01")]
+        FormId("f1"),
+        [replace(question("A"), question_id=QuestionId("q1"), from_entry="r0#open01")],
     )
     payload = round_to_payload(round_)
     back = round_from_payload(
@@ -116,7 +119,7 @@ def test_carried_sources_round_trip_and_old_payload_is_empty():
         step=round_.step,
         waiting_on=round_.waiting_on,
     )
-    assert back.carried_sources() == {"q1": "r0#open01"}
+    assert back.carried_sources() == {"f1#q1": "r0#open01"}
 
     payload.pop("carried_sources")
     old = round_from_payload(
