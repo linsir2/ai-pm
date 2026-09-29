@@ -211,7 +211,15 @@ class StartRound:
         document_state = render_document_state(
             view, readiness=self._checker.check(view)
         )
-        repair = ""
+        # 上一次失败留下的报错就是这次第一次尝试的起点（同整合那条路，P13 C1/C2）。
+        # **没有 hint 就不开事务**：寻常路径的事务数被既有用例钉着（不许为只读开事务）。
+        retry_hint = round_.retry_hint
+        if retry_hint is not None:
+            with self._uow:
+                stored = self._rounds.get(round_id)
+                stored.take_retry_hint()
+                self._round_writer.save(stored)
+        repair = retry_hint or ""
         for attempt in range(1, MAX_CLAIMS_ATTEMPTS + 1):
             try:
                 analysis = await self._analyzer.analyze(
@@ -234,6 +242,8 @@ class StartRound:
                         clock=self._clock,
                         round_id=round_id,
                         reason=reason,
+                        # 报文类失败才留提示：重试时它变成第一次尝试的 validation_error
+                        hint=repair_note(error),
                     )
                     raise PacketParseError(reason, purpose="claims") from error
                 # 重装要带上"上一次错在哪"——只给要求，不复制模型写错的那串
@@ -942,11 +952,12 @@ class IntegrateRound:
     async def _integrate_with_repair(self, *, round_id: RoundId):  # type: ignore[no-untyped-def]
         # 上一次失败留下的报错（如果有）就是这次第一次尝试的起点：重试不再"盲调"（P13 C1/C2）。
         # 取走即清——不清的话，陈年错误会被后面每个动作当成校验错误递进去。
-        with self._uow:
-            round_ = self._rounds.get(round_id)
-            retry_hint = round_.take_retry_hint()
-            if retry_hint is not None:
-                self._round_writer.save(round_)
+        retry_hint = self._rounds.get(round_id).retry_hint
+        if retry_hint is not None:
+            with self._uow:
+                stored = self._rounds.get(round_id)
+                stored.take_retry_hint()
+                self._round_writer.save(stored)
         validation_error = retry_hint or ""
         carried: tuple[Question, ...] = ()
         carried_from_queue: tuple[Question, ...] = ()

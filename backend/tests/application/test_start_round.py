@@ -236,3 +236,28 @@ async def test_round_survives_a_seat_id_that_is_not_in_the_catalog():
     assert round_.step is Step.CLAIMS_READY
     # 只调了一次：不再为了一个不存在的席位把整轮重装两遍
     assert len([call for call in harness.prompts.calls if call[0] == "analyzer"]) == 1
+
+
+async def test_retrying_after_a_claims_failure_carries_the_last_error():
+    """E3 剩余（claims 那一路）：重试不是"盲调"——上次为什么没通过，要递进第一次尝试。"""
+
+    harness = Harness(replies={"claims": ["{不是 JSON", "{不是 JSON", claims_reply()]})
+    harness.seed_project()
+    use_case = harness.start_round()
+    round_id = await use_case.create(project_id=PROJECT, user_input=INPUT)
+
+    with pytest.raises(PacketParseError):
+        await use_case.analyze(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.FAILED
+    assert "两次都过不了校验" in round_.failure.reason
+    assert "上一次的报文没通过校验" in round_.retry_hint
+
+    await harness.retry_round()(round_id=round_id)  # 失败 → resume 回 started
+    await use_case.analyze(round_id=round_id)  # 第三次脚本是好的 → 切出主张
+
+    analyzer_calls = [slots for name, slots in harness.prompts.calls if name == "analyzer"]
+    assert "上一次的报文没通过校验" in analyzer_calls[-1]["validation_error"]
+    assert harness.rounds.get(round_id).retry_hint is None  # 用过就清
+    assert harness.rounds.get(round_id).step is Step.CLAIMS_READY
