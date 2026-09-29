@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from pmstudio.domain.shared.errors import (
+    DomainError,
     FeatureNotAllowedHere,
     TargetShapeError,
     UnknownSection,
@@ -95,3 +96,31 @@ class Target:
         if self.field is not None:
             text = f"{text}.{self.field}"
         return text
+
+
+def target_from_label(label: str) -> Target | None:
+    """`Target.label()` 的反函数（2026-09-29 P11 C1）。
+
+    为什么放在领域里：`label()` 的形态是**领域词汇表**的一部分（卡片、提示词、导出的 s11
+    条目都用它），反函数跟它住一起才不会两边漂。
+
+    两件事分得很清：
+    - **形状不认识**（章节不存在、`s5/` 这种缺一半、空串）→ 返回 `None`，调用方回落 `s11`，绝不猜；
+    - **字段名对不对**是**内容层**的事（`field_spec` 管），这里不替它判死。
+    """
+
+    text = label.strip()
+    if not text:
+        return None
+    if text == "preference":
+        return Target.preference()
+    head, dot, field = text.partition(".")
+    if dot and not field:
+        return None  # 写了点却没写字段名（`s5/order-export.`）——形状不完整，不猜
+    section_id, slash, slug = head.partition("/")
+    if not section_id or (slash and not slug):
+        return None
+    try:
+        return Target.body(section_id, feature_slug=slug or None, field=field or None)
+    except DomainError:
+        return None
