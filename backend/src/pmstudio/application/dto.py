@@ -341,7 +341,8 @@ def round_view(
             for item in round_.dropped
         ),
         questions=_question_views(round_),
-        list_items=tuple(item.text for item in (questionnaire.list_items if questionnaire else ())),
+        # 清单项的真相源是**轮次**（历次累积）：挂在当轮问卷上的那份换一批就没了（F8）
+        list_items=tuple(item.text for item in round_.list_items),
         draft=draft_view,
         advisories=advisories,
         failure_reason=round_.failure.reason if round_.failure is not None else None,

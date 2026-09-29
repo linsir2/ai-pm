@@ -129,6 +129,28 @@ def questionnaire_packet(*, title: str = "单次导出的最大行数是多少�
     )
 
 
+def questionnaire_packet_with_a_list_item(
+    text: str = "第一条清单项：模板字段要不要可配置？",
+) -> str:
+    """一批问卷 + 一条清单项（超出本批的记下来，不挡这一轮）。"""
+
+    draft = question_draft()
+    return json.dumps(
+        {
+            "questions": [draft],
+            "list_items": [
+                {
+                    "text": text,
+                    "target": {"zone": "body", "section_id": "s8"},
+                    "reason": "本批装不下，先记下来",
+                }
+            ],
+            "proposals": [],
+        },
+        ensure_ascii=False,
+    )
+
+
 def attributed_questionnaire_packet() -> str:
     """一道**带归因**的题：`from_opinions` 指向 `SEAT` 的第一条意见。
 
@@ -203,6 +225,43 @@ async def test_integrate_round_asks_when_there_are_questions():
     assert round_.waiting_on is WaitingOn.QUESTIONNAIRE
     assert str(round_.questionnaire.questions[0].question_id) == "q1"
     assert round_.draft is None
+
+
+async def test_the_next_batch_prompt_carries_the_previous_list_items():
+    """F8：清单项"说完就扔"——下一批的整合者要看得到上一批记下的东西。
+
+    真相源在**轮次**上（不是当轮问卷）：问卷一批换一批，挂在问卷上的清单项跟着就没了。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [questionnaire_packet_with_a_list_item(), draft_packet()],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)  # 第一批：出问卷 + 记下清单项
+    first = harness.rounds.get(round_id).questionnaire
+    await harness.submit_answers()(
+        round_id=round_id,
+        form_id=str(first.form_id),
+        answers=tuple(
+            AnswerInput(question_id=str(item.question_id), text="第一批的答案")
+            for item in first.questions
+        ),
+        skipped=(),
+    )
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)  # 第二批：提示词里要看得到
+
+    calls = [slots for name, slots in harness.prompts.calls if name == "integrator"]
+    assert "第一条清单项：模板字段要不要可配置？" in calls[-1]["previous_list_items"]
+    assert [
+        item.text for item in harness.rounds.get(round_id).list_items
+    ] == ["第一条清单项：模板字段要不要可配置？"]
 
 
 async def test_integrate_round_writes_draft_when_nothing_to_ask():

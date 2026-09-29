@@ -98,6 +98,7 @@ class Integrator:
         "validation_error",
         "authorized_features",
         "open_items",
+        "previous_list_items",
     )
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
@@ -117,6 +118,7 @@ class Integrator:
         round_id: RoundId | None = None,
         authorized_features: str = "",
         open_items: str = "",
+        previous_list_items: str = "",
     ) -> IntegrationOutcome:
         schema = schemas.IntegrationPacket.model_json_schema()
         prompt = self._prompts.render(
@@ -134,6 +136,7 @@ class Integrator:
             validation_error=validation_error,
             authorized_features=authorized_features,
             open_items=open_items,
+            previous_list_items=previous_list_items,
         )
         reply = await self._model.complete(
             ModelRequest(

@@ -14,6 +14,7 @@ from pmstudio.domain.round.opinion import SeatReview
 from pmstudio.domain.round.questionnaire import (
     Answer,
     AnswerSet,
+    ListItem,
     Option,
     Question,
     Questionnaire,
@@ -133,3 +134,87 @@ def test_an_old_payload_without_the_key_falls_back_to_the_current_batch():
 
     assert [str(form.form_id) for form in restored.questionnaire_history] == ["f2"]
     assert restored.asked_question_count == 1
+
+
+def list_item(text: str) -> ListItem:
+    return ListItem(text=text, target=Target.body("s8"), reason="本批装不下，记下来")
+
+
+def two_batch_round_with_list_items(
+    first: tuple[str, ...], second: tuple[str, ...]
+) -> Round:
+    """一轮里两批问卷**各记下一批清单项**（F8：原来后一批把前一批盖掉）。
+
+    与用例里同一个套路：清单项先记进轮次，再进这一批的问卷。
+    """
+
+    round_ = Round.start(
+        round_id=ROUND_ID, project_id=PROJECT, user_input="想做个订单导出", now=NOW
+    )
+    round_.attach_claims((make_claim(eid=EvidenceId("E1")),))
+    round_.submit_opening(seats=(SEAT,))
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 E1", opinions=()))
+    round_.remember_list_items(tuple(list_item(text) for text in first))
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f1"),
+            round_id=ROUND_ID,
+            questions=(question("q1", "第一批第一题？"),),
+            list_items=tuple(list_item(text) for text in first),
+        )
+    )
+    round_.submit_answers(
+        AnswerSet(
+            form_id=FormId("f1"),
+            answers=(Answer(question_id=QuestionId("q1"), text="10 万"),),
+            answered_at=NOW,
+        ),
+        active_seats=(SEAT,),
+    )
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 E1", opinions=()))
+    round_.remember_list_items(tuple(list_item(text) for text in second))
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f2"),
+            round_id=ROUND_ID,
+            questions=(question("q2", "第二批唯一一题？"),),
+            list_items=tuple(list_item(text) for text in second),
+        )
+    )
+    return round_
+
+
+def test_list_items_accumulate_across_batches():
+    """F8：清单项的真相源是**轮次**，不再是当轮问卷——不然换一批就消失。"""
+
+    round_ = two_batch_round_with_list_items(("第一批记的",), ("第二批记的",))
+
+    assert [item.text for item in round_.list_items] == ["第一批记的", "第二批记的"]
+    # 当轮那批没动：问卷仍然只记自己这一批的
+    assert [item.text for item in round_.questionnaire.list_items] == ["第二批记的"]
+
+
+def test_payload_roundtrip_keeps_list_items_and_old_rows_fall_back():
+    round_ = two_batch_round_with_list_items(("第一批记的",), ("第二批记的",))
+
+    payload = round_to_payload(round_)
+    restored = round_from_payload(
+        payload,
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+    assert [item.text for item in restored.list_items] == ["第一批记的", "第二批记的"]
+
+    del payload["list_items"]  # 老行：没有这个键 → 回落到当轮问卷的清单项
+    legacy = round_from_payload(
+        payload,
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+    assert [item.text for item in legacy.list_items] == ["第二批记的"]

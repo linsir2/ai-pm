@@ -8,7 +8,7 @@ from enum import StrEnum
 from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.draft import Draft
 from pmstudio.domain.round.opinion import Opinion, SeatReview
-from pmstudio.domain.round.questionnaire import AnswerSet, Question, Questionnaire
+from pmstudio.domain.round.questionnaire import AnswerSet, ListItem, Question, Questionnaire
 from pmstudio.domain.round.step import LEGAL_ADVANCES, MAX_SEAT_ROUNDS, Step, WaitingOn
 from pmstudio.domain.shared.errors import (
     AlreadyAnswered,
@@ -133,6 +133,7 @@ class Round:
         deferred: tuple[Question, ...] = (),
         carried_sources: dict[str, str] | None = None,
         questionnaire_history: tuple[Questionnaire, ...] = (),
+        list_items: tuple[ListItem, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -158,6 +159,7 @@ class Round:
         self._deferred = tuple(deferred)
         #: 这一轮把哪些 s11 未决条目问回来了（question_id → entry_id）：答完要机械撤下它们
         self._carried_sources = dict(carried_sources or {})
+        self._list_items = tuple(list_items)
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -448,6 +450,26 @@ class Round:
 
     def carried_sources(self) -> dict[str, str]:
         return dict(self._carried_sources)
+
+    @property
+    def list_items(self) -> tuple[ListItem, ...]:
+        """本轮**历次**记下的清单项（追加不覆盖）。
+
+        原来是"当轮问卷的 `list_items`"：问卷一批换一批，第二批一到，第一批记下的东西就没了
+        （真跑 F8：第一轮 0 条、第二轮 19 条、第三轮 2 条，谁也追不回来）。真相源放轮次上，
+        与 `questionnaire_history` 同一个范式；老行没有这个 payload 键 → 读侧回落到当轮问卷的那批。
+        """
+
+        return self._list_items
+
+    def remember_list_items(self, items: Sequence[ListItem]) -> None:
+        """把这一批记下的清单项存进轮次。追加：一批一批攒，不覆盖。
+
+        只有整合用例调它（问卷与草案两条路都要调，不然"这一批没出题"的那些清单项会丢）。
+        """
+
+        if items:
+            self._list_items = self._list_items + tuple(items)
 
     @property
     def current_reviews(self) -> tuple[SeatReview, ...]:

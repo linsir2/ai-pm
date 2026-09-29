@@ -718,6 +718,21 @@ def _render_open_items(carried: Sequence[Question]) -> str:
     return "\n".join(lines) or "（没有未决项）"
 
 
+def _render_list_items(round_: Round) -> str:
+    """给整合者看的"这一轮前面几批记下的清单项"（F8：不许说完就扔）。
+
+    限量 10 条：它是提示，不是账本——真账在 `Round.list_items` 与草案卡上。
+    跨轮不保（`Round` 一结束就没了）：跨轮延续靠 s11 未决条，这条口径写在 `02` 设计文档里。
+    """
+
+    items = round_.list_items[:10]
+    lines = [
+        f"- 〔去处：{item.target.label()}〕{item.text}（为什么记下：{item.reason}）"
+        for item in items
+    ]
+    return "\n".join(lines) or "（这一轮前面几批没有记下清单项）"
+
+
 def _next_proposal_index(proposals: Sequence[Proposal]) -> int:
     """续编提案编号：**现有最大编号 + 1**，不是 `len + 1`。
 
@@ -900,6 +915,9 @@ class IntegrateRound:
                 ledger=ledger,
             )
             form_id = FormId(self._ids.new("f"))
+            # 这一批记下的清单项要进轮次（两条路都记）：问卷一批换一批，
+            # 挂在问卷上的那份下一批就看不见了（F8）。
+            round_.remember_list_items(assembled.list_items)
             questionnaire = questionnaire_of(
                 round_id, form_id, questions, assembled.list_items
             )
@@ -946,6 +964,7 @@ class IntegrateRound:
                     round_, document=document
                 )
                 open_items = _render_open_items(carried_from_open_items)
+                previous_list_items = _render_list_items(round_)
                 outcome = await self._integrator.integrate(
                     document_state=render_document_state(
                         view, readiness=self._checker.check(view)
@@ -961,6 +980,7 @@ class IntegrateRound:
                     round_id=round_id,
                     authorized_features=authorized_features,
                     open_items=open_items,
+                    previous_list_items=previous_list_items,
                 )
                 if outcome.overflow and attempt < MAX_INTEGRATION_ATTEMPTS:
                     # 超限是可修复的错：先让它自己精简一次，第二次才截断（报告 F2/F11）。

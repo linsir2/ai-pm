@@ -383,12 +383,21 @@ def questionnaire_to_json(questionnaire: Questionnaire) -> dict:
         "form_id": str(questionnaire.form_id),
         "round_id": str(questionnaire.round_id),
         "questions": [_question_to_json(item) for item in questionnaire.questions],
-        "list_items": [
-            {"text": item.text, "target": target_to_json(item.target), "reason": item.reason}
-            for item in questionnaire.list_items
-        ],
+        "list_items": [_list_item_to_json(item) for item in questionnaire.list_items],
         # 留痕不写在这里：`Round.dropped` 是唯一通道（老行的读法见 _legacy_dropped）
     }
+
+
+def _list_item_to_json(item: ListItem) -> dict:
+    return {"text": item.text, "target": target_to_json(item.target), "reason": item.reason}
+
+
+def _list_item_from_json(data: dict) -> ListItem:
+    return ListItem(
+        text=data["text"],
+        target=target_from_json(data["target"]),
+        reason=data["reason"],
+    )
 
 
 def questionnaire_from_json(data: dict) -> Questionnaire:
@@ -396,14 +405,7 @@ def questionnaire_from_json(data: dict) -> Questionnaire:
         form_id=FormId(data["form_id"]),
         round_id=RoundId(data["round_id"]),
         questions=tuple(_question_from_json(item) for item in data["questions"]),
-        list_items=tuple(
-            ListItem(
-                text=item["text"],
-                target=target_from_json(item["target"]),
-                reason=item["reason"],
-            )
-            for item in data["list_items"]
-        ),
+        list_items=tuple(_list_item_from_json(item) for item in data["list_items"]),
     )
 
 
@@ -550,6 +552,8 @@ def round_to_payload(round_: Round) -> dict:
         "deferred_questions": [_question_to_json(item) for item in round_.deferred],
         # 这一轮问回来的 s11 未决条目（老行没有这个键 → 读侧 .get）
         "carried_sources": round_.carried_sources(),
+        # 这一轮历次记下的清单项（老行没有这个键 → 读侧回落到当轮问卷的那批）
+        "list_items": [_list_item_to_json(item) for item in round_.list_items],
         "failure": _failure_to_json(round_.failure),
         "confirmed_version_no": round_.confirmed_version_no,
         "abandon_reason": round_.abandon_reason,
@@ -565,6 +569,11 @@ def round_from_payload(
     step: Step,
     waiting_on: WaitingOn,
 ) -> Round:
+    questionnaire = (
+        None
+        if payload["questionnaire"] is None
+        else questionnaire_from_json(payload["questionnaire"])
+    )
     return Round(
         round_id=round_id,
         project_id=project_id,
@@ -581,14 +590,16 @@ def round_from_payload(
             for item in payload.get("nominated_seats", ())
         ),
         seat_reviews=tuple(review_from_json(item) for item in payload["seat_reviews"]),
-        questionnaire=(
-            None
-            if payload["questionnaire"] is None
-            else questionnaire_from_json(payload["questionnaire"])
-        ),
+        questionnaire=questionnaire,
         # 老行里没有这个键（问卷历史是后加的）：构造器会回落到"只有当前这一批"
         questionnaire_history=tuple(
             questionnaire_from_json(item) for item in payload.get("questionnaire_history", ())
+        ),
+        # 老行里没有这个键（清单项改成轮次累积是后加的）：回落到"当轮问卷记下的那批"
+        list_items=(
+            tuple(_list_item_from_json(item) for item in payload["list_items"])
+            if "list_items" in payload
+            else (() if questionnaire is None else questionnaire.list_items)
         ),
         answer_sets=tuple(answer_set_from_json(item) for item in payload["answer_sets"]),
         draft=None if payload["draft"] is None else draft_from_json(payload["draft"]),
