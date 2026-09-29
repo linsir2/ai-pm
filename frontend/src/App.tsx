@@ -112,6 +112,12 @@ export default function App() {
         }),
       add: (blockId: string, text: string) =>
         void data.editEntry({ op: "add", block_id: blockId, text }),
+      addField: (featureSlug: string, field: string, text: string) =>
+        void data.editEntry({
+          op: "add",
+          target: { zone: "body", section_id: "s5", feature_slug: featureSlug, field },
+          text,
+        }),
       remove: (blockId: string, entryId: string) =>
         void data.editEntry({
           op: "remove",

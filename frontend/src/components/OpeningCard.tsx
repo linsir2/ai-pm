@@ -2,7 +2,7 @@
    只改标签与去处（改文本归文档，见 01-规格 §5 的硬约束）。 */
 
 import type { ClaimEdit } from "../api/payload";
-import { seatNominationSummary, selectableLabels } from "../api/payload";
+import { seatNominationSummary, selectableLabels, targetOptions } from "../api/payload";
 import type { DocumentView, RoundView } from "../api/types";
 import { claimLabelText } from "../labels";
 import { EvidenceChip } from "./EvidenceChip";
@@ -26,7 +26,6 @@ export function OpeningCard({
   onToggleSeat: (seatId: string) => void;
   onSubmit: () => void;
 }) {
-  const sections = doc?.sections ?? [];
   const touched = touchedTargets(round, edits);
   const alwaysOn = round.nominated_seats.filter((seat) => seat.always_on).length;
   const triggered = round.nominated_seats.filter((seat) => seat.matched_keywords.length > 0);
@@ -85,9 +84,9 @@ export function OpeningCard({
                       {edit.label === "preference" ? (
                         <option value="preference">偏好区</option>
                       ) : (
-                        sections.map((section) => (
-                          <option key={section.section_id} value={section.section_id}>
-                            {section.section_id} {section.title}
+                        targetOptions(doc).map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.text}
                           </option>
                         ))
                       )}

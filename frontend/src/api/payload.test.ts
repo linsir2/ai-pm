@@ -13,9 +13,11 @@ import {
   integrationSummary,
   selectableLabels,
   seatNominationSummary,
+  targetBody,
+  targetOptions,
   unansweredCount,
 } from "./payload";
-import type { RoundView } from "./types";
+import type { DocumentView, RoundView } from "./types";
 
 const round = {
   round_id: "r1",
@@ -115,22 +117,116 @@ describe("buildClaimEdits", () => {
     ]);
   });
 
-  it("功能字段上的主张按章节比，不因为带了 feature 就当成改过", () => {
+  it("从功能字段改回整章也算改过（F7：去处比的是完整 label，不再只看章节）", () => {
     const edits = buildClaimEdits(round, {
       c4: { label: "decision", target_label: "s5" },
     });
-    expect(edits).toEqual([]);
+    expect(edits).toEqual([
+      { claim_id: "c4", label: "decision", target: { zone: "body", section_id: "s5" } },
+    ]);
+  });
+
+  it("落到某个功能的某个字段：请求体给全三件套（F7）", () => {
+    const edits = buildClaimEdits(round, {
+      c4: { label: "decision", target_label: "s5/order-export.acceptance" },
+    });
+    expect(edits).toEqual([
+      {
+        claim_id: "c4",
+        label: "decision",
+        target: {
+          zone: "body",
+          section_id: "s5",
+          feature_slug: "order-export",
+          field: "acceptance",
+        },
+      },
+    ]);
   });
 });
 
 describe("initialClaimEdits", () => {
-  it("初值就是后端给的现状，去处显示到章节一级", () => {
+  it("初值就是后端给的现状，去处原样显示（含功能字段）", () => {
     expect(initialClaimEdits(round)).toEqual({
       c1: { label: "need", target_label: "s5" },
       c2: { label: "guess", target_label: "s10" },
       c3: { label: "preference", target_label: "preference" },
-      c4: { label: "decision", target_label: "s5" },
+      c4: { label: "decision", target_label: "s5/订单导出.priority" },
     });
+  });
+});
+
+describe("targetBody", () => {
+  it("四种去处形状各自变对（与后端 Target.label 互为逆运算）", () => {
+    expect(targetBody("preference")).toEqual({ zone: "preference" });
+    expect(targetBody("s5")).toEqual({ zone: "body", section_id: "s5" });
+    expect(targetBody("s5/order-export")).toEqual({
+      zone: "body",
+      section_id: "s5",
+      feature_slug: "order-export",
+    });
+    expect(targetBody("s5/order-export.acceptance")).toEqual({
+      zone: "body",
+      section_id: "s5",
+      feature_slug: "order-export",
+      field: "acceptance",
+    });
+    // 章节槽（s8 的六块）：没有斜杠，点是分隔符
+    expect(targetBody("s8.performance")).toEqual({
+      zone: "body",
+      section_id: "s8",
+      field: "performance",
+    });
+  });
+});
+
+const doc = {
+  sections: [
+    {
+      section_id: "s5",
+      title: "功能需求",
+      blocks: [
+        {
+          block_id: "feat-order-export",
+          kind: "feature",
+          feature_slug: "order-export",
+          field: null,
+          entries: [],
+          children: [
+            {
+              block_id: "feat-order-export.name",
+              kind: "text",
+              field: "name",
+              field_title: "名称",
+              entries: [{ entry_id: "e1", text: "订单导出", refs: [] }],
+              children: [],
+            },
+          ],
+        },
+      ],
+    },
+    { section_id: "s8", title: "非功能需求", blocks: [] },
+  ],
+} as unknown as DocumentView;
+
+describe("targetOptions", () => {
+  it("章节与「功能 · 字段」都在选项里；字段块还不存在也能选（F7）", () => {
+    const options = targetOptions(doc);
+    const values = options.map((option) => option.value);
+
+    expect(values).toContain("preference");
+    expect(values).toContain("s8");
+    expect(values).toContain("s5/order-export.name");
+    // 验收标准这块还不存在，但它是功能字段表里的一员 → 也要能选
+    expect(values).toContain("s5/order-export.acceptance");
+    expect(options.find((option) => option.value === "s5/order-export.acceptance")!.text).toBe(
+      "订单导出 · 验收标准",
+    );
+  });
+
+  it("没有文档就只剩偏好区与 13 章", () => {
+    const values = targetOptions(null).map((option) => option.value);
+    expect(values).toEqual(["preference"]);
   });
 });
 

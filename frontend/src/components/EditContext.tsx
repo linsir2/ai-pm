@@ -15,6 +15,11 @@ export interface EditApi {
   busy: boolean;
   edit: (blockId: string, entryId: string, text: string) => void;
   add: (blockId: string, text: string) => void;
+  /**
+   * 往"某个功能的某个字段"加一条——这一块还不存在也行（后端会自己建块，F8-①）。
+   * 功能本身不会被凭空造出来：没授权过的 slug 后端会拒。
+   */
+  addField: (featureSlug: string, field: string, text: string) => void;
   remove: (blockId: string, entryId: string) => void;
 }
 
@@ -23,6 +28,7 @@ const NO_EDIT: EditApi = {
   busy: false,
   edit: () => undefined,
   add: () => undefined,
+  addField: () => undefined,
   remove: () => undefined,
 };
 

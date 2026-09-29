@@ -59,6 +59,16 @@ export function fieldTitle(
   );
 }
 
+/** 12 个功能字段（顺序就是后端字段表的顺序）：建"还不存在的字段块"时用。 */
+export function featureFields(
+  schema: SchemaView | null = current,
+): { name: string; title: string }[] {
+  if (schema !== null) {
+    return schema.feature_fields.map((item) => ({ name: item.name, title: item.title }));
+  }
+  return Object.entries(FALLBACK_FIELD_TITLES).map(([name, title]) => ({ name, title }));
+}
+
 /** 这一章是干什么的（拿不到 schema 就是 null：宁可不显示，也不编一句）。 */
 export function sectionPurpose(
   sectionId: string,

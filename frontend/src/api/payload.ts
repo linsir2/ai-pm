@@ -4,8 +4,9 @@
    1. 问卷是"交卷语义"——没答也没显式跳过的题按跳过提交，后果由题面写清；
    2. 草案默认勾选"你说过的 + 它替你判断的"，**它提议的默认不勾**。 */
 
-import { sectionIdOf } from "../labels";
-import type { AnswerBatchView, ClaimView, DraftView, RoundView } from "./types";
+import { listFeatures } from "../document/structure";
+import type { AnswerBatchView, ClaimView, DocumentView, DraftView, RoundView } from "./types";
+import { featureFields } from "../state/schema";
 
 export interface AnswerDraft {
   selected: string[];
@@ -116,9 +117,76 @@ export function initialClaimEdits(round: RoundView): Record<string, ClaimEdit> {
   return Object.fromEntries(
     round.claims.map((claim) => [
       claim.claim_id,
-      { label: claim.label, target_label: sectionIdOf(claim.target_label) },
+      { label: claim.label, target_label: claim.target_label },
     ]),
   );
+}
+
+/** 请求体里的去处形状（与后端 `ClaimEditRequest.target` 一一对应）。 */
+export interface ClaimTargetBody {
+  zone: "body" | "preference";
+  section_id?: string;
+  feature_slug?: string;
+  field?: string;
+}
+
+/**
+ * 去处 label → 请求体。label 的形状由后端 `Target.label()` 决定，共四种：
+ * `preference` / `s8` / `s8.performance`（章节槽）/ `s5/order-export.acceptance`（功能字段）。
+ */
+export function targetBody(label: string): ClaimTargetBody {
+  if (label === "preference") return { zone: "preference" };
+
+  const slash = label.indexOf("/");
+  if (slash >= 0) {
+    const section_id = label.slice(0, slash);
+    const rest = label.slice(slash + 1);
+    const dot = rest.indexOf(".");
+    if (dot < 0) return { zone: "body", section_id, feature_slug: rest };
+    return {
+      zone: "body",
+      section_id,
+      feature_slug: rest.slice(0, dot),
+      field: rest.slice(dot + 1),
+    };
+  }
+
+  const dot = label.indexOf(".");
+  if (dot >= 0) {
+    return { zone: "body", section_id: label.slice(0, dot), field: label.slice(dot + 1) };
+  }
+  return { zone: "body", section_id: label };
+}
+
+export interface TargetOption {
+  /** 去处 label（`s5/order-export.acceptance` 这种）——直接当 `<select>` 的 value。 */
+  value: string;
+  text: string;
+}
+
+/**
+ * 复述卡的去处下拉：偏好区 + 13 章 + **每个已存在功能的 12 个字段**（F7）。
+ *
+ * 字段清单来自 `/schema`（拿不到就用 `FALLBACK_FIELD_TITLES`），所以"验收标准那块还不存在"
+ * 也能选——真正建块发生在确认写入那一刻（domain 自己建）。
+ */
+export function targetOptions(doc: DocumentView | null): TargetOption[] {
+  const options: TargetOption[] = [{ value: "preference", text: "偏好区" }];
+  if (doc === null) return options;
+
+  for (const section of doc.sections) {
+    options.push({ value: section.section_id, text: `${section.section_id} ${section.title}` });
+  }
+  for (const feature of listFeatures(doc)) {
+    const slug = feature.block.feature_slug ?? feature.slug;
+    for (const field of featureFields()) {
+      options.push({
+        value: `s5/${slug}.${field.name}`,
+        text: `${feature.name} · ${field.title ?? field.name}`,
+      });
+    }
+  }
+  return options;
 }
 
 /**
@@ -130,21 +198,16 @@ export function buildClaimEdits(round: RoundView, edits: Record<string, ClaimEdi
     .filter((claim: ClaimView) => {
       const edit = edits[claim.claim_id];
       if (edit === undefined) return false;
-      return (
-        edit.label !== claim.label ||
-        edit.target_label !== sectionIdOf(claim.target_label)
-      );
+      return edit.label !== claim.label || edit.target_label !== claim.target_label;
     })
     .map((claim) => {
       const edit = edits[claim.claim_id]!;
-      if (edit.label === "preference") {
-        return { claim_id: claim.claim_id, label: edit.label, target: { zone: "preference" } };
-      }
-      return {
-        claim_id: claim.claim_id,
-        label: edit.label,
-        target: { zone: "body", section_id: edit.target_label },
-      };
+      // 标签是偏好时去处强制走偏好区（后端会因"标签与分区不符"直接拒）
+      const target =
+        edit.label === "preference"
+          ? ({ zone: "preference" } as ClaimTargetBody)
+          : targetBody(edit.target_label);
+      return { claim_id: claim.claim_id, label: edit.label, target };
     });
 }
 
