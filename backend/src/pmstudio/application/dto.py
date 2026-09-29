@@ -147,6 +147,10 @@ class RoundView:
     draft: DraftView | None
     advisories: tuple[str, ...]
     failure_reason: str | None
+    #: 失败时停在哪个 step（`failed` 之外的那个）——"重试会从哪继续"由它翻译
+    failure_at_step: str | None
+    #: 那句人话（认不出的 step → None，不猜）
+    retry_from: str | None
     abandon_reason: str | None
     confirmed_version_no: int | None
     form_id: str | None
@@ -290,6 +294,20 @@ def feature_coverage_advisory(round_: Round) -> str | None:
     )
 
 
+#: "重试会从哪继续"的人话，对着 `graph.RESUME_ROUTES` 写：认不出的 step → None（不猜）
+RETRY_FROM_LABELS: dict[str, str] = {
+    "started": "从切分重新开始",
+    "claims_ready": "等你确认复述卡（不用重跑模型）",
+    "seats_running": "从席位轮继续（已交回的不重跑）",
+}
+
+
+def retry_from_label(step: str) -> str | None:
+    """失败停在 `step` 时，重试会从哪儿继续（纯函数，认不出就 None）。"""
+
+    return RETRY_FROM_LABELS.get(step)
+
+
 def round_view(
     round_: Round,
     *,
@@ -346,6 +364,12 @@ def round_view(
         draft=draft_view,
         advisories=advisories,
         failure_reason=round_.failure.reason if round_.failure is not None else None,
+        failure_at_step=(
+            None if round_.failure is None else round_.failure.at_step.value
+        ),
+        retry_from=(
+            None if round_.failure is None else retry_from_label(round_.failure.at_step.value)
+        ),
         abandon_reason=round_.abandon_reason,
         confirmed_version_no=round_.confirmed_version_no,
         form_id=None if questionnaire is None else str(questionnaire.form_id),

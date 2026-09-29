@@ -320,6 +320,35 @@ def test_round_view_surfaces_failure_reason_and_resume_point():
     assert "seat.permissions" in view.failure_reason
 
 
+def test_round_view_says_where_retry_will_continue():
+    """E3：光有"为什么死"不够——还要说清"重试会从哪继续、哪些活不用重跑"。"""
+
+    round_ = make_round()  # `make_round()` 已经过完开场卡 → 停在 seats_running
+    round_.fail("席位 seat.permissions 返回的报文过不了 schema")
+
+    view = dto.round_view(round_)
+
+    assert view.failure_at_step == "seats_running"
+    assert view.retry_from == "从席位轮继续（已交回的不重跑）"
+
+
+def test_retry_from_labels_follow_the_resume_routes():
+    """这四句话对着 `RESUME_ROUTES`：认不出的 step 不猜（老库里的坏行）。"""
+
+    assert dto.retry_from_label("started") == "从切分重新开始"
+    assert dto.retry_from_label("claims_ready") == "等你确认复述卡（不用重跑模型）"
+    assert dto.retry_from_label("seats_running") == "从席位轮继续（已交回的不重跑）"
+    assert dto.retry_from_label("failed") is None
+    assert dto.retry_from_label("") is None
+
+
+def test_a_healthy_round_has_no_failure_point():
+    view = dto.round_view(make_round())
+
+    assert view.failure_at_step is None
+    assert view.retry_from is None
+
+
 def test_workspace_view_carries_project_document_and_round():
     document = Document.new(
         document_id=DocumentId("doc1"), project_id=ProjectId("p1"), title="订单中台", now=NOW
