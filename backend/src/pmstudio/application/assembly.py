@@ -613,10 +613,11 @@ def landed_answer_proposals(
     （报告 F6）。所以出草案那一刻核查：这条答案的出处编号被这一趟的提案/题目引用了吗？
     `cited` 由调用方从**本轮**的提案与题目里收（那是一趟的产物，装配层看不到）。
 
-    三种**不落地**，各自在 `notes` 里说清为什么（绝不静默）：
-    ① `target` 是未授权的新功能 slug——落下去等于凭空建功能子树，撞硬约束；
-    ② 这道题来自 s11 未决条目（`carried_sources` 命中）——答完已有机械 `remove`
-       撤下它，再 ADD 一条会对冲；
+    三种**不落地**：
+    ① `target` 是未授权的新功能 slug（在 `notes` 里说清为什么）；
+    ② **去处就是 s11**（老格式的 carried 题、或整合者自己把题问在 s11 上）——那里的"结论"
+       由机械 `remove` 与队列处理，不往正文塞。判据是**去处**不是来源（2026-09-29 P11 C2）：
+       带着原去处回来的 carried 题，答案照落回原章节（真跑里四条答案就是因为这条一刀切才蒸发的）；
     ③ 答案已经被引用（整合者干完了活）。
 
     空答（既没选项也没自由文本）没有内容可落：跳过，也不留噪声。
@@ -631,7 +632,6 @@ def landed_answer_proposals(
         block.feature_slug for block in document.features() if block.feature_slug is not None
     )
     authorized = round_.authorized_new_features
-    carried = round_.carried_sources()
 
     landed: list[Proposal] = []
     notes: list[str] = []
@@ -661,8 +661,10 @@ def landed_answer_proposals(
                     "（要写就先答一次「这是不是独立功能」）。"
                 )
                 continue
-            if f"{answer_set.form_id}#{answer.question_id}" in carried:
-                continue  # 已有机械 remove 撤下那条未决项，别再 ADD（会当场对冲）
+            if question.target.section_id == OPEN_QUESTION_HOME:
+                # 去处就是 s11：那里的"结论"由机械 remove 与队列处理，不往正文塞一段"用户已定"
+                # （2026-09-29 P11 C2：判据是**去处**，不是来源——带原去处回来的 carried 题照落）
+                continue
             try:
                 kind = _kind_for(question.target, None)
             except (PacketParseError, DomainError) as error:

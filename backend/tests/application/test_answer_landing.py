@@ -157,8 +157,9 @@ def test_an_authorized_new_feature_still_lands():
     assert landed.notes == ()
 
 
-def test_an_answer_carried_from_s11_is_not_landed():
-    """来自 s11 未决条目的答案已经有机械 `remove` 撤下它，再 ADD 一条会当场对冲。"""
+def test_an_answer_whose_target_is_s11_is_not_landed():
+    """**去处**是 s11 的答案不落地（老格式 carried 题就是这种）：那里的"结论"由机械 `remove`
+    和队列处理，再往正文塞一条「用户已定」没有去处可落（P11 C2：判据是去处，不是来源）。"""
 
     landed = assembly.landed_answer_proposals(
         round_with_one_answer(target=Target.body("s11"), carried=True),
@@ -168,6 +169,30 @@ def test_an_answer_carried_from_s11_is_not_landed():
 
     assert landed.proposals == ()
     assert landed.notes == ()
+
+
+def test_an_answer_to_a_carried_question_lands_at_its_own_section():
+    """**P11 的核心用例**：真跑 `p-0b212145` 里 E100/E101/E116/E117 四条答案只留了一条 remove，
+    正文一个字没有——因为 carried 一律被排除在落地之外。
+
+    P11 之后 carried 题带着**原去处**回来，答案就该像别的答案一样落进去。
+    """
+
+    target = Target.body("s5", feature_slug="order-export", field="acceptance")
+    round_ = round_with_one_answer(
+        target=target, selected=(), text="当班内可驳回重提，跨天不许改", carried=True
+    )
+
+    landed = assembly.landed_answer_proposals(
+        round_,
+        ledger=ledger_with_the_answer(text="当班内可驳回重提，跨天不许改"),
+        document=document(),
+    )
+
+    assert [item.target for item in landed.proposals] == [target]
+    assert landed.proposals[0].text == "用户已定：当班内可驳回重提，跨天不许改"
+    assert landed.proposals[0].origin.refs == (EvidenceId("E1"),)
+    assert landed.proposals[0].origin.type.value == "user"
 
 
 def test_a_free_text_answer_lands_verbatim():
