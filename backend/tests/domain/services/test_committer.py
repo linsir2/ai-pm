@@ -227,6 +227,63 @@ def test_commit_ok_proposed_without_traceability_is_allowed():
     assert result.version.version_no == 2
 
 
+def draft_with_one_derived_and_one_proposed() -> Draft:
+    """一条"它替你判断的" + 一条"它提议的"——C4 的计数据的是**后者**。"""
+
+    return Draft(
+        draft_id=DraftId("d1"),
+        round_id=ROUND_ID,
+        proposals=(
+            Proposal(
+                proposal_id=ProposalId("p1"),
+                entry_id=EntryId("en1"),
+                op=WriteOp.ADD,
+                target=Target.body("s5"),
+                text="验收标准：5 万条内 60 秒可下载",
+                origin=Origin(OriginType.DERIVED, (EvidenceId("E2"),), "量级在 1 万级"),
+                kind=BlockKind.ACCEPTANCE,
+            ),
+            Proposal(
+                proposal_id=ProposalId("p3"),
+                entry_id=EntryId("en3"),
+                op=WriteOp.ADD,
+                target=Target.body("s8"),
+                text="导出记录保留 30 天",
+                origin=Origin(OriginType.PROPOSED, (EvidenceId("E3"),), "纯专业判断"),
+                kind=BlockKind.BULLET_LIST,
+            ),
+        ),
+    )
+
+
+def test_commit_records_zero_when_the_user_takes_no_proposed_content():
+    """只勾了"它替你判断的" → 给 1 收 0（C4 的判据就落在这两个数上）。"""
+
+    fixture = Fixture()
+    fixture.round.integrate(draft=draft_with_one_derived_and_one_proposed())
+    fixture.rounds.seed(fixture.round)
+
+    fixture.committer().commit(round_id=ROUND_ID, accepted=(ProposalId("p1"),), now=NOW)
+
+    round_ = fixture.rounds.get(ROUND_ID)
+    assert round_.proposed_offered == 1
+    assert round_.proposed_accepted == 0
+
+
+def test_commit_records_one_when_the_user_takes_the_proposed_content():
+    fixture = Fixture()
+    fixture.round.integrate(draft=draft_with_one_derived_and_one_proposed())
+    fixture.rounds.seed(fixture.round)
+
+    fixture.committer().commit(
+        round_id=ROUND_ID, accepted=(ProposalId("p1"), ProposalId("p3")), now=NOW
+    )
+
+    round_ = fixture.rounds.get(ROUND_ID)
+    assert round_.proposed_offered == 1
+    assert round_.proposed_accepted == 1
+
+
 def test_commit_bad_round_write_failure_rolls_back_document():
     fixture = Fixture()
     fixture.add_draft()

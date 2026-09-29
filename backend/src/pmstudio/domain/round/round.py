@@ -136,6 +136,8 @@ class Round:
         list_items: tuple[ListItem, ...] = (),
         contradictions: tuple[Contradiction, ...] = (),
         retry_hint: str | None = None,
+        proposed_offered: int | None = None,
+        proposed_accepted: int | None = None,
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -164,6 +166,8 @@ class Round:
         self._list_items = tuple(list_items)
         self._contradictions = tuple(contradictions)
         self._retry_hint = retry_hint
+        self._proposed_offered = proposed_offered
+        self._proposed_accepted = proposed_accepted
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -602,11 +606,37 @@ class Round:
         self._answer_sets = self._answer_sets + (answer_set,)
         self._advance_to(Step.SEATS_RUNNING)
 
-    def confirm(self, version_no: int) -> None:
+    def confirm(
+        self,
+        version_no: int,
+        *,
+        proposed_offered: int = 0,
+        proposed_accepted: int = 0,
+    ) -> None:
+        """确认写入：记版本号，也记下"它提议的"**给了几条、用户收了几条**（C4 的判据）。
+
+        给这两个数是 `ProposalCommitter` 的活（它手里才有草案与勾选）；
+        默认 0 只服务于"这一轮压根没有提议组"的老调用方式。
+        """
+
         self._require_step(Step.AWAITING_CONFIRM)
         self._require_waiting(WaitingOn.DRAFT)
         self._confirmed_version_no = version_no
+        self._proposed_offered = proposed_offered
+        self._proposed_accepted = proposed_accepted
         self._advance_to(Step.DONE)
+
+    @property
+    def proposed_offered(self) -> int | None:
+        """"它提议的"这一组给了几条（没确认过就是 `None`——**不编 0**）。"""
+
+        return self._proposed_offered
+
+    @property
+    def proposed_accepted(self) -> int | None:
+        """"它提议的"这一组用户收了几条。"""
+
+        return self._proposed_accepted
 
     def authorize_new_feature(self, slug: FeatureSlug, *, basis: EvidenceId) -> None:
         if slug in self._authorized:

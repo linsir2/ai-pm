@@ -13,6 +13,7 @@
 import pytest
 
 from pmstudio.domain.round.claim import Contradiction
+from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
 from pmstudio.domain.round.opinion import SeatReview
 from pmstudio.domain.round.questionnaire import (
     Answer,
@@ -25,8 +26,17 @@ from pmstudio.domain.round.questionnaire import (
 )
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
-from pmstudio.domain.shared.ids import EvidenceId, FormId, QuestionId
+from pmstudio.domain.shared.ids import (
+    DraftId,
+    EntryId,
+    EvidenceId,
+    FormId,
+    ProposalId,
+    QuestionId,
+    RoundId,
+)
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
 from tests.support.builders import (
     NOW,
@@ -321,3 +331,73 @@ def test_a_gateway_failure_has_no_hint():
     round_.fail("模型调用失败：ReadTimeout")
 
     assert round_.retry_hint is None
+
+
+# —— C4：确认时记下"它提议的"给了几条、收了几条（P14）——
+
+
+def proposal_draft(proposal_id: str, *, origin: OriginType) -> Proposal:
+    return Proposal(
+        proposal_id=ProposalId(proposal_id),
+        entry_id=EntryId(f"r1#{proposal_id[-2:]}"),
+        op=WriteOp.ADD,
+        target=Target.body("s2"),
+        text=f"{proposal_id} 的内容",
+        origin=Origin(origin, (EvidenceId("E1"),), "理由"),
+        kind=BlockKind.TEXT,
+    )
+
+
+def round_with_a_draft(*, round_id: str = "r1", seat_round_count: int = 1) -> Round:
+    """一轮走到草案卡：草案里 1 条"它提议的" + 1 条"它替你判断的" + 1 条"你说过的"。"""
+
+    round_ = Round.start(
+        round_id=RoundId(round_id), project_id=PROJECT, user_input="想做个订单导出", now=NOW
+    )
+    round_.attach_claims((make_claim(eid=EvidenceId("E1")),))
+    round_.submit_opening(seats=(SEAT,))
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 E1", opinions=()))
+    round_.integrate(
+        draft=Draft(
+            draft_id=DraftId("d1"),
+            round_id=RoundId(round_id),
+            proposals=(
+                proposal_draft("p01", origin=OriginType.USER),
+                proposal_draft("p02", origin=OriginType.DERIVED),
+                proposal_draft("p03", origin=OriginType.PROPOSED),
+            ),
+        ),
+        dropped=(),
+    )
+    return round_
+
+
+def test_confirming_records_how_many_proposals_were_offered_and_accepted():
+    round_ = round_with_a_draft()
+    round_.confirm(7, proposed_offered=1, proposed_accepted=0)
+
+    assert round_.proposed_offered == 1
+    assert round_.proposed_accepted == 0
+    assert round_.confirmed_version_no == 7
+    assert round_.step is Step.DONE
+
+
+def test_a_round_that_never_confirmed_has_no_tally():
+    round_ = round_with_a_draft()
+
+    assert round_.proposed_offered is None
+    assert round_.proposed_accepted is None
+
+
+def test_payload_roundtrip_keeps_the_tally_and_old_rows_fall_back():
+    round_ = round_with_a_draft()
+    round_.confirm(7, proposed_offered=3, proposed_accepted=1)
+
+    payload = round_to_payload(round_)
+    assert restored(payload).proposed_offered == 3
+    assert restored(payload).proposed_accepted == 1
+
+    del payload["proposed_offered"]  # 老行：没有这两把键 → None（不编 0）
+    del payload["proposed_accepted"]
+    assert restored(payload).proposed_offered is None
+    assert restored(payload).proposed_accepted is None

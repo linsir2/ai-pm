@@ -561,6 +561,9 @@ def round_to_payload(round_: Round) -> dict:
         ],
         # 上次失败的报文类原因（重试时递给第一次尝试；老行没有这个键 → None）
         "retry_hint": round_.retry_hint,
+        # 确认时记下的"它提议的"给/收（老行没有这两把键 → None，不编 0）
+        "proposed_offered": round_.proposed_offered,
+        "proposed_accepted": round_.proposed_accepted,
         "failure": _failure_to_json(round_.failure),
         "confirmed_version_no": round_.confirmed_version_no,
         "abandon_reason": round_.abandon_reason,
@@ -614,6 +617,9 @@ def round_from_payload(
         ),
         # 老行里没有这个键（重试提示是后加的）：None——不编提示
         retry_hint=payload.get("retry_hint"),
+        # 老行里没有这两把键（C4 的计数是后加的）：None——不编 0
+        proposed_offered=payload.get("proposed_offered"),
+        proposed_accepted=payload.get("proposed_accepted"),
         answer_sets=tuple(answer_set_from_json(item) for item in payload["answer_sets"]),
         draft=None if payload["draft"] is None else draft_from_json(payload["draft"]),
         seat_round_count=payload["seat_round_count"],

@@ -82,7 +82,19 @@ class ProposalCommitter:
                 authorized_new_features=round_.authorized_new_features,
             )
             self._writer.save(document)
-            round_.confirm(version.version_no)
+            # 记下"它提议的"给了几条、用户收了几条（C4）：给的是**整个草案**里的 proposed，
+            # 收的是**勾了的那部分**里的 proposed——两个数都能从这一轮自己推出来，不用建表。
+            offered = [
+                item
+                for item in round_.draft.proposals
+                if item.origin.type is OriginType.PROPOSED
+            ]
+            taken = {proposal.proposal_id for proposal in proposals}
+            round_.confirm(
+                version.version_no,
+                proposed_offered=len(offered),
+                proposed_accepted=sum(1 for item in offered if item.proposal_id in taken),
+            )
             self._round_writer.save(round_)
         return CommitResult(
             version=version,
