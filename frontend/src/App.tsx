@@ -230,6 +230,9 @@ export default function App() {
               round !== null &&
               void data.confirm(round.round_id, drafts.accepted)
             }
+            onDig={() => {
+              if (round !== null) void data.dig(round.round_id);
+            }}
             onRetry={() => {
               if (round !== null) void data.retry(round.round_id);
             }}

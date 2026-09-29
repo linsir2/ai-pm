@@ -15,6 +15,7 @@ export function DraftDrawer({
   onToggle,
   onSetAccepted,
   onSubmit,
+  onDig,
   onCollapse,
 }: {
   round: RoundView;
@@ -24,6 +25,8 @@ export function DraftDrawer({
   onToggle: (proposalId: string) => void;
   onSetAccepted: (proposalIds: string[]) => void;
   onSubmit: () => void;
+  /** 草案卡上的"继续深挖"：回到提问，把刚才没问上的题问出来（C6）。 */
+  onDig: () => void;
   onCollapse: () => void;
 }) {
   const draft: DraftView | null = round.draft;
@@ -101,6 +104,14 @@ export function DraftDrawer({
             disabled={pending || accepted.length === 0}
           >
             全不勾
+          </button>
+          <button
+            type="button"
+            className="btn btn--sm btn--ghost"
+            onClick={onDig}
+            disabled={pending}
+          >
+            继续深挖（再问一批）
           </button>
           <button type="button" className="btn btn--primary" disabled={pending} onClick={onSubmit}>
             {pending ? "正在写入…" : `确认写入 ${accepted.length} 条`}

@@ -164,6 +164,10 @@ export const api = {
   retry: (roundId: string) =>
     request<RoundView>(`/rounds/${roundId}/retry`, { method: "POST", body: "{}" }),
 
+  /** 草案卡上的"继续深挖"：回到提问，把刚才没问上的题问出来（C6）。 */
+  dig: (roundId: string) =>
+    request<RoundView>(`/rounds/${roundId}/dig`, { method: "POST", body: "{}" }),
+
   /** 放弃这一轮：后端先记状态、再取消正在跑的模型调用。 */
   abandonRound: (roundId: string) =>
     request<RoundView>(`/rounds/${roundId}/abandon`, { method: "POST", body: "{}" }),

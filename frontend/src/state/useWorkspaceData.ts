@@ -16,7 +16,14 @@ import type {
 import { initialState, reduce } from "./workspace";
 import { useEvents } from "./useEvents";
 
-export type PendingAction = "start" | "opening" | "answers" | "confirm" | "retry" | "edit";
+export type PendingAction =
+  | "start"
+  | "opening"
+  | "answers"
+  | "confirm"
+  | "retry"
+  | "dig"
+  | "edit";
 
 const PROJECT_PARAM = "project";
 
@@ -214,6 +221,14 @@ export function useWorkspaceData() {
     [run],
   );
 
+  const dig = useCallback(
+    (roundId: string) =>
+      run("dig", async () => {
+        dispatch({ type: "round", round: await api.dig(roundId) });
+      }),
+    [run],
+  );
+
   /** 放弃这一轮：不动 pending（那条在途请求由 abandoning 标志位接住）。 */
   const abandon = useCallback(async (roundId: string) => {
     abandoning.current = true;
@@ -320,6 +335,7 @@ export function useWorkspaceData() {
     submitAnswers,
     confirm,
     retry,
+    dig,
     abandon,
     editEntry,
     rollback,

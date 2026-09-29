@@ -20,6 +20,7 @@ export function LoopColumn({
   onSubmitAnswers,
   onSkipAll,
   onConfirm,
+  onDig,
   onRetry,
   onAbandon,
 }: {
@@ -35,6 +36,7 @@ export function LoopColumn({
   onSubmitAnswers: () => void;
   onSkipAll: () => void;
   onConfirm: () => void;
+  onDig: () => void;
   onRetry: () => void;
   onAbandon: () => void;
 }) {
@@ -107,6 +109,7 @@ export function LoopColumn({
           onToggle={drafts.toggleAccepted}
           onSetAccepted={drafts.setAccepted}
           onSubmit={onConfirm}
+          onDig={onDig}
           onCollapse={() => drafts.setCollapsed(true)}
         />
       )}
