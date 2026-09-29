@@ -11,7 +11,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import DroppedItem, DropSource, SeatNomination
+from pmstudio.domain.round.round import DroppedItem, DropSource, Round, SeatNomination
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EntryId, EvidenceId, FormId, ProjectId, QuestionId, RoundId
 from pmstudio.domain.shared.target import Target
@@ -184,6 +184,60 @@ def test_workspace_index_reports_summary_and_latest_round(repos):
     assert summary.version_no == 1
     assert index.latest_round_id(PROJECT) == RoundId("r1")
     assert [item.project_id for item in index.list_summaries()] == ["p1"]
+
+
+def test_recent_rounds_returns_newest_first_and_reads_the_tally(repos):
+    """C4 要按项目看最近几轮：最新在前，没确认过的轮字段是 None（不编 0）。"""
+
+    _, rounds, _, index, uow = repos
+    confirmed = Round(
+        round_id=RoundId("r1"),
+        project_id=PROJECT,
+        user_input="第一轮",
+        created_at=NOW,
+        step=Step.DONE,
+        waiting_on=WaitingOn.NONE,
+        confirmed_version_no=7,
+        proposed_offered=1,
+        proposed_accepted=0,
+    )
+    fresh = Round(
+        round_id=RoundId("r2"),
+        project_id=PROJECT,
+        user_input="第二轮",
+        created_at=NOW,
+        step=Step.SEATS_RUNNING,
+        waiting_on=WaitingOn.NONE,
+    )
+    with uow:
+        rounds.save(confirmed)
+        rounds.save(fresh)
+
+    outcomes = index.recent_rounds(PROJECT, limit=5)
+
+    assert [item.round_id for item in outcomes] == ["r2", "r1"]  # 最新在前
+    assert outcomes[0].step == "seats_running"
+    assert outcomes[0].proposed_offered is None  # 还没确认 → None
+    assert (outcomes[1].proposed_offered, outcomes[1].proposed_accepted) == (1, 0)
+
+
+def test_recent_rounds_respects_the_limit(repos):
+    _, rounds, _, index, uow = repos
+    with uow:
+        for index_ in range(1, 4):
+            rounds.save(
+                Round(
+                    round_id=RoundId(f"r{index_}"),
+                    project_id=PROJECT,
+                    user_input=f"第 {index_} 轮",
+                    created_at=NOW,
+                    step=Step.DONE,
+                    waiting_on=WaitingOn.NONE,
+                    confirmed_version_no=index_,
+                )
+            )
+
+    assert len(index.recent_rounds(PROJECT, limit=2)) == 2
 
 
 def test_repositories_bad_unknown_ids(repos):

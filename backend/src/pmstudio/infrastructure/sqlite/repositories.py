@@ -9,7 +9,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
-from pmstudio.application.dto import ProjectSummaryView
+from pmstudio.application.dto import ProjectSummaryView, RoundOutcomeView
 from pmstudio.application.errors import UnknownProject, UnknownRound
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -240,3 +240,35 @@ class SqliteWorkspaceIndex:
 
     def latest_round_id(self, project_id: ProjectId) -> RoundId | None:
         return SqliteRoundRepository(self._connection).latest_round_id(project_id)
+
+    def recent_rounds(
+        self, project_id: ProjectId, *, limit: int = 5
+    ) -> tuple[RoundOutcomeView, ...]:
+        """最近几轮的**结果投影**（C4：连续几轮没采用席位提议）。
+
+        只读 payload 里那几个键——查历史不该把整轮重建出来。倒序排 `created_at`，
+        同刻的按 `round_id` 倒序（测试里两轮常在同一时刻）。
+        """
+
+        rows = self._connection.execute(
+            """
+            SELECT round_id, step, payload
+            FROM rounds
+            WHERE project_id = ?
+            ORDER BY created_at DESC, round_id DESC
+            LIMIT ?
+            """,
+            (str(project_id), limit),
+        ).fetchall()
+        outcomes: list[RoundOutcomeView] = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            outcomes.append(
+                RoundOutcomeView(
+                    round_id=row["round_id"],
+                    step=row["step"],
+                    proposed_offered=payload.get("proposed_offered"),
+                    proposed_accepted=payload.get("proposed_accepted"),
+                )
+            )
+        return tuple(outcomes)

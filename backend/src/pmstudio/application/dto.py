@@ -165,6 +165,19 @@ class ProjectSummaryView:
 
 
 @dataclass(frozen=True, slots=True)
+class RoundOutcomeView:
+    """一轮的**结果投影**（不是整轮）：C4 只需要"给了几条 / 收了几条"。
+
+    只读 `rounds.payload` 里那几个键，不 `round_from_payload`——查历史不该把整轮重建出来。
+    """
+
+    round_id: str
+    step: str
+    proposed_offered: int | None
+    proposed_accepted: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class ReadinessItemView:
     section_id: str
     code: str

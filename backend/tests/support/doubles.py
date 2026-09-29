@@ -171,6 +171,7 @@ class StaticWorkspaceIndex:
 
         self._summaries: dict[str, ProjectSummaryView] = {}
         self._latest: dict[str, RoundId] = {}
+        self._outcomes: dict[str, list] = {}
 
     def set_summary(self, summary) -> None:  # type: ignore[no-untyped-def]
         self._summaries[summary.project_id] = summary
@@ -186,3 +187,11 @@ class StaticWorkspaceIndex:
 
     def latest_round_id(self, project_id: ProjectId) -> RoundId | None:
         return self._latest.get(str(project_id))
+
+    def set_round_outcomes(self, project_id: str, outcomes) -> None:  # type: ignore[no-untyped-def]
+        """测试注入口：把最近几轮的结果投影塞进来（**最新在前**，真实现是查 `rounds` 表）。"""
+
+        self._outcomes[project_id] = list(outcomes)
+
+    def recent_rounds(self, project_id: ProjectId, *, limit: int = 5):  # type: ignore[no-untyped-def]
+        return tuple(self._outcomes.get(str(project_id), ())[:limit])
