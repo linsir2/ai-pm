@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from pmstudio.application.commands import RoundCommand
 from pmstudio.application.errors import PacketParseError
 from pmstudio.application.use_cases import AnswerInput
 from pmstudio.domain.authoring.instruction import WriteInstruction
@@ -1578,3 +1579,30 @@ async def test_retrying_after_an_integration_failure_carries_the_last_error():
     slots = [slots for name, slots in harness.prompts.calls if name == "integrator"][-1]
     assert "上一次的报文没通过校验" in slots["validation_error"]  # 第一次尝试就带上了
     assert harness.rounds.get(round_id).retry_hint is None  # 用过就清
+
+
+async def test_retry_after_a_failed_integration_does_not_re_run_the_seats():
+    """核验：09-28 报告那句"重试是整轮重来"在**今天**不成立——走真图，席位一个都不重跑。
+
+    这条是**钉子**（T1/T2 之前就该成立）：`RunSeatRound` 只跑 `Round.pending_seats`，
+    图的路由 `seats_running → seat_round → integrate` 让"已交回的不重跑"端到端生效。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": ["{这不是 JSON", "{这不是 JSON", questionnaire_packet()],
+        },
+        seat_replies={SEAT: JUDGMENT_ONLY_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    with pytest.raises(PacketParseError):
+        await harness.integrate_round()(round_id=round_id)
+
+    seats_before = harness.gateway.purposes.count("seat_review")
+
+    await harness.runner().run(RoundCommand(kind="retry", round_id=str(round_id)))
+
+    assert harness.gateway.purposes.count("seat_review") == seats_before  # 席位零重跑
+    assert harness.rounds.get(round_id).retry_hint is None  # T1 的提示被用掉了
+    assert harness.rounds.get(round_id).questionnaire is not None  # 接着跑到底了
