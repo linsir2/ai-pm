@@ -300,6 +300,7 @@ def assemble(
     document: Document,
     ledger: EvidenceLedger,
     carried: Sequence[Question] = (),
+    contradictions: frozenset[frozenset[EvidenceId]] = frozenset(),
 ) -> Assembly:
     known = frozenset(evidence.eid for evidence in ledger.evidences())
     existing_features = frozenset(
@@ -401,6 +402,11 @@ def assemble(
             dropped=dropped,
             used_handles=used_handles,
         )
+        # 矛盾由**系统**盖章：题目的依据同时覆盖某一对互斥主张的两侧 ⇒ `kind=conflict`，
+        # 模型写什么不算（P10 真跑 54 道题 0 条 conflict：指望它记得标是不靠谱的）。
+        # 只改 `kind`；`blocking` 仍按章节规则算（`01` §7）。
+        if _covers_a_contradiction(question.evidence_refs, contradictions):
+            question = replace(question, kind=QuestionKind.CONFLICT)
         if question_key(question) in seen_questions:
             continue  # 模型又问了同一件事：留 carried 那份，丢新出的
         seen_questions.add(question_key(question))
@@ -876,6 +882,33 @@ def _asks_user_something(refs: Sequence[EvidenceId], *, ledger: EvidenceLedger) 
     return any(
         ledger.get(ref).kind in {EvidenceKind.USER_INPUT, EvidenceKind.CARD_ANSWER} for ref in refs
     )
+
+
+def contradiction_pairs(round_: Round) -> frozenset[frozenset[EvidenceId]]:
+    """互斥对子的**编号版**：`c1/c2` → 账本里的 `E…`（`assemble` 盖章用它）。
+
+    映射只有这一处。主张还没编号（`eid is None`）的对子跳过——那种情况说明它还没进账本，
+    这时候盖章本来也无从谈起（真要出现，是上游把顺序搞反了，不是这里能修的）。
+    """
+
+    by_id = {claim.claim_id: claim.eid for claim in round_.claims}
+    pairs: list[frozenset[EvidenceId]] = []
+    for item in round_.contradictions:
+        left = by_id.get(item.claim_id_a)
+        right = by_id.get(item.claim_id_b)
+        if left is None or right is None:
+            continue
+        pairs.append(frozenset({left, right}))
+    return frozenset(pairs)
+
+
+def _covers_a_contradiction(
+    refs: Sequence[EvidenceId], pairs: frozenset[frozenset[EvidenceId]]
+) -> bool:
+    """这道题的依据**同时覆盖**某一对互斥两侧？（只覆盖一侧不算——那是普通题。）"""
+
+    cited = set(refs)
+    return any(pair <= cited for pair in pairs)
 
 
 def _kind_for(target: Target, name: str | None) -> BlockKind:

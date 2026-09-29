@@ -19,6 +19,7 @@ from pmstudio.application.assembly import (
     OPEN_QUESTION_HOME,
     Assembly,
     assemble,
+    contradiction_pairs,
     deferred_from_open_items,
     degraded_question_proposals,
     downgraded_question_proposals,
@@ -1009,6 +1010,7 @@ class IntegrateRound:
                     document=document,
                     ledger=ledger,
                     carried=carried,
+                    contradictions=contradiction_pairs(round_),
                 )
                 # 截断掉的那几条要留痕 + 在草案卡缺口行里说清（"不静默丢"）。
                 assembled = replace(

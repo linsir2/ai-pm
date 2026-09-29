@@ -31,6 +31,7 @@ from tests.support.builders import (
     document_with_feature,
     make_document,
     make_round,
+    make_round_with_contradictions,
 )
 
 PROJECT = ProjectId("p1")
@@ -1406,3 +1407,56 @@ def test_unparsable_open_items_are_skipped_not_crashed():
     )
 
     assert carried == ()
+
+
+# —— 矛盾的机械通道：analyzer 报对子，装配层盖章（T8）——
+
+
+def test_contradiction_pairs_map_claim_ids_to_eids():
+    """映射只有这一处：`c1/c2` → 账本里的 `E1/E2`（`assemble` 盖章要用编号）。"""
+
+    pairs = assembly.contradiction_pairs(make_round_with_contradictions())
+
+    assert pairs == frozenset({frozenset({EvidenceId("E1"), EvidenceId("E2")})})
+
+
+def test_a_question_covering_both_sides_is_stamped_as_conflict():
+    """判断做一次（analyzer 读原话），标签由系统盖章——不再靠模型记得标。"""
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(evidence_refs=["E1", "E2"])]),  # 模型自己写的是 gap
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+        contradictions=frozenset({frozenset({EvidenceId("E1"), EvidenceId("E2")})}),
+    )
+
+    assert result.questions[0].kind is QuestionKind.CONFLICT
+
+
+def test_a_question_with_only_one_side_stays_as_the_model_labelled_it():
+    """只引了一侧 ⇒ 不盖章（别把普通题都标成矛盾）。"""
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(evidence_refs=["E1"])]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+        contradictions=frozenset({frozenset({EvidenceId("E1"), EvidenceId("E2")})}),
+    )
+
+    assert result.questions[0].kind is QuestionKind.GAP
+
+
+def test_a_model_labelled_conflict_without_a_pair_is_left_alone():
+    """反方向不管：模型自己标了 conflict 但没对子 ⇒ 原样保留（它可能看到的是别种冲突）。"""
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(evidence_refs=["E1"], kind="conflict")]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+        contradictions=frozenset(),
+    )
+
+    assert result.questions[0].kind is QuestionKind.CONFLICT

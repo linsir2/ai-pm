@@ -12,6 +12,7 @@ from pmstudio.domain.round.questionnaire import (
     Answer,
     AnswerSet,
     Question,
+    QuestionKind,
     Questionnaire,
     QuestionType,
 )
@@ -1457,3 +1458,71 @@ def test_a_mechanical_remove_does_not_count_as_citing_an_answer():
     cited = _cited_eids([written, retired], [])
 
     assert cited == frozenset({EvidenceId("E1")})
+
+
+# —— 矛盾的机械通道：analyzer 报对子 → 装配层盖章（T8）——
+
+
+CONTRADICTION_CLAIMS_REPLY = json.dumps(
+    {
+        "basis": "读了这一轮输入",
+        "claims": [
+            {
+                "text": "点检记录提交后不许改",
+                "raw_span": "点检记录不许改",
+                "label": "constraint",
+                "zone": "body",
+                "section_id": "s5",
+            },
+            {
+                "text": "点错了要能改",
+                "raw_span": "点错了要能改",
+                "label": "need",
+                "zone": "body",
+                "section_id": "s5",
+            },
+        ],
+        "seats": [{"seat_id": SEAT, "why": "两条规则互相打架"}],
+        "contradictions": [{"claim_a": 1, "claim_b": 2, "why": "一个说不能改，一个说要能改"}],
+    },
+    ensure_ascii=False,
+)
+
+
+def conflict_question_packet() -> str:
+    """模型出的一道题**同时引用了互斥两侧**（E1 与 E2），但它自己把 kind 写成 gap。"""
+
+    draft = question_draft() | {
+        "title": "点检记录提交后到底能不能改？",
+        "kind": "gap",
+        "evidence_refs": ["E1", "E2"],
+    }
+    return json.dumps(
+        {"questions": [draft], "list_items": [], "proposals": []}, ensure_ascii=False
+    )
+
+
+async def test_a_question_covering_a_contradiction_is_stamped_conflict_end_to_end():
+    """端到端：analyzer 标了互斥 → 装配层给覆盖两侧的题盖章 `conflict`（不看模型怎么写）。"""
+
+    harness = Harness(
+        replies={
+            "claims": CONTRADICTION_CLAIMS_REPLY,
+            "integration": conflict_question_packet(),
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    harness.seed_project()
+    start = harness.start_round()
+    round_id = await start.create(
+        project_id=PROJECT, user_input="点检记录不许改；点错了要能改"
+    )
+    await start.analyze(round_id=round_id)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+    await harness.run_seat_round()(round_id=round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    questions = harness.rounds.get(round_id).questionnaire.questions
+    assert questions[0].kind is QuestionKind.CONFLICT
+    assert [str(ref) for ref in questions[0].evidence_refs] == ["E1", "E2"]
