@@ -4,7 +4,7 @@
   "input": "导出要支持 100 万行；另外导出必须在 3 秒内完成。",
   "extra_assertions": [
     {
-      "type": "contradiction_is_labelled_conflict"
+      "type": "contradiction_is_labelled"
     }
   ]
 }

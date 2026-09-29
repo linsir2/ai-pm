@@ -216,22 +216,22 @@ def test_the_two_surfaces_still_agree_when_the_zero_feature_advisory_is_also_the
     assert check({"type": "outside_scope_items_are_labeled"}, view) is None
 
 
-def test_a_contradiction_must_be_labelled_conflict():
+def test_a_contradiction_must_be_labelled_conflict_or_decision():
     """矛盾题与缺信息题在界面上分开显示（`document/status.ts`），所以判据要能看出 kind。
 
-    报告 F7：真跑里三批 15 道题 `kind` 全是 `gap`，一道 `conflict` 都没有——
-    提示词原来只写了"与文档既有结论冲突"。这条断言挂在 `06-edge-contradiction` 上。
+    P11 C3：`conflict` 与 `decision` 在**前端与就绪度里等价**（都算"要你拍板"）——
+    模型把"两侧互斥"落成"在两个方案里选一个"（`decision`）是合理读法（真跑试点 q1 就是这样）。
+    真正要抓的失败模式是"把它当普通缺信息题、只出 `gap`"。这条断言挂在 `06-edge-contradiction` 上。
     """
 
     gap = question("q1", target=Target.body("s8"))
-    conflict = replace(gap, kind=QuestionKind.CONFLICT, title="到底按量级还是按耗时？")
+    as_conflict = replace(gap, kind=QuestionKind.CONFLICT, title="到底按量级还是按耗时？")
+    as_decision = replace(gap, kind=QuestionKind.DECISION, title="到底按量级还是按耗时？")
 
     only_gap = view_of(round_with([gap]))
-    assert check({"type": "contradiction_is_labelled_conflict"}, only_gap) is not None
-    assert (
-        check({"type": "contradiction_is_labelled_conflict"}, view_of(round_with([conflict])))
-        is None
-    )
+    assert check({"type": "contradiction_is_labelled"}, only_gap) is not None
+    assert check({"type": "contradiction_is_labelled"}, view_of(round_with([as_conflict]))) is None
+    assert check({"type": "contradiction_is_labelled"}, view_of(round_with([as_decision]))) is None
 
 
 def test_dropped_items_must_have_a_reason():
