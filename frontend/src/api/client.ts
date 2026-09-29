@@ -9,6 +9,7 @@ import type {
   ProjectSummaryView,
   RollbackResult,
   RoundView,
+  SchemaView,
   VersionListView,
   WorkspaceView,
 } from "./types";
@@ -102,6 +103,8 @@ export interface EditBody {
 
 export const api = {
   health: () => request<{ status: string; model: string }>("/health"),
+
+  schema: () => request<SchemaView>("/schema"),
 
   listProjects: () => request<ProjectSummaryView[]>("/projects"),
 

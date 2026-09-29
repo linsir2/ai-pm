@@ -113,3 +113,22 @@ describe("rewritesOf", () => {
     expect(rewritesOf(null)).toBe(0);
   });
 });
+
+describe("roundProgress 的席位轮上限", () => {
+  it("上限从 /schema 来，不再是前端抄的 3", () => {
+    const round = {
+      ...empty,
+      seats: ["seat.a"],
+      seat_round_count: 1,
+      seat_packets: [{ seat_id: "seat.a", status: "completed" }],
+    } as unknown as RoundView;
+
+    const limits = { max_seat_rounds: 5, max_questionnaires: 2, max_open_items_per_batch: 3 };
+
+    expect(roundProgress(round, limits).find((step) => step.key === "seats")!.detail).toBe(
+      "1 / 5 轮",
+    );
+    // 没给上限就回落旧默认值（3），界面照样有数
+    expect(roundProgress(round).find((step) => step.key === "seats")!.detail).toBe("1 / 3 轮");
+  });
+});

@@ -279,3 +279,41 @@ export interface EvidenceLookupView {
   chain: ChainItemView[];
   used_by: string[];
 }
+
+/** 章节槽（只有 s8 有六个）。 */
+export interface SlotSchemaView {
+  name: string;
+  title: string;
+  kind: string;
+}
+
+export interface SectionSchemaView {
+  section_id: string;
+  title: string;
+  /** 这一章是干什么的（真相源在后端 `domain/shared/sections.py`）。 */
+  purpose: string;
+  allows_features: boolean;
+  slots: SlotSchemaView[];
+}
+
+export interface FeatureFieldSchemaView {
+  name: string;
+  title: string;
+  kind: string;
+  multiple: boolean;
+  required: boolean;
+}
+
+/** 三处上限：界面显示"第 2/3 轮""未答 3/5 题"用，不再自己抄一份。 */
+export interface LimitsView {
+  max_seat_rounds: number;
+  max_questionnaires: number;
+  max_open_items_per_batch: number;
+}
+
+/** `GET /schema`：现行结构，不是文档内容。 */
+export interface SchemaView {
+  sections: SectionSchemaView[];
+  feature_fields: FeatureFieldSchemaView[];
+  limits: LimitsView;
+}

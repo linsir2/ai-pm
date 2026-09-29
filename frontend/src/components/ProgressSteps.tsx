@@ -1,9 +1,16 @@
-import type { RoundView } from "../api/types";
+import type { LimitsView, RoundView } from "../api/types";
 import { roundProgress } from "../state/progress";
 
 /** 本轮执行进度：七格都从这一轮的字段推出来，没有一格是估的。 */
-export function ProgressSteps({ round }: { round: RoundView | null }) {
-  const steps = roundProgress(round);
+export function ProgressSteps({
+  round,
+  limits = null,
+}: {
+  round: RoundView | null;
+  /** 席位轮上限等常量：来自 `/schema`（拿不到就由 `progress` 回落）。 */
+  limits?: LimitsView | null;
+}) {
+  const steps = roundProgress(round, limits);
   if (steps.length === 0) return null;
 
   return (

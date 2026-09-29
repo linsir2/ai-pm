@@ -2,6 +2,7 @@
    加一个映射之前先问：后端有没有这个值？没有就别在前端发明。 */
 
 import type { SectionView } from "./api/types";
+import { fieldTitle } from "./state/schema";
 
 export const CLAIM_LABEL_TEXT: Record<string, string> = {
   fact: "事实",
@@ -24,27 +25,6 @@ export function claimLabelText(label: string): string {
 
 export function claimLabelClass(label: string): string {
   return `tag tag--${label}`;
-}
-
-/** 功能子树字段的中文名。真相源是后端 `domain/authoring/schema.py` 的 FEATURE_FIELDS。 */
-export const FIELD_TITLES: Record<string, string> = {
-  name: "名称",
-  one_liner: "一句话描述",
-  priority: "优先级",
-  goal: "服务的目标",
-  audience: "面向角色",
-  user_story: "用户故事",
-  main_flow: "主流程",
-  exceptions: "异常与边界",
-  io: "输入与输出",
-  rules: "状态与规则",
-  acceptance: "验收标准",
-  dependencies: "依赖",
-};
-
-export function fieldTitle(field: string | null): string | null {
-  if (field === null) return null;
-  return FIELD_TITLES[field] ?? field;
 }
 
 export const QUESTION_KIND_TEXT: Record<string, string> = {

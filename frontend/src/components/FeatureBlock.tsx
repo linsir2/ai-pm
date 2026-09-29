@@ -3,7 +3,7 @@
 
 import type { BlockView } from "../api/types";
 import { fieldEntries, groupFields } from "../document/structure";
-import { fieldTitle } from "../labels";
+import { fieldTitle } from "../state/schema";
 import { EntryList } from "./EntryList";
 import { EvidenceChip } from "./EvidenceChip";
 

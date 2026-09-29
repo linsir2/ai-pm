@@ -5,19 +5,19 @@
 import type { ReactNode } from "react";
 
 import { integrationSummary } from "../api/payload";
-import type { RoundView } from "../api/types";
+import type { LimitsView, RoundView } from "../api/types";
 import { dropsFor, unplacedDrops } from "../document/dropped";
 import { claimLabelText, compactTarget } from "../labels";
 import { labelCounts, rewritesOf } from "../state/progress";
+import { limitsOf } from "../state/schema";
 import { ProgressSteps } from "./ProgressSteps";
 import { RoundStatus } from "./RoundStatus";
 import { SeatPacketCard } from "./SeatPacketCard";
 
-const MAX_SEAT_ROUNDS = 3;
-
 export function LoopPane({
   round,
   pending,
+  limits = null,
   onRetry,
   onAbandon,
   onOpenQuestionnaire,
@@ -25,11 +25,14 @@ export function LoopPane({
 }: {
   round: RoundView;
   pending: string | null;
+  /** `/schema` 里的上限；拿不到就回落（`06-前端.md` §5 记的重复因此退休）。 */
+  limits?: LimitsView | null;
   onRetry: () => void;
   onAbandon: () => void;
   onOpenQuestionnaire: () => void;
   onOpenDraft: () => void;
 }) {
+  const maxSeatRounds = limits?.max_seat_rounds ?? limitsOf().max_seat_rounds;
   const running = pending !== null;
   const counts = labelCounts(round);
   const integrated = round.questions.length > 0 || round.draft !== null;
@@ -49,7 +52,7 @@ export function LoopPane({
         onRetry={onRetry}
         onAbandon={onAbandon}
       />
-      <ProgressSteps round={round} />
+      <ProgressSteps round={round} limits={limits} />
 
       <ol className="timeline">
         <Node index={1} actor="你" title="本轮输入" meta="本轮">
@@ -94,7 +97,7 @@ export function LoopPane({
             actor="席位轮"
             title={`${round.seats.length} 个席位`}
             meta={
-              `第 ${Math.min(round.seat_round_count, MAX_SEAT_ROUNDS)} / ${MAX_SEAT_ROUNDS} 轮` +
+              `第 ${Math.min(round.seat_round_count, maxSeatRounds)} / ${maxSeatRounds} 轮` +
               (round.active_seats.length < round.seats.length
                 ? ` · 这一趟只请了 ${round.active_seats.length} 个（缩编：只请与本次答案相关的面）`
                 : "")

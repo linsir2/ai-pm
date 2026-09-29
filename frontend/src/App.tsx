@@ -189,11 +189,13 @@ export default function App() {
             justWritten={state.justWritten}
             activeSection={activeSection}
             readiness={state.readiness}
+            schema={data.schema}
           />
 
           <LoopColumn
             round={shownRound}
             doc={doc}
+            schema={data.schema}
             mode={readingHistory ? null : mode}
             pending={data.pending}
             drafts={drafts}

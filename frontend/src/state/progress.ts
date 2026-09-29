@@ -1,7 +1,8 @@
 /* 本轮执行进度：全部从后端投影的字段推出来，不猜、不编。
    能读的就这几样：step / waiting_on / seat_round_count / claims / questions / draft。 */
 
-import type { RoundView } from "../api/types";
+import type { LimitsView, RoundView } from "../api/types";
+import { limitsOf } from "./schema";
 
 export type ProgressState = "done" | "active" | "todo";
 
@@ -12,11 +13,14 @@ export interface ProgressStep {
   detail: string | null;
 }
 
-const MAX_SEAT_ROUNDS = 3;
-
-export function roundProgress(round: RoundView | null): ProgressStep[] {
+export function roundProgress(
+  round: RoundView | null,
+  limits: LimitsView | null = null,
+): ProgressStep[] {
   if (round === null) return [];
 
+  // 席位轮上限的真相源在后端（`GET /schema`）；调用方没给就用已经存下的那一份。
+  const maxSeatRounds = (limits ?? limitsOf()).max_seat_rounds;
   const done = round.step === "done";
   const openingDone = round.seats.length > 0;
   const seatsDone = round.seat_packets.length > 0 && round.seat_packets.every(isCompleted);
@@ -39,7 +43,7 @@ export function roundProgress(round: RoundView | null): ProgressStep[] {
       key: "seats",
       text: "席位轮",
       state: seatsDone && integrated ? "done" : openingDone ? "active" : "todo",
-      detail: `${Math.min(round.seat_round_count, MAX_SEAT_ROUNDS)} / ${MAX_SEAT_ROUNDS} 轮`,
+      detail: `${Math.min(round.seat_round_count, maxSeatRounds)} / ${maxSeatRounds} 轮`,
     },
     {
       key: "integration",

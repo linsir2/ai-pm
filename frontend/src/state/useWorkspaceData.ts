@@ -11,8 +11,10 @@ import type {
   EditResult,
   ProjectSummaryView,
   RoundView,
+  SchemaView,
   WorkspaceEvent,
 } from "../api/types";
+import { setSchema as publishSchema } from "./schema";
 import { initialState, reduce } from "./workspace";
 import { useEvents } from "./useEvents";
 
@@ -37,6 +39,8 @@ export function useWorkspaceData() {
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  // 现行结构（`GET /schema`）：一次会话拉一次。拉不到不影响主流程，界面回落旧默认值。
+  const [schema, setSchemaState] = useState<SchemaView | null>(null);
   // 我们自己取消掉的那条在途请求会以网络错误回来——别把它当"连不上后端"弹出来
   const abandoning = useRef(false);
   // 点跨轮编号时临时切过去看的那一轮（只读；"回到最新"就清掉）
@@ -92,6 +96,23 @@ export function useWorkspaceData() {
       alive = false;
     };
   }, [loadWorkspace]);
+
+  useEffect(() => {
+    let alive = true;
+    void api
+      .schema()
+      .then((view) => {
+        if (!alive) return;
+        publishSchema(view);
+        setSchemaState(view);
+      })
+      .catch(() => {
+        // 拿不到 schema 不是错误：章节说明与字段中文名回落 `state/schema.ts` 里的旧默认值。
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const onEvent = useCallback((event: WorkspaceEvent) => {
     dispatch({ type: "event", event });
@@ -323,6 +344,7 @@ export function useWorkspaceData() {
 
   return {
     state,
+    schema,
     historyRound,
     projects,
     booting,

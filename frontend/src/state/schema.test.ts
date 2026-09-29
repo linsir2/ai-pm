@@ -1,0 +1,44 @@
+import { afterEach, describe, expect, it } from "vitest";
+
+import type { SchemaView } from "../api/types";
+import { FALLBACK_LIMITS, fieldTitle, limitsOf, sectionPurpose, setSchema } from "./schema";
+
+const FROM_BACKEND: SchemaView = {
+  sections: [
+    {
+      section_id: "s5",
+      title: "功能需求",
+      purpose: "每个功能一棵子树。",
+      allows_features: true,
+      slots: [],
+    },
+  ],
+  feature_fields: [
+    { name: "name", title: "名字", kind: "text", multiple: false, required: true },
+  ],
+  limits: { max_seat_rounds: 5, max_questionnaires: 4, max_open_items_per_batch: 9 },
+};
+
+afterEach(() => setSchema(null));
+
+describe("schema", () => {
+  it("拿到 /schema 就用后端那一份", () => {
+    setSchema(FROM_BACKEND);
+
+    expect(fieldTitle("name")).toBe("名字");
+    expect(limitsOf().max_seat_rounds).toBe(5);
+    expect(sectionPurpose("s5")).toBe("每个功能一棵子树。");
+  });
+
+  it("没拿到 /schema 就回落旧默认值，界面不空着", () => {
+    setSchema(null);
+
+    expect(fieldTitle("name")).toBe("名称");
+    expect(limitsOf()).toEqual(FALLBACK_LIMITS);
+    expect(sectionPurpose("s5")).toBeNull();
+  });
+
+  it("空字段就是空，不编", () => {
+    expect(fieldTitle(null)).toBeNull();
+  });
+});

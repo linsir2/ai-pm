@@ -1,5 +1,5 @@
 import type { BlockView } from "../api/types";
-import { fieldTitle } from "../labels";
+import { fieldTitle } from "../state/schema";
 import { EntryList } from "./EntryList";
 
 /** 非功能块：条目 + 出处 + （可编辑时）改 / 加 / 删。 */

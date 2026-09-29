@@ -4,7 +4,7 @@
    依据都来自后端 block 的 `field` 与 `kind`（`domain/authoring/schema.py` 是真相源）。 */
 
 import type { BlockView, DocumentView, Entry } from "../api/types";
-import { fieldTitle } from "../labels";
+import { fieldTitle } from "../state/schema";
 
 export const FEATURE_HOME = "s5";
 

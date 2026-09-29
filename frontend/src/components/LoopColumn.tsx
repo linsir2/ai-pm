@@ -2,7 +2,7 @@
    复述卡是特例——它不是抽屉，它就是这一轮的开场，所以占满整栏。 */
 
 import type { AwaitingMode } from "../api/payload";
-import type { DocumentView, RoundView } from "../api/types";
+import type { DocumentView, RoundView, SchemaView } from "../api/types";
 import type { RoundDrafts } from "../state/useRoundDrafts";
 import { DraftDrawer } from "./DraftDrawer";
 import { LoopPane } from "./LoopPane";
@@ -12,6 +12,7 @@ import { QuestionnaireDrawer } from "./QuestionnaireDrawer";
 export function LoopColumn({
   round,
   doc,
+  schema,
   mode,
   pending,
   drafts,
@@ -26,6 +27,8 @@ export function LoopColumn({
 }: {
   round: RoundView | null;
   doc: DocumentView | null;
+  /** `GET /schema` 的投影：只用来取上限常量（拿不到就由下游回落）。 */
+  schema: SchemaView | null;
   /** null = 只看不算数（正在看历史轮：不出开场卡、不出抽屉）。 */
   mode: AwaitingMode | null;
   pending: string | null;
@@ -80,6 +83,7 @@ export function LoopColumn({
         <LoopPane
           round={round}
           pending={pending}
+          limits={schema?.limits ?? null}
           onRetry={onRetry}
           onAbandon={onAbandon}
           onOpenQuestionnaire={() => drafts.setCollapsed(false)}

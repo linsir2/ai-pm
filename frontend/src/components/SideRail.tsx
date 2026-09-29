@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import type { DocumentView, ProjectSummaryView, RoundView } from "../api/types";
 import { STATUS_TEXT, sectionStatus, statusClass } from "../document/status";
 import { listFeatures } from "../document/structure";
-import { fieldTitle } from "../labels";
+import { fieldTitle } from "../state/schema";
 
 const PREFERENCE = "preference";
 
