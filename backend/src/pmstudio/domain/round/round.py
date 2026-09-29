@@ -61,6 +61,25 @@ class DropSource(StrEnum):
     UNACCOUNTED = "unaccounted"  # 装配层核出来的：既没说丢、也没交代落到哪儿
 
 
+def widened(target: Target) -> Target:
+    """把功能字段的去处放宽到**整棵功能子树**（2026-09-29 作者拍板 D1）。
+
+    `Target.is_within` 的语义是"scope 不给 field 就覆盖这个功能的全部字段"，
+    所以"点了 `s5/order-export.one_liner`"放宽成"点了 `s5/order-export`"即可。
+
+    为什么要放宽：P8 的提示词要求"主张点名过的功能已授权，内容要落到功能字段，
+    拿不准也别降级成章节级"（`02` §11.0.9 口径三），而写范围原来只认主张点名的**那一个字段**——
+    两条规则自己跟自己打架，真跑里一轮刷出 20 条 advisory，把"零功能候选"那条置顶告警挤得看不见。
+
+    **只对功能字段放宽**：章节槽（`s8.compatibility`）说一个不等于授权另一个，
+    章节级（只给 section_id）本来就覆盖整章，原样返回。
+    """
+
+    if target.feature_slug is None:
+        return target
+    return Target.body(target.section_id, feature_slug=target.feature_slug)
+
+
 @dataclass(frozen=True, slots=True)
 class DroppedItem:
     """一条"没进卡片"的留痕（`04-未决.md` C5 后半）。
@@ -272,9 +291,14 @@ class Round:
 
     @property
     def write_scope(self) -> frozenset[Target]:
-        """本轮允许写的去处：主张的 target ∪ 已作答问题的 target。"""
+        """本轮允许写的去处：主张的 target ∪ 已作答问题的 target（**功能字段放宽到功能级**）。
 
-        scope = {claim.target for claim in self._claims}
+        放宽的口径与理由见 `widened()`。它只影响"跑出本轮去处"这条**提示**（`ScopeGuard`），
+        写入的硬约束（不得新增未授权功能子树、不得离开 13 章）在 `Document.apply` 与 `Target`
+        构造里。
+        """
+
+        scope = {widened(claim.target) for claim in self._claims}
         if self._questionnaire is not None:
             answered = {
                 answer.question_id
@@ -282,7 +306,7 @@ class Round:
                 for answer in answer_set.answers
             }
             scope |= {
-                question.target
+                widened(question.target)
                 for question in self._questionnaire.questions
                 if question.question_id in answered
             }
