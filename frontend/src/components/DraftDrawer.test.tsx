@@ -92,4 +92,55 @@ describe("DraftDrawer", () => {
     const button = screen.getByRole("button", { name: /继续深挖/ }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
   });
+
+  it("『全不勾』把已勾的清空；『本批全接受』带上提议组", () => {
+    const props = draw({
+      round: roundWithAllThreeOrigins(),
+      accepted: ["p01", "p02"],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /全不勾/ }));
+    expect(props.onSetAccepted).toHaveBeenLastCalledWith([]);
+
+    fireEvent.click(screen.getByRole("button", { name: /本批全接受/ }));
+    expect(props.onSetAccepted).toHaveBeenLastCalledWith(["p01", "p02", "p03"]);
+  });
+
+  it("默认勾选由上层按『你说过的 + 它替你判断的』给，提议组不在里面", () => {
+    const proposals = [proposal, other("p02", "derived"), other("p03", "proposed")];
+
+    // 界面只照 `accepted` 画勾：默认值来自 `defaultAccepted`（另一条纯函数用例钉着）
+    draw({ round: roundWith(proposals), accepted: ["p01", "p02"] });
+
+    const toggles = screen.getAllByRole("button", { name: /^(要|不要)$/ }) as HTMLButtonElement[];
+    expect(toggles.map((button) => button.getAttribute("aria-pressed"))).toEqual([
+      "true",
+      "true",
+      "false",
+    ]);
+  });
 });
+
+function other(proposalId: string, originType: ProposalView["origin_type"]): ProposalView {
+  return { ...proposal, proposal_id: proposalId, origin_type: originType };
+}
+
+function roundWith(proposals: ProposalView[]): RoundView {
+  return {
+    ...round(),
+    draft: {
+      draft_id: "d1",
+      groups: [
+        ["你说过的", proposals.filter((item) => item.origin_type === "user")],
+        ["它替你判断的", proposals.filter((item) => item.origin_type === "derived")],
+        ["它提议的", proposals.filter((item) => item.origin_type === "proposed")],
+      ],
+      proposals,
+      gaps: [],
+    },
+  } as unknown as RoundView;
+}
+
+function roundWithAllThreeOrigins(): RoundView {
+  return roundWith([proposal, other("p02", "derived"), other("p03", "proposed")]);
+}
