@@ -132,6 +132,7 @@ class Round:
         active_seats: tuple[str, ...] = (),
         deferred: tuple[Question, ...] = (),
         carried_sources: dict[str, str] | None = None,
+        questionnaire_history: tuple[Questionnaire, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -157,6 +158,12 @@ class Round:
         self._deferred = tuple(deferred)
         #: 这一轮把哪些 s11 未决条目问回来了（question_id → entry_id）：答完要机械撤下它们
         self._carried_sources = dict(carried_sources or {})
+        #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
+        #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
+        self._questionnaire_history = tuple(questionnaire_history)
+        if not self._questionnaire_history and self._questionnaire is not None:
+            # 老库/老 payload 没有历史键：退化成"只有当前这一批"，不编历史
+            self._questionnaire_history = (self._questionnaire,)
 
     @classmethod
     def start(
@@ -220,6 +227,25 @@ class Round:
     @property
     def answer_sets(self) -> tuple[AnswerSet, ...]:
         return self._answer_sets
+
+    @property
+    def questionnaire_history(self) -> tuple[Questionnaire, ...]:
+        """本轮**问过的每一批**问卷（追加不覆盖）。
+
+        要它是因为"按题号回查"的六处地方（计划 §0.1）：题面、跳过后果、选项文案都得回到
+        **出题那一批**去找，拿当前批反查会张冠李戴。当前批仍是 `questionnaire`。
+        """
+
+        return self._questionnaire_history
+
+    @property
+    def asked_question_count(self) -> int:
+        """本轮**已经问出去**多少题——下一批的题号从这里接着发（D4：题号轮内唯一）。
+
+        只数"问出去的"（进了问卷的）；轮内队列里没问上的题不算，它们下一批会重新编号。
+        """
+
+        return sum(len(form.questions) for form in self._questionnaire_history)
 
     @property
     def draft(self) -> Draft | None:
@@ -477,6 +503,8 @@ class Round:
             if questionnaire.round_id != self._round_id:
                 raise ShapeError("问卷不属于本轮", form_id=str(questionnaire.form_id))
             self._questionnaire = questionnaire
+            # 历史**追加不覆盖**：下一批一到，上一批的题面/选项就没别的地方可查了（D4）
+            self._questionnaire_history = self._questionnaire_history + (questionnaire,)
             self._advance_to(Step.AWAITING_ANSWERS, waiting_on=WaitingOn.QUESTIONNAIRE)
             return
         assert draft is not None

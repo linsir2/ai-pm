@@ -191,6 +191,49 @@ def test_question_asked_by_also_comes_from_the_cited_evidence():
     assert result.questions[0].asked_by == (SEAT,)
 
 
+def test_question_numbering_continues_across_batches_of_the_same_round():
+    """题号按**轮次**发：第一批已经问了 2 题 ⇒ 这一批从 q3 起（2026-09-29 拍板 D4）。
+
+    原来每批都从 `q1` 重排，同一个轮次里 `q1` 有两个意思，六处"按题号回查"就全指错
+    （真跑里第二批的答案挂着第一批的题面与编号，见计划 §0.2）。
+    """
+
+    round_ = make_round()
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f1"),
+            round_id=ROUND_ID,
+            questions=(
+                Question(
+                    question_id=QuestionId("q1"),
+                    target=Target.body("s8"),
+                    type=QuestionType.TEXT,
+                    title="第一批第一题？",
+                    why="量级决定同步还是异步",
+                    consequence_if_skipped="按同步实现",
+                ),
+                Question(
+                    question_id=QuestionId("q2"),
+                    target=Target.body("s8"),
+                    type=QuestionType.TEXT,
+                    title="第一批第二题？",
+                    why="量级决定同步还是异步",
+                    consequence_if_skipped="按同步实现",
+                ),
+            ),
+        )
+    )
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(), question_draft(title="第二道新题？")]),
+        round_=round_,
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [str(item.question_id) for item in result.questions] == ["q3", "q4"]
+
+
 def test_question_from_unparsable_opinion_is_dropped_not_fatal():
     """归因解析不出来只丢归因、留痕，不判死整轮（题目本身可能没问题）。"""
 

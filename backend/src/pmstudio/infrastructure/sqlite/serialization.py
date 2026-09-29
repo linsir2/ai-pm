@@ -526,6 +526,10 @@ def round_to_payload(round_: Round) -> dict:
         "questionnaire": (
             None if round_.questionnaire is None else questionnaire_to_json(round_.questionnaire)
         ),
+        # 本轮每一批问卷（老行没有这个键 → 读侧回落到"只有当前这一批"）
+        "questionnaire_history": [
+            questionnaire_to_json(item) for item in round_.questionnaire_history
+        ],
         "answer_sets": [answer_set_to_json(item) for item in round_.answer_sets],
         "draft": None if round_.draft is None else draft_to_json(round_.draft),
         "seat_round_count": round_.seat_round_count,
@@ -581,6 +585,10 @@ def round_from_payload(
             None
             if payload["questionnaire"] is None
             else questionnaire_from_json(payload["questionnaire"])
+        ),
+        # 老行里没有这个键（问卷历史是后加的）：构造器会回落到"只有当前这一批"
+        questionnaire_history=tuple(
+            questionnaire_from_json(item) for item in payload.get("questionnaire_history", ())
         ),
         answer_sets=tuple(answer_set_from_json(item) for item in payload["answer_sets"]),
         draft=None if payload["draft"] is None else draft_from_json(payload["draft"]),

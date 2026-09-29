@@ -87,6 +87,17 @@ def question_key(question: Question) -> tuple[str, str]:
     return (question.target.label(), " ".join(question.title.split()))
 
 
+def _first_question_number(round_: Round) -> int:
+    """这一批的题号从几开始：接着本轮**已经问出去**的数量往下发（D4：题号轮内唯一）。
+
+    为什么不能每批从 1 重排：`(轮次, 题号)` 是答案的身份，重排会让"按题号回查"的六处地方
+    指到别的批（计划 §0.1）——真跑里第二批的答案挂着第一批的题面与 E 编号。
+    没问上的题不占号（它们在队列里，下一批重新编号）。
+    """
+
+    return round_.asked_question_count + 1
+
+
 #: s11 未决条目的标准文本（`open_question_proposal` 写进去的那个格式）：
 #: 可选的阻塞标记 + 标题 + （未决定，待决人：…；跳过后果：…）
 _OPEN_ITEM = re.compile(
@@ -322,7 +333,9 @@ def assemble(
         ordered.append(question)
     kept = [
         replace(question, question_id=QuestionId(f"q{index}"))
-        for index, question in enumerate(ordered[:MAX_QUESTIONS_PER_BATCH], start=1)
+        for index, question in enumerate(
+            ordered[:MAX_QUESTIONS_PER_BATCH], start=_first_question_number(round_)
+        )
     ]
     # 没问上的题进轮内队列（不是"清单项"）：下一批优先问，出草案时落 s11
     deferred = tuple(ordered[MAX_QUESTIONS_PER_BATCH:])

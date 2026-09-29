@@ -382,8 +382,12 @@ async def test_integrate_round_stops_asking_after_two_questionnaires():
         await harness.integrate_round()(round_id=round_id)
         round_ = harness.rounds.get(round_id)
         assert round_.step is Step.AWAITING_ANSWERS
+        # 题号按**轮次**发（2026-09-29 拍板 D4）：第一批 q1、第二批 q2（不再每批从 q1 重排）
         await harness.submit_answers()(
-            round_id=round_id, form_id=f"f{index + 1}", answers=(), skipped=("q1",)
+            round_id=round_id,
+            form_id=f"f{index + 1}",
+            answers=(),
+            skipped=(f"q{index + 1}",),
         )
         await harness.run_seat_round()(round_id=round_id)
 
@@ -820,7 +824,8 @@ async def test_deferred_queue_is_flushed_to_s11_when_the_round_stops_asking():
     still_queued = [item.title for item in harness.rounds.get(round_id).deferred]
     assert still_queued  # 还有压着的
 
-    await harness.submit_answers()(round_id=round_id, form_id="f2", answers=(), skipped=("q1",))
+    # 题号按**轮次**发（2026-09-29 拍板 D4）：第一批问了 q1–q5，所以第二批这一道是 q6
+    await harness.submit_answers()(round_id=round_id, form_id="f2", answers=(), skipped=("q6",))
     await harness.run_seat_round()(round_id=round_id)
     await harness.integrate_round()(round_id=round_id)  # 闸门：两批已满 → 降级 + 清队列
 
