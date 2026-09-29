@@ -197,7 +197,13 @@ def test_claims_packet_array_is_not_guessed():
             purpose="claims",
         )
 
-    assert exc.value.details["packet_shape"]["expected_keys"] == ("basis", "claims", "seats")
+    # 2026-09-29：claims 报文加了 `contradictions`（互斥对子，T7）——形状清单跟着长一条
+    assert exc.value.details["packet_shape"]["expected_keys"] == (
+        "basis",
+        "claims",
+        "seats",
+        "contradictions",
+    )
 
 
 def test_rebuilt_array_still_honours_the_cap():

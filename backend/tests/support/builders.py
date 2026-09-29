@@ -8,7 +8,7 @@ from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
-from pmstudio.domain.round.claim import Claim
+from pmstudio.domain.round.claim import Claim, Contradiction
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.ids import (
     DocumentId,
@@ -56,6 +56,38 @@ def make_round(*, seats: tuple[str, ...] = (SEAT,)) -> Round:
     )
     round_.attach_claims((make_claim(eid=EvidenceId("E1")),))
     round_.submit_opening(seats=seats)
+    return round_
+
+
+def make_contradiction(
+    *, why: str = "一个说不能改，一个说要能改，两侧立场互斥"
+) -> Contradiction:
+    return Contradiction(claim_id_a="c1", claim_id_b="c2", why=why)
+
+
+def make_round_with_contradictions() -> Round:
+    """一轮：主张 c1（不许改）与 c2（点错了要改）被判成互斥对子。
+
+    真跑里就是这么出现的（P11：`q1 kind=conflict … E7 与 E8 冲突`）。
+    """
+
+    round_ = Round.start(
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        user_input="点检记录不许改；点错了要能改",
+        now=NOW,
+    )
+    round_.attach_claims(
+        (
+            make_claim(text="点检记录不能改", raw_span="点检记录不许改", eid=EvidenceId("E1")),
+            replace(
+                make_claim(text="点错了要能改", raw_span="点错了要能改", eid=EvidenceId("E2")),
+                claim_id="c2",
+            ),
+        )
+    )
+    round_.submit_opening(seats=(SEAT,))
+    round_.attach_contradictions((make_contradiction(),))
     return round_
 
 

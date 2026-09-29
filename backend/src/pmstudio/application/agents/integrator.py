@@ -99,6 +99,7 @@ class Integrator:
         "authorized_features",
         "open_items",
         "previous_list_items",
+        "contradictions",
     )
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
@@ -119,6 +120,7 @@ class Integrator:
         authorized_features: str = "",
         open_items: str = "",
         previous_list_items: str = "",
+        contradictions: str = "",
     ) -> IntegrationOutcome:
         schema = schemas.IntegrationPacket.model_json_schema()
         prompt = self._prompts.render(
@@ -137,6 +139,7 @@ class Integrator:
             authorized_features=authorized_features,
             open_items=open_items,
             previous_list_items=previous_list_items,
+            contradictions=contradictions,
         )
         reply = await self._model.complete(
             ModelRequest(

@@ -29,6 +29,7 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from tests.support.builders import make_round, make_round_with_contradictions
 
 NOW = datetime(2026, 9, 22, 10, 0)
 PROJECT = ProjectId("p1")
@@ -293,3 +294,17 @@ def test_render_answers_separates_answered_and_skipped():
 def test_labels_and_sections_text_come_from_domain_constants():
     assert "猜测" in context.LABELS_TEXT
     assert "s5 功能需求" in context.SECTIONS_TEXT
+
+
+def test_render_contradictions_uses_the_claim_texts():
+    """给整合者看的互斥对子要用**主张原文**，不是 `c1/c2`——它才知道这两句在打架。"""
+
+    rendered = context.render_contradictions(make_round_with_contradictions())
+
+    assert "点检记录不能改" in rendered
+    assert "点错了要能改" in rendered
+    assert "一个说不能改" in rendered
+
+
+def test_render_contradictions_says_none_when_there_are_none():
+    assert context.render_contradictions(make_round()) == "（这一轮没有判出互斥的主张）"

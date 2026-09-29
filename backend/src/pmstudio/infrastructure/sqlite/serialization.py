@@ -11,7 +11,7 @@ from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.version import Snapshot, Version, VersionTrigger
 from pmstudio.domain.provenance.evidence import Evidence, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
-from pmstudio.domain.round.claim import Assumption, Claim
+from pmstudio.domain.round.claim import Assumption, Claim, Contradiction
 from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
@@ -554,6 +554,11 @@ def round_to_payload(round_: Round) -> dict:
         "carried_sources": round_.carried_sources(),
         # 这一轮历次记下的清单项（老行没有这个键 → 读侧回落到当轮问卷的那批）
         "list_items": [_list_item_to_json(item) for item in round_.list_items],
+        # 被判成立场互斥的主张对子（老行没有这个键 → 空）
+        "contradictions": [
+            {"claim_id_a": item.claim_id_a, "claim_id_b": item.claim_id_b, "why": item.why}
+            for item in round_.contradictions
+        ],
         "failure": _failure_to_json(round_.failure),
         "confirmed_version_no": round_.confirmed_version_no,
         "abandon_reason": round_.abandon_reason,
@@ -600,6 +605,10 @@ def round_from_payload(
             tuple(_list_item_from_json(item) for item in payload["list_items"])
             if "list_items" in payload
             else (() if questionnaire is None else questionnaire.list_items)
+        ),
+        # 老行里没有这个键（互斥对子是后加的）：空——不编对子
+        contradictions=tuple(
+            Contradiction(**item) for item in payload.get("contradictions", ())
         ),
         answer_sets=tuple(answer_set_from_json(item) for item in payload["answer_sets"]),
         draft=None if payload["draft"] is None else draft_from_json(payload["draft"]),

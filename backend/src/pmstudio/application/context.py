@@ -152,6 +152,27 @@ def render_document_state(
     return text if not gaps else f"{text}\n\n{gaps}"
 
 
+def render_contradictions(round_: Round) -> str:
+    """给整合者看的"被判成立场互斥的主张对子"。
+
+    用**主张原文**而不是 `c1/c2`：模型才知道这两句在打架（编号是给机器对账的）。
+    对子指向的主张找不到就跳过——渲染层不替领域层判错。
+    """
+
+    by_id = {claim.claim_id: claim for claim in round_.claims}
+    lines: list[str] = []
+    for item in round_.contradictions:
+        left = by_id.get(item.claim_id_a)
+        right = by_id.get(item.claim_id_b)
+        if left is None or right is None:
+            continue
+        lines.append(
+            f"- 「{left.text}」 ↔ 「{right.text}」：{item.why}"
+            "（两侧立场互斥：要出一道**让用户拍板**的题，`kind` 写 conflict）"
+        )
+    return "\n".join(lines) or "（这一轮没有判出互斥的主张）"
+
+
 def render_claims(claims: Sequence[Claim]) -> str:
     lines: list[str] = []
     for claim in claims:

@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 
-from pmstudio.domain.round.claim import Claim
+from pmstudio.domain.round.claim import Claim, Contradiction
 from pmstudio.domain.round.draft import Draft
 from pmstudio.domain.round.opinion import Opinion, SeatReview
 from pmstudio.domain.round.questionnaire import AnswerSet, ListItem, Question, Questionnaire
@@ -134,6 +134,7 @@ class Round:
         carried_sources: dict[str, str] | None = None,
         questionnaire_history: tuple[Questionnaire, ...] = (),
         list_items: tuple[ListItem, ...] = (),
+        contradictions: tuple[Contradiction, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -160,6 +161,7 @@ class Round:
         #: 这一轮把哪些 s11 未决条目问回来了（question_id → entry_id）：答完要机械撤下它们
         self._carried_sources = dict(carried_sources or {})
         self._list_items = tuple(list_items)
+        self._contradictions = tuple(contradictions)
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -359,6 +361,31 @@ class Round:
                 raise ContentWithoutEvidence(what=f"主张 {item.claim_id}")
         self._claims = claims
         self._advance_to(Step.CLAIMS_READY, waiting_on=WaitingOn.OPENING)
+
+    @property
+    def contradictions(self) -> tuple[Contradiction, ...]:
+        """这一轮被判成**立场互斥**的主张对子（analyzer 判的，只判一次）。
+
+        装配层拿它给"同时覆盖两侧"的题目盖章 `kind=conflict`；整合者也看得到它（要出题问用户）。
+        """
+
+        return self._contradictions
+
+    def attach_contradictions(
+        self, items: tuple[Contradiction, ...] | list[Contradiction]
+    ) -> None:
+        """挂上互斥对子。**要在 `attach_claims` 之后调**：它得核对主张确实在这一轮里。
+
+        指向不存在的主张 = 解析那一层已经丢过一遍（丢条留痕）；这里再拦一道，
+        是为了不让"领域里不存在的对子"悄悄进聚合。
+        """
+
+        known = {claim.claim_id for claim in self._claims}
+        for item in items:
+            for claim_id in (item.claim_id_a, item.claim_id_b):
+                if claim_id not in known:
+                    raise ShapeError("互斥对子指向了这一轮不存在的主张", claim_id=claim_id)
+        self._contradictions = tuple(items)
 
     def nominate(self, seats: tuple[SeatNomination, ...] | list[SeatNomination]) -> None:
         """记下这一轮的席位提名（Analyzer 挑的）。同一席位只留第一次出现的那条。"""

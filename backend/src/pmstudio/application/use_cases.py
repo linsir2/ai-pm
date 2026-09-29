@@ -34,6 +34,7 @@ from pmstudio.application.context import (
     answer_eids,
     render_answers,
     render_claims,
+    render_contradictions,
     render_document_state,
     render_existing_entries,
     render_reviews,
@@ -258,6 +259,9 @@ class StartRound:
                 analysis.claims, ledger=ledger, round_id=round_id, now=self._clock.now()
             )
             round_.attach_claims(assigned)
+            # 互斥对子在 attach_claims 之后挂（它要核对主张确实存在）：判断只做一次，
+            # 做在读用户原话的那一步；装配层随后给覆盖两侧的题目盖章（T8）。
+            round_.attach_contradictions(analysis.contradictions)
             # 席位名单跟着主张一起落：它是这一次判断的产物，重试/刷新都该看得见
             round_.nominate(analysis.seats)
             # 被丢掉的提名（目录里没有的席位）留痕：丢人不丢轮，但要说清丢了谁
@@ -965,6 +969,7 @@ class IntegrateRound:
                 )
                 open_items = _render_open_items(carried_from_open_items)
                 previous_list_items = _render_list_items(round_)
+                contradictions = render_contradictions(round_)
                 outcome = await self._integrator.integrate(
                     document_state=render_document_state(
                         view, readiness=self._checker.check(view)
@@ -981,6 +986,7 @@ class IntegrateRound:
                     authorized_features=authorized_features,
                     open_items=open_items,
                     previous_list_items=previous_list_items,
+                    contradictions=contradictions,
                 )
                 if outcome.overflow and attempt < MAX_INTEGRATION_ATTEMPTS:
                     # 超限是可修复的错：先让它自己精简一次，第二次才截断（报告 F2/F11）。

@@ -453,3 +453,67 @@ async def test_analyzer_keeps_known_seats_and_reports_unknown_ones():
     assert analysis.seats == (SeatNomination(seat_id=SEAT, why="你说到了数据量"),)
     assert [item.handle for item in analysis.dropped] == ["席位提名 seat.observability"]
     assert "目录里没有" in analysis.dropped[0].reason
+
+
+def contradictions_reply(*, claim_a: int, claim_b: int) -> str:
+    """既有报文 + 一对互斥（写的是**第几条主张**，从 1 开始——不是 `c1`）。"""
+
+    payload = json.loads(CLAIMS_REPLY)
+    payload["contradictions"] = [
+        {"claim_a": claim_a, "claim_b": claim_b, "why": "一个说不能改，一个说要能改"}
+    ]
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def test_the_claims_packet_accepts_contradiction_pairs():
+    packet = ClaimsPacket.model_validate(json.loads(contradictions_reply(claim_a=1, claim_b=2)))
+
+    assert packet.contradictions[0].claim_a == 1
+    assert packet.contradictions[0].claim_b == 2
+    assert packet.contradictions[0].why
+
+
+def test_the_claims_packet_defaults_to_no_contradictions():
+    """没报互斥就是空数组——这是常态，不是缺字段。"""
+
+    assert ClaimsPacket.model_validate(json.loads(CLAIMS_REPLY)).contradictions == []
+
+
+async def test_the_analyzer_turns_claim_numbers_into_claim_ids():
+    """序号 → `c{i}`：编号是我们按数组下标发的，模型只报"第几条"。"""
+
+    gateway = ScriptedModelGateway(replies={"claims": contradictions_reply(claim_a=1, claim_b=3)})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert [item.claim_id for item in analysis.claims] == ["c1", "c2", "c3"]
+    assert [(item.claim_id_a, item.claim_id_b) for item in analysis.contradictions] == [
+        ("c1", "c3")
+    ]
+    assert analysis.dropped == ()
+
+
+async def test_a_contradiction_pointing_at_an_unknown_claim_is_dropped_with_a_trace():
+    """写歪的序号丢**那一条** + 留痕，不判死整轮（与未知席位提名同一个口径）。"""
+
+    gateway = ScriptedModelGateway(replies={"claims": contradictions_reply(claim_a=1, claim_b=9)})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert analysis.contradictions == ()
+    assert [item.handle for item in analysis.dropped] == ["互斥对子 1↔9"]
+    assert "只有 3 条主张" in analysis.dropped[0].reason
+
+
+async def test_a_contradiction_of_a_claim_with_itself_is_dropped_too():
+    """自己跟自己不叫互斥——按"写歪"处理，丢那一条并留痕。"""
+
+    gateway = ScriptedModelGateway(replies={"claims": contradictions_reply(claim_a=2, claim_b=2)})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert analysis.contradictions == ()
+    assert [item.handle for item in analysis.dropped] == ["互斥对子 2↔2"]

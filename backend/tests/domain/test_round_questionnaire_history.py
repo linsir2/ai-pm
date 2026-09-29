@@ -10,6 +10,9 @@
 老行（没有历史键）读回来退化成"只有当前这一批"，不编历史、不抛。
 """
 
+import pytest
+
+from pmstudio.domain.round.claim import Contradiction
 from pmstudio.domain.round.opinion import SeatReview
 from pmstudio.domain.round.questionnaire import (
     Answer,
@@ -24,7 +27,14 @@ from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.ids import EvidenceId, FormId, QuestionId
 from pmstudio.domain.shared.target import Target
 from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
-from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_claim
+from tests.support.builders import (
+    NOW,
+    PROJECT,
+    ROUND_ID,
+    SEAT,
+    make_claim,
+    make_round_with_contradictions,
+)
 
 
 def question(question_id: str, title: str) -> Question:
@@ -218,3 +228,47 @@ def test_payload_roundtrip_keeps_list_items_and_old_rows_fall_back():
         waiting_on=round_.waiting_on,
     )
     assert [item.text for item in legacy.list_items] == ["第二批记的"]
+
+
+def test_round_keeps_contradictions_and_survives_the_payload_roundtrip():
+    """互斥对子（analyzer 判的）要活过落库：装配层盖章要用它（T8）。"""
+
+    round_ = make_round_with_contradictions()
+    assert [(item.claim_id_a, item.claim_id_b) for item in round_.contradictions] == [("c1", "c2")]
+
+    payload = round_to_payload(round_)
+    restored = round_from_payload(
+        payload,
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+
+    assert [item.claim_id_a for item in restored.contradictions] == ["c1"]
+    assert restored.contradictions[0].why
+
+    del payload["contradictions"]  # 老行：没有这个键 → 空（不编对子）
+    legacy = round_from_payload(
+        payload,
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+    assert legacy.contradictions == ()
+
+
+def test_a_contradiction_must_point_at_claims_this_round_actually_has():
+    """对子指向不存在的主张：领域层就拦住（解析那一层已经先丢过一遍）。"""
+
+    from pmstudio.domain.shared.errors import ShapeError
+
+    round_ = make_round_with_contradictions()
+
+    with pytest.raises(ShapeError):
+        round_.attach_contradictions(
+            (Contradiction(claim_id_a="c1", claim_id_b="c9", why="越界"),)
+        )

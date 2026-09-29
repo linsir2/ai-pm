@@ -50,6 +50,23 @@ class SeatPickDraft(BaseModel):
     why: str = Field(description="一句话：读完这段输入，为什么这个专业面要表态")
 
 
+class ContradictionDraft(BaseModel):
+    """一对**立场互斥**的主张。写的是**第几条**（从 1 开始），不是 `c1`。
+
+    为什么用序号：`c1/c2` 是我们按 claims 数组下标发的，提示词里从没出现过——
+    让模型写 id 等于让它猜。序号 → 主张 id 的映射由解析那一层做，只有那一处。
+    """
+
+    claim_a: int = Field(description="第几条主张（从 1 开始，按 claims 数组的顺序）")
+    claim_b: int = Field(description="另一条主张的序号（从 1 开始）")
+    why: str = Field(
+        description=(
+            "一句话说清这两条为什么**立场互斥**（例如「记录不许改」 vs 「点错了要能改」）。"
+            "只是「还没定」「还没想清楚」不算互斥，别写在这里"
+        )
+    )
+
+
 class ClaimsPacket(BaseModel):
     basis: str = Field(description="你读了哪些章节与编号才切出这些主张")
     claims: list[ClaimDraft] = Field(min_length=1, max_length=12)
@@ -57,6 +74,11 @@ class ClaimsPacket(BaseModel):
         min_length=1,
         max_length=7,
         description="这一轮该请哪些席位（从目录里挑，一般 2–6 个）",
+    )
+    contradictions: list[ContradictionDraft] = Field(
+        default_factory=list,
+        max_length=5,
+        description="本轮输入内部**立场互斥**的主张对子；没有就给空数组",
     )
 
 

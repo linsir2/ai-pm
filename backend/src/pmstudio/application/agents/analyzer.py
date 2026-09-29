@@ -7,6 +7,7 @@
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
@@ -25,7 +26,7 @@ from pmstudio.application.ports import (
     PromptLibrary,
     SeatCatalog,
 )
-from pmstudio.domain.round.claim import Assumption, Claim
+from pmstudio.domain.round.claim import Assumption, Claim, Contradiction
 from pmstudio.domain.round.round import DroppedItem, DropSource, SeatNomination
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import RoundId
@@ -41,6 +42,8 @@ class Analysis:
     claims: tuple[Claim, ...]
     seats: tuple[SeatNomination, ...]
     dropped: tuple[DroppedItem, ...] = ()
+    #: 本轮输入内部**立场互斥**的主张对子（没判出来就是空）
+    contradictions: tuple[Contradiction, ...] = ()
 
 
 def normalize(text: str) -> str:
@@ -192,10 +195,13 @@ class ClaimAnalyzer:
         )
         packet = schemas.parse_packet(reply.text, schemas.ClaimsPacket, purpose=self.PURPOSE)
         seats, dropped = nominations_from_packet(packet, catalog=self._catalog)
+        claims = claims_from_packet(packet, user_input=user_input)
+        contradictions, contradiction_drops = contradictions_from_packet(packet, claims=claims)
         return Analysis(
-            claims=claims_from_packet(packet, user_input=user_input),
+            claims=claims,
             seats=seats,
-            dropped=dropped,
+            dropped=dropped + contradiction_drops,
+            contradictions=contradictions,
         )
 
 
@@ -293,3 +299,56 @@ def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tupl
                 domain_code=error.code,
             ) from error
     return tuple(claims)
+
+
+def contradictions_from_packet(
+    packet: schemas.ClaimsPacket, *, claims: Sequence[Claim]
+) -> tuple[tuple[Contradiction, ...], tuple[DroppedItem, ...]]:
+    """报文里的"第几条 ↔ 第几条" → 领域值对象；写歪的**丢那一条 + 留痕**。
+
+    三种写歪：序号越界、指向自己、领域校验不过（比如空 why）。一律不判死整轮——
+    与"未知席位提名"同一个口径：一条判断写错，不该让整轮重跑（模型重跑一次要几十秒）。
+
+    序号 → 主张 id（`c{i}`）的映射只有这一处：id 是我们按数组下标发的，提示词里从没出现过。
+    """
+
+    total = len(claims)
+    keep: list[Contradiction] = []
+    dropped: list[DroppedItem] = []
+    for item in packet.contradictions:
+        handle = f"互斥对子 {item.claim_a}↔{item.claim_b}"
+        reason: str | None = None
+        if not (1 <= item.claim_a <= total and 1 <= item.claim_b <= total):
+            reason = f"这一轮只有 {total} 条主张，序号越界；已丢弃该条互斥判断"
+        elif item.claim_a == item.claim_b:
+            reason = "自己跟自己不叫互斥；已丢弃该条互斥判断"
+        if reason is not None:
+            dropped.append(
+                DroppedItem(
+                    handle=handle,
+                    reason=reason,
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                )
+            )
+            continue
+        try:
+            keep.append(
+                Contradiction(
+                    claim_id_a=claims[item.claim_a - 1].claim_id,
+                    claim_id_b=claims[item.claim_b - 1].claim_id,
+                    why=item.why,
+                )
+            )
+        except DomainError as error:
+            dropped.append(
+                DroppedItem(
+                    handle=handle,
+                    reason=f"互斥判断过不了领域校验：{error.message}",
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                )
+            )
+    return tuple(keep), tuple(dropped)
