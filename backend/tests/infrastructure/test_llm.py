@@ -244,6 +244,58 @@ async def test_gateway_retries_transient_errors_then_succeeds(monkeypatch):
     assert slept == [1.0]
 
 
+async def test_gateway_records_every_attempt_including_the_failed_one(monkeypatch):
+    """留样要能看到**每一次尝试**（报告 §四）。
+
+    120.4 秒那一次是"超时 90 → 退避 → 重试成功"，只有最后成功那次被记下来，
+    于是"刚才为什么慢/为什么重试"在 `model_calls` 里一行都查不到。
+    """
+
+    calls = {"count": 0}
+
+    async def flaky(**kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("Connection error.")
+
+        class _Message:
+            content = '{"ok": true}'
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "m"
+            usage = {}
+
+        return _Response()
+
+    async def fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", flaky)
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.asyncio.sleep", fake_sleep)
+    recorder = _RecordingRecorder()
+    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
+
+    await gateway.complete(
+        ModelRequest(
+            purpose="claims",
+            messages=(ModelMessage(role="user", content="x"),),
+            schema_name="SeatPacket",
+            response_schema={"type": "object"},
+        )
+    )
+
+    assert [(row["attempt"], row["ok"], bool(row["error"])) for row in recorder.rows] == [
+        (1, False, True),
+        (2, True, False),
+    ]
+    assert "Connection error" in recorder.rows[0]["error"]
+    assert recorder.rows[1]["reply_text"] == '{"ok": true}'
+
+
 async def test_gateway_gives_up_after_max_attempts_on_transient_errors(monkeypatch):
     calls = {"count": 0}
 

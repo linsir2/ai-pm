@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS evidence_ledgers (
 
 -- 模型留样（`02` §5.3）：默认不写，`PMSTUDIO_TRACE_MODEL=1` 时才记。
 -- 它不参与业务：写不进去也不影响这一轮；要清就直接 DELETE。
+-- 每次**尝试**一行（重试后成功也留：不然"刚才为什么慢"永远查不到）：
+-- `attempt` 第几次尝试、`ok` 成没成、`error` 失败原因（成功为 NULL）。
 CREATE TABLE IF NOT EXISTS model_calls (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   round_id    TEXT,
@@ -49,6 +51,9 @@ CREATE TABLE IF NOT EXISTS model_calls (
   reply_text  TEXT NOT NULL,
   usage_json  TEXT NOT NULL,
   duration_ms INTEGER NOT NULL,
-  created_at  TEXT NOT NULL
+  created_at  TEXT NOT NULL,
+  attempt     INTEGER NOT NULL DEFAULT 1,
+  ok          INTEGER NOT NULL DEFAULT 1,
+  error       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_model_calls_round ON model_calls(round_id, id);

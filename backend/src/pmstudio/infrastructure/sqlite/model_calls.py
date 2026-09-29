@@ -12,6 +12,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 PROMPT_LIMIT = 20_000
+"""提示词留样的字符预算。**超了就头尾各半保留**（2026-09-29 改）。
+
+原来只留头部，被切掉的正好是末尾的硬规矩与输出 schema——复盘"模型为什么这么答"时最想看的那一段。
+"""
+
+TRUNCATION_MARK = "\n…（略去 {count} 字符）…\n"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +31,9 @@ class ModelCallRow:
     usage: dict[str, object]
     duration_ms: int
     created_at: datetime
+    attempt: int = 1
+    ok: bool = True
+    error: str | None = None
 
 
 class SqliteModelCallRecorder:
@@ -43,22 +52,28 @@ class SqliteModelCallRecorder:
         usage: Mapping[str, object],
         duration_ms: int,
         created_at: datetime,
+        attempt: int = 1,
+        ok: bool = True,
+        error: str | None = None,
     ) -> None:
         try:
             self._connection.execute(
                 "INSERT INTO model_calls (round_id, purpose, model, prompt_sha, prompt_text,"
-                " reply_text, usage_json, duration_ms, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " reply_text, usage_json, duration_ms, created_at, attempt, ok, error)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     round_id,
                     purpose,
                     model,
                     prompt_sha,
-                    prompt_text[:PROMPT_LIMIT],
+                    _keep_head_and_tail(prompt_text),
                     reply_text,
                     json.dumps(dict(usage), ensure_ascii=False),
                     duration_ms,
                     created_at.isoformat(),
+                    attempt,
+                    int(ok),
+                    error,
                 ),
             )
         except (sqlite3.Error, TypeError, ValueError):
@@ -87,6 +102,19 @@ class SqliteModelCallRecorder:
                 usage=json.loads(row["usage_json"]),
                 duration_ms=row["duration_ms"],
                 created_at=datetime.fromisoformat(row["created_at"]),
+                attempt=row["attempt"],
+                ok=bool(row["ok"]),
+                error=row["error"],
             )
             for row in rows
         )
+
+
+def _keep_head_and_tail(prompt: str) -> str:
+    """超预算就**头尾各半**：末尾的硬规矩与输出 schema 比中间那段更值得留。"""
+
+    if len(prompt) <= PROMPT_LIMIT:
+        return prompt
+    half = PROMPT_LIMIT // 2
+    dropped = len(prompt) - PROMPT_LIMIT
+    return prompt[:half] + TRUNCATION_MARK.format(count=dropped) + prompt[-half:]

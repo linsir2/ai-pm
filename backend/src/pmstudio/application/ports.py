@@ -82,6 +82,9 @@ class ModelCallRecorder(Protocol):
         usage: Mapping[str, object],
         duration_ms: int,
         created_at: datetime,
+        attempt: int = 1,
+        ok: bool = True,
+        error: str | None = None,
     ) -> None: ...
 
 

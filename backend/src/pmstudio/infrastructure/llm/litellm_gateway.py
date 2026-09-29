@@ -93,22 +93,26 @@ class LiteLLMGateway:
             kwargs["api_base"] = self._api_base
         response = None
         for attempt in range(1, self._max_attempts + 1):
+            attempt_started = time.monotonic()
             try:
                 response = await acompletion(**kwargs)
                 break
             except Exception as error:  # noqa: BLE001 —— 供应商异常类型太多，统一转译
-                if is_transient(error) and attempt < self._max_attempts:
-                    await asyncio.sleep(self._backoff[attempt - 1])
-                    continue
-                # 失败的这一次也留样（reply_text 空串）：查"为什么超时"要看**每一次**尝试，
-                # 不只是最后成功的那次。
+                # **每一次尝试都留样**（含"重试后成功"的那几次失败）：查"为什么超时/为什么重试"
+                # 要看每一次尝试，只有最后一次失败被记下来的话，那次 120 秒会看起来像一次慢成功。
                 self._record(
                     request,
                     reply_text="",
                     usage={},
-                    duration_ms=int((time.monotonic() - started) * 1000),
+                    duration_ms=int((time.monotonic() - attempt_started) * 1000),
                     model=self._model,  # 没拿到回复，只有我们配的那个名字
+                    attempt=attempt,
+                    ok=False,
+                    error=f"{type(error).__name__}: {error}",
                 )
+                if is_transient(error) and attempt < self._max_attempts:
+                    await asyncio.sleep(self._backoff[attempt - 1])
+                    continue
                 raise ModelCallFailed(
                     f"模型调用失败：{type(error).__name__}"
                     + (f"（重试 {attempt - 1} 次后仍失败）" if attempt > 1 else ""),
@@ -143,6 +147,8 @@ class LiteLLMGateway:
             usage=reply.usage,
             duration_ms=int((time.monotonic() - started) * 1000),
             model=reply.model,  # 供应商回填的模型名（能看出实际是哪个快照答的）
+            attempt=attempt,
+            ok=True,
         )
         return reply
 
@@ -154,6 +160,9 @@ class LiteLLMGateway:
         usage: Mapping[str, object],
         duration_ms: int,
         model: str,
+        attempt: int = 1,
+        ok: bool = True,
+        error: str | None = None,
     ) -> None:
         """旁路留样：没接 recorder 就什么都不做（默认就是没接）。"""
 
@@ -172,6 +181,9 @@ class LiteLLMGateway:
             usage=_jsonable(usage),
             duration_ms=duration_ms,
             created_at=datetime.now(UTC),
+            attempt=attempt,
+            ok=ok,
+            error=error,
         )
 
 
