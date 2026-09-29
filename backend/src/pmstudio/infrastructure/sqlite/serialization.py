@@ -559,6 +559,8 @@ def round_to_payload(round_: Round) -> dict:
             {"claim_id_a": item.claim_id_a, "claim_id_b": item.claim_id_b, "why": item.why}
             for item in round_.contradictions
         ],
+        # 上次失败的报文类原因（重试时递给第一次尝试；老行没有这个键 → None）
+        "retry_hint": round_.retry_hint,
         "failure": _failure_to_json(round_.failure),
         "confirmed_version_no": round_.confirmed_version_no,
         "abandon_reason": round_.abandon_reason,
@@ -610,6 +612,8 @@ def round_from_payload(
         contradictions=tuple(
             Contradiction(**item) for item in payload.get("contradictions", ())
         ),
+        # 老行里没有这个键（重试提示是后加的）：None——不编提示
+        retry_hint=payload.get("retry_hint"),
         answer_sets=tuple(answer_set_from_json(item) for item in payload["answer_sets"]),
         draft=None if payload["draft"] is None else draft_from_json(payload["draft"]),
         seat_round_count=payload["seat_round_count"],

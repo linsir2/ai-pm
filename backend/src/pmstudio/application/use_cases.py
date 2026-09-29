@@ -940,7 +940,14 @@ class IntegrateRound:
         _publish(self._events, self._clock, round_)
 
     async def _integrate_with_repair(self, *, round_id: RoundId):  # type: ignore[no-untyped-def]
-        validation_error = ""
+        # 上一次失败留下的报错（如果有）就是这次第一次尝试的起点：重试不再"盲调"（P13 C1/C2）。
+        # 取走即清——不清的话，陈年错误会被后面每个动作当成校验错误递进去。
+        with self._uow:
+            round_ = self._rounds.get(round_id)
+            retry_hint = round_.take_retry_hint()
+            if retry_hint is not None:
+                self._round_writer.save(round_)
+        validation_error = retry_hint or ""
         carried: tuple[Question, ...] = ()
         carried_from_queue: tuple[Question, ...] = ()
         carried_from_open_items: tuple[Question, ...] = ()
@@ -1067,6 +1074,12 @@ class IntegrateRound:
                         clock=self._clock,
                         round_id=round_id,
                         reason=reason,
+                        # 报文类失败才留提示：重试时它变成第一次尝试的 validation_error
+                        hint=(
+                            repair_note(error)
+                            if isinstance(error, PacketParseError)
+                            else message
+                        ),
                     )
                     raise PacketParseError(reason, purpose="integration") from error
                 validation_error = (
@@ -1910,12 +1923,16 @@ def fail_round(
     clock: Clock,
     round_id: RoundId,
     reason: str,
+    hint: str | None = None,
 ) -> None:
-    """整轮失败：记原因、发 generation.failed。**不改文档、不落半截意见。**"""
+    """整轮失败：记原因、发 generation.failed。**不改文档、不落半截意见。**
+
+    `hint` 只有**报文类**失败才传（P13 C1）：重试时它会变成第一次尝试的 `validation_error`。
+    """
 
     with uow:
         round_ = rounds.get(round_id)
-        round_.fail(reason)
+        round_.fail(reason, hint=hint)
         round_writer.save(round_)
     events.publish(
         Event(

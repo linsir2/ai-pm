@@ -135,6 +135,7 @@ class Round:
         questionnaire_history: tuple[Questionnaire, ...] = (),
         list_items: tuple[ListItem, ...] = (),
         contradictions: tuple[Contradiction, ...] = (),
+        retry_hint: str | None = None,
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -162,6 +163,7 @@ class Round:
         self._carried_sources = dict(carried_sources or {})
         self._list_items = tuple(list_items)
         self._contradictions = tuple(contradictions)
+        self._retry_hint = retry_hint
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -611,12 +613,15 @@ class Round:
             raise FeatureAlreadyAuthorized(feature_slug=slug)
         self._authorized[slug] = basis
 
-    def fail(self, reason: str) -> None:
+    def fail(self, reason: str, *, hint: str | None = None) -> None:
         """记失败：**只记第一次**。
 
         第二次调用（并发重试、重复提交）会把 `at_step` 记成当时那一步——那时它已经是
         `failed` 了，于是"从哪一步重跑"这个信息就没了，任谁都救不回来（`04-未决.md` C9）。
         失败点只有一个，重复的失败不改写它。
+
+        `hint` 是**报文类**失败的摘要（给重试时的第一次尝试用）：网关那类（超时 / 5xx）
+        不传——那种错对模型没有信息量，递进去只是把提示词喂脏。
         """
 
         if self._step is Step.DONE:
@@ -624,8 +629,26 @@ class Round:
         if self._step is Step.FAILED:
             return
         self._failure = Failure(at_step=self._step, waiting_on=self._waiting_on, reason=reason)
+        if hint:
+            self._retry_hint = hint
         self._waiting_on = WaitingOn.NONE
         self._step = Step.FAILED
+
+    @property
+    def retry_hint(self) -> str | None:
+        """上次失败的**报文类**原因：重试时递给第一次尝试（"别盲调"）。"""
+
+        return self._retry_hint
+
+    def take_retry_hint(self) -> str | None:
+        """取走重试提示（**一次性**）。
+
+        不取走的话，陈年错误会被后面每个动作当成 `validation_error` 递进提示词——
+        那比不递更糟（模型会去修一个已经不存在的问题）。
+        """
+
+        hint, self._retry_hint = self._retry_hint, None
+        return hint
 
     def resume(self) -> None:
         if self._step is not Step.FAILED or self._failure is None:

@@ -1526,3 +1526,55 @@ async def test_a_question_covering_a_contradiction_is_stamped_conflict_end_to_en
     questions = harness.rounds.get(round_id).questionnaire.questions
     assert questions[0].kind is QuestionKind.CONFLICT
     assert [str(ref) for ref in questions[0].evidence_refs] == ["E1", "E2"]
+
+
+# —— 续跑口径：重试不再盲调（E3，P13）——
+
+#: 只交判断、不交疑问的席位回复：整合两次失败时**不会降级**，一定判死（才走得到重试那条路）
+JUDGMENT_ONLY_REPLY = json.dumps(
+    {
+        "basis": "读了 s1–s13 与 E1",
+        "opinions": [
+            {
+                "local_id": "O1",
+                "form": "judgment",
+                "about": "导出的性能上限",
+                "claim": "单次导出应在 60 秒内完成",
+                "because": "同类导出的常见上限",
+                "evidence_refs": ["E1"],
+            }
+        ],
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_retrying_after_an_integration_failure_carries_the_last_error():
+    """E3 剩余：重试不是"盲调"——上次为什么没通过，要递进第一次尝试。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": ["{这不是 JSON", "{这不是 JSON", questionnaire_packet()],
+        },
+        seat_replies={SEAT: JUDGMENT_ONLY_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+
+    with pytest.raises(PacketParseError):
+        await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.FAILED
+    # 两条信息分开放：`failure.reason` 是**给我们看的**（几次都没过），
+    # `retry_hint` 是**给模型看的**（上一版错在哪、该怎么改）
+    assert "两次都过不了校验" in round_.failure.reason
+    assert "上一次的报文没通过校验" in round_.retry_hint
+
+    await harness.retry_round()(round_id=round_id)  # 失败 → resume 回 seats_running
+    await harness.run_seat_round()(round_id=round_id)  # 席位齐了 → 一个模型调用都不发
+    await harness.integrate_round()(round_id=round_id)  # 第三次脚本是好的 → 出问卷
+
+    slots = [slots for name, slots in harness.prompts.calls if name == "integrator"][-1]
+    assert "上一次的报文没通过校验" in slots["validation_error"]  # 第一次尝试就带上了
+    assert harness.rounds.get(round_id).retry_hint is None  # 用过就清

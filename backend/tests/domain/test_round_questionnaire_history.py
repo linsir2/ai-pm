@@ -24,6 +24,7 @@ from pmstudio.domain.round.questionnaire import (
     QuestionType,
 )
 from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EvidenceId, FormId, QuestionId
 from pmstudio.domain.shared.target import Target
 from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
@@ -33,6 +34,7 @@ from tests.support.builders import (
     ROUND_ID,
     SEAT,
     make_claim,
+    make_round,
     make_round_with_contradictions,
 )
 
@@ -272,3 +274,50 @@ def test_a_contradiction_must_point_at_claims_this_round_actually_has():
         round_.attach_contradictions(
             (Contradiction(claim_id_a="c1", claim_id_b="c9", why="越界"),)
         )
+
+
+# —— 续跑口径：失败原因留到重试的第一次尝试（E3，P13）——
+
+
+def restored(payload: dict) -> Round:
+    return round_from_payload(
+        payload,
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        created_at=NOW,
+        step=Step.FAILED,
+        waiting_on=WaitingOn.NONE,
+    )
+
+
+def test_a_failed_round_remembers_the_reason_for_the_next_attempt():
+    """报文类失败要留下"上次错在哪"：重试时递给第一次尝试，省掉一次盲调。"""
+
+    round_ = make_round()
+    round_.fail("整合两次都过不了校验：…", hint="evidence_refs 要的是数组，你给的是字符串")
+
+    payload = round_to_payload(round_)
+    assert restored(payload).retry_hint == "evidence_refs 要的是数组，你给的是字符串"
+
+    del payload["retry_hint"]  # 老行：没有这个键 → None（不编提示）
+    assert restored(payload).retry_hint is None
+
+
+def test_take_retry_hint_hands_it_over_exactly_once():
+    """取走即清——不然陈年错误会被后面每个动作当成校验错误递进去。"""
+
+    round_ = make_round()
+    round_.fail("整合两次都过不了校验：…", hint="上一版报错")
+
+    assert round_.take_retry_hint() == "上一版报错"
+    assert round_.take_retry_hint() is None
+    assert round_.retry_hint is None
+
+
+def test_a_gateway_failure_has_no_hint():
+    """网关那类失败（超时 / 5xx）对模型没有信息量，不递。"""
+
+    round_ = make_round()
+    round_.fail("模型调用失败：ReadTimeout")
+
+    assert round_.retry_hint is None
