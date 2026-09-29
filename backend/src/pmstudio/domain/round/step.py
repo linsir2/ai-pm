@@ -28,7 +28,9 @@ LEGAL_ADVANCES: dict[Step, frozenset[Step]] = {
     Step.CLAIMS_READY: frozenset({Step.SEATS_RUNNING}),
     Step.SEATS_RUNNING: frozenset({Step.AWAITING_ANSWERS, Step.AWAITING_CONFIRM}),
     Step.AWAITING_ANSWERS: frozenset({Step.SEATS_RUNNING}),
-    Step.AWAITING_CONFIRM: frozenset({Step.DONE}),
+    # 草案卡上用户可以说"继续深挖"：回到席位轮，再问一批（C6，P14）。
+    # 这不是普通推进，只有 `Round.dig()` 会这么转——它同时清草案、加额度、新开席位轮。
+    Step.AWAITING_CONFIRM: frozenset({Step.DONE, Step.SEATS_RUNNING}),
     Step.DONE: frozenset(),
     Step.FAILED: frozenset(),
     Step.ABANDONED: frozenset(),

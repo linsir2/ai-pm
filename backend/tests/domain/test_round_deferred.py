@@ -6,9 +6,24 @@
 
 from dataclasses import replace
 
+import pytest
+
+from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
 from pmstudio.domain.round.questionnaire import Option, Question, QuestionType
-from pmstudio.domain.shared.ids import FormId, QuestionId, RoundId
+from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.step import MAX_SEAT_ROUNDS, Step, WaitingOn
+from pmstudio.domain.shared.errors import IllegalStepTransition, SeatRoundLimitReached
+from pmstudio.domain.shared.ids import (
+    DraftId,
+    EntryId,
+    EvidenceId,
+    FormId,
+    ProposalId,
+    QuestionId,
+    RoundId,
+)
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
 from tests.support.builders import NOW, PROJECT, ROUND_ID, make_round
 
@@ -131,3 +146,85 @@ def test_carried_sources_round_trip_and_old_payload_is_empty():
         waiting_on=round_.waiting_on,
     )
     assert old.carried_sources() == {}
+
+
+# —— C6：用户主动"继续深挖"（P14）——
+
+
+def round_awaiting_confirm() -> Round:
+    """一轮停在草案卡（**带一条没问上的题**，这正是 dig 要把它问回来的东西）。"""
+
+    round_ = make_round()
+    round_.defer((question("这条没问上"),))
+    round_.integrate(
+        draft=Draft(
+            draft_id=DraftId("d1"),
+            round_id=ROUND_ID,
+            proposals=(
+                Proposal(
+                    proposal_id=ProposalId("p01"),
+                    entry_id=EntryId("r1#01"),
+                    op=WriteOp.ADD,
+                    target=Target.body("s2"),
+                    text="现状：导出靠手工复制",
+                    origin=Origin(OriginType.USER, (EvidenceId("E1"),)),
+                    kind=BlockKind.TEXT,
+                ),
+            ),
+        )
+    )
+    assert round_.step is Step.AWAITING_CONFIRM and round_.waiting_on is WaitingOn.DRAFT
+    return round_
+
+
+def test_dig_sends_the_round_back_to_the_seat_round_with_a_spare_batch():
+    round_ = round_awaiting_confirm()
+
+    round_.dig()
+
+    assert round_.step is Step.SEATS_RUNNING
+    assert round_.extra_batches == 1
+    assert round_.draft is None  # 旧草案作废（没确认写入，文档不受影响）
+    assert round_.seat_round_count == 2  # 新开一次席位轮
+    assert round_.deferred == (question("这条没问上"),)  # 队列留着 → 下一趟问得回来
+
+
+def test_dig_is_refused_when_the_round_is_not_awaiting_confirm():
+    with pytest.raises(IllegalStepTransition):
+        make_round().dig()
+
+
+def test_dig_is_refused_when_the_seat_rounds_are_used_up():
+    round_ = round_awaiting_confirm()
+    for _ in range(MAX_SEAT_ROUNDS - 1):
+        round_._begin_seat_round()  # 把这一轮的席位轮额度用满（测试内部手法）
+
+    with pytest.raises(SeatRoundLimitReached):
+        round_.dig()
+
+
+def test_payload_roundtrip_keeps_the_extra_batches():
+    round_ = round_awaiting_confirm()
+    round_.dig()
+
+    payload = round_to_payload(round_)
+    restored = round_from_payload(
+        payload,
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+    assert restored.extra_batches == 1
+
+    del payload["extra_batches"]  # 老行：没有这个键 → 0
+    legacy = round_from_payload(
+        payload,
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+    assert legacy.extra_batches == 0

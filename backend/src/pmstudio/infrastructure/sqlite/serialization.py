@@ -566,6 +566,8 @@ def round_to_payload(round_: Round) -> dict:
         "proposed_accepted": round_.proposed_accepted,
         # 出草案时算出来的"连续几轮没采用席位提议"（老行没有这个键 → 0，不提示）
         "proposal_ignore_streak": round_.proposal_ignore_streak,
+        # 用户"继续深挖"多出来的批次额度（老行没有这个键 → 0）
+        "extra_batches": round_.extra_batches,
         "failure": _failure_to_json(round_.failure),
         "confirmed_version_no": round_.confirmed_version_no,
         "abandon_reason": round_.abandon_reason,
@@ -624,6 +626,8 @@ def round_from_payload(
         proposed_accepted=payload.get("proposed_accepted"),
         # 老行里没有这个键（C4 的 streak 是后加的）：0——不提示
         proposal_ignore_streak=payload.get("proposal_ignore_streak") or 0,
+        # 老行里没有这个键（dig 的额度是后加的）：0
+        extra_batches=payload.get("extra_batches") or 0,
         answer_sets=tuple(answer_set_from_json(item) for item in payload["answer_sets"]),
         draft=None if payload["draft"] is None else draft_from_json(payload["draft"]),
         seat_round_count=payload["seat_round_count"],

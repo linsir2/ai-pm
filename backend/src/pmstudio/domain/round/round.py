@@ -139,6 +139,7 @@ class Round:
         proposed_offered: int | None = None,
         proposed_accepted: int | None = None,
         proposal_ignore_streak: int = 0,
+        extra_batches: int = 0,
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -170,6 +171,7 @@ class Round:
         self._proposed_offered = proposed_offered
         self._proposed_accepted = proposed_accepted
         self._proposal_ignore_streak = proposal_ignore_streak
+        self._extra_batches = extra_batches
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -648,6 +650,30 @@ class Round:
 
     def remember_proposal_ignore_streak(self, count: int) -> None:
         self._proposal_ignore_streak = max(0, count)
+
+    @property
+    def extra_batches(self) -> int:
+        """用户主动要求"继续深挖"多出来的问卷批次（问卷闸门的额度，C6）。"""
+
+        return self._extra_batches
+
+    def dig(self) -> None:
+        """从草案卡回到提问：**把这一轮没问上的那些题重新问一遍**（P14 C6）。
+
+        四件事，缺一不可：
+        1. 清掉未确认的草案——文档**从没被写过**（写入只在确认那一刻发生），所以不用回滚；
+        2. 问卷闸门 +1 批；
+        3. **新开一次席位轮**（席位要针对"用户还想再深挖"重新表态；到上限就明确报错）；
+        4. 回到 `seats_running`——轮内队列**保留**（出草案时已经不清空了），
+           于是下一趟整合会把这些题当 carried 真的问出来。
+        """
+
+        self._require_step(Step.AWAITING_CONFIRM)
+        self._require_waiting(WaitingOn.DRAFT)
+        self._draft = None
+        self._extra_batches += 1
+        self._begin_seat_round()
+        self._advance_to(Step.SEATS_RUNNING)
 
     def authorize_new_feature(self, slug: FeatureSlug, *, basis: EvidenceId) -> None:
         if slug in self._authorized:

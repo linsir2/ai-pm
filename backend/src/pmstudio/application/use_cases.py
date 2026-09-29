@@ -804,8 +804,10 @@ def _stop_asking_reason(round_: Round) -> str | None:
     - **席位轮到上限**（`02` §7）：兜底，正常路径下问卷闸门会先响。
     """
 
-    if len(round_.answer_sets) >= MAX_QUESTIONNAIRES:
-        return f"问卷已满 {MAX_QUESTIONNAIRES} 批"
+    # 用户"继续深挖"过几次，额度就多几批（C6，P14）：闸门只放宽问卷，不放宽席位轮上限
+    allowed = MAX_QUESTIONNAIRES + round_.extra_batches
+    if len(round_.answer_sets) >= allowed:
+        return f"问卷已满 {allowed} 批"
     if round_.seat_round_count >= MAX_SEAT_ROUNDS:
         return "已到席位轮上限"
     return None
@@ -924,8 +926,10 @@ class IntegrateRound:
                 ]
                 questions = ()
             if not questions:
-                # 出草案这一支：轮内队列**一律清空落 s11**（队列只在轮内有活路）
-                leftover = list(round_.clear_deferred())
+                # 出草案这一支：没问上的题落 s11；但队列**本身留着**（P14 C6）——
+                # 用户点"继续深挖"就回到席位轮，届时这些题会被 carried 真的问出来。
+                # 不清空的代价：正常确认的轮里队列还剩几条，轮已 done，没人再读它。
+                leftover = list(round_.deferred)
                 if leftover:
                     # 已经在 s11 里的那几题不再落第二遍（P13 C6）；缺口行照旧列全（它们仍没定）
                     landable_leftover = unlanded_open_questions(

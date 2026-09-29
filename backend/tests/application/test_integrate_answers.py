@@ -1772,3 +1772,48 @@ async def test_a_round_whose_history_took_a_proposal_has_no_streak():
     assert harness.rounds.get(round_id).proposal_ignore_streak == 1  # 只有最近那一轮算数
     view = await harness.get_round()(round_id=round_id)
     assert view.advisories == ()  # 1 < 3 → 不说
+
+
+# —— C6：草案卡上的"继续深挖"（P14）——
+
+
+async def test_the_deferred_queue_is_not_cleared_when_the_draft_is_written():
+    """C6 的前置：出草案时轮内队列**留着**。
+
+    以前这里是 `clear_deferred()`——题落进 s11 之后队列就空了，于是"继续深挖"只可能
+    再端出一份一模一样的草案。现在队列留着，dig 之后它们会被 carried 真的问出来（见 T5 的用例）。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [
+                questionnaire_packet(title="第一批的问题？"),
+                questionnaire_packet(title="第二批的问题？"),
+                # 第三趟：闸门（问卷已满两批）这时候响 → 5 题降级进 s11、2 题进轮内队列、出草案
+                packet_with_questions(7, prefix="第三批"),
+            ],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    await harness.integrate_round()(round_id=round_id)  # 第一批问卷
+    for _ in range(2):  # 两批问卷，全部按跳过走
+        form = harness.rounds.get(round_id).questionnaire
+        await harness.submit_answers()(
+            round_id=round_id,
+            form_id=str(form.form_id),
+            answers=(),
+            skipped=tuple(str(item.question_id) for item in form.questions),
+        )
+        await harness.run_seat_round()(round_id=round_id)
+        await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.AWAITING_CONFIRM
+    assert [item.title for item in round_.deferred] == ["第三批第 6 题", "第三批第 7 题"]
+    assert round_.draft is not None
+    # 队列里的题同时落了 s11（草案没确认之前，文档里什么都没有；这是给"不再深挖"的用户看的）
+    s11 = [item.text for item in round_.draft.proposals if str(item.target.section_id) == "s11"]
+    assert any("第三批第 6 题" in text for text in s11)
