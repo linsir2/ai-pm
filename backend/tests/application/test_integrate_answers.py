@@ -1677,3 +1677,45 @@ def test_a_list_item_the_draft_already_covers_is_not_written_to_s11():
 
     assert _unhandled_list_items(round_, questions=(), proposals=(covered,)) == ()
     assert _unhandled_list_items(round_, questions=(), proposals=()) == round_.list_items
+
+
+async def test_a_list_item_already_in_s11_is_not_landed_a_second_time():
+    """同一句话已经在 s11 里 → 不再落一遍，只在 gaps 里说一句（A3-②：不静默丢）。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [questionnaire_packet_with_a_list_item(), draft_packet()],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    # s11 里已经有一条**同名同去处**的未决条（它会在第一批被问回来）
+    seed_open_item(
+        harness,
+        entry_id="r0#open01",
+        text=(
+            "第一条清单项：模板字段要不要可配置？（未决定，待决人：PM；跳过后果：先搁着）"
+            "〔去处：s8〕"
+        ),
+    )
+
+    await harness.integrate_round()(round_id=round_id)  # 第一批：问回它 + 记下同名清单项
+    first = harness.rounds.get(round_id).questionnaire
+    await harness.submit_answers()(
+        round_id=round_id,
+        form_id=str(first.form_id),
+        answers=tuple(
+            AnswerInput(question_id=str(item.question_id), text="第一批的答案")
+            for item in first.questions
+        ),
+        skipped=(),
+    )
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)  # 第二批：出草案
+
+    draft = harness.rounds.get(round_id).draft
+    s11 = [item.text for item in draft.proposals if str(item.target.section_id) == "s11"]
+    assert [text for text in s11 if "模板字段要不要可配置" in text] == []  # 不再落第二遍
+    assert any("已经在 s11" in gap for gap in draft.gaps)

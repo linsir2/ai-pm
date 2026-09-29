@@ -26,12 +26,14 @@ from pmstudio.application.assembly import (
     draft_of,
     landed_answer_proposals,
     normalize,
+    open_item_keys,
     open_item_proposal,
     open_question_proposals,
     question_key,
     questionnaire_of,
     seat_questions,
     unaccounted_drops,
+    unlanded_open_questions,
 )
 from pmstudio.application.context import (
     answer_eids,
@@ -871,11 +873,14 @@ class IntegrateRound:
                 degraded = len(degraded_proposals)
                 proposals += list(degraded_proposals)
             system_defaults = _system_defaults(round_, ledger=ledger, now=now)
+            # s11 里已经活跃的条目身份：下面三处落地都拿它判重（P13 C6）
+            known_open_items = open_item_keys(document)
             proposals += list(
                 open_question_proposals(
                     round_,
                     system_defaults=system_defaults,
                     start_index=_next_proposal_index(proposals),
+                    known=known_open_items,
                 )
             )
             questions = assembled.questions
@@ -888,7 +893,9 @@ class IntegrateRound:
             stop_reason = _stop_asking_reason(round_)
             if questions and stop_reason is not None:
                 # 不再追问：题目降级成 s11 开放问题，直接出草案（02 §7 / 04-未决 C6）
-                for question in questions:
+                # 已经在 s11 里的那几题不再落第二遍（P13 C6）；信息没丢，所以不另记缺口行
+                landable = unlanded_open_questions(questions, known=known_open_items)
+                for question in landable:
                     system_defaults[question.question_id] = ledger.record(
                         kind=EvidenceKind.SYSTEM_DEFAULT,
                         text=f"{question.title}（{stop_reason}，未决定）",
@@ -900,7 +907,7 @@ class IntegrateRound:
                     )
                 proposals += list(
                     downgraded_question_proposals(
-                        questions,
+                        landable,
                         system_defaults=system_defaults,
                         start_index=_next_proposal_index(proposals),
                         round_id=round_id,
@@ -915,16 +922,20 @@ class IntegrateRound:
                 # 出草案这一支：轮内队列**一律清空落 s11**（队列只在轮内有活路）
                 leftover = list(round_.clear_deferred())
                 if leftover:
+                    # 已经在 s11 里的那几题不再落第二遍（P13 C6）；缺口行照旧列全（它们仍没定）
+                    landable_leftover = unlanded_open_questions(
+                        leftover, known=known_open_items
+                    )
                     defaults = _open_item_defaults(
                         round_,
-                        leftover,
+                        landable_leftover,
                         ledger=ledger,
                         now=now,
                         reason="本批没排上",
                     )
                     proposals += list(
                         downgraded_question_proposals(
-                            leftover,
+                            landable_leftover,
                             system_defaults=defaults,
                             start_index=_next_proposal_index(proposals),
                             round_id=round_id,
@@ -955,9 +966,26 @@ class IntegrateRound:
                 unhandled = _unhandled_list_items(
                     round_, questions=(), proposals=proposals
                 )
-                if unhandled:
+                # 已经在 s11 里的那条不再落第二遍；剩下这些仍然没定，缺口行照说
+                landable_items = tuple(
+                    item
+                    for item in unhandled
+                    if (item.target.label(), normalize(item.text)) not in known_open_items
+                )
+                already_known = len(unhandled) - len(landable_items)
+                if already_known:
+                    gaps.append(
+                        f"有 {already_known} 条清单项已经在 s11 里，不重复落："
+                        + "；".join(
+                            item.text
+                            for item in unhandled
+                            if (item.target.label(), normalize(item.text))
+                            in known_open_items
+                        )[:3]
+                    )
+                if landable_items:
                     start = _next_proposal_index(proposals)
-                    for offset, item in enumerate(unhandled):
+                    for offset, item in enumerate(landable_items):
                         eid = ledger.record(
                             kind=EvidenceKind.SYSTEM_DEFAULT,
                             text=f"{item.text}（清单项，本轮没处理）",
@@ -980,8 +1008,8 @@ class IntegrateRound:
                             )
                         )
                     gaps.append(
-                        f"还有 {len(unhandled)} 条清单项没被处理，已记进 s11（不阻塞交付）："
-                        + "；".join(item.text for item in unhandled[:3])
+                        f"还有 {len(landable_items)} 条清单项没被处理，已记进 s11（不阻塞交付）："
+                        + "；".join(item.text for item in landable_items[:3])
                     )
             dropped = _dropped_items_for(
                 round_,

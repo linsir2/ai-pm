@@ -1387,6 +1387,39 @@ def test_two_blockers_keep_the_oldest_first():
     assert [item.title for item in carried] == ["先提的"]
 
 
+def test_open_item_keys_reads_the_active_ones_only():
+    """s11 里**活跃**条目的身份 = `(去处 label, 归一化标题)`；解析不了的不猜。"""
+
+    document = document_with_open_items(
+        [
+            "r0#open01|口径是什么？（未决定，待决人：PM；跳过后果：无）〔去处：s8.cost〕",
+            "r0#open02|一行脏数据，不是我们写的",
+        ]
+    )
+
+    assert assembly.open_item_keys(document) == {("s8.cost", "口径是什么？")}
+    assert assembly.open_item_keys(make_document()) == frozenset()
+
+
+def test_questions_already_in_s11_are_dropped_before_landing():
+    """同一句话已经在 s11 挂着 → 不再落一遍（P10 真跑 removed 4 / added 18 里就有重复）。"""
+
+    question = Question(
+        question_id=QuestionId("q1"),
+        target=Target.body("s8"),
+        type=QuestionType.TEXT,
+        title="单次导出的最大行数是多少？",
+        why="量级决定同步还是异步",
+        consequence_if_skipped="按同步实现",
+    )
+
+    assert (
+        assembly.unlanded_open_questions((question,), known={("s8", "单次导出的最大行数是多少？")})
+        == ()
+    )
+    assert assembly.unlanded_open_questions((question,), known=frozenset()) == (question,)
+
+
 def test_a_carried_question_goes_back_to_its_own_section():
     """带上去处的未决条问回来时回到**原章节**（P11 C1）。
 

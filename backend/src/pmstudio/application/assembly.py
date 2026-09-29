@@ -154,6 +154,55 @@ def parse_open_item(text: str) -> OpenItem | None:
     )
 
 
+def _open_item_entries(document: Document) -> tuple[OpenItem, ...]:
+    """s11 里所有**能解析**的未决条目（解析不了的跳过——那是别人写的，不猜）。"""
+
+    view = document.view()
+    section = next(
+        (item for item in view.sections if str(item.section_id) == OPEN_QUESTION_HOME), None
+    )
+    if section is None:
+        return ()
+    found: list[OpenItem] = []
+    for block in section.blocks:
+        for entry in block.entries:
+            parsed = parse_open_item(entry.text)
+            if parsed is None:
+                continue
+            found.append(parsed)
+    return tuple(found)
+
+
+def open_item_keys(document: Document) -> frozenset[tuple[str, str]]:
+    """当前 s11 里**活跃**未决条目的身份：`(去处 label, 归一化标题)`（P13 C6 判重用它）。
+
+    只跟**现在文档里有的**比：答过的条目会被 `remove` 撤下（P9），撤下之后同一件事
+    可以再落——判据是"现在有没有"，不是"历史上有没有"。
+    """
+
+    keys: set[tuple[str, str]] = set()
+    for item in _open_item_entries(document):
+        target_label = item.target_label or OPEN_QUESTION_HOME
+        keys.add((target_label, normalize(item.title)))
+    return frozenset(keys)
+
+
+def unlanded_open_questions(
+    questions: Sequence[Question], *, known: frozenset[tuple[str, str]]
+) -> tuple[Question, ...]:
+    """去掉"同一去处 + 同一句话已经在 s11 挂着"的题（机械判据，不是语义去重）。
+
+    挡的是"同一句话被落两遍"（问卷闸门响两次、降级题与已有条目同题）；
+    挡不住"换句话说的同一件事"——那要做相似度，本计划不做（§5）。
+    """
+
+    return tuple(
+        question
+        for question in questions
+        if (question.target.label(), normalize(question.title)) not in known
+    )
+
+
 def deferred_from_open_items(
     document: Document,
     *,
@@ -561,11 +610,15 @@ def open_question_proposals(
     *,
     system_defaults: Mapping[QuestionId, EvidenceId],
     start_index: int,
+    known: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[Proposal, ...]:
     """跳过的题按题面写明的后果落成 s11 开放问题（`02` §5）。
 
     题面与跳过后果回**出题那一批**去找（`questionnaire_history`）：题号在一轮里唯一之后，
     按 `(表单, 题号)` 查得到；拿当前批反查会把上一批的题静默丢掉（计划 §0.1 第 3 处）。
+
+    `known` 是 s11 里已经活跃的条目身份（`open_item_keys`）：同一句话已经在里面了就不再落
+    ——这不是"静默丢"，那条信息仍然在 s11 里，只是不重复记第二遍（P13 C6）。
     """
 
     questionnaire = round_.questionnaire
@@ -593,6 +646,11 @@ def open_question_proposals(
             seen.add(question_id)
             pairs.append((question, eid))
 
+    pairs = [
+        (question, eid)
+        for question, eid in pairs
+        if (question.target.label(), normalize(question.title)) not in known
+    ]
     proposals: list[Proposal] = []
     for offset, (question, eid) in enumerate(pairs):
         proposals.append(
