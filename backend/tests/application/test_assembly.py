@@ -1068,11 +1068,64 @@ def document_with_open_items(items: list[str]) -> Document:
 def test_parse_open_item_reads_our_own_format():
     text = "〔未决·阻塞〕点检完成率的统计口径（未决定，待决人：PM；跳过后果：报表口径不清）"
 
-    title, consequence, blocking = assembly.parse_open_item(text)
+    parsed = assembly.parse_open_item(text)
 
-    assert title == "点检完成率的统计口径"
-    assert consequence == "报表口径不清"
-    assert blocking is True
+    assert parsed is not None
+    assert parsed.title == "点检完成率的统计口径"
+    assert parsed.consequence == "报表口径不清"
+    assert parsed.blocking is True
+    assert parsed.target_label is None  # 老格式：没有去处标记
+
+
+def test_open_item_text_carries_its_target():
+    """s11 条目要记住它本来落在哪一章（P11 C1）：不然问回来只能回到 s11，答案也就没处落。"""
+
+    proposal = assembly.open_question_proposal(
+        Question(
+            question_id=QuestionId("q1"),
+            target=Target.body("s5", feature_slug="order-export", field="acceptance"),
+            type=QuestionType.TEXT,
+            title="单次导出的最大行数是多少？",
+            why="量级决定同步还是异步",
+            consequence_if_skipped="按同步实现",
+        ),
+        eid=EvidenceId("E9"),
+        index=1,
+        round_id=ROUND_ID,
+        rationale="跳过的题按题面后果落开放问题",
+    )
+
+    assert proposal.text.endswith("〔去处：s5/order-export.acceptance〕")
+    parsed = assembly.parse_open_item(proposal.text)
+    assert parsed is not None
+    assert parsed.target_label == "s5/order-export.acceptance"
+    assert parsed.title == "单次导出的最大行数是多少？"
+    assert parsed.consequence == "按同步实现"
+    assert parsed.blocking is False
+
+
+def test_an_open_item_with_a_chapter_slot_keeps_it():
+    """章节槽（`s8.compatibility`）也要认——真跑里技术/性能类的未决项常落在这些槽上。"""
+
+    proposal = assembly.open_question_proposal(
+        Question(
+            question_id=QuestionId("q1"),
+            target=Target.body("s8", field="compatibility"),
+            type=QuestionType.TEXT,
+            title="导出要不要兼容老版 Excel？",
+            why="兼容性影响验收口径",
+            consequence_if_skipped="先不兼容",
+        ),
+        eid=EvidenceId("E9"),
+        index=1,
+        round_id=ROUND_ID,
+        rationale="跳过的题按题面后果落开放问题",
+    )
+
+    parsed = assembly.parse_open_item(proposal.text)
+
+    assert parsed is not None
+    assert parsed.target_label == "s8.compatibility"
 
 
 def test_parse_open_item_rejects_a_foreign_line():

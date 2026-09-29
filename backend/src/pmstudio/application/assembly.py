@@ -112,22 +112,45 @@ _OPEN_ITEM = re.compile(
     r"^(?:〔未决·阻塞〕)?(?P<title>.+?)（未决定，待决人：[^；]+；跳过后果：(?P<consequence>.*)）$"
 )
 
+#: 去处标记：写在条目**末尾**，与旧格式向后兼容（老条目没有它就是 `None`）
+_TARGET_MARK = re.compile(r"〔去处：(?P<label>[^〕]+)〕\s*$")
 
-def parse_open_item(text: str) -> tuple[str, str, bool] | None:
-    """s11 未决条目的标准文本 → `(标题, 跳过后果, 是否阻塞)`；解析不了返回 None。
+
+@dataclass(frozen=True, slots=True)
+class OpenItem:
+    """s11 未决条目的解析结果（2026-09-29 P11）。
+
+    比原来的三元组多一个 `target_label`：**去处要跟着内容走**——没有它，问回来只能回到 s11，
+    答案也就永远落不回正文（真跑 `p-0b212145` 里四条答案就是这么蒸发的）。
+    """
+
+    title: str
+    consequence: str
+    blocking: bool
+    target_label: str | None = None
+
+
+def parse_open_item(text: str) -> OpenItem | None:
+    """s11 未决条目的标准文本 → `OpenItem`；解析不了返回 None。
 
     格式是我们自己写进去的（有测试钉住）；用户手写的条目、老版本写的条目都可能长别的样子——
-    那就**跳过**（调用方把它算进缺口），绝不猜。
+    那就**跳过**（调用方把它算进缺口），绝不猜。**老格式（没有去处标记）照旧认**，`target_label=None`。
     """
 
     stripped = text.strip()
+    target_label: str | None = None
+    mark = _TARGET_MARK.search(stripped)
+    if mark is not None:
+        target_label = mark.group("label").strip()
+        stripped = stripped[: mark.start()].rstrip()
     match = _OPEN_ITEM.match(stripped)
     if match is None:
         return None
-    return (
-        match.group("title"),
-        match.group("consequence"),
-        stripped.startswith(BLOCKING_MARK),
+    return OpenItem(
+        title=match.group("title"),
+        consequence=match.group("consequence"),
+        blocking=stripped.startswith(BLOCKING_MARK),
+        target_label=target_label,
     )
 
 
@@ -159,7 +182,7 @@ def deferred_from_open_items(
             parsed = parse_open_item(entry.text)
             if parsed is None:
                 continue
-            title, consequence, blocking = parsed
+            title, consequence, blocking = parsed.title, parsed.consequence, parsed.blocking
             carried.append(
                 Question(
                     question_id=QuestionId("q0"),  # 占位：assemble 统一重编号
@@ -565,6 +588,7 @@ def open_question_proposal(
         text=(
             f"{BLOCKING_MARK if question.blocking else ''}{question.title}（未决定，待决人：PM；"
             f"跳过后果：{question.consequence_if_skipped}）"
+            f"〔去处：{question.target.label()}〕"
         ),
         origin=Origin(OriginType.SYSTEM_DEFAULT, (eid,), rationale),
         kind=BlockKind.QUESTION,
