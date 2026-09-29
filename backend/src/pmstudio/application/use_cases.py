@@ -359,7 +359,8 @@ class RunSeatRound:
         )
         claims_text = render_claims(round_.claims)
         answered_text = render_answers(round_, ledger=ledger)
-        answer_refs = answer_eids(ledger=ledger)
+        # 席位把 `q3` 翻译成 E 编号时，只许翻**本轮**的答案（跨轮同号会把出处指错）
+        answer_refs = answer_eids(ledger=ledger, round_id=round_id)
         previous = render_reviews(round_.seat_reviews, titles=titles, ledger=ledger)
         known_eids = frozenset(evidence.eid for evidence in ledger.evidences())
 
@@ -557,13 +558,14 @@ def _retire_answered_open_items(
     没回答（跳过）的不撤——它还该留在 s11 里等下一轮。
     """
 
-    # 键带 form_id：同一轮每一批的 question_id 都从 q1 重排（真跑第 2 轮暴露过）
+    # 来源键带 form_id：`carried_sources` 记的就是这一把（题号在一轮里唯一之后它仍然成立）
     answered = {
         f"{answer_set.form_id}#{answer.question_id}": answer.question_id
         for answer_set in round_.answer_sets
         for answer in answer_set.answers
     }
-    mapping = answer_eids(ledger=ledger)
+    # 编号按**本轮**认（老实现收整个项目账本，别的轮里同号的那条会把出处引走）
+    mapping = answer_eids(ledger=ledger, round_id=round_.round_id)
     sources = round_.carried_sources()
     proposals: list[Proposal] = []
     index = start_index
@@ -1706,16 +1708,24 @@ def dry_run(
 def _system_defaults(
     round_: Round, *, ledger: EvidenceLedger, now: datetime
 ) -> dict[QuestionId, EvidenceId]:
-    """给跳过的题补一条 system_default 出处（编号在账本里，proposal 才有东西可引用）。"""
+    """给跳过的题补一条 system_default 出处（编号在账本里，proposal 才有东西可引用）。
+
+    文本用**出题那一批**的题面（`questionnaire_history`）：拿当前批反查会把上一批的跳过题
+    静默丢掉，或者写上另一道题的题面（计划 §0.1 第 4 处）。
+    """
 
     questionnaire = round_.questionnaire
     if questionnaire is None:
         return {}
-    by_id = {question.question_id: question for question in questionnaire.questions}
+    by_key = {
+        (str(form.form_id), str(question.question_id)): question
+        for form in round_.questionnaire_history
+        for question in form.questions
+    }
     defaults: dict[QuestionId, EvidenceId] = {}
     for answer_set in round_.answer_sets:
         for question_id in answer_set.skipped:
-            question = by_id.get(question_id)
+            question = by_key.get((str(answer_set.form_id), str(question_id)))
             if question is None or question_id in defaults:
                 continue
             defaults[question_id] = ledger.record(

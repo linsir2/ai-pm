@@ -10,9 +10,18 @@ P8 的提示词明确要求"已授权功能要把内容落到功能字段"（`02
 """
 
 from pmstudio.domain.round.draft import Origin, OriginType, Proposal
+from pmstudio.domain.round.opinion import SeatReview
+from pmstudio.domain.round.questionnaire import (
+    Answer,
+    AnswerSet,
+    Option,
+    Question,
+    Questionnaire,
+    QuestionType,
+)
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.services.scope_guard import OUTSIDE_ROUND_SCOPE, ScopeGuard
-from pmstudio.domain.shared.ids import EntryId, EvidenceId, ProposalId
+from pmstudio.domain.shared.ids import EntryId, EvidenceId, FormId, ProposalId, QuestionId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_claim
@@ -80,3 +89,64 @@ def test_a_section_level_claim_still_covers_the_whole_section():
     round_ = round_with_claim(Target.body("s2"))
 
     assert violations(round_, Target.body("s2")) == ()
+
+
+def question(question_id: str, target: Target) -> Question:
+    return Question(
+        question_id=QuestionId(question_id),
+        target=target,
+        type=QuestionType.SINGLE,
+        title="这面怎么定？",
+        why="缺一个只有你能给的信息",
+        consequence_if_skipped="按默认处理",
+        options=(Option("a", "甲"), Option("b", "乙")),
+    )
+
+
+def round_with_two_batches() -> Round:
+    """第一批问了 `s5` 并答了；第二批问的是 `s8`（还没答）。"""
+
+    round_ = Round.start(
+        round_id=ROUND_ID, project_id=PROJECT, user_input="想做个订单导出", now=NOW
+    )
+    round_.attach_claims((make_claim(eid=EvidenceId("E1"), target=Target.body("s2")),))
+    round_.submit_opening(seats=(SEAT,))
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 E1", opinions=()))
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f1"),
+            round_id=ROUND_ID,
+            questions=(question("q1", Target.body("s5")),),
+        )
+    )
+    round_.submit_answers(
+        AnswerSet(
+            form_id=FormId("f1"),
+            answers=(Answer(question_id=QuestionId("q1"), text="10 万"),),
+            answered_at=NOW,
+        ),
+        active_seats=(SEAT,),
+    )
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 E1", opinions=()))
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f2"),
+            round_id=ROUND_ID,
+            questions=(question("q2", Target.body("s8")),),
+        )
+    )
+    return round_
+
+
+def test_an_answered_questions_target_comes_from_its_own_batch():
+    """第一批答过的题的去处要进写范围；第二批**只是问了、还没答**的不进。
+
+    老实现按裸题号去**当前**问卷里反查：第一批的 `q1` 在第二批的问卷里根本不存在，
+    于是第一批的去处丢了、第二批的去处混进来（计划 §0.2 探针 2）。
+    """
+
+    labels = {target.label() for target in round_with_two_batches().write_scope}
+
+    assert "s2" in labels  # 主张
+    assert "s5" in labels  # 第一批答过的那道题的去处
+    assert "s8" not in labels  # 第二批还没答

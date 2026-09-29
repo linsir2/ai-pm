@@ -18,6 +18,7 @@ from pmstudio.domain.round.questionnaire import (
     QuestionType,
 )
 from pmstudio.domain.round.round import DropSource, Round
+from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.ids import EntryId, EvidenceId, FormId, ProjectId, QuestionId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
@@ -232,6 +233,84 @@ def test_question_numbering_continues_across_batches_of_the_same_round():
     )
 
     assert [str(item.question_id) for item in result.questions] == ["q3", "q4"]
+
+
+def round_with_two_batches_skipped(*, round_id: str = "r1") -> Round:
+    """一轮两批，两批的题**都被跳过**：s11 里的题面要各回各的批。"""
+
+    first = Questionnaire(
+        form_id=FormId("f1"),
+        round_id=ROUND_ID,
+        questions=(
+            Question(
+                question_id=QuestionId("q1"),
+                target=Target.body("s5"),
+                type=QuestionType.TEXT,
+                title="第一批的题：最大行数？",
+                why="量级决定同步还是异步",
+                consequence_if_skipped="按同步实现",
+            ),
+        ),
+    )
+    second = Questionnaire(
+        form_id=FormId("f2"),
+        round_id=ROUND_ID,
+        questions=(
+            Question(
+                question_id=QuestionId("q2"),
+                target=Target.body("s8"),
+                type=QuestionType.TEXT,
+                title="第二批的题：对端不可用时怎么降级？",
+                why="缺一个只有你能给的信息",
+                consequence_if_skipped="先按不降级处理",
+            ),
+        ),
+    )
+    return Round(
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        user_input="想做个订单导出",
+        created_at=NOW,
+        step=Step.SEATS_RUNNING,
+        questionnaire_history=(first, second),
+        questionnaire=second,
+        answer_sets=(
+            AnswerSet(
+                form_id=FormId("f1"),
+                answers=(),
+                answered_at=NOW,
+                skipped=(QuestionId("q1"),),
+            ),
+            AnswerSet(
+                form_id=FormId("f2"),
+                answers=(),
+                answered_at=NOW,
+                skipped=(QuestionId("q2"),),
+            ),
+        ),
+    )
+
+
+def test_skipped_questions_keep_their_own_batchs_title():
+    """跳过的题落 s11 时，题面与跳过后果要回到**出题那一批**去找（计划 §0.1 第 3 处）。
+
+    老实现用**当前批**的问卷反查题号：第一批的 `q1` 在第二批的问卷里不存在，于是这条被静默丢掉，
+    同一件事在文档里查不到。现在按 `(表单, 题号)` 回历史里找。
+    """
+
+    items = assembly.open_question_proposals(
+        round_with_two_batches_skipped(),
+        system_defaults={
+            QuestionId("q1"): EvidenceId("E1"),
+            QuestionId("q2"): EvidenceId("E2"),
+        },
+        start_index=1,
+    )
+
+    assert len(items) == 2
+    assert "第一批的题：最大行数？" in items[0].text
+    assert "按同步实现" in items[0].text
+    assert "第二批的题：对端不可用时怎么降级？" in items[1].text
 
 
 def test_question_from_unparsable_opinion_is_dropped_not_fatal():

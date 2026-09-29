@@ -20,7 +20,7 @@ from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.opinion import OpinionForm, SeatReview
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
-from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS, slot_block_id
 from pmstudio.domain.shared.writing import BlockKind
@@ -238,28 +238,38 @@ def render_answers(round_: Round, *, ledger: EvidenceLedger | None = None) -> st
     **每条答案要带上它自己的出处编号**（形如 E8）：答案进账本时就拿到了编号，
     席位想引用"用户答过的那句话"必须引 E 编号。只给题号（q1）会诱导模型把题号
     当编号引用——真模型冒烟实测过一次，整轮因此失败。
+
+    **答案的身份是"轮次 + 题号"**（2026-09-29 拍板 D4）：题面与跳过后果回到**出题那一批**去找
+    （`questionnaire_history`），编号按 `(轮次, 题号)` 认。原来两样都按裸题号在**当前批**里找，
+    第二批发到同一个号就挂错题面、引错编号（真跑里两行答案同一个题面、同一个 E 编号）。
+    找不到（老库、题号重排过的历史行）就只写题号：**宁可不显示，也不显示错的**。
     """
 
-    questionnaire = round_.questionnaire
-    if questionnaire is None:
+    by_key = {
+        (str(form.form_id), str(question.question_id)): question
+        for form in round_.questionnaire_history
+        for question in form.questions
+    }
+    if not by_key:
         return "--\n（本轮没问过问题）"
-    by_id = {question.question_id: question for question in questionnaire.questions}
     answered_lines: list[str] = []
     skipped_lines: list[str] = []
     for answer_set in round_.answer_sets:
         for answer in answer_set.answers:
-            question = by_id.get(answer.question_id)
+            question = by_key.get((str(answer_set.form_id), str(answer.question_id)))
             title = question.title if question else str(answer.question_id)
             chosen = "、".join(answer.selected)
             free = answer.text.strip()
             detail = " / ".join(part for part in (chosen, free) if part)
-            eid = _answer_eid(ledger, answer.question_id)
+            eid = _answer_eid(
+                ledger, round_id=round_.round_id, question_id=answer.question_id
+            )
             answered_lines.append(
                 f"- {answer.question_id} {title} → {detail or '（空答）'}"
                 + (f"〔{eid}〕" if eid else "")
             )
         for question_id in answer_set.skipped:
-            question = by_id.get(question_id)
+            question = by_key.get((str(answer_set.form_id), str(question_id)))
             if question is None:
                 skipped_lines.append(f"- {question_id}（原题已不在）")
                 continue
@@ -274,25 +284,43 @@ def render_answers(round_: Round, *, ledger: EvidenceLedger | None = None) -> st
     return f"{answered}\n--\n{skipped}"
 
 
-def answer_eids(*, ledger: EvidenceLedger) -> dict[str, str]:
-    """题号 → 这条答案的出处编号（给席位做 `q3 → E8` 的引用翻译）。"""
+def answer_eids(*, ledger: EvidenceLedger, round_id: RoundId) -> dict[str, str]:
+    """题号 → 这条答案的出处编号（给席位做 `q3 → E8` 的引用翻译）。
+
+    **只收本轮**：老实现收整个项目账本，第二轮席位写 `q1` 会被翻到第一轮那道题的答案上
+    （与 `render_answers` 同一个根因，`02` §11.0.11）。同一个题号撞上两条答案（D4 之前的老库）
+    就**不收录**——宁可翻译不出来（照原样判"编号不存在"），也不给一个错的编号。
+    """
 
     mapping: dict[str, str] = {}
+    seen: dict[str, int] = {}
     for evidence in ledger.evidences():
-        question_id = evidence.source.question_id
-        if question_id is None or evidence.kind is not EvidenceKind.CARD_ANSWER:
+        if evidence.kind is not EvidenceKind.CARD_ANSWER:
             continue
-        mapping.setdefault(str(question_id), str(evidence.eid))
-    return mapping
+        question_id = evidence.source.question_id
+        if question_id is None or evidence.source.round_id != round_id:
+            continue
+        key = str(question_id)
+        seen[key] = seen.get(key, 0) + 1
+        mapping.setdefault(key, str(evidence.eid))
+    return {key: eid for key, eid in mapping.items() if seen[key] == 1}
 
 
-def _answer_eid(ledger: EvidenceLedger | None, question_id: object) -> str | None:
+def _answer_eid(
+    ledger: EvidenceLedger | None, *, round_id: RoundId, question_id: object
+) -> str | None:
+    """这条答案的出处编号；**认不出就不给**（同一轮里同一个题号有两条 = 老库重排过）。"""
+
     if ledger is None:
         return None
-    for evidence in ledger.evidences():
-        if evidence.source.question_id == question_id:
-            return str(evidence.eid)
-    return None
+    found = [
+        evidence
+        for evidence in ledger.evidences()
+        if evidence.kind is EvidenceKind.CARD_ANSWER
+        and evidence.source.round_id == round_id
+        and evidence.source.question_id == question_id
+    ]
+    return str(found[0].eid) if len(found) == 1 else None
 
 
 def render_existing_entries(document: Document) -> str:

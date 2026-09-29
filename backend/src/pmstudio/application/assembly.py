@@ -453,17 +453,25 @@ def open_question_proposals(
     system_defaults: Mapping[QuestionId, EvidenceId],
     start_index: int,
 ) -> tuple[Proposal, ...]:
-    """跳过的题按题面写明的后果落成 s11 开放问题（`02` §5）。"""
+    """跳过的题按题面写明的后果落成 s11 开放问题（`02` §5）。
+
+    题面与跳过后果回**出题那一批**去找（`questionnaire_history`）：题号在一轮里唯一之后，
+    按 `(表单, 题号)` 查得到；拿当前批反查会把上一批的题静默丢掉（计划 §0.1 第 3 处）。
+    """
 
     questionnaire = round_.questionnaire
     if questionnaire is None:
         return ()
-    by_id = {question.question_id: question for question in questionnaire.questions}
+    by_key = {
+        (str(form.form_id), str(question.question_id)): question
+        for form in round_.questionnaire_history
+        for question in form.questions
+    }
     seen: set[QuestionId] = set()
     pairs: list[tuple[Question, EvidenceId]] = []
     for answer_set in round_.answer_sets:
         for question_id in answer_set.skipped:
-            question = by_id.get(question_id)
+            question = by_key.get((str(answer_set.form_id), str(question_id)))
             eid = system_defaults.get(question_id)
             if question is None or question_id in seen:
                 continue

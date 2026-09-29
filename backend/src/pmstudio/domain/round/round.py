@@ -325,17 +325,19 @@ class Round:
         """
 
         scope = {widened(claim.target) for claim in self._claims}
-        if self._questionnaire is not None:
-            answered = {
-                answer.question_id
-                for answer_set in self._answer_sets
-                for answer in answer_set.answers
-            }
-            scope |= {
-                widened(question.target)
-                for question in self._questionnaire.questions
-                if question.question_id in answered
-            }
+        # 已答题的去处回**出题那一批**找（`(表单, 题号)`）：拿当前批按裸题号反查，会把
+        # 上一批答过的去处丢掉、把这一批只是问过的去处混进来（计划 §0.2 探针 2）。
+        answered = {
+            (str(answer_set.form_id), str(answer.question_id))
+            for answer_set in self._answer_sets
+            for answer in answer_set.answers
+        }
+        scope |= {
+            widened(question.target)
+            for form in self._questionnaire_history
+            for question in form.questions
+            if (str(form.form_id), str(question.question_id)) in answered
+        }
         return frozenset(scope)
 
     # —— 推进 ——

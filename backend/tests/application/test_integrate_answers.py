@@ -5,12 +5,27 @@ import pytest
 from pmstudio.application.errors import PacketParseError
 from pmstudio.application.use_cases import AnswerInput
 from pmstudio.domain.authoring.instruction import WriteInstruction
+from pmstudio.domain.provenance.evidence import EvidenceSource
+from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import OriginType
-from pmstudio.domain.round.questionnaire import AnswerSet
+from pmstudio.domain.round.questionnaire import (
+    Answer,
+    AnswerSet,
+    Question,
+    Questionnaire,
+    QuestionType,
+)
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
-from pmstudio.domain.shared.ids import EntryId, EvidenceId, FeatureSlug, FormId, QuestionId
+from pmstudio.domain.shared.ids import (
+    EntryId,
+    EvidenceId,
+    FeatureSlug,
+    FormId,
+    QuestionId,
+    RoundId,
+)
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_seat
@@ -1034,3 +1049,125 @@ async def test_open_items_answered_in_different_batches_are_all_retired():
         str(item.entry_id) for item in round_.draft.proposals if str(item.op) == "remove"
     )
     assert removals == ["r0#open01", "r0#open02", "r0#open03"]
+
+
+# —— 答案的身份：题面回历史的批、编号按 (轮次, 题号) 认（2026-09-29 拍板 D4）——
+
+
+def test_skipped_question_defaults_use_its_own_batchs_title():
+    """跳过的题补 system_default 出处时，文本要写**它自己那一批**的题面（计划 §0.1 第 4 处）。"""
+
+    from pmstudio.application.use_cases import _system_defaults
+
+    round_ = skipped_two_batch_round()
+    ledger = EvidenceLedger.empty(PROJECT)
+    ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="想做个订单导出",
+        source=EvidenceSource(round_id=ROUND_ID, raw_span="想做个订单导出的功能"),
+        now=NOW,
+    )
+
+    defaults = _system_defaults(round_, ledger=ledger, now=NOW)
+
+    assert "第一批的题：最大行数？" in ledger.get(defaults[QuestionId("q1")]).text
+    assert "第二批的题：对端不可用时怎么降级？" in ledger.get(defaults[QuestionId("q2")]).text
+
+
+def test_retiring_an_answered_open_item_cites_this_rounds_answer():
+    """撤下未决项时引的出处编号必须是**本轮**那条答案（计划 §0.1 第 5 处）。
+
+    老实现收整个项目账本、按 `setdefault` 取第一条：别的轮里同号的那条答案会被引走。
+    """
+
+    from pmstudio.application.use_cases import _retire_answered_open_items
+
+    other_round = RoundId("r0")
+    round_ = Round(
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        user_input="想做个订单导出",
+        created_at=NOW,
+        answer_sets=(
+            AnswerSet(
+                form_id=FormId("f2"),
+                answers=(Answer(question_id=QuestionId("q1"), text="这一轮的答案"),),
+                answered_at=NOW,
+            ),
+        ),
+        carried_sources={"f2#q1": "r0#open01"},
+    )
+    ledger = EvidenceLedger.empty(PROJECT)
+    ledger.record(
+        kind=EvidenceKind.CARD_ANSWER,
+        text="上一轮的答案",
+        source=EvidenceSource(round_id=other_round, question_id=QuestionId("q1")),
+        now=NOW,
+    )
+    mine = ledger.record(
+        kind=EvidenceKind.CARD_ANSWER,
+        text="这一轮的答案",
+        source=EvidenceSource(round_id=ROUND_ID, question_id=QuestionId("q1")),
+        now=NOW,
+    )
+
+    proposals = _retire_answered_open_items(round_, ledger=ledger, start_index=1)
+
+    assert [item.origin.refs for item in proposals] == [(mine,)]
+    assert [str(item.entry_id) for item in proposals] == ["r0#open01"]
+
+
+def skipped_two_batch_round() -> Round:
+    """两批题都被跳过的轮次（直接构造：这一层要验的是"回哪一批找题面"）。"""
+
+    first = Questionnaire(
+        form_id=FormId("f1"),
+        round_id=ROUND_ID,
+        questions=(
+            Question(
+                question_id=QuestionId("q1"),
+                target=Target.body("s5"),
+                type=QuestionType.TEXT,
+                title="第一批的题：最大行数？",
+                why="量级决定同步还是异步",
+                consequence_if_skipped="按同步实现",
+            ),
+        ),
+    )
+    second = Questionnaire(
+        form_id=FormId("f2"),
+        round_id=ROUND_ID,
+        questions=(
+            Question(
+                question_id=QuestionId("q2"),
+                target=Target.body("s8"),
+                type=QuestionType.TEXT,
+                title="第二批的题：对端不可用时怎么降级？",
+                why="缺一个只有你能给的信息",
+                consequence_if_skipped="先按不降级处理",
+            ),
+        ),
+    )
+    return Round(
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        user_input="想做个订单导出",
+        created_at=NOW,
+        step=Step.SEATS_RUNNING,
+        questionnaire=second,
+        questionnaire_history=(first, second),
+        answer_sets=(
+            AnswerSet(
+                form_id=FormId("f1"),
+                answers=(),
+                answered_at=NOW,
+                skipped=(QuestionId("q1"),),
+            ),
+            AnswerSet(
+                form_id=FormId("f2"),
+                answers=(),
+                answered_at=NOW,
+                skipped=(QuestionId("q2"),),
+            ),
+        ),
+    )
