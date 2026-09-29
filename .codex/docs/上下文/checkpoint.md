@@ -933,3 +933,32 @@ E3 真正缺的是"重试带上次报错"，T1/T2 收口。
 
 **运行口径**：真跑库一律 `/tmp`，**不许碰** `backend/data/pmstudio.db`；
 `PMSTUDIO_MODEL_TIMEOUT=180` 仍是当前基线。
+
+## P14 · 包 A 剩余：C4 跨轮统计 · C6 继续深挖（2026-09-29）
+
+**拍板**：包 A 剩下的两条（C4 / C6）；包 B（B1–B4 + 界-2）排在 P15。
+计划 `docs/plans/2026-09-29-P14-剩余包A与包B-两批.md`。
+
+| 提交 | 内容 |
+|---|---|
+| `f708a1f` | 计划（待拍板） |
+| `a699b03` | T1 确认时记下"它提议的"给/收（`Round.confirm(..., proposed_offered, proposed_accepted)`） |
+| `35d46ec` | T2 `WorkspaceIndex.recent_rounds`（只读投影，不建表） |
+| `b996661` | T3 连续三轮没采用就在草案卡上说一句（纯函数 + 存事实 + `advisories`） |
+| `8892cb5` | T4 `Round.dig()`（合法转移 + 额度 + 队列留着） |
+| `69dcdd2` | T5 `dig` 命令 + `POST /rounds/{id}/dig`（**端点 19→20**） |
+| `2a5b413` | T6 前端按钮 + `DraftDrawer.test.tsx`（组件测试） |
+
+**执行中改掉的设计（测试当场挡回来的）**：计划里写的"dig 新开一次席位轮"**是错的**——
+常规两批流程已经用满 3 趟席位轮（开场 1 + 每批答案后 1），dig 会被 `SeatRoundLimitReached`
+直接拒掉，功能等于没有。改成：
+
+1. dig **不**新开席位轮（`pending_seats` 已空 → 席位零重跑），只花**一次整合调用**；
+2. 但必须**同步**放宽"批后那一趟"席位轮额度（`extra_seat_rounds`），否则用户答完这一批
+   走不动；
+3. `_stop_asking_reason` 的席位轮闸门也要读同一个数（`Round.seat_round_limit`）——
+   否则 dig 之后整合那边先响，照样降级成 s11。**这条是真的踩到了**：第一次真跑
+   dig 之后又出一份草案，gaps 里写着"已到席位轮上限，不再追问"。
+
+**核验**：单测 **741 passed** · `ruff` 全绿 · 前端 `vitest 99 passed` + `tsc` 无输出 ·
+端点 **20** 个（`EXPECTED_PATHS` 同步）。

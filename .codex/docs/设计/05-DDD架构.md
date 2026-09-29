@@ -267,6 +267,7 @@ tests/                domain/ application/ infrastructure/
 | 10 | `POST /rounds/{id}/confirm` | **唯一写入**：应用提案 → Document.apply → 新版本 → 记内容与出处的关联 → step=done | **一个事务** | `doc.changed`、`round.updated` |
 | 11 | 任意模型调用失败 | step=failed + fail_reason | 一个事务 | `generation.failed` |
 | 12 | `POST /rounds/{id}/retry` | 从 `step` 继续，已冻结的卡片不重问 | — | `round.updated` |
+| 13 | `POST /rounds/{id}/dig` | **继续深挖**（P14）：清未确认的草案 + 问卷/席位轮额度各 +1，回到 step=seats_running；席位不重跑，下一趟整合把没问上的题端出来 | 一个事务 | `round.updated` |
 
 四个事件，每个都有明确订阅者：
 `round.updated`（界面：步骤与等待状态）、`packet.emitted`（界面：闭环区逐条出现席位发言）、
