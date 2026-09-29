@@ -235,6 +235,13 @@ def dropped_from_packet(
     )
 
 
+#: 未申报意见的留痕里，引原文引到多少字为止（留痕是给人看的，不是把整句抄进去）
+OPINION_HEAD_CHARS = 40
+
+#: 未申报意见的留痕尾句：说明的是"整合者没交代"，不是"这条意见没价值"
+UNACCOUNTED_TAIL = "（整合既没说丢掉它，也没交代它落到了哪儿）"
+
+
 def unaccounted_drops(
     reviews: Sequence[SeatReview],
     *,
@@ -249,6 +256,8 @@ def unaccounted_drops(
     1. 地址出现在某道题的 `from_opinions` 里；
     2. 它自己的出处编号（只有判断有）出现在某条提案或某道题的引用里；
     3. 模型在 `dropped_opinions` 里申报过。
+
+    留痕要带**这条意见说了什么**（F5）：只说"没人交代它"，用户查不出丢的是哪句话。
     """
 
     items: list[DroppedItem] = []
@@ -266,13 +275,22 @@ def unaccounted_drops(
             items.append(
                 DroppedItem(
                     handle=handle,
-                    reason="整合既没说丢掉它，也没交代它落到了哪儿",
+                    reason=f"{opinion.about}：{_opinion_head(opinion)}{UNACCOUNTED_TAIL}",
                     source=DropSource.UNACCOUNTED,
                     seat_id=review.seat_id,
                     pass_index=review.pass_index,
                 )
             )
     return tuple(items)
+
+
+def _opinion_head(opinion: Opinion) -> str:
+    """意见的"是哪句话"：`about` + 判断/疑问原文（长了就截断）。"""
+
+    head = " ".join(opinion.claim.split())
+    if len(head) > OPINION_HEAD_CHARS:
+        return head[:OPINION_HEAD_CHARS] + "……"
+    return head
 
 
 def assemble(

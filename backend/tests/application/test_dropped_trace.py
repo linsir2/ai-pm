@@ -126,6 +126,11 @@ async def test_unaccounted_opinion_is_reported_in_the_round():
     round_ = harness.rounds.get(round_id)
     assert {item.handle for item in round_.dropped} == {f"{SEAT}:O1", f"{SEAT}:O2"}
     assert {item.source for item in round_.dropped} == {DropSource.UNACCOUNTED}
+    # F5：留痕要带上"这条意见说了什么"，用户才查得到丢的是哪句话
+    by_handle = {item.handle: item.reason for item in round_.dropped}
+    assert "导出的数据量级" in by_handle[f"{SEAT}:O1"]
+    assert "量级决定同步还是异步，必须问用户" in by_handle[f"{SEAT}:O1"]
+    assert "导出的性能上限" in by_handle[f"{SEAT}:O2"]
 
 
 async def test_judgment_accounted_by_a_proposal_still_leaves_the_question_reported():

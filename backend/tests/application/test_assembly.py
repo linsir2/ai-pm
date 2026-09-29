@@ -696,6 +696,67 @@ def test_unaccounted_opinion_is_reported():
     ]
 
 
+def test_an_unaccounted_opinion_says_what_it_was_about():
+    """F5：光说"没人交代它"没法查——把意见本身带进留痕，用户才知道丢的是哪句话。"""
+
+    review = SeatReview(
+        seat_id=SEAT,
+        basis="读了 E1",
+        opinions=(
+            Opinion(
+                local_id="O1",
+                form=OpinionForm.JUDGMENT,
+                about="导出的数据量级",
+                claim="量级决定同步还是异步，必须问用户",
+                because="1 万以内可同步，10 万以上必须异步",
+                evidence_refs=(EvidenceId("E1"),),
+            ),
+        ),
+    )
+
+    items = assembly.unaccounted_drops(
+        (review,),
+        ledger=ledger_with_two_entries(),
+        accounted_handles=frozenset(),
+        accounted_eids=frozenset(),
+        declared=frozenset(),
+    )
+
+    assert "导出的数据量级" in items[0].reason  # opinion.about
+    assert "量级决定同步还是异步" in items[0].reason  # opinion.claim
+    assert "既没说丢掉它" in items[0].reason  # 原话保留：它说明的是**整合者没交代**
+
+
+def test_a_long_unaccounted_claim_is_truncated_in_the_trace():
+    """留痕是给人看的：长句截断，别把闭环区刷成一屏。"""
+
+    review = SeatReview(
+        seat_id=SEAT,
+        basis="读了 E1",
+        opinions=(
+            Opinion(
+                local_id="O1",
+                form=OpinionForm.QUESTION,
+                about="导出的数据量级",
+                claim="量" * 200,
+                because="理由",
+                evidence_refs=(EvidenceId("E1"),),
+            ),
+        ),
+    )
+
+    items = assembly.unaccounted_drops(
+        (review,),
+        ledger=ledger_with_two_entries(),
+        accounted_handles=frozenset(),
+        accounted_eids=frozenset(),
+        declared=frozenset(),
+    )
+
+    assert "量" * 40 in items[0].reason
+    assert "量" * 60 not in items[0].reason
+
+
 def test_opinion_cited_by_a_question_is_not_reported():
     """地址被某道题的 from_opinions 点过 → 算交代过。"""
 
