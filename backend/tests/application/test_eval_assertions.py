@@ -19,13 +19,14 @@ from pmstudio.domain.shared.ids import (
     DraftId,
     EntryId,
     EvidenceId,
+    FeatureSlug,
     FormId,
     ProposalId,
     QuestionId,
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from tests.support.builders import ROUND_ID, make_round
+from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_claim, make_round
 
 
 def question(question_id: str, *, target: Target, eids: tuple[str, ...] = ("E1",)) -> Question:
@@ -163,6 +164,54 @@ def test_out_of_scope_items_are_labeled_ignores_a_round_inside_its_scope():
     view = view_of(round_with_draft(out_of_scope=False))
 
     assert view.advisories == ()
+    assert check({"type": "outside_scope_items_are_labeled"}, view) is None
+
+
+def round_whose_claims_name_a_feature(*, proposal_target: Target) -> Round:
+    """主张点名了一个功能、草案却落在别处：同时触发"置顶告警"与"跑出本轮去处"。"""
+
+    round_ = Round.start(
+        round_id=ROUND_ID, project_id=PROJECT, user_input="想做个订单导出", now=NOW
+    )
+    round_.attach_claims(
+        (
+            make_claim(
+                eid=EvidenceId("E1"),
+                target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+            ),
+        )
+    )
+    round_.submit_opening(seats=(SEAT,))
+    round_.integrate(
+        draft=Draft(
+            draft_id=DraftId("d1"),
+            round_id=ROUND_ID,
+            proposals=(
+                Proposal(
+                    proposal_id=ProposalId("p01"),
+                    entry_id=EntryId("r1#01"),
+                    op=WriteOp.ADD,
+                    target=proposal_target,
+                    text="现状：导出靠手工复制",
+                    origin=Origin(OriginType.USER, (EvidenceId("E1"),)),
+                    kind=BlockKind.TEXT,
+                ),
+            ),
+        )
+    )
+    return round_
+
+
+def test_the_two_surfaces_still_agree_when_the_zero_feature_advisory_is_also_there():
+    """置顶告警（零功能候选）不挂在任何提案上，不许把它算进"顶部提示数"（2026-09-29 修）。
+
+    真跑前发现：`feature_coverage_advisory` 只出现在"草案里一条 s5 都没有"时，
+    而那一刻草案里的章节级条目很可能正好越界——两条提示同时出现就假红，判据却跟提示词没关系。
+    """
+
+    view = view_of(round_whose_claims_name_a_feature(proposal_target=Target.body("s1")))
+
+    assert len(view.advisories) == 2  # 置顶告警 + 一条越界提示
     assert check({"type": "outside_scope_items_are_labeled"}, view) is None
 
 

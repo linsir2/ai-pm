@@ -94,6 +94,11 @@ def check(assertion: dict, view: RoundView) -> str | None:
         # 所以这条断言不再把"跑出本轮去处"当失败，改成盯**标注这条路没断**：
         # ① 卡片上带标注的提案数 == 顶部提示数（两处不许漂移）；② 标注是人话。
         #
+        # 2026-09-29 修：顶部提示里**只有"跑出本轮去处"那一类**该跟卡片标注对齐。
+        # 置顶告警（`dto.feature_coverage_advisory`）说的是**这一轮整体**：它不挂在任何提案上，
+        # 算进总数就会假红——真跑前复现过（主张点了功能 + 草案落 s1）。
+        # 除了越界提示，顶部只允许出现以 `⚠` 开头的置顶告警，别的一律当"来历不明的提示"报错。
+        #
         # 它管不了、也不该管的那件事：**不得新增未授权功能子树**——那条硬约束由
         # `assembly.assemble` 的 `pending_features` → `new_feature_yes` 决策题
         # （用户点头才授权）与领域层的授权集合守着，
@@ -101,14 +106,16 @@ def check(assertion: dict, view: RoundView) -> str | None:
         # `test_assemble_creates_feature_subtree_only_when_authorized`。
         proposals = view.draft.proposals if view.draft else ()
         labeled = [proposal for proposal in proposals if proposal.warning]
-        if len(labeled) != len(view.advisories):
+        outside = [text for text in view.advisories if "不在本轮去处里" in text]
+        others = [text for text in view.advisories if "不在本轮去处里" not in text]
+        unknown = [text for text in others if not text.startswith("⚠")]
+        if unknown:
+            return f"这条标注既不是越界提示、也不是置顶告警：{unknown[0]}"
+        if len(labeled) != len(outside):
             return (
                 f"跑出本轮去处的条目与顶部提示的标注对不上：卡片上标了 {len(labeled)} 条、"
-                f"顶部有 {len(view.advisories)} 条"
+                f"顶部有 {len(outside)} 条（另有 {len(others)} 条置顶告警）"
             )
-        for text in view.advisories:
-            if "不在本轮去处里" not in text:
-                return f"这条标注没写清是跑出本轮去处：{text}"
         return None
 
     raise ValueError(f"未知断言：{kind}")
