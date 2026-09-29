@@ -962,3 +962,34 @@ E3 真正缺的是"重试带上次报错"，T1/T2 收口。
 
 **核验**：单测 **741 passed** · `ruff` 全绿 · 前端 `vitest 99 passed` + `tsc` 无输出 ·
 端点 **20** 个（`EXPECTED_PATHS` 同步）。
+
+## P15 · 包 B：卡片与文档可信度 + 包 C「整块能力」设计（2026-09-29）
+
+**拍板**：作者「都按照你推荐的来」。方案
+`docs/plans/2026-09-30-P15-剩余核对-包B-包C整块能力.md`（§0 逐条核对 §1 包 B 计划 §2 包 C 设计）。
+**包 C（索引层 / 工具层）本轮只出设计，不开工。**
+
+| 提交 | 内容 |
+|---|---|
+| `e688550` | 方案文档（待拍板） |
+| `3f75a12` | T1 `GET /schema`——13 章说明（`SectionSpec.purpose`）+ 功能字段表 + 三处上限（**端点 20→21**） |
+| `e42377a` | T2 前端改读 `/schema`：字段中文名 / 席位轮上限 / 章节头说明；抄的几份降级为离线回落 |
+| `1b51132` | T3 `RoundView.answer_sets`（已答/跳过/答了什么）+ 抽屉显示 |
+| `8236cb6` | T4 手改能给 `{feature_slug, field}`，字段块不存在由 domain 建（F8-①） |
+| `e42170b` | T5 复述卡落到功能字段（F7）+ 前端"补一个还没写的字段" |
+| `162ade5` | T6 `QuestionnaireDrawer.test.tsx` + `DraftDrawer.test.tsx` 补两条（F11） |
+| `71d12da` | T7 SSE 建流首帧 `: ready`（界-2） |
+
+**执行中改掉的设计 / 发现的新东西**（都写进了 `docs/plans/...-P15-...md` 与本文件）：
+
+1. **`MAX_OPEN_ITEMS_PER_BATCH` 从 `use_cases.py` 搬进 `domain/round/questionnaire.py`**：
+   `/schema` 要读它，但 `dto` 不能 import `use_cases`（`use_cases` 已经 import `dto`，会成环）。
+   与 `MAX_QUESTIONNAIRES` 放在一起（同一类上限、同一个真相源，只是搬家不是复制）。
+2. **前端抄的常量有**三**份不是两份**：计划只数到 `labels.ts` 与 `progress.ts`，
+   实现时发现 `LoopPane.tsx` 还有一份 `MAX_SEAT_ROUNDS = 3`，一并消掉。
+3. **改了 4 条既有前端/后端测试的断言**（都是"契约本身变了"，不是迁就实现）：
+   `initialClaimEdits` / `buildClaimEdits` 从"去处只到章节级"改成"完整 label"（F7）；
+   `test_event_stream_formats_named_sse_frames` 的 `chunks[0]` → `chunks[1]`、
+   `test_event_stream_sends_heartbeat_when_idle` 补上首帧（界-2）。
+
+**核验**：见 `.codex/runs/2026-09-29/P15验证.md`。
