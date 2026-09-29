@@ -77,6 +77,14 @@ class Assembly:
     """整合失败、改走降级通道时的原因原文（见 `degraded_question_proposals`）。"""
 
 
+@dataclass(frozen=True, slots=True)
+class LandedAnswers:
+    """机械落地的答案（`D3`）：能落的落成提案，落不了的**说清为什么**。"""
+
+    proposals: tuple[Proposal, ...] = ()
+    notes: tuple[str, ...] = ()
+
+
 def normalize(text: str) -> str:
     return " ".join(text.split()).casefold()
 
@@ -561,6 +569,119 @@ def open_question_proposal(
         origin=Origin(OriginType.SYSTEM_DEFAULT, (eid,), rationale),
         kind=BlockKind.QUESTION,
     )
+
+
+def landed_answer_proposals(
+    round_: Round,
+    *,
+    ledger: EvidenceLedger,
+    document: Document,
+    cited: frozenset[EvidenceId] = frozenset(),
+    start_index: int = 1,
+) -> LandedAnswers:
+    """答案要么被引用、要么机械落地（2026-09-29 拍板 `D3`）。
+
+    跨轮去重只认文档（`P9` 定过：不新建第二真相源）：一条答案要是没落进文档，下一轮必然再问一遍
+    （报告 F6）。所以出草案那一刻核查：这条答案的出处编号被这一趟的提案/题目引用了吗？
+    `cited` 由调用方从**本轮**的提案与题目里收（那是一趟的产物，装配层看不到）。
+
+    三种**不落地**，各自在 `notes` 里说清为什么（绝不静默）：
+    ① `target` 是未授权的新功能 slug——落下去等于凭空建功能子树，撞硬约束；
+    ② 这道题来自 s11 未决条目（`carried_sources` 命中）——答完已有机械 `remove`
+       撤下它，再 ADD 一条会对冲；
+    ③ 答案已经被引用（整合者干完了活）。
+
+    空答（既没选项也没自由文本）没有内容可落：跳过，也不留噪声。
+    """
+
+    by_key = {
+        (str(form.form_id), str(question.question_id)): question
+        for form in round_.questionnaire_history
+        for question in form.questions
+    }
+    existing_features = frozenset(
+        block.feature_slug for block in document.features() if block.feature_slug is not None
+    )
+    authorized = round_.authorized_new_features
+    carried = round_.carried_sources()
+
+    landed: list[Proposal] = []
+    notes: list[str] = []
+    index = start_index
+    for answer_set in round_.answer_sets:
+        for answer in answer_set.answers:
+            key = (str(answer_set.form_id), str(answer.question_id))
+            question = by_key.get(key)
+            if question is None:
+                continue  # 老库/题面丢了：认不出这道题，就没法给它选去处（不猜）
+            detail = _answer_detail(question, answer)
+            if not detail:
+                continue  # 空答：没有内容可落
+            eid = _uncited_answer_eid(
+                ledger,
+                round_id=round_.round_id,
+                question_id=answer.question_id,
+                cited=cited,
+            )
+            if eid is None:
+                continue  # 已经被引用（或认不出编号）
+            slug = question.target.feature_slug
+            if slug is not None and slug not in existing_features and slug not in authorized:
+                notes.append(
+                    f"「{question.title}」的答案没落进正文："
+                    f"它想写进功能 {slug}，但这个功能还没被授权"
+                    "（要写就先答一次「这是不是独立功能」）。"
+                )
+                continue
+            if f"{answer_set.form_id}#{answer.question_id}" in carried:
+                continue  # 已有机械 remove 撤下那条未决项，别再 ADD（会当场对冲）
+            landed.append(
+                Proposal(
+                    proposal_id=ProposalId(f"p{index:02d}"),
+                    entry_id=EntryId(f"{round_.round_id}#{index:02d}"),
+                    op=WriteOp.ADD,
+                    target=question.target,
+                    text=f"用户已定：{detail}",
+                    origin=Origin(
+                        OriginType.USER,
+                        (eid,),
+                        "问卷答案机械落地（整合者没有引用它）",
+                    ),
+                    kind=_kind_for(question.target, None),
+                )
+            )
+            index += 1
+    return LandedAnswers(proposals=tuple(landed), notes=tuple(notes))
+
+
+def _answer_detail(question: Question, answer: object) -> str:
+    """答案的人话：优先用**选项文案**（`new_feature_no` 这种机器 id 不能进正文），否则自由文本。"""
+
+    selected = tuple(getattr(answer, "selected", ()) or ())
+    chosen = [option.text for option in question.options if option.option_id in selected]
+    text = str(getattr(answer, "text", "") or "").strip()
+    return " / ".join(part for part in ("、".join(chosen), text) if part)
+
+
+def _uncited_answer_eid(
+    ledger: EvidenceLedger,
+    *,
+    round_id: RoundId,
+    question_id: QuestionId,
+    cited: frozenset[EvidenceId],
+) -> EvidenceId | None:
+    """这条答案自己的出处编号；**已经被引用**、或**认不出**（老库同号两条）都不返回。"""
+
+    found = [
+        evidence
+        for evidence in ledger.evidences()
+        if evidence.kind is EvidenceKind.CARD_ANSWER
+        and evidence.source.round_id == round_id
+        and evidence.source.question_id == question_id
+    ]
+    if len(found) != 1 or found[0].eid in cited:
+        return None
+    return found[0].eid
 
 
 def is_blocking(target: Target) -> bool:

@@ -23,6 +23,7 @@ from pmstudio.application.assembly import (
     degraded_question_proposals,
     downgraded_question_proposals,
     draft_of,
+    landed_answer_proposals,
     open_question_proposals,
     question_key,
     questionnaire_of,
@@ -590,6 +591,21 @@ def _retire_answered_open_items(
     return tuple(proposals)
 
 
+def _cited_eids(
+    proposals: Sequence[Proposal], questions: Sequence[Question]
+) -> frozenset[EvidenceId]:
+    """这一趟**用到的**出处编号（提案的依据 + 题目的依据）。
+
+    "答案要么被引用、要么机械落地"（`D3`）里的"被引用"就看它：这条答案的编号出现在
+    提案或题目的依据里，就算整合者交代过它的去处了。
+    """
+
+    return frozenset(
+        [ref for proposal in proposals for ref in proposal.origin.refs]
+        + [ref for question in questions for ref in question.evidence_refs]
+    )
+
+
 def _open_item_defaults(
     round_: Round,
     questions: Sequence[Question],
@@ -752,6 +768,7 @@ class IntegrateRound:
         with self._uow:
             round_ = self._rounds.get(round_id)
             ledger = self._evidence.get(round_.project_id)
+            document = self._documents.get(round_.project_id)
             now = self._clock.now()
             # 只有**真被问出去**的那几条才从轮内队列出队（carried 里还混着 s11 来的题）
             asked = {question_key(item) for item in assembled.questions}
@@ -846,6 +863,16 @@ class IntegrateRound:
                         start_index=_next_proposal_index(proposals),
                     )
                 )
+                # 答案要么被引用、要么机械落地（D3）：跨轮去重只认文档，答案不落地下一轮必然再问
+                landed = landed_answer_proposals(
+                    round_,
+                    ledger=ledger,
+                    document=document,
+                    cited=_cited_eids(proposals, assembled.questions),
+                    start_index=_next_proposal_index(proposals),
+                )
+                proposals += list(landed.proposals)
+                gaps += list(landed.notes)
             dropped = _dropped_items_for(
                 round_,
                 assembled=assembled,

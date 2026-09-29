@@ -157,6 +157,12 @@ def draft_packet(*, field: str = "exceptions") -> str:
     )
 
 
+def citing_draft_packet() -> str:
+    """引用了"这条答案"的草案：这条流程里 `E3` 就是 `q1` 那条答案进账本后拿到的编号
+    （E1 用户输入、E2 席位判断、E3 card_answer）。"""
+    return draft_packet().replace('"evidence_refs": ["E1"]', '"evidence_refs": ["E1", "E3"]')
+
+
 async def round_in_seat_pass(harness: Harness):
     harness.seed_project()
     start = harness.start_round()
@@ -1177,3 +1183,67 @@ def skipped_two_batch_round() -> Round:
             ),
         ),
     )
+
+
+async def test_an_answered_question_lands_as_content_when_the_draft_ignores_it():
+    """D3：整合者没引用这条答案 ⇒ 机械落一条「用户已定：…」。
+
+    跨轮去重只认文档，答案不落地下一轮必然再问（报告 F6）。落地文本用**选项文案**。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [questionnaire_packet(), draft_packet()],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)  # 出问卷
+    await harness.submit_answers()(
+        round_id=round_id,
+        form_id="f1",
+        answers=(
+            AnswerInput(question_id="q1", selected=("b",), text="大概是这个量级"),
+        ),
+        skipped=(),
+    )
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)  # 出草案：只引了 E1，没引这条答案
+
+    proposals = harness.rounds.get(round_id).draft.proposals
+    landed = [item for item in proposals if item.text.startswith("用户已定：")]
+
+    assert len(landed) == 1
+    assert landed[0].text == "用户已定：1 万–10 万 / 大概是这个量级"
+    assert [str(item.target.section_id) for item in landed] == ["s8"]
+    assert landed[0].origin.type.value == "user"
+
+
+async def test_a_landed_answer_does_not_repeat_after_the_draft_cites_it():
+    """同一件事别落两遍：整合者引用了答案 ⇒ 机械通道闭嘴。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": [questionnaire_packet(), citing_draft_packet()],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+    await harness.submit_answers()(
+        round_id=round_id,
+        form_id="f1",
+        answers=(AnswerInput(question_id="q1", selected=("b",), text=""),),
+        skipped=(),
+    )
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)
+
+    proposals = harness.rounds.get(round_id).draft.proposals
+    assert [item for item in proposals if item.text.startswith("用户已定：")] == []
