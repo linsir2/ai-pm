@@ -157,3 +157,22 @@ def test_literal_error_lists_the_allowed_values():
 
     assert "opinions.0.form" in note
     assert "question" in note and "judgment" in note
+
+
+def test_a_missing_kind_gets_the_three_values_and_the_criterion():
+    """`kind` 写不出来时，重装那一次要把三种取值与判据一起递过去（P11 C3）。
+
+    只报"是必填字段"它只会随便挑一个（真跑里 8/15 道题干脆没写）。
+    """
+
+    note = repair_note(
+        PacketParseError(
+            "模型返回的报文过不了 schema",
+            purpose="integration",
+            errors=[schema_error("missing", ("questions", 0, "kind"))],
+        )
+    )
+
+    assert "questions.0.kind" in note
+    assert "gap" in note and "conflict" in note and "decision" in note
+    assert "互斥" in note

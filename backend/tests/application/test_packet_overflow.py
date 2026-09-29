@@ -107,6 +107,7 @@ REAL_QUESTION = {
 
 MINIMAL_ITEM = {
     "questions": {
+        "kind": "gap",
         "title": "t",
         "why": "w",
         "consequence_if_skipped": "c",
@@ -260,11 +261,18 @@ def test_single_string_becomes_a_one_item_list():
 
 
 def test_null_on_a_defaulted_field_falls_back_to_the_default():
+    """L3：**非 Optional、有默认值**的字段收到 `null` → 用默认值（P8 口径）。
+
+    这个例子原来用的是 `kind`（`null → gap`）；2026-09-29 P11 C3 把 `kind` 改成**必填**，
+    于是它退出了 L3 的适用范围——例子换成同样"有默认值的分类提示"的 `type`。
+    """
+
     raw = json.dumps(
         {
             "questions": [
                 {
-                    "kind": None,
+                    "kind": "gap",
+                    "type": None,
                     "title": "t",
                     "why": "w",
                     "consequence_if_skipped": "c",
@@ -282,6 +290,7 @@ def test_null_on_a_defaulted_field_falls_back_to_the_default():
         raw, schemas.IntegrationPacket, purpose="integration"
     )
 
+    assert packet.questions[0].type == "single"
     assert packet.questions[0].kind == "gap"
     assert packet.list_items == []
     assert packet.dropped_opinions == []

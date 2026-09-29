@@ -13,6 +13,13 @@ from pmstudio.application.errors import PacketParseError
 #: 说不上具体是哪一种时的兜底话术
 GENERIC = "请按上面的硬规矩重新切一遍，只输出 JSON Schema 要求的那个对象。"
 
+#: `kind` 缺失/写错时给的具体话术（P11 C3：默认值不再兜底，判据必须递到它眼前）
+_KIND_GUIDANCE = (
+    "kind 只能取 gap / conflict / decision：**两侧立场互斥**"
+    "（有人说过 A、有人说不能 A）→ conflict；"
+    "只是**还没定**（谁都没表过态）→ gap；要用户在两个方案里挑一个 → decision"
+)
+
 
 def repair_note(error: PacketParseError) -> str:
     """上一次的 `PacketParseError` → 第二段提示词（纯函数，可离线测）。"""
@@ -93,8 +100,12 @@ def _schema_guidance(errors: object, *, limit: int = 4) -> str:
     for item in errors[:limit]:
         if not isinstance(item, dict):
             continue
-        path = ".".join(str(part) for part in item.get("loc", ())) or "(根)"
+        loc = item.get("loc", ())
+        path = ".".join(str(part) for part in loc) or "(根)"
         hint = _TYPE_GUIDANCE.get(str(item.get("type")), "")
+        if loc and str(loc[-1]) == "kind":
+            # 题目的 kind 是"要它做判断"的字段：光说"必填"它只会随便挑一个（P11 C3）
+            hint = f"{hint}；{_KIND_GUIDANCE}" if hint else _KIND_GUIDANCE
         expected = (item.get("ctx") or {}).get("expected")
         if expected:
             hint = f"{hint}（允许：{expected}）" if hint else f"允许：{expected}"

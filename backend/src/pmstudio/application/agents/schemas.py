@@ -101,7 +101,9 @@ class OptionDraft(BaseModel):
 
 
 class QuestionDraft(BaseModel):
-    kind: Literal["gap", "conflict", "decision"] = "gap"
+    # 必填（2026-09-29 P11 C3）：默认值会把"忘了写"和"判断成 gap"混成一种——
+    # 真跑 `edge-contradiction` 的 15 道题里 8 道没写 kind，全被默认值吞成 gap。
+    kind: Literal["gap", "conflict", "decision"]
     title: str
     why: str
     consequence_if_skipped: str
