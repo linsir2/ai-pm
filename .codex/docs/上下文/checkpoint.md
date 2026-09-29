@@ -859,3 +859,41 @@ r-a95e8bdc（就是 edge-long）：claims 调了 2 次；第一次报
 
 **运行口径**：真跑库一律 `/tmp`（本轮用 P10 库的**副本** `/tmp/pmstudio-p11.db`），**不许碰**
 `backend/data/pmstudio.db`；`.env` 的 `PMSTUDIO_MODEL_TIMEOUT=180` 仍是当前基线。
+
+## P12 · 未决队列两端 · 卡片可信度 · 矛盾的机械通道（2026-09-29）
+
+**拍板**：09-28 报告里还没修完的 F5/F8/F10/F12/F14 + P11 留的第 3 条（analyzer 标互斥对子 +
+装配层机械盖章），T1–T9 一次做完。计划
+`docs/plans/2026-09-29-P12-遗留清单-未决队列与卡片可信度-矛盾的机械通道.md`（含**修订 v2**：
+交作者前对着代码核验，改了 8 处——题序口径、收口位置与留痕、`dry_run` 落点、清单项不跨轮、
+互斥对子改用序号）。
+
+| 提交 | 内容 |
+|---|---|
+| `c21ef9d` | 计划修订 v2（核验 8 处） |
+| `4a8923b` | T1 引了用户主张的题排前（F12） |
+| `801ace4` | T2 同去处让位（**只认字段级去处**；章节级会让整章新题熄火，既有用例当场抓到） |
+| `0ce930f` | T3 每批问回 3 条未决项（F14；不设清零目标） |
+| `754f0b5` | T4 草案卡带补齐度 `s5 已填 x/6 …`（F10） |
+| `c9aed7e` | T5 清单项改成轮次累积 + `$previous_list_items`（F8） |
+| `cc0e49d` | T6 未申报意见的留痕带上它说了什么（F5） |
+| `7b91cc9` | T7 claims 报文加 `contradictions`（**序号**不是 id）+ 落库 + 渲染给整合者 |
+| `e3f55ad` | T8 覆盖互斥两侧的题由装配层盖章 `kind=conflict` |
+
+**真跑验证**（`.codex/runs/2026-09-29/P12验证.md`，库 `/tmp/pmstudio-p12-eval06.db`）：
+
+| 项 | 结果 |
+|---|---|
+| 单测 / lint | **699 passed** · `ruff` All checks passed · 端点 19 个未动 |
+| eval | `edge-contradiction` 换**真互斥**输入后 **1/1 PASS**（含 `contradiction_is_labelled`）——P11 那条红用例收口 |
+| 留样 | claims 报出 `contradictions: [{claim_a:1, claim_b:3, why:"…两者立场互斥"}]`；整合者这次**自己也写了 `conflict`**（`$contradictions` 槽位 + 判据话术起作用），而 E1+E3 那道题同时会被装配层盖章（两条通道同向） |
+| 落库 | `rounds.payload` 里 `contradictions` / `list_items` 两把键都在，值形状正确 |
+
+**执行中改过的两处测试**（都是夹具把旧口径写死，不是行为错）：
+1. `test_open_items_answered_in_different_batches_are_all_retired`：预置 3 条未决项、
+   默认每批吃 2 条；配额变 3 后第一批就全问完了，"跨批"无从验 → 夹具加第 4 条（断言从 3 条改 4 条）。
+2. `test_claims_packet_array_is_not_guessed`：claims 报文的 `expected_keys` 从 3 个变 4 个
+   （新增 `contradictions`）——这条断言本来就是钉报文形状的。
+
+**运行口径**：真跑库一律 `/tmp`（本轮 `/tmp/pmstudio-p12-eval06.db`），**不许碰**
+`backend/data/pmstudio.db`；`PMSTUDIO_MODEL_TIMEOUT=180` 仍是当前基线。
