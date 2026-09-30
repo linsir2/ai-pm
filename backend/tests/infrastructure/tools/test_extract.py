@@ -103,6 +103,16 @@ def test_a_pdf_without_extractable_text_says_so():
     assert "没有可抽取的文字" in str(error.value)
 
 
+def test_a_broken_pdf_is_a_clear_refusal_not_a_500():
+    """坏文件（半截 PDF / 加密 PDF）：要报"读不了"，不许把 pdfminer 的异常漏成 500。"""
+
+    with pytest.raises(UnsupportedMaterial) as error:
+        parser.parse(filename="broken.pdf", media_type="application/pdf", data=b"%PDF-1.4\n1 0 obj")
+
+    assert error.value.code == "unsupported_material"
+    assert "读不了" in str(error.value)
+
+
 def test_a_very_long_material_is_marked_truncated():
     payload = ("字" * (MAX_MATERIAL_CHARS + 500)).encode()
     parsed = parser.parse(

@@ -181,7 +181,13 @@ class LocalMaterialParser:
         )
 
     def _from_html(self, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
-        soup = BeautifulSoup(data, "lxml")
+        try:
+            soup = BeautifulSoup(data, "lxml")
+        except Exception as error:  # noqa: BLE001 —— 同上：lxml 对畸形输入也可能抛
+            raise UnsupportedMaterial(
+                f"这份网页读不了（{type(error).__name__}）——换一份、或另存成文本再给我",
+                filename=filename,
+            ) from error
         for tag in soup(["script", "style"]):
             tag.decompose()
         text, truncated = _cap_text(soup.get_text("\n", strip=True).strip())
@@ -197,7 +203,15 @@ class LocalMaterialParser:
         )
 
     def _from_pdf(self, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
-        raw = pdf_extract_text(BytesIO(data))
+        try:
+            raw = pdf_extract_text(BytesIO(data))
+        except Exception as error:  # noqa: BLE001 —— 第三方解析器什么都可能抛
+            # 坏文件（半截 / 加密 / 根本不是 PDF）要报"读不了"，**不许漏成 500**：
+            # 真跑踩到过——半截 PDF 会把 pdfminer 的 PSEOF 直接顶到 HTTP 层。
+            raise UnsupportedMaterial(
+                f"这份 PDF 读不了（{type(error).__name__}）——换一份、或另存成文本再给我",
+                filename=filename,
+            ) from error
         # pdfminer 用 \f 分页；末尾的空页丢掉
         pages = [page for page in raw.split("\f")]
         if pages and not pages[-1].strip():
