@@ -308,3 +308,105 @@ def test_render_contradictions_uses_the_claim_texts():
 
 def test_render_contradictions_says_none_when_there_are_none():
     assert context.render_contradictions(make_round()) == "（这一轮没有判出互斥的主张）"
+
+
+# ── 材料信息包的选块与渲染（工具层 C-2）────────────────────────────────
+
+
+def make_packet(*texts: str, title: str = "需求.md", parser_id: str = "local-text"):
+    from pmstudio.application.dto import MaterialChunk, MaterialPacket, ParsedMaterial
+
+    chunks = tuple(
+        MaterialChunk(
+            chunk_id=f"m1#c{index:02d}",
+            ordinal=index,
+            text=text,
+            heading_path=(),
+            anchor=f"第 {index + 1} 行",
+        )
+        for index, text in enumerate(texts)
+    )
+    return MaterialPacket(
+        material_id="m1",
+        project_id="p1",
+        parsed=ParsedMaterial(
+            origin="upload",
+            title=title,
+            source_ref=f"attachment:{title}",
+            media_type="text/markdown",
+            bytes_len=100,
+            chunks=chunks,
+            parser_id=parser_id,
+            parser_version="v1",
+        ),
+        created_at=datetime(2026, 9, 22, 10, 0),
+    )
+
+
+def test_select_chunks_is_the_only_place_that_decides_what_goes_in():
+    packet = make_packet(*["字" * 500 for _ in range(20)])
+
+    picked = context.select_chunks([packet], budget=1200)
+
+    assert [chunk.ordinal for _, chunk in picked] == [0, 1]
+    assert all(material_id == "m1" for material_id, _ in picked)
+
+
+def test_select_chunks_stops_when_the_budget_runs_out_across_materials():
+    first = make_packet("字" * 700, title="甲.md")
+    second = make_packet("字" * 700, title="乙.md")
+
+    picked = context.select_chunks([first, second], budget=800)
+
+    assert [material_id for material_id, _ in picked] == ["m1"]
+
+
+def test_materials_render_with_number_anchor_and_parser_identity():
+    packet = make_packet("目标：导出", "边界：只给管理员", title="需求.md", parser_id="pdfminer")
+    eids = {"m1#c00": EvidenceId("E12"), "m1#c01": EvidenceId("E13")}
+
+    rendered = context.render_materials([(packet, eids)])
+
+    assert "需求.md" in rendered.text
+    assert "pdfminer" in rendered.text        # 解析器身份照实写
+    assert "[E12]" in rendered.text and "第 1 行" in rendered.text
+    assert "目标：导出" in rendered.text
+    assert "不要再把它说成用户说的话" in rendered.text
+    assert rendered.truncated is False
+    assert rendered.used_chunk_ids == ("m1#c00", "m1#c01")
+
+
+def test_materials_that_were_cut_short_say_so():
+    packet = make_packet(*["字" * 500 for _ in range(20)])
+    eids = {
+        chunk.chunk_id: EvidenceId(f"E{index + 10}")
+        for index, chunk in enumerate(packet.parsed.chunks)
+    }
+    picked = context.select_chunks([packet], budget=1200)
+
+    rendered = context.render_materials(
+        [(packet, {chunk.chunk_id: eids[chunk.chunk_id] for _, chunk in picked})]
+    )
+
+    assert rendered.truncated is True
+    assert "共 20 块" in rendered.text and "只带了" in rendered.text
+    assert rendered.used_chunk_ids == tuple(chunk.chunk_id for _, chunk in picked)
+
+
+def test_no_materials_renders_a_plain_sentence():
+    rendered = context.render_materials([])
+
+    assert rendered.text == "（这一轮没有外部材料）"
+    assert rendered.used_chunk_ids == ()
+    assert rendered.truncated is False
+
+
+def test_render_materials_ignores_chunks_without_an_eid():
+    """没有编号的块**不进提示词**——"编号 == 带进去的块"这条不变量的另一半。"""
+
+    packet = make_packet("目标：导出", "边界：只给管理员")
+
+    rendered = context.render_materials([(packet, {"m1#c00": EvidenceId("E12")})])
+
+    assert "[E12]" in rendered.text
+    assert "边界：只给管理员" not in rendered.text

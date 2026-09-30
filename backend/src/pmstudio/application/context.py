@@ -8,7 +8,9 @@
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
+from pmstudio.application.dto import MaterialChunk, MaterialPacket
 from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.authoring.blocks import Entry
 from pmstudio.domain.authoring.document import Document
@@ -354,3 +356,142 @@ def render_existing_entries(document: Document) -> str:
     for entry in document.preference_entries:
         lines.append(f"- [{entry.entry_id}] （偏好区）{entry.text}")
     return "\n".join(lines) or "（文档现在没有任何条目）"
+
+
+# ── 外部材料：选块 + 渲染（工具层 C-2）──────────────────────────────────
+#
+# 三段式里的后两段：**选块**只有一个地方（`select_chunks`），**渲染**只有一个地方
+# （`render_materials` / `render_web_results`）。中间那一段（发号）在用例里，
+# 它必须拿 `select_chunks` 的结果去发——否则"编号 == 带进提示词的块"这条口径立刻漏。
+
+#: 材料块合计的预算（字）。为什么是 4000：integration 提示词已经 ~20k 字符、实测最慢 201.2s，
+#: 再加几千字符风险太大；先按这个量跑，量完再抬。
+MATERIAL_BUDGET = 4000
+#: 检索结果合计的预算（字）。Tavily 实测单条 content ≈ 1.1k 字符，所以每条还要再截。
+WEB_BUDGET = 2000
+#: 单条检索结果截到多少字（截了就在那段末尾说明）
+WEB_SNIPPET_CHARS = 300
+#: 每个块渲染时除了正文还会多一行「[E12] 第 3 页」——算预算时把它算进去，别超太多
+CHUNK_OVERHEAD = 24
+
+
+def select_chunks(
+    packets: Sequence[MaterialPacket],
+    *,
+    budget: int = MATERIAL_BUDGET,
+) -> tuple[tuple[str, MaterialChunk], ...]:
+    """**唯一**决定"哪些块进这一轮"的地方：按材料顺序、块顺序取，到预算为止。
+
+    返回 `(material_id, chunk)`：调用方拿它去发号（`Round.materials`）与渲染。
+    """
+
+    picked: list[tuple[str, MaterialChunk]] = []
+    used = 0
+    for packet in packets:
+        for chunk in packet.parsed.chunks:
+            cost = len(chunk.text) + CHUNK_OVERHEAD
+            if used + cost > budget:
+                return tuple(picked)
+            picked.append((packet.material_id, chunk))
+            used += cost
+    return tuple(picked)
+
+
+@dataclass(frozen=True, slots=True)
+class RenderedMaterial:
+    """渲染结果：文本 + 是否截断 + 用掉了哪几块（界面/日志要能说清）。"""
+
+    text: str
+    truncated: bool
+    used_chunk_ids: tuple[str, ...]
+
+
+def render_materials(
+    entries: Sequence[tuple[MaterialPacket, Mapping[str, EvidenceId]]],
+    *,
+    budget: int = MATERIAL_BUDGET,
+) -> RenderedMaterial:
+    """材料 → 提示词里那一段。**只渲染有编号的块**（没编号的进不了提示词）。
+
+    `entries` 里的块应当来自 `select_chunks`；若包的块数多于带编号的块数，
+    就写「（材料较长，只带了 N 块 / 共 M 块）」，界面与提示词都不许假装完整。
+    """
+
+    if not entries:
+        return RenderedMaterial(text="（这一轮没有外部材料）", truncated=False, used_chunk_ids=())
+
+    lines: list[str] = []
+    used_ids: list[str] = []
+    truncated = False
+    for packet, eids in entries:
+        parsed = packet.parsed
+        head = (
+            f"【{ORIGIN_TITLES.get(parsed.origin, parsed.origin)}】{parsed.title}"
+            f"（{parsed.media_type} · 由 {parsed.parser_id} 抽出）"
+        )
+        lines.append(head)
+        for chunk in parsed.chunks:
+            eid = eids.get(chunk.chunk_id)
+            if eid is None:
+                continue
+            lines.append(f"[{eid}] {chunk.anchor}")
+            lines.append(chunk.text)
+            used_ids.append(chunk.chunk_id)
+        for warning in parsed.warnings:
+            lines.append(f"（{warning}）")
+        kept = len(used_ids)
+        total = len(parsed.chunks)
+        if kept < total:
+            truncated = True
+            lines.append(f"（材料较长，只带了 {kept} 块 / 共 {total} 块）")
+    lines.append(
+        "（以上是外部材料，不是用户说的话；不要再把它说成用户说的话。"
+        "要引就引方括号里的编号）"
+    )
+    return RenderedMaterial(
+        text="\n".join(lines), truncated=truncated, used_chunk_ids=tuple(used_ids)
+    )
+
+
+ORIGIN_TITLES: dict[str, str] = {
+    "upload": "上传的材料",
+    "web_search": "联网检索结果",
+    "web_fetch": "抓来的网页",
+}
+
+
+def render_web_results(
+    entries: Sequence[tuple[MaterialPacket, EvidenceId]],
+    *,
+    budget: int = WEB_BUDGET,
+) -> RenderedMaterial:
+    """检索结果 → 提示词里那一段：一条一段（编号 + 标题 + URL + 摘要）。超预算就说截断。"""
+
+    if not entries:
+        return RenderedMaterial(
+            text="（这一轮没有联网检索结果）", truncated=False, used_chunk_ids=()
+        )
+
+    lines: list[str] = []
+    used_ids: list[str] = []
+    used = 0
+    truncated = False
+    for packet, eid in entries:
+        parsed = packet.parsed
+        chunk = parsed.chunks[0] if parsed.chunks else None
+        snippet = "" if chunk is None else chunk.text[:WEB_SNIPPET_CHARS]
+        block = f"[{eid}] {parsed.title}\n{parsed.source_ref}\n{snippet}"
+        if used + len(block) > budget:
+            truncated = True
+            break
+        lines.append(block)
+        used += len(block)
+        if chunk is not None:
+            used_ids.append(chunk.chunk_id)
+    lines.append(
+        "（以上是联网检索结果，不是用户说的话；不要再把它说成用户说的话。"
+        "要引就引方括号里的编号）"
+    )
+    return RenderedMaterial(
+        text="\n".join(lines), truncated=truncated, used_chunk_ids=tuple(used_ids)
+    )
