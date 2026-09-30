@@ -671,6 +671,8 @@ class EvidenceLookupView:
     round_id: str | None
     seat_id: str | None
     question_id: str | None
+    #: 外部材料的指称：`attachment:需求.md#c00` / URL（工具层 C-2；别的 kind 是 None）
+    external_ref: str | None
     chain: tuple[ChainItemView, ...]
     used_by: tuple[str, ...]
 
@@ -1036,6 +1038,7 @@ def evidence_lookup_view(
         round_id=None if source.round_id is None else str(source.round_id),
         seat_id=source.seat_id,
         question_id=None if source.question_id is None else str(source.question_id),
+        external_ref=source.external_ref,
         chain=tuple(_chain_item_view(item) for item in chain),
         used_by=used_by,
     )

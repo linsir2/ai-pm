@@ -47,3 +47,25 @@ async def test_unknown_evidence_is_404(app):
 
     assert response.status_code == 404
     assert response.json()["code"] == "unknown_evidence"
+
+
+async def test_external_evidence_exposes_where_it_came_from():
+    """材料的出处要能说清"来自哪份材料的哪一块 / 哪个 URL"（工具层 C-2 的证据链）。"""
+
+    harness = Harness(replies={}, seat_replies={})
+    harness.seed_project()
+    ledger = harness.evidences.get(PROJECT)
+    ledger.record(
+        kind=EvidenceKind.EXTERNAL,
+        text="目标：导出要有权限",
+        source=EvidenceSource(external_ref="attachment:需求.md#c00"),
+        now=NOW,
+    )
+    harness.evidences.save(ledger)
+
+    async with async_client(create_app(harness.api_services(model_name="m"))) as client:
+        response = await client.get(f"/api/projects/{PROJECT}/evidence/E1")
+
+    body = response.json()
+    assert (body["kind"], body["kind_label"]) == ("external", "外部材料")
+    assert body["external_ref"] == "attachment:需求.md#c00"

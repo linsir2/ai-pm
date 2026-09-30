@@ -182,7 +182,10 @@ def _appendix_a(ledger: EvidenceLedger) -> str:
     lines = ["## 附录 A · 出处（只给编号与一句话摘要）"]
     for evidence in ledger.evidences():
         label = KIND_LABELS.get(evidence.kind, str(evidence.kind))
-        lines.append(f"- {evidence.eid} · {label} · {_summarize(evidence.text)}")
+        # 外部材料要写清"哪份材料的哪一块 / 哪个 URL"，否则读者不知道这句话从哪来（工具层 C-2）
+        where = evidence.source.external_ref
+        source = f"{where} · " if where else ""
+        lines.append(f"- {evidence.eid} · {label} · {source}{_summarize(evidence.text)}")
     if len(lines) == 1:
         lines.append("（还没有任何出处）")
     return "\n".join(lines)
