@@ -139,7 +139,7 @@ class SqliteMaterialStore:
         return int(row["total"])
 
     def list_for_project(
-        self, project_id: ProjectId, *, parser_id: str, parser_version: str
+        self, project_id: ProjectId, *, current: frozenset[tuple[str, str]]
     ) -> tuple[MaterialSummaryView, ...]:
         rows = self._connection.execute(
             """
@@ -156,13 +156,21 @@ class SqliteMaterialStore:
         return tuple(
             material_summary_view(
                 self._packet(row, chunks=()),
-                parser_id=parser_id,
-                parser_version=parser_version,
+                current=current,
                 chunk_count=int(row["chunk_count"]),
                 chars=int(row["chars"]),
             )
             for row in rows
         )
+
+    def count_for_project(self, project_id: ProjectId) -> int:
+        row = self._connection.execute(
+            "SELECT COUNT(*) AS total FROM materials WHERE project_id = ?", (str(project_id),)
+        ).fetchone()
+        return int(row["total"])
+
+    def find_by_sha(self, project_id: ProjectId, sha256: str) -> MaterialPacket | None:
+        return self._find_by_sha(project_id, sha256)
 
     # ── 内部 ──────────────────────────────────────────────────────────────
 

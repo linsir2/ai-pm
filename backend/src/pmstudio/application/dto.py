@@ -387,14 +387,15 @@ MATERIAL_SCHEMA_VERSION = 1
 def material_summary_view(
     packet: MaterialPacket,
     *,
-    parser_id: str,
-    parser_version: str,
+    current: frozenset[tuple[str, str]],
     chunk_count: int | None = None,
     chars: int | None = None,
 ) -> MaterialSummaryView:
     """包 → 列表里的一行。
 
-    `stale` 是**算出来的**（不存），因为"当前解析器是谁"会变；
+    `current` 是**当前这套解析器能产出的身份集合**（`(parser_id, parser_version)` 的集合）——
+    一个解析器可能产好几种（本地的文本/PDF/HTML 三种），所以这里收集合而不是单个 id。
+    `stale` 因此是**算出来的**（不存）；
     `chunk_count` / `chars` 允许调用方直接给（列表是按 SQL 算的，没把块正文读出来）。
     """
 
@@ -412,19 +413,22 @@ def material_summary_view(
         parser_version=parsed.parser_version,
         truncated=parsed.truncated,
         warnings=parsed.warnings,
-        stale=needs_reparse(packet, parser_id=parser_id, parser_version=parser_version),
+        stale=needs_reparse(packet, current=current),
     )
 
 
 def needs_reparse(
-    packet: MaterialPacket, *, parser_id: str, parser_version: str
+    packet: MaterialPacket, *, current: frozenset[tuple[str, str]]
 ) -> bool:
-    """这份包该不该用当前解析器重读一遍（C-2c 的 `reparse` 与列表里的提示都用它）。"""
+    """这份包该不该用当前解析器重读一遍（C-2c 的 `reparse` 与列表里的提示都用它）。
+
+    `current` 是"当前解析器能产出的身份集合"；不在里面就是旧的（换了 docling、或解析器升级过）。
+    """
 
     if packet.schema_version != MATERIAL_SCHEMA_VERSION:
         return True
     parsed = packet.parsed
-    return parsed.parser_id != parser_id or parsed.parser_version != parser_version
+    return (parsed.parser_id, parsed.parser_version) not in current
 
 
 def _blocks_in(section_blocks: Sequence[BlockView]):

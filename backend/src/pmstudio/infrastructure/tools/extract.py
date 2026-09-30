@@ -142,6 +142,17 @@ def chunk_pages(pages: list[str] | tuple[str, ...], *, parser_id: str) -> tuple[
 class LocalMaterialParser:
     """本地真解析：文本按 UTF-8、PDF 走 pdfminer、HTML 走 bs4+lxml；其余明确拒绝。"""
 
+    def identities(self) -> frozenset[tuple[str, str]]:
+        """我能产出三种身份（文本 / PDF / HTML）——换 docling 之后这一组就全变了。"""
+
+        return frozenset(
+            {
+                (TEXT_PARSER_ID, _package_version("pmstudio")),
+                (HTML_PARSER_ID, f"beautifulsoup4 {metadata.version('beautifulsoup4')}"),
+                (PDF_PARSER_ID, _package_version("pdfminer.six")),
+            }
+        )
+
     def parse(self, *, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
         suffix = Path(filename).suffix.lower()
         if suffix == ".pdf" or media_type == "application/pdf":

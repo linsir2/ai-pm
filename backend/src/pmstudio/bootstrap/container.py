@@ -27,6 +27,7 @@ from pmstudio.application.use_cases import (
     GetVersions,
     GetWorkspace,
     IntegrateRound,
+    ListMaterials,
     ListProjects,
     ListRounds,
     RetryRound,
@@ -36,6 +37,7 @@ from pmstudio.application.use_cases import (
     StartRound,
     SubmitAnswers,
     SubmitOpening,
+    UploadMaterial,
 )
 from pmstudio.bootstrap.settings import Settings
 from pmstudio.domain.authoring.readiness import ReadinessChecker
@@ -59,6 +61,7 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
+from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 PROMPTS_DIR = PACKAGE_ROOT / "infrastructure" / "llm" / "prompts"
@@ -99,6 +102,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     rounds = SqliteRoundRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
     materials = SqliteMaterialStore(connection, ids=ids)
+    parser = LocalMaterialParser()
     index = SqliteWorkspaceIndex(connection)
     uow = SqliteUnitOfWork(connection)
 
@@ -238,6 +242,10 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         get_schema=GetSchema(),
         list_rounds=ListRounds(index=index),
         search=SearchProject(documents=documents, evidence=evidences, index=index),
+        upload_material=UploadMaterial(
+            documents=documents, materials=materials, parser=parser, clock=clock, uow=uow
+        ),
+        list_materials=ListMaterials(materials=materials, parser=parser),
         get_document=GetDocument(documents=documents),
         get_readiness=GetReadiness(documents=documents, checker=readiness),
         export_markdown=ExportMarkdown(

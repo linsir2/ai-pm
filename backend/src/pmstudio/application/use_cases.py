@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import hashlib
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -53,6 +54,7 @@ from pmstudio.application.dto import (
     EvidenceLookupView,
     MaterialChunk,
     MaterialPacket,
+    MaterialSummaryView,
     ProjectSummaryView,
     ReadinessItemView,
     RollbackResult,
@@ -65,6 +67,7 @@ from pmstudio.application.dto import (
     answer_text,
     diff_view,
     evidence_lookup_view,
+    material_summary_view,
     proposal_ignore_streak,
     readiness_view,
     round_view,
@@ -76,6 +79,7 @@ from pmstudio.application.dto import (
 )
 from pmstudio.application.errors import (
     ApplicationError,
+    MaterialTooLarge,
     ModelCallFailed,
     PacketParseError,
     UnknownEvidenceId,
@@ -92,6 +96,7 @@ from pmstudio.application.ports import (
     Clock,
     EventPublisher,
     IdGenerator,
+    MaterialParser,
     MaterialStore,
     ProjectFactory,
     RoundCanceller,
@@ -619,6 +624,11 @@ MAX_INTEGRATION_ATTEMPTS = 2
 #: 是把成本推给人。与整合者同一个口径——**必须带上一次错在哪**（`repair_note`），
 #: 否则只是拿同一句提示词再撞一堵墙（`learnings.md` L13）。
 MAX_CLAIMS_ATTEMPTS = 2
+
+#: 单份材料上限（20MB）：在**读 body 之前**用 `file.size` 判一次，用例里再兜一次
+MAX_MATERIAL_BYTES = 20 * 1024 * 1024
+#: 一个项目最多几份材料（防止材料列表与检索被塞爆）
+MAX_MATERIALS_PER_PROJECT = 50
 
 #: 单个席位也允许"重装一次"：超限（意见太多）与别的报文错都是可修复的，
 #: 而整轮重跑要付 4–6 个席位的代价（真跑实测：188 次席位调用里多出一倍是重跑）。
@@ -1797,6 +1807,73 @@ class GetWorkspace:
             catalog=self._catalog,
             ledger=ledger,
             readiness=self._checker.check(view),
+        )
+
+
+class UploadMaterial:
+    """上传一份材料：**解析在事务外、落库在事务内**（与模型调用同一条纪律）。
+
+    - 上限在**读 body 之前**就判（路由层用 `file.size`），这里再兜一层；
+    - 同一份字节重复上传 → 复用（存储层按 `(project, sha256)` 去重），不占两次预算；
+    - 抽不出文字 / 类型不支持 → `UnsupportedMaterial`（明确报错，不静默存空）。
+    """
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        materials: MaterialStore,
+        parser: MaterialParser,
+        clock: Clock,
+        uow: UnitOfWork,
+    ) -> None:
+        self._documents = documents
+        self._materials = materials
+        self._parser = parser
+        self._clock = clock
+        self._uow = uow
+
+    async def __call__(
+        self, *, project_id: ProjectId, filename: str, media_type: str, data: bytes
+    ) -> MaterialSummaryView:
+        if len(data) > MAX_MATERIAL_BYTES:
+            raise MaterialTooLarge(
+                f"这份材料太大了（{len(data) // 1024 // 1024}MB > "
+                f"{MAX_MATERIAL_BYTES // 1024 // 1024}MB）",
+                filename=filename,
+            )
+        parsed = self._parser.parse(filename=filename, media_type=media_type, data=data)
+        digest = hashlib.sha256(data).hexdigest()
+        with self._uow:
+            self._documents.get(project_id)      # 项目不存在就地失败
+            existing = self._materials.find_by_sha(project_id, digest)
+            if existing is None and self._materials.count_for_project(
+                project_id
+            ) >= MAX_MATERIALS_PER_PROJECT:
+                raise MaterialTooLarge(
+                    f"这个项目的材料已经到上限（{MAX_MATERIALS_PER_PROJECT} 份）",
+                    project_id=str(project_id),
+                )
+            packet = existing or self._materials.put(
+                project_id=project_id,
+                parsed=parsed,
+                sha256=digest,
+                content=data,
+                now=self._clock.now(),
+            )
+        return material_summary_view(packet, current=self._parser.identities())
+
+
+class ListMaterials:
+    """这个项目有哪些材料（**只回摘要**，块正文一个字都不进列表）。"""
+
+    def __init__(self, *, materials: MaterialStore, parser: MaterialParser) -> None:
+        self._materials = materials
+        self._parser = parser
+
+    async def __call__(self, *, project_id: ProjectId) -> tuple[MaterialSummaryView, ...]:
+        return self._materials.list_for_project(
+            project_id, current=self._parser.identities()
         )
 
 

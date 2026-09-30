@@ -115,7 +115,7 @@ def test_list_returns_summaries_without_chunk_text(store):
     )
 
     summaries = store.list_for_project(
-        PROJECT, parser_id="local-text", parser_version="pmstudio 0.0.0"
+        PROJECT, current=frozenset({("local-text", "pmstudio 0.0.0")})
     )
 
     assert len(summaries) == 1
@@ -133,7 +133,7 @@ def test_a_packet_read_by_an_older_parser_is_marked_stale(store):
         content=b"x", now=NOW,
     )
 
-    summaries = store.list_for_project(PROJECT, parser_id="docling", parser_version="docling 2.5.0")
+    summaries = store.list_for_project(PROJECT, current=frozenset({("docling", "docling 2.5.0")}))
 
     assert summaries[0].stale is True
     assert summaries[0].parser_id == "local-text"       # 照实说是谁读的
@@ -151,4 +151,4 @@ def test_other_projects_materials_are_not_listed(store):
         content=b"x", now=NOW,
     )
 
-    assert store.list_for_project(PROJECT, parser_id="local-text", parser_version="v") == ()
+    assert store.list_for_project(PROJECT, current=frozenset()) == ()

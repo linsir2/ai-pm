@@ -1,8 +1,9 @@
 """14 个端点：解析请求 → 调用例 → 序列化返回。业务判断一个都不在这儿。"""
 
+from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
 from pmstudio.api.schemas import (
@@ -15,7 +16,12 @@ from pmstudio.api.schemas import (
 )
 from pmstudio.api.sse import as_json, event_stream
 from pmstudio.application.commands import RoundCommand
-from pmstudio.application.use_cases import AnswerInput, ClaimEdit
+from pmstudio.application.errors import MaterialTooLarge
+from pmstudio.application.use_cases import (
+    MAX_MATERIAL_BYTES,
+    AnswerInput,
+    ClaimEdit,
+)
 from pmstudio.domain.shared.ids import ProjectId, RoundId
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.target import Target
@@ -191,6 +197,39 @@ async def list_rounds(request: Request, project_id: str, limit: int = 20):  # ty
 
     return as_json(
         await services_of(request).list_rounds(project_id=ProjectId(project_id), limit=limit)
+    )
+
+
+@router.post("/projects/{project_id}/attachments", status_code=201)
+async def upload_attachment(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, file: Annotated[UploadFile, File()]
+):
+    """上传一份材料（multipart）。**解析在事务外**，落库在事务内；材料永远不写文档。"""
+
+    services = services_of(request)
+    # 体积在**读进内存之前**判一次（`UploadFile.size` 由 Starlette 填好）
+    if file.size is not None and file.size > MAX_MATERIAL_BYTES:
+        raise MaterialTooLarge(
+            f"这份材料太大了（{file.size // 1024 // 1024}MB > "
+            f"{MAX_MATERIAL_BYTES // 1024 // 1024}MB）",
+            filename=file.filename or "",
+        )
+    data = await file.read(MAX_MATERIAL_BYTES + 1)
+    summary = await services.upload_material(
+        project_id=ProjectId(project_id),
+        filename=file.filename or "未命名",
+        media_type=file.content_type or "application/octet-stream",
+        data=data,
+    )
+    return as_json(summary)
+
+
+@router.get("/projects/{project_id}/attachments")
+async def list_attachments(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+    """这个项目有哪些材料（**只回摘要**，块正文不进列表）。"""
+
+    return as_json(
+        await services_of(request).list_materials(project_id=ProjectId(project_id))
     )
 
 

@@ -101,6 +101,10 @@ class Harness:
         self.rounds = InMemoryRoundRepository()
         self.evidences = InMemoryEvidenceRepository()
         self.materials = InMemoryMaterialStore()
+        # 真解析器（不是替身）：上传路径在测试里也走真 pdfminer / bs4
+        from pmstudio.infrastructure.tools.extract import LocalMaterialParser
+
+        self.parser = LocalMaterialParser()
         self.uow = FakeTransaction(self.documents, self.rounds, self.evidences)
         # gateway 是给"要卡住/要乱来"的测试用的注入口；平时用脚本化网关
         self.gateway = gateway or ScriptedModelGateway(
@@ -335,6 +339,22 @@ class Harness:
             documents=self.documents, evidence=self.evidences, index=self.index
         )
 
+    def upload_material(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import UploadMaterial
+
+        return UploadMaterial(
+            documents=self.documents,
+            materials=self.materials,
+            parser=self.parser,
+            clock=self.clock,
+            uow=self.uow,
+        )
+
+    def list_materials(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import ListMaterials
+
+        return ListMaterials(materials=self.materials, parser=self.parser)
+
     def get_document(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetDocument
 
@@ -408,6 +428,8 @@ class Harness:
             get_schema=self.get_schema(),
             list_rounds=self.list_rounds(),
             search=self.search(),
+            upload_material=self.upload_material(),
+            list_materials=self.list_materials(),
             get_document=self.get_document(),
             get_readiness=self.get_readiness(),
             export_markdown=self.export_markdown(),

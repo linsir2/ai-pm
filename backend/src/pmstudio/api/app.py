@@ -23,10 +23,12 @@ from pmstudio.application.use_cases import (
     GetVersionDiff,
     GetVersions,
     GetWorkspace,
+    ListMaterials,
     ListProjects,
     ListRounds,
     RollbackVersion,
     SearchProject,
+    UploadMaterial,
 )
 from pmstudio.domain.shared.errors import DomainError
 
@@ -43,6 +45,8 @@ class ApiServices:
     get_schema: GetSchema
     list_rounds: ListRounds
     search: SearchProject
+    upload_material: UploadMaterial
+    list_materials: ListMaterials
     get_document: GetDocument
     get_readiness: GetReadiness
     export_markdown: ExportMarkdown

@@ -90,6 +90,42 @@ async def test_health_reports_model():
     assert response.json() == {"status": "ok", "model": "openai/gpt-4o-mini"}
 
 
+async def test_upload_endpoint_accepts_multipart_and_lists_summaries():
+    """上传材料走**真 multipart**：解析、落库、列表都走真实现（不假实现）。"""
+
+    app, _ = make_client()
+    async with async_client(app) as client:
+        created = await client.post("/api/projects", json={"title": "订单中台"})
+        project_id = created.json()["project_id"]
+        response = await client.post(
+            f"/api/projects/{project_id}/attachments",
+            files={"file": ("需求.md", "# 目标\n导出要有权限".encode(), "text/markdown")},
+        )
+        listed = await client.get(f"/api/projects/{project_id}/attachments")
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["parser_id"] == "local-text"
+    assert body["chunk_count"] == 1
+    assert body["stale"] is False
+    assert "chunks" not in body                      # 摘要投影：不回块正文
+    assert [item["title"] for item in listed.json()] == ["需求.md"]
+
+
+async def test_upload_of_an_unsupported_type_is_422_with_a_code():
+    app, _ = make_client()
+    async with async_client(app) as client:
+        created = await client.post("/api/projects", json={"title": "订单中台"})
+        project_id = created.json()["project_id"]
+        response = await client.post(
+            f"/api/projects/{project_id}/attachments",
+            files={"file": ("scan.jpg", b"\x89PNG", "image/jpeg")},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "unsupported_material"
+
+
 async def test_search_endpoint_returns_hits_and_an_empty_query_returns_nothing():
     """F6：搜得到东西；**空查询回空**（绝不"不填就是全量"）。"""
 

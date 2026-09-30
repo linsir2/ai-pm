@@ -128,14 +128,19 @@ class InMemoryMaterialStore:
         packet = self._packets.get(material_id)
         return 0 if packet is None else len(packet.parsed.chunks)
 
-    def list_for_project(self, project_id, *, parser_id="", parser_version=""):  # type: ignore[no-untyped-def]
+    def list_for_project(self, project_id, *, current):  # type: ignore[no-untyped-def]
         return tuple(
-            material_summary_view(
-                packet, parser_id=parser_id, parser_version=parser_version
-            )
+            material_summary_view(packet, current=current)
             for packet in self._packets.values()
             if packet.project_id == str(project_id)
         )
+
+    def count_for_project(self, project_id) -> int:  # type: ignore[no-untyped-def]
+        return sum(1 for packet in self._packets.values() if packet.project_id == str(project_id))
+
+    def find_by_sha(self, project_id, sha256: str):  # type: ignore[no-untyped-def]
+        material_id = self._sha.get((str(project_id), sha256))
+        return None if material_id is None else self._packets.get(material_id)
 
     def delete(self, material_id: str) -> None:
         self._packets.pop(material_id, None)
