@@ -130,6 +130,35 @@ class MaterialParser(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class ToolDefinition:
+    """一个工具的声明（从 TOML 读）。`requires` 是**配置项名**：没配就没这个工具。"""
+
+    tool_id: str
+    title: str
+    kind: str
+    requires: tuple[str, ...] = ()
+    max_queries: int = 0
+    max_results: int = 0
+
+
+@runtime_checkable
+class ToolCatalog(Protocol):
+    def all(self) -> tuple[ToolDefinition, ...]: ...
+    def available(self, *, has: frozenset[str]) -> tuple[ToolDefinition, ...]: ...
+
+
+@runtime_checkable
+class WebSearchGateway(Protocol):
+    """一次查询 → 若干**解析草稿**（每条结果一个，含 URL 与摘要块）。
+
+    与 `MaterialParser` 同一个形状：**只有 `MaterialStore.put` 能盖章**（material_id/project_id），
+    所以网关不产 `MaterialPacket`——它连"这是哪个项目"都不知道。
+    """
+
+    async def search(self, *, query: str, limit: int) -> tuple["ParsedMaterial", ...]: ...
+
+
 @runtime_checkable
 class MaterialStore(Protocol):
     """材料的唯一入口/出口。**只有这里能盖章**（material_id / project_id）。"""

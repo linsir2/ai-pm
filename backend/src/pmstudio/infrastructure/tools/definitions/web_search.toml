@@ -1,0 +1,9 @@
+# 联网搜索（Tavily REST）。
+# `requires` 里列的是**配置项名**：没配就等于这个工具不可用（复述卡不出现那一栏），
+# 不是"假成功"。判据见 `docs/plans/2026-09-30-P17-工具层.md` §13。
+tool_id = "tool.web_search"
+title = "联网搜索（Tavily）"
+kind = "web_search"
+requires = ["tavily_api_key"]
+max_queries = 3
+max_results = 5

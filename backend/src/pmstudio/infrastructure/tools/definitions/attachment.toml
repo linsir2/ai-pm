@@ -1,0 +1,5 @@
+# 上传的材料（本地解析，不需要任何外部依赖 —— 所以它永远可用）
+tool_id = "tool.attachment"
+title = "上传的材料"
+kind = "attachment"
+requires = []

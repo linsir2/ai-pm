@@ -13,6 +13,7 @@ DB_ENV = "PMSTUDIO_DB"
 TIMEOUT_ENV = "PMSTUDIO_MODEL_TIMEOUT"
 TRACE_ENV = "PMSTUDIO_TRACE_MODEL"
 PARAMS_ENV = "PMSTUDIO_MODEL_PARAMS"
+TAVILY_ENV = "PMSTUDIO_TAVILY_API_KEY"
 
 #: 每次模型调用的墙钟上限（秒）。**按次算**，不是按一次业务动作算：
 #: 一次业务调用最多 3 次尝试 ⇒ 最坏 3 × 90 + 退避(1+3) ≈ 4.6 分钟。
@@ -38,6 +39,17 @@ class Settings:
     #: 典型用法（DashScope 关思考）：`{"extra_body": {"enable_thinking": false}}`。
     #: 我们自己的键（model / messages / timeout / num_retries）永远覆盖它。
     model_params: Mapping[str, object] = field(default_factory=dict)
+    #: 联网检索（工具层 C-2）：Tavily 的 key。**可缺省**——缺了 `tool.web_search` 不可用
+    #: （复述卡不出现那一栏），而不是"假成功"。
+    tavily_api_key: str | None = None
+
+    def available_tool_keys(self) -> frozenset[str]:
+        """当前环境**配好**了哪些工具的依赖（工具目录按它过滤）。"""
+
+        keys: set[str] = set()
+        if self.tavily_api_key is not None:
+            keys.add("tavily_api_key")
+        return frozenset(keys)
 
     @classmethod
     def from_env(
@@ -84,4 +96,5 @@ class Settings:
             model_timeout=model_timeout,
             trace_model=trace_model,
             model_params=model_params,
+            tavily_api_key=source.get(TAVILY_ENV, "").strip() or None,
         )
