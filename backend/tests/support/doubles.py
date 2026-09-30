@@ -3,11 +3,15 @@
 import asyncio
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from pmstudio.application.errors import ModelCallFailed
 from pmstudio.application.events import Event
 from pmstudio.application.ports import ModelReply, ModelRequest, SeatDefinition
 from pmstudio.domain.shared.ids import ProjectId, RoundId
+
+if TYPE_CHECKING:
+    from pmstudio.application.dto import ParsedMaterial
 
 SCRIPTED_MODEL = "scripted"
 
@@ -161,6 +165,30 @@ class StaticSeatCatalog:
 
     def titles(self) -> dict[str, str]:
         return {seat.seat_id: seat.title for seat in self._seats}
+
+
+class RecordingWebSearch:
+    """联网检索替身：记录每一次调用，按配置返回结果或抛错（**只在测试里**）。
+
+    它不是"假实现"——生产路径的实现是 `infrastructure/tools/tavily.py`；
+    这里的作用是让"没勾就不联网"这条口径**可被断言**（`calls == []`）。
+    """
+
+    def __init__(
+        self,
+        *,
+        returns: Sequence["ParsedMaterial"] = (),
+        failure: Exception | None = None,
+    ) -> None:
+        self.calls: list[tuple[str, int]] = []
+        self.returns = tuple(returns)
+        self.failure = failure
+
+    async def search(self, *, query: str, limit: int) -> tuple["ParsedMaterial", ...]:
+        self.calls.append((query, limit))
+        if self.failure is not None:
+            raise self.failure
+        return self.returns
 
 
 class StaticWorkspaceIndex:

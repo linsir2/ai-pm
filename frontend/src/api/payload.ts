@@ -222,8 +222,10 @@ export function buildOpeningBody(
   round: RoundView,
   seats: string[],
   edits: Record<string, ClaimEdit>,
+  webQueries: string[] = [],
 ) {
-  return { seats, claim_edits: buildClaimEdits(round, edits) };
+  // 检索词默认空 = 不联网：这是"没勾就一次网络调用都没有"这条口径的起点
+  return { seats, claim_edits: buildClaimEdits(round, edits), web_queries: [...webQueries] };
 }
 
 /** 底部那一块该是什么：输入框 / 复述卡 / 抽屉 / 等数据 / 结束。 */

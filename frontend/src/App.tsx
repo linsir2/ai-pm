@@ -256,7 +256,7 @@ export default function App() {
               round !== null &&
               void data.submitOpening(
                 round.round_id,
-                buildOpeningBody(round, drafts.seats, drafts.edits),
+                buildOpeningBody(round, drafts.seats, drafts.edits, drafts.webQueries),
               )
             }
             onSubmitAnswers={() =>

@@ -168,6 +168,7 @@ class RoundRunner:
             round_id=RoundId(_round_id(state)),
             seats=command.seats,
             claim_edits=command.claim_edits,
+            web_queries=command.web_queries,
         )
         return {}
 

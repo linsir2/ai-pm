@@ -198,11 +198,13 @@ def test_claims_packet_array_is_not_guessed():
         )
 
     # 2026-09-29：claims 报文加了 `contradictions`（互斥对子，T7）——形状清单跟着长一条
+    # 2026-09-30：又加了 `web_queries`（联网检索词提名，C-2b）——再长一条
     assert exc.value.details["packet_shape"]["expected_keys"] == (
         "basis",
         "claims",
         "seats",
         "contradictions",
+        "web_queries",
     )
 
 

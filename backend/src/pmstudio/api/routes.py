@@ -266,6 +266,7 @@ async def submit_opening(request: Request, round_id: str, body: OpeningRequest):
             kind="submit_opening",
             round_id=round_id,
             seats=tuple(body.seats),
+            web_queries=tuple(body.web_queries),
             claim_edits=edits,
         )
     )

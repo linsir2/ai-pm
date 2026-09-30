@@ -18,6 +18,8 @@ class RoundCommand:
     #: 这一轮带进来的材料（用户在上传框里挑的）；空 = 不带材料
     material_ids: tuple[str, ...] = ()
     seats: tuple[str, ...] = ()
+    #: 用户在本轮复述卡上勾中的联网检索词；空 = 不联网（默认）
+    web_queries: tuple[str, ...] = ()
     claim_edits: tuple[ClaimEdit, ...] = ()
     answers: tuple[AnswerInput, ...] = ()
     skipped: tuple[str, ...] = ()

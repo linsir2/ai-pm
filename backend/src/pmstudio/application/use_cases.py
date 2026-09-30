@@ -102,6 +102,9 @@ from pmstudio.application.ports import (
     RoundCanceller,
     SeatCatalog,
     SeatDefinition,
+    ToolCatalog,
+    ToolDefinition,
+    WebSearchGateway,
     WorkspaceIndex,
 )
 from pmstudio.application.repair import repair_note
@@ -348,12 +351,57 @@ class StartRound:
             round_.attach_contradictions(analysis.contradictions)
             # 席位名单跟着主张一起落：它是这一次判断的产物，重试/刷新都该看得见
             round_.nominate(analysis.seats)
+            # 联网检索词也是这次判断的产物：**只提名**，勾不勾由用户在复述卡上定（C-2b）
+            round_.attach_web_queries(analysis.web_queries)
             # 被丢掉的提名（目录里没有的席位）留痕：丢人不丢轮，但要说清丢了谁
             round_.note_dropped(analysis.dropped)
             authorize_named_features(round_, assigned, document=document)
             self._evidence_writer.save(ledger)
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
+
+
+#: 工具目录里"联网搜索"的 kind（`web_search.toml` 写的就是它）
+WEB_SEARCH_KIND = "web_search"
+#: 目录没声明 `max_queries` 时的兜底（真定义在 `web_search.toml` 里）
+DEFAULT_WEB_QUERY_LIMIT = 3
+
+
+def web_search_tool(tools: ToolCatalog, *, keys: frozenset[str]) -> ToolDefinition | None:
+    """当前配置下**真的能用**的联网工具；没配密钥（或目录里没有）就是 None。
+
+    "能不能用"只有一个判据：目录说 `requires` 都满足了。所以复述卡上的那一栏、
+    与用例里的那两道校验，看的是同一件事——不是三处各判一次。
+    """
+
+    for item in tools.available(has=keys):
+        if item.kind == WEB_SEARCH_KIND:
+            return item
+    return None
+
+
+def _checked_queries(
+    queries: Sequence[str], *, tools: ToolCatalog, keys: frozenset[str]
+) -> tuple[str, ...]:
+    """用户勾中的检索词过两道闸门：去重保序 → 上限 → 以及"这里到底有没有这个工具"。"""
+
+    chosen = tuple(dict.fromkeys(item.strip() for item in queries if item.strip()))
+    if not chosen:
+        return ()
+    tool = web_search_tool(tools, keys=keys)
+    if tool is None:
+        raise ShapeError(
+            "这一轮勾了联网检索，但服务端没有配好联网工具（没配密钥，或工具被停用）",
+            tool_ids=[item.tool_id for item in tools.all()],
+        )
+    limit = tool.max_queries or DEFAULT_WEB_QUERY_LIMIT
+    if len(chosen) > limit:
+        raise ShapeError(
+            f"这一轮勾了 {len(chosen)} 条检索词，最多只允许 {limit} 条",
+            limit=limit,
+            chosen=len(chosen),
+        )
+    return chosen
 
 
 class SubmitOpening:
@@ -363,6 +411,9 @@ class SubmitOpening:
         rounds: RoundReader,
         round_writer: RoundWriter,
         catalog: SeatCatalog,
+        tools: ToolCatalog,
+        available_tool_keys: frozenset[str],
+        web_search: WebSearchGateway | None,
         uow: UnitOfWork,
         clock: Clock,
         events: EventPublisher,
@@ -370,6 +421,9 @@ class SubmitOpening:
         self._rounds = rounds
         self._round_writer = round_writer
         self._catalog = catalog
+        self._tools = tools
+        self._available_tool_keys = available_tool_keys
+        self._web_search = web_search
         self._uow = uow
         self._clock = clock
         self._events = events
@@ -380,7 +434,16 @@ class SubmitOpening:
         round_id: RoundId,
         seats: Sequence[str],
         claim_edits: Sequence[ClaimEdit] = (),
+        web_queries: Sequence[str] = (),
     ) -> None:
+        # 校验全部在**写之前**：请求不对（422）就不该留下半推半就的状态。
+        chosen = _checked_queries(web_queries, tools=self._tools, keys=self._available_tool_keys)
+        if chosen and self._web_search is None:
+            # 目录说工具可用、组装点却没接上实现：这是装配错误，必须当场响，不能悄悄跳过
+            raise ShapeError(
+                "联网工具声明可用，但组装点没有接上实现（这一轮先别勾联网）",
+                tool_id=WEB_SEARCH_KIND,
+            )
         with self._uow:
             round_ = self._rounds.get(round_id)
             # 席位必须在注册表里：不然它会一路走到 `catalog.by_id` 才炸成 500。
@@ -394,7 +457,7 @@ class SubmitOpening:
                 )
             if claim_edits:
                 round_.revise_claims(_apply_claim_edits(round_, claim_edits))
-            round_.submit_opening(seats=tuple(seats))
+            round_.submit_opening(seats=tuple(seats), web_queries_chosen=chosen)
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
 
@@ -1783,6 +1846,8 @@ class GetWorkspace:
         evidence: EvidenceReader,
         index: WorkspaceIndex,
         catalog: SeatCatalog,
+        tools: ToolCatalog,
+        available_tool_keys: frozenset[str],
         checker: ReadinessChecker,
         materials: MaterialStore,
     ) -> None:
@@ -1791,6 +1856,8 @@ class GetWorkspace:
         self._evidence = evidence
         self._index = index
         self._catalog = catalog
+        self._tools = tools
+        self._available_tool_keys = available_tool_keys
         self._checker = checker
         self._materials = materials
 
@@ -1809,6 +1876,10 @@ class GetWorkspace:
             catalog=self._catalog,
             ledger=ledger,
             materials=() if round_ is None else _materials_of(round_, store=self._materials),
+            web_search_available=web_search_tool(
+                self._tools, keys=self._available_tool_keys
+            )
+            is not None,
             readiness=self._checker.check(view),
         )
 
@@ -2121,11 +2192,15 @@ class GetRound:
         rounds: RoundReader,
         evidence: EvidenceReader,
         catalog: SeatCatalog,
+        tools: ToolCatalog,
+        available_tool_keys: frozenset[str],
         materials: MaterialStore,
     ) -> None:
         self._rounds = rounds
         self._evidence = evidence
         self._catalog = catalog
+        self._tools = tools
+        self._available_tool_keys = available_tool_keys
         self._materials = materials
 
     async def __call__(self, *, round_id: RoundId) -> RoundView:
@@ -2137,6 +2212,10 @@ class GetRound:
             catalog=self._catalog,
             ledger=self._evidence.get(round_.project_id),
             materials=_materials_of(round_, store=self._materials),
+            web_search_available=web_search_tool(
+                self._tools, keys=self._available_tool_keys
+            )
+            is not None,
         )
 
 

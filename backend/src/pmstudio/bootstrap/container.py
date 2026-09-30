@@ -38,6 +38,7 @@ from pmstudio.application.use_cases import (
     SubmitAnswers,
     SubmitOpening,
     UploadMaterial,
+    web_search_tool,
 )
 from pmstudio.bootstrap.settings import Settings
 from pmstudio.domain.authoring.readiness import ReadinessChecker
@@ -61,11 +62,14 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
+from pmstudio.infrastructure.tools.catalog import TomlToolCatalog
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
+from pmstudio.infrastructure.tools.tavily import TavilySearchGateway
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 PROMPTS_DIR = PACKAGE_ROOT / "infrastructure" / "llm" / "prompts"
 SEATS_DIR = PACKAGE_ROOT / "infrastructure" / "seats" / "definitions"
+TOOLS_DIR = PACKAGE_ROOT / "infrastructure" / "tools" / "definitions"
 
 
 class SystemClock:
@@ -82,6 +86,18 @@ class Container:
     def __init__(self, *, settings: Settings, app: FastAPI) -> None:
         self.settings = settings
         self.app = app
+
+
+def _web_search_gateway(
+    settings: Settings, *, tools: TomlToolCatalog, keys: frozenset[str]
+) -> TavilySearchGateway | None:
+    """两件事都成立才造网关：**目录说这个工具可用**（`requires` 都配上了）
+    且密钥确实在手上。缺一件就是 None——用例那边会把"勾了但没有工具"当场拒掉，
+    而不是拿一个空 key 去请求，更不是假装搜过。"""
+
+    if web_search_tool(tools, keys=keys) is None or settings.tavily_api_key is None:
+        return None
+    return TavilySearchGateway(api_key=settings.tavily_api_key)
 
 
 def build_container(settings: Settings, *, gateway: ModelGateway | None = None) -> Container:
@@ -119,6 +135,10 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             model_params=settings.model_params,
         )
     catalog = TomlSeatCatalog(SEATS_DIR)
+    # 工具目录：`requires` 没配上的工具**直接不可用**（不是"无密钥降级"）
+    tools = TomlToolCatalog(TOOLS_DIR)
+    available_tool_keys = settings.available_tool_keys()
+    web_search = _web_search_gateway(settings, tools=tools, keys=available_tool_keys)
     assigner = EvidenceAssigner()
     readiness = ReadinessChecker()
     analyzer = ClaimAnalyzer(model=gateway, prompts=prompts, catalog=catalog)
@@ -145,6 +165,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         rounds=rounds,
         round_writer=rounds,
         catalog=catalog,
+        tools=tools,
+        available_tool_keys=available_tool_keys,
+        web_search=web_search,
         uow=uow,
         clock=clock,
         events=bus,
@@ -206,7 +229,12 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     )
     dig_round = DigRound(rounds=rounds, round_writer=rounds, uow=uow, clock=clock, events=bus)
     get_round = GetRound(
-        rounds=rounds, evidence=evidences, catalog=catalog, materials=materials
+        rounds=rounds,
+        evidence=evidences,
+        catalog=catalog,
+        tools=tools,
+        available_tool_keys=available_tool_keys,
+        materials=materials,
     )
     runner = RoundRunner(
         start_round=start_round,
@@ -237,6 +265,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             evidence=evidences,
             index=index,
             catalog=catalog,
+            tools=tools,
+            available_tool_keys=available_tool_keys,
             checker=readiness,
             materials=materials,
         ),

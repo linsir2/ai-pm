@@ -77,9 +77,11 @@ export function LoopColumn({
           doc={doc}
           edits={drafts.edits}
           seats={drafts.seats}
+          webQueries={drafts.webQueries}
           pending={pending === "opening"}
           onChangeClaim={drafts.changeClaim}
           onToggleSeat={drafts.toggleSeat}
+          onToggleWebQuery={drafts.toggleWebQuery}
           onSubmit={onSubmitOpening}
         />
       ) : round === null ? (

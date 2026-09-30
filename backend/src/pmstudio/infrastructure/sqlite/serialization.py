@@ -33,6 +33,7 @@ from pmstudio.domain.round.round import (
     SeatNomination,
 )
 from pmstudio.domain.round.step import Step, WaitingOn
+from pmstudio.domain.round.web_query import WebQuery
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
     BlockId,
@@ -589,6 +590,12 @@ def round_to_payload(round_: Round) -> dict:
             }
             for item in round_.materials
         ],
+        # 分析者提名的检索词（老行没有这把键 → 读侧回落空）
+        "web_queries": [
+            {"query": item.query, "why": item.why} for item in round_.web_queries
+        ],
+        # 用户在复述卡上勾中的（老行没有这把键 → 空 = 不联网）
+        "web_queries_chosen": list(round_.web_queries_chosen),
     }
 
 
@@ -655,6 +662,12 @@ def round_from_payload(
             )
             for item in payload.get("materials") or ()
         ),
+        # 老行里没有这两把键（联网检索词是后加的）：空——不联网、也不编"它建议查过"
+        web_queries=tuple(
+            WebQuery(query=str(item["query"]), why=str(item["why"]))
+            for item in payload.get("web_queries") or ()
+        ),
+        web_queries_chosen=tuple(str(item) for item in payload.get("web_queries_chosen") or ()),
         answer_sets=tuple(answer_set_from_json(item) for item in payload["answer_sets"]),
         draft=None if payload["draft"] is None else draft_from_json(payload["draft"]),
         seat_round_count=payload["seat_round_count"],

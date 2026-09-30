@@ -168,6 +168,19 @@ export interface RoundView {
   answer_sets: AnswerBatchView[];
   /** 这一轮带进提示词的材料块（工具层 C-2）。 */
   materials: RoundMaterialView[];
+  /**
+   * 分析者提名的联网检索词（工具层 C-2b）：**只是提名**，勾了才会真去查。
+   * 勾选状态由用户给（默认不勾），后端把"你勾过哪条"投影在 `chosen` 里。
+   */
+  web_queries: WebQueryView[];
+  /** 服务端现在有没有可用的联网工具（没配密钥就是 false）——据此决定出不出现那一栏。 */
+  web_search_available: boolean;
+}
+
+export interface WebQueryView {
+  query: string;
+  why: string;
+  chosen: boolean;
 }
 
 export interface AnswerBatchView {

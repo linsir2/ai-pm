@@ -31,6 +31,8 @@ class StartRoundRequest(BaseModel):
 class OpeningRequest(BaseModel):
     seats: list[str] = Field(min_length=1)
     claim_edits: list[ClaimEditRequest] = Field(default_factory=list)
+    #: 复述卡上勾中的联网检索词（工具层 C-2b）。空 = 不联网——**默认就是空**。
+    web_queries: list[str] = Field(default_factory=list)
 
 
 class AnswerRequest(BaseModel):

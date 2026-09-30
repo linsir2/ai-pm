@@ -13,18 +13,22 @@ export function OpeningCard({
   doc,
   edits,
   seats,
+  webQueries,
   pending,
   onChangeClaim,
   onToggleSeat,
+  onToggleWebQuery,
   onSubmit,
 }: {
   round: RoundView;
   doc: DocumentView | null;
   edits: Record<string, ClaimEdit>;
   seats: string[];
+  webQueries: string[];
   pending: boolean;
   onChangeClaim: (claimId: string, edit: ClaimEdit) => void;
   onToggleSeat: (seatId: string) => void;
+  onToggleWebQuery: (query: string) => void;
   onSubmit: () => void;
 }) {
   const touched = touchedTargets(round, edits);
@@ -179,6 +183,47 @@ export function OpeningCard({
             </details>
           )}
         </fieldset>
+
+        {round.web_queries.length > 0 && (
+          <fieldset className="seats web-queries">
+            <legend className="loop__label">联网检索</legend>
+            {round.web_search_available ? (
+              <>
+                <p className="seat__note">
+                  这几条是<strong>分析席位建议去外面查的</strong>（每条写了为什么）。联网要花额度，
+                  所以<strong>默认一条都不查</strong>——你要哪条就勾哪条，勾了才真去查。
+                </p>
+                {round.web_queries.map((item) => {
+                  const on = webQueries.includes(item.query);
+                  return (
+                    <label className={on ? "seat seat--on" : "seat"} key={item.query}>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => onToggleWebQuery(item.query)}
+                        aria-label={item.query}
+                      />
+                      <span>
+                        <span className="seat__title">{item.query}</span>
+                        {item.why.trim() !== "" && (
+                          <span className="seat__why">为什么查它：{item.why}</span>
+                        )}
+                        <span className="seat__focus">
+                          查回来的东西算<strong>外部材料</strong>：它只进"它提议的"那一组，默认不写入文档。
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </>
+            ) : (
+              <p className="seat__note">
+                分析席位建议查 {round.web_queries.length} 条，但服务端没配联网工具（缺密钥），
+                这一栏先帮不了你——想查就先把工具配好。
+              </p>
+            )}
+          </fieldset>
+        )}
       </div>
 
       <footer className="drawer__foot">

@@ -90,6 +90,8 @@ async function download(path: string, fallbackName: string): Promise<void> {
 
 export interface OpeningBody {
   seats: string[];
+  /** 复述卡上勾中的联网检索词；空数组 = 这一轮不联网。 */
+  web_queries: string[];
   claim_edits: {
     claim_id: string;
     label: string;

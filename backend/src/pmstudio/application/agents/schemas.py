@@ -50,6 +50,22 @@ class SeatPickDraft(BaseModel):
     why: str = Field(description="一句话：读完这段输入，为什么这个专业面要表态")
 
 
+class WebQueryDraft(BaseModel):
+    """Analyzer 提名的检索词（工具层 C-2b）：**只提名，不联网**。
+
+    为什么把上限写在描述里、而不是 `max_length=3`：写死了就是"给了 4 条 → 整包重装一次"，
+    而仓库对"模型多写了一条"的既定口径是**丢那一条 + 留痕**（见席位提名与互斥对子）。
+    """
+
+    query: str = Field(description="要拿去搜的一句话（像人问的那样，别堆关键词）")
+    why: str = Field(
+        description=(
+            "为什么这一轮需要**外部客观事实**——文档里没有、用户也没说过的那种"
+            "（行业标准、法规、第三方接口的既有做法）"
+        )
+    )
+
+
 class ContradictionDraft(BaseModel):
     """一对**立场互斥**的主张。写的是**第几条**（从 1 开始），不是 `c1`。
 
@@ -79,6 +95,14 @@ class ClaimsPacket(BaseModel):
         default_factory=list,
         max_length=5,
         description="本轮输入内部**立场互斥**的主张对子；没有就给空数组",
+    )
+    web_queries: list[WebQueryDraft] = Field(
+        default_factory=list,
+        description=(
+            "最多 3 条。**只在你真觉得需要外部客观事实时给**；"
+            "用户已经说过的 / 文档或材料里已有的 / 产品取舍与偏好 —— 一律给空数组。"
+            "没有就给空数组。（这里只是提名，用户会在复述卡上勾选要不要真的联网）"
+        ),
     )
 
 

@@ -28,6 +28,15 @@ CLAIMS_REPLY = json.dumps(
     ensure_ascii=False,
 )
 
+#: 同一份报文 + 一条检索词提名（工具层 C-2b：复述卡上的联网那一栏）
+CLAIMS_REPLY_WITH_QUERY = json.dumps(
+    {
+        **json.loads(CLAIMS_REPLY),
+        "web_queries": [{"query": "RBAC 权限模型", "why": "要查行业通行做法"}],
+    },
+    ensure_ascii=False,
+)
+
 QUESTION_REPLY = json.dumps(
     {
         "questions": [
@@ -244,6 +253,42 @@ async def test_full_loop_over_http():
     assert opened.status_code == 200
     assert opened.json()["waiting_on"] == "questionnaire"
     assert opened.json()["form_id"] == "f1"
+
+
+async def test_opening_records_the_queries_the_user_checked():
+    """复述卡勾一条检索词 → 后端记下来，并且读回来的投影里带着"你勾了它"。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY_WITH_QUERY, "integration": QUESTION_REPLY},
+        seat_replies={"seat.data_scale": SEAT_REPLY},
+    )
+    app = create_app(_services(harness))
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        round_id = (
+            await client.post(
+                f"/api/projects/{project_id}/rounds", json={"input": "想做个订单导出的功能"}
+            )
+        ).json()["round_id"]
+        opened = await client.post(
+            f"/api/rounds/{round_id}/opening",
+            json={
+                "seats": ["seat.data_scale"],
+                "claim_edits": [],
+                "web_queries": ["RBAC 权限模型"],
+            },
+        )
+        read_back = await client.get(f"/api/rounds/{round_id}")
+
+    assert opened.status_code == 200
+    assert read_back.status_code == 200
+    assert [
+        (item["query"], item["why"], item["chosen"])
+        for item in read_back.json()["web_queries"]
+    ] == [("RBAC 权限模型", "要查行业通行做法", True)]
+    assert read_back.json()["web_search_available"] is True
 
 
 async def test_opening_with_an_unknown_seat_is_a_422_not_a_500():

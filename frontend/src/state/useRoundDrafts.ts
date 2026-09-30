@@ -15,12 +15,15 @@ import type { RoundView } from "../api/types";
 export interface RoundDrafts {
   answers: Record<string, AnswerDraft>;
   seats: string[];
+  /** 复述卡上勾中的联网检索词：**默认不勾**（联网是花钱的事，要显式授权）。 */
+  webQueries: string[];
   edits: Record<string, ClaimEdit>;
   accepted: string[];
   collapsed: boolean;
   setCollapsed: (collapsed: boolean) => void;
   changeAnswer: (questionId: string, draft: AnswerDraft) => void;
   toggleSeat: (seatId: string) => void;
+  toggleWebQuery: (query: string) => void;
   changeClaim: (claimId: string, edit: ClaimEdit) => void;
   toggleAccepted: (proposalId: string) => void;
   setAccepted: (proposalIds: string[]) => void;
@@ -29,6 +32,7 @@ export interface RoundDrafts {
 export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): RoundDrafts {
   const [answers, setAnswers] = useState<Record<string, AnswerDraft>>({});
   const [seats, setSeats] = useState<string[]>([]);
+  const [webQueries, setWebQueries] = useState<string[]>([]);
   const [edits, setEdits] = useState<Record<string, ClaimEdit>>({});
   const [accepted, setAccepted] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState(false);
@@ -43,6 +47,8 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     setAnswers({});
     setAccepted([]);
     setSeats(round === null ? [] : defaultSeats(round));
+    // 默认一条都不勾：勾了才会真联网（后端也拿这个当唯一判据）
+    setWebQueries([]);
     setEdits(round === null ? {} : initialClaimEdits(round));
   }, [roundId]);
 
@@ -67,6 +73,12 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     );
   }, []);
 
+  const toggleWebQuery = useCallback((query: string) => {
+    setWebQueries((current) =>
+      current.includes(query) ? current.filter((item) => item !== query) : [...current, query],
+    );
+  }, []);
+
   const changeClaim = useCallback((claimId: string, edit: ClaimEdit) => {
     setEdits((current) => ({ ...current, [claimId]: edit }));
   }, []);
@@ -87,12 +99,14 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
   return {
     answers,
     seats,
+    webQueries,
     edits,
     accepted,
     collapsed,
     setCollapsed,
     changeAnswer,
     toggleSeat,
+    toggleWebQuery,
     changeClaim,
     toggleAccepted,
     setAccepted: setAcceptedIds,

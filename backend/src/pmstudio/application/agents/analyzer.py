@@ -29,6 +29,7 @@ from pmstudio.application.ports import (
 )
 from pmstudio.domain.round.claim import Assumption, Claim, Contradiction
 from pmstudio.domain.round.round import DroppedItem, DropSource, SeatNomination
+from pmstudio.domain.round.web_query import MAX_WEB_QUERIES, WebQuery
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import RoundId
 from pmstudio.domain.shared.label import ClaimLabel
@@ -45,6 +46,8 @@ class Analysis:
     dropped: tuple[DroppedItem, ...] = ()
     #: 本轮输入内部**立场互斥**的主张对子（没判出来就是空）
     contradictions: tuple[Contradiction, ...] = ()
+    #: 这一轮建议联网查什么（**只是提名**；用户在复述卡上勾了才真去查）
+    web_queries: tuple[WebQuery, ...] = ()
 
 
 def normalize(text: str) -> str:
@@ -201,11 +204,13 @@ class ClaimAnalyzer:
         seats, dropped = nominations_from_packet(packet, catalog=self._catalog)
         claims = claims_from_packet(packet, user_input=user_input)
         contradictions, contradiction_drops = contradictions_from_packet(packet, claims=claims)
+        web_queries, query_drops = web_queries_from_packet(packet)
         return Analysis(
             claims=claims,
             seats=seats,
-            dropped=dropped + contradiction_drops,
+            dropped=dropped + contradiction_drops + query_drops,
             contradictions=contradictions,
+            web_queries=web_queries,
         )
 
 
@@ -355,4 +360,52 @@ def contradictions_from_packet(
                     pass_index=1,
                 )
             )
+    return tuple(keep), tuple(dropped)
+
+
+def web_queries_from_packet(
+    packet: schemas.ClaimsPacket,
+) -> tuple[tuple[WebQuery, ...], tuple[DroppedItem, ...]]:
+    """报文的检索词提名 → 领域值对象；写多了 / 写歪了的**丢那一条 + 留痕**。
+
+    与"未知席位提名""互斥对子序号越界"同一个口径：一条判断写歪，不该让整轮重跑
+    （真跑一次重装几十秒）。三种写歪：超过 `MAX_WEB_QUERIES`、没写"为什么"、检索词为空。
+    """
+
+    keep: list[WebQuery] = []
+    dropped: list[DroppedItem] = []
+    seen: set[str] = set()
+    for item in packet.web_queries:
+        query = item.query.strip()
+        handle = f"检索词 {query or '(空)'}"
+        if len(keep) >= MAX_WEB_QUERIES:
+            dropped.append(
+                DroppedItem(
+                    handle=handle,
+                    reason=(
+                        f"一轮最多 {MAX_WEB_QUERIES} 条检索词提名，多出来的这一条已丢弃"
+                    ),
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                )
+            )
+            continue
+        if query in seen:
+            continue
+        try:
+            candidate = WebQuery(query=query, why=item.why)
+        except DomainError as error:
+            dropped.append(
+                DroppedItem(
+                    handle=handle,
+                    reason=f"这条检索词过不了领域校验：{error.message}",
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                )
+            )
+            continue
+        seen.add(query)
+        keep.append(candidate)
     return tuple(keep), tuple(dropped)

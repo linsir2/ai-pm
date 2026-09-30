@@ -269,7 +269,16 @@ describe("buildOpeningBody", () => {
       claim_edits: [
         { claim_id: "c2", label: "constraint", target: { zone: "body", section_id: "s10" } },
       ],
+      // 契约变更（工具层 C-2b）：起轮体多带一把 `web_queries`，不勾就是空数组
+      web_queries: [],
     });
+  });
+
+  it("把勾中的检索词一起递出去（没勾就是空数组）", () => {
+    const body = buildOpeningBody(round, ["seat.data_scale"], {}, ["RBAC 权限模型"]);
+
+    expect(body.web_queries).toEqual(["RBAC 权限模型"]);
+    expect(buildOpeningBody(round, ["seat.data_scale"], {}).web_queries).toEqual([]);
   });
 });
 

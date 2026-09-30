@@ -19,6 +19,7 @@ from pmstudio.domain.round.round import (
     Round,
     SeatNomination,
 )
+from pmstudio.domain.round.web_query import WebQuery
 from pmstudio.domain.shared.ids import (
     DocumentId,
     DraftId,
@@ -532,6 +533,41 @@ def test_opening_card_uses_the_analyzer_nomination_not_the_catalog_match():
     assert view.nominated_seats[0].source == "agent"
     # 常驻的席位并没有消失：它以"还能加的"身份留在旁边
     assert [seat.seat_id for seat in view.available_seats] == ["seat.data_scale"]
+
+
+def round_with_queries() -> Round:
+    """复述卡上的一轮：分析者提名两条，用户勾了第二条。"""
+
+    round_ = _opening_round()
+    round_.attach_web_queries(
+        (
+            WebQuery(query="RBAC 权限模型", why="要查行业通行做法"),
+            WebQuery(query="订单导出的行业规范", why="要查行业标准"),
+        )
+    )
+    round_.submit_opening(seats=(SEAT,), web_queries_chosen=("订单导出的行业规范",))
+    return round_
+
+
+def test_round_view_carries_the_nominated_queries_and_what_the_user_picked():
+    """复述卡要能说清"它建议查什么、为什么、你勾了哪条"。"""
+
+    view = dto.round_view(round_with_queries(), web_search_available=True)
+
+    assert [(item.query, item.why, item.chosen) for item in view.web_queries] == [
+        ("RBAC 权限模型", "要查行业通行做法", False),
+        ("订单导出的行业规范", "要查行业标准", True),
+    ]
+    assert view.web_search_available is True
+
+
+def test_web_search_is_unavailable_unless_somebody_says_otherwise():
+    """拿不到"配没配工具"这个事实时，默认是**不可用**：宁可少显示一栏，也不许骗人能查。"""
+
+    view = dto.round_view(make_round())
+
+    assert view.web_queries == ()
+    assert view.web_search_available is False
 
 
 def test_catalog_fallback_is_marked_as_such_for_older_rounds():

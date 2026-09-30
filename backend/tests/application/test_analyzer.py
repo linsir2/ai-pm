@@ -7,6 +7,7 @@ from pmstudio.application.agents.analyzer import ClaimAnalyzer, grounded_span
 from pmstudio.application.agents.schemas import ClaimsPacket
 from pmstudio.application.errors import PacketParseError
 from pmstudio.domain.round.round import SeatNomination
+from pmstudio.domain.round.web_query import WebQuery
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
 from tests.support.builders import SEAT, make_seat
@@ -517,3 +518,88 @@ async def test_a_contradiction_of_a_claim_with_itself_is_dropped_too():
 
     assert analysis.contradictions == ()
     assert [item.handle for item in analysis.dropped] == ["互斥对子 2↔2"]
+
+
+def web_queries_reply(*queries: dict) -> str:
+    """在最小可用报文上加一串检索词提名（`P17b` §5）。"""
+
+    payload = json.loads(CLAIMS_REPLY)
+    payload["web_queries"] = list(queries)
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def test_analyzer_parses_the_queries_the_model_nominated():
+    """闸门 A：分析者只**提名**，一条都不许自己查（联网要用户在复述卡上拍板）。"""
+
+    gateway = ScriptedModelGateway(
+        replies={
+            "claims": web_queries_reply(
+                {"query": "RBAC 权限模型的主流做法", "why": "要查行业通行的权限模型"}
+            )
+        }
+    )
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert analysis.web_queries == (
+        WebQuery(query="RBAC 权限模型的主流做法", why="要查行业通行的权限模型"),
+    )
+    assert analysis.dropped == ()
+
+
+async def test_no_web_queries_in_the_packet_is_an_empty_tuple():
+    """没提名是常态（老报文里根本没有这把键），不许当成缺字段。"""
+
+    gateway = ScriptedModelGateway(replies={"claims": CLAIMS_REPLY})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert analysis.web_queries == ()
+
+
+async def test_a_fourth_query_is_dropped_with_a_trace_not_a_restart():
+    """越界丢**多出来的那几条** + 留痕，不判死整轮（与席位提名同一个口径）。"""
+
+    gateway = ScriptedModelGateway(
+        replies={
+            "claims": web_queries_reply(
+                *[
+                    {"query": f"第{index}条检索词", "why": "要查外部客观事实"}
+                    for index in range(1, 5)
+                ]
+            )
+        }
+    )
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert [item.query for item in analysis.web_queries] == [
+        "第1条检索词",
+        "第2条检索词",
+        "第3条检索词",
+    ]
+    assert [item.handle for item in analysis.dropped] == ["检索词 第4条检索词"]
+    assert "最多 3 条" in analysis.dropped[0].reason
+
+
+async def test_a_query_without_a_reason_is_dropped_with_a_trace():
+    """没说清"为什么要查外部事实"的那一条丢掉，其余照留。"""
+
+    gateway = ScriptedModelGateway(
+        replies={
+            "claims": web_queries_reply(
+                {"query": "RBAC", "why": "   "},
+                {"query": "订单导出的行业规范", "why": "要查行业标准"},
+            )
+        }
+    )
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+
+    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert [item.query for item in analysis.web_queries] == ["订单导出的行业规范"]
+    assert [item.handle for item in analysis.dropped] == ["检索词 RBAC"]
+    assert "为什么" in analysis.dropped[0].reason

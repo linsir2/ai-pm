@@ -10,6 +10,7 @@ from pmstudio.domain.round.draft import Draft
 from pmstudio.domain.round.opinion import Opinion, SeatReview
 from pmstudio.domain.round.questionnaire import AnswerSet, ListItem, Question, Questionnaire
 from pmstudio.domain.round.step import LEGAL_ADVANCES, MAX_SEAT_ROUNDS, Step, WaitingOn
+from pmstudio.domain.round.web_query import MAX_WEB_QUERIES, WebQuery
 from pmstudio.domain.shared.errors import (
     AlreadyAnswered,
     ContentWithoutEvidence,
@@ -160,6 +161,8 @@ class Round:
         extra_batches: int = 0,
         extra_seat_rounds: int = 0,
         materials: tuple[MaterialRef, ...] = (),
+        web_queries: tuple[WebQuery, ...] = (),
+        web_queries_chosen: tuple[str, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -194,6 +197,10 @@ class Round:
         self._extra_batches = extra_batches
         self._extra_seat_rounds = extra_seat_rounds
         self._materials = tuple(materials)
+        #: 分析者提名的检索词（它只提名，查不查由用户在复述卡上定）
+        self._web_queries = tuple(web_queries)
+        #: 用户在复述卡上勾中的那几条（没勾就是空 = 一次网络调用都没有）
+        self._web_queries_chosen = tuple(web_queries_chosen)
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -447,7 +454,39 @@ class Round:
             raise ShapeError("席位提名不能为空")
         self._nominated_seats = tuple(unique.values())
 
-    def submit_opening(self, *, seats: tuple[str, ...] | list[str]) -> None:
+    @property
+    def web_queries(self) -> tuple[WebQuery, ...]:
+        """分析者提名的检索词（带"为什么"）。它**不是**"要查的"——那要看勾选。"""
+
+        return self._web_queries
+
+    @property
+    def web_queries_chosen(self) -> tuple[str, ...]:
+        """用户在复述卡上勾中的检索词（空 = 不联网）。"""
+
+        return self._web_queries_chosen
+
+    def attach_web_queries(self, items: tuple[WebQuery, ...] | list[WebQuery]) -> None:
+        """挂上分析者提名的检索词：按 query 去重、保序。
+
+        超过 `MAX_WEB_QUERIES` 是**编程错误**（解析层已经丢过一轮并留痕），这里拦住手搓的调用方。
+        """
+
+        unique: dict[str, WebQuery] = {}
+        for item in items:
+            unique.setdefault(item.query, item)
+        if len(unique) > MAX_WEB_QUERIES:
+            raise ShapeError(
+                f"一轮最多 {MAX_WEB_QUERIES} 条检索词提名", count=len(unique)
+            )
+        self._web_queries = tuple(unique.values())
+
+    def submit_opening(
+        self,
+        *,
+        seats: tuple[str, ...] | list[str],
+        web_queries_chosen: tuple[str, ...] | list[str] = (),
+    ) -> None:
         self._require_step(Step.CLAIMS_READY)
         self._require_waiting(WaitingOn.OPENING)
         unique_seats = tuple(dict.fromkeys(seats))
@@ -455,6 +494,10 @@ class Round:
             raise ShapeError("席位编制不能为空")
         self._seats = unique_seats
         self._active_seats = unique_seats  # 开场卡确认：这一趟就是用户编制
+        # 勾选的检索词：去重、去空白、保序（前端可能会手滑，或同一句被勾两次）
+        self._web_queries_chosen = tuple(
+            dict.fromkeys(item.strip() for item in web_queries_chosen if item.strip())
+        )
         self._begin_seat_round()
         self._advance_to(Step.SEATS_RUNNING)
 

@@ -20,6 +20,7 @@ from tests.support.doubles import (
     FixedClock,
     RecordingPrompts,
     RecordingPublisher,
+    RecordingWebSearch,
     ScriptedModelGateway,
     SeqIds,
     StaticSeatCatalog,
@@ -96,6 +97,8 @@ class Harness:
         seat_replies: Mapping[str, str | Sequence[str]] | None = None,
         seats: Sequence[SeatDefinition] | None = None,
         gateway: ModelGateway | None = None,
+        available_tool_keys: frozenset[str] = frozenset({"tavily_api_key"}),
+        web_search: RecordingWebSearch | None = None,
     ) -> None:
         self.documents = InMemoryDocumentRepository()
         self.rounds = InMemoryRoundRepository()
@@ -116,6 +119,14 @@ class Harness:
         self.events = RecordingPublisher()
         self.index = StaticWorkspaceIndex()
         self.seats = StaticSeatCatalog(tuple(seats) if seats else (make_seat(),))
+        # 工具目录用**真实现**（读真 TOML）：判据 `requires` / `max_queries` 是数据，
+        # 用替身就测不出".toml 写错了"这件事（与材料解析器同一个理由）。
+        from pmstudio.bootstrap.container import TOOLS_DIR
+        from pmstudio.infrastructure.tools.catalog import TomlToolCatalog
+
+        self.tools = TomlToolCatalog(TOOLS_DIR)
+        self.available_tool_keys = available_tool_keys
+        self.web_search = web_search or RecordingWebSearch()
         self.analyzer = ClaimAnalyzer(
             model=self.gateway, prompts=self.prompts, catalog=self.seats
         )
@@ -167,6 +178,9 @@ class Harness:
             rounds=self.rounds,
             round_writer=self.rounds,
             catalog=self.seats,
+            tools=self.tools,
+            available_tool_keys=self.available_tool_keys,
+            web_search=self.web_search,
             uow=self.uow,
             clock=self.clock,
             events=self.events,
@@ -284,6 +298,8 @@ class Harness:
             rounds=self.rounds,
             evidence=self.evidences,
             catalog=self.seats,
+            tools=self.tools,
+            available_tool_keys=self.available_tool_keys,
             materials=self.materials,
         )
 
@@ -374,6 +390,8 @@ class Harness:
             evidence=self.evidences,
             index=self.index,
             catalog=self.seats,
+            tools=self.tools,
+            available_tool_keys=self.available_tool_keys,
             checker=self.readiness,
             materials=self.materials,
         )
@@ -406,6 +424,8 @@ class Harness:
                     rounds=self.rounds,
                     evidence=self.evidences,
                     catalog=self.seats,
+                    tools=self.tools,
+                    available_tool_keys=self.available_tool_keys,
                     materials=self.materials,
                 ),
             )

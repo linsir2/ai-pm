@@ -177,6 +177,15 @@ class RoundMaterialView:
 
 
 @dataclass(frozen=True, slots=True)
+class WebQueryView:
+    """复述卡上的一条检索词提名：查什么、为什么查、用户勾没勾。"""
+
+    query: str
+    why: str
+    chosen: bool
+
+
+@dataclass(frozen=True, slots=True)
 class RoundView:
     """一轮的只读投影。"""
 
@@ -209,6 +218,10 @@ class RoundView:
     answer_sets: tuple[AnswerBatchView, ...] = ()
     #: 这一轮**带进提示词**的材料块（工具层 C-2）：界面据此显示材料卡并支持跳转。
     materials: tuple[RoundMaterialView, ...] = ()
+    #: 分析者提名的检索词（**只是提名**；勾了才会真去查）
+    web_queries: tuple[WebQueryView, ...] = ()
+    #: 联网工具现在能不能用（没配密钥就是 False）——复述卡据此决定要不要出现那一栏
+    web_search_available: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -872,6 +885,7 @@ def round_view(
     catalog: SeatCatalog | None = None,
     ledger: EvidenceLedger | None = None,
     materials: Sequence[MaterialPacket] = (),
+    web_search_available: bool = False,
 ) -> RoundView:
     warnings: dict[str, str] = {}
     advisories: tuple[str, ...] = ()
@@ -941,6 +955,22 @@ def round_view(
         form_id=None if questionnaire is None else str(questionnaire.form_id),
         answer_sets=answer_batches(round_),
         materials=round_material_views(round_, materials=materials),
+        web_queries=_web_query_views(round_),
+        web_search_available=web_search_available,
+    )
+
+
+def _web_query_views(round_: Round) -> tuple[WebQueryView, ...]:
+    """提名的检索词 + "用户勾没勾"。
+
+    勾选按**文本**对（用户勾的就是那一句原话）；投影里给一个布尔，
+    是为了刷新之后复述卡还能显示"你勾的是这条"——UI 不用自己维护第二份状态。
+    """
+
+    chosen = set(round_.web_queries_chosen)
+    return tuple(
+        WebQueryView(query=item.query, why=item.why, chosen=item.query in chosen)
+        for item in round_.web_queries
     )
 
 
@@ -998,6 +1028,7 @@ def workspace_view(
     catalog: SeatCatalog | None = None,
     ledger: EvidenceLedger | None = None,
     materials: Sequence[MaterialPacket] = (),
+    web_search_available: bool = False,
     readiness: Sequence[ReadinessItem] = (),
 ) -> WorkspaceView:
     return WorkspaceView(
@@ -1012,6 +1043,7 @@ def workspace_view(
                 catalog=catalog,
                 ledger=ledger,
                 materials=materials,
+                web_search_available=web_search_available,
             )
         ),
         readiness=tuple(readiness_view(item) for item in readiness),
