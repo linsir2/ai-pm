@@ -385,9 +385,18 @@ MATERIAL_SCHEMA_VERSION = 1
 
 
 def material_summary_view(
-    packet: MaterialPacket, *, parser_id: str, parser_version: str
+    packet: MaterialPacket,
+    *,
+    parser_id: str,
+    parser_version: str,
+    chunk_count: int | None = None,
+    chars: int | None = None,
 ) -> MaterialSummaryView:
-    """包 → 列表里的一行。`stale` 是**算出来的**（不存），因为"当前解析器是谁"会变。"""
+    """包 → 列表里的一行。
+
+    `stale` 是**算出来的**（不存），因为"当前解析器是谁"会变；
+    `chunk_count` / `chars` 允许调用方直接给（列表是按 SQL 算的，没把块正文读出来）。
+    """
 
     parsed = packet.parsed
     return MaterialSummaryView(
@@ -397,8 +406,8 @@ def material_summary_view(
         source_ref=parsed.source_ref,
         media_type=parsed.media_type,
         bytes_len=parsed.bytes_len,
-        chunk_count=len(parsed.chunks),
-        chars=sum(len(chunk.text) for chunk in parsed.chunks),
+        chunk_count=len(parsed.chunks) if chunk_count is None else chunk_count,
+        chars=sum(len(chunk.text) for chunk in parsed.chunks) if chars is None else chars,
         parser_id=parsed.parser_id,
         parser_version=parsed.parser_version,
         truncated=parsed.truncated,

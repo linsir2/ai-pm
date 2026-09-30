@@ -37,6 +37,40 @@ CREATE TABLE IF NOT EXISTS evidence_ledgers (
   updated_at TEXT NOT NULL
 );
 
+-- 材料（工具层 C-2）：一份材料一行，**原始字节与抽出的文字都在这儿**。
+-- 为什么留 content：换解析器（docling）时要能重解析，不能让用户重传。
+-- 注意：`content` **永不进任何 API 投影**（`as_json` 没有 bytes 分支，进去就是 500）。
+CREATE TABLE IF NOT EXISTS materials (
+  material_id     TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL,
+  origin          TEXT NOT NULL,
+  title           TEXT NOT NULL,
+  source_ref      TEXT NOT NULL,
+  media_type      TEXT NOT NULL,
+  bytes_len       INTEGER NOT NULL,
+  sha256          TEXT NOT NULL,
+  parser_id       TEXT NOT NULL,
+  parser_version  TEXT NOT NULL,
+  schema_version  INTEGER NOT NULL,
+  truncated       INTEGER NOT NULL,
+  warnings        TEXT NOT NULL,
+  content         BLOB NOT NULL,
+  created_at      TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_materials_dedupe ON materials(project_id, sha256);
+CREATE INDEX IF NOT EXISTS idx_materials_project ON materials(project_id, created_at);
+
+-- 材料块：检索、引用、渲染的单位。块正文只在这里（列表接口不吐它）。
+CREATE TABLE IF NOT EXISTS material_chunks (
+  chunk_id     TEXT PRIMARY KEY,
+  material_id  TEXT NOT NULL REFERENCES materials(material_id) ON DELETE CASCADE,
+  ordinal      INTEGER NOT NULL,
+  text         TEXT NOT NULL,
+  heading_path TEXT NOT NULL,
+  anchor       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_material_chunks_material ON material_chunks(material_id, ordinal);
+
 -- 模型留样（`02` §5.3）：默认不写，`PMSTUDIO_TRACE_MODEL=1` 时才记。
 -- 它不参与业务：写不进去也不影响这一轮；要清就直接 DELETE。
 -- 每次**尝试**一行（重试后成功也留：不然"刚才为什么慢"永远查不到）：
