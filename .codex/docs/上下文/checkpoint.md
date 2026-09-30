@@ -993,3 +993,25 @@ E3 真正缺的是"重试带上次报错"，T1/T2 收口。
    `test_event_stream_sends_heartbeat_when_idle` 补上首帧（界-2）。
 
 **核验**：见 `.codex/runs/2026-09-29/P15验证.md`。
+
+## P16 · 包 C-1 索引层：轮次列表 · 上一轮主张 · 全局搜索（2026-09-30）
+
+**拍板**：作者「都按照你推荐的来」——包 C 先做 **C-1 索引层**（C-2 工具层留后）。
+计划 `docs/plans/2026-09-30-P16-索引层.md`（三个任务：C-1a 轮次列表 / C-1b 上一轮主张 / C-1c 全局搜索）。
+
+| 提交 | 内容 |
+|---|---|
+| `4826c15` | C-1a `WorkspaceIndex.list_rounds` + `ListRounds` + `GET /projects/{id}/rounds`（**端点 21→22**）+ 闭环区 `RoundHistory` |
+| `7cc51b8` | C-1b `RoundHeadView.claim_headlines`（头 3 条主张摘要） |
+| `025f5cb` | C-1c `dto.search_hits` + `WorkspaceIndex.recent_opinions` + `SearchProject` + `GET /projects/{id}/search`（**端点 22→23**）+ 顶栏 `SearchBox` |
+
+**三条只读口径**（回写进 `02` §11.0.27）：① 索引层**不是第二份真相源**——不建表、不缓存、现查现算，
+跨轮的真相源仍是文档与轮次；② **空查询返回空**，绝不"不填就是全量"；到 50 条 `truncated=True`，
+界面写"只显示前 N 条"；③ `json.loads` 坏行**跳过不抛**、老 payload 缺键回落。
+
+**真数据核验**（`/tmp/pmstudio-eval.db` 8 个项目 + `/tmp/pmstudio-p11.db` 老库）：
+轮次列表给出输入摘要 / 主张数 / 问卷数 / 写入版本 / 头三条主张；搜索四类都能命中（`entry` / `feature` /
+`evidence` / `opinion`）、「导出」在长输入项目上 50 条并标 `truncated=True`、空白查询 0 条；
+老库（P10/P11 写的 payload）读回来正常。
+
+**核验**：见 `.codex/runs/2026-09-30/P16验证.md`。

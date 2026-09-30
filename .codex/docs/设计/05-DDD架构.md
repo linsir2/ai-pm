@@ -269,6 +269,8 @@ tests/                domain/ application/ infrastructure/
 | 12 | `POST /rounds/{id}/retry` | 从 `step` 继续，已冻结的卡片不重问 | — | `round.updated` |
 | 13 | `POST /rounds/{id}/dig` | **继续深挖**（P14）：清未确认的草案 + 问卷/席位轮额度各 +1，回到 step=seats_running；席位不重跑，下一趟整合把没问上的题端出来 | 一个事务 | `round.updated` |
 | 14 | `GET /schema` | **现行结构**（P15）：13 章（含说明与槽）+ 功能字段表 + 三处上限。纯函数用例、不注入任何仓储 ⇒ 结构上不可能开事务 | — | — |
+| 15 | `GET /projects/{id}/rounds` | **轮次列表**（P16）：只读 `rounds.payload` 的头部几个键（时间 / 输入摘要 / 主张数 / 问卷数 / 写入版本 / 头 3 条主张），**不建表、不缓存**；坏行跳过不抛 | — | — |
+| 16 | `GET /projects/{id}/search?q=` | **全局搜索**（P16）：文档条目 + 功能 + 出处编号 + 最近 10 轮的席位发言；空查询回空、上限 50 条并明说截断 | — | — |
 
 四个事件，每个都有明确订阅者：
 `round.updated`（界面：步骤与等待状态）、`packet.emitted`（界面：闭环区逐条出现席位发言）、
