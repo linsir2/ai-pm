@@ -11,7 +11,10 @@ from pmstudio.domain.shared.ids import DocumentId, ProjectId, RoundId
 if TYPE_CHECKING:
     from pmstudio.application.commands import RoundCommand
     from pmstudio.application.dto import (
+        MaterialPacket,
+        MaterialSummaryView,
         OpinionSourceView,
+        ParsedMaterial,
         ProjectSummaryView,
         RoundHeadView,
         RoundOutcomeView,
@@ -114,6 +117,34 @@ class EventPublisher(Protocol):
 @runtime_checkable
 class EventStream(Protocol):
     def subscribe(self) -> AsyncIterator[Event]: ...
+
+
+@runtime_checkable
+class MaterialParser(Protocol):
+    """把上传的字节变成**解析草稿**。抽不出文字抛 `UnsupportedMaterial`，不返回空包。"""
+
+    def parse(self, *, filename: str, media_type: str, data: bytes) -> "ParsedMaterial": ...
+
+
+@runtime_checkable
+class MaterialStore(Protocol):
+    """材料的唯一入口/出口。**只有这里能盖章**（material_id / project_id）。"""
+
+    def put(
+        self,
+        *,
+        project_id: ProjectId,
+        parsed: "ParsedMaterial",
+        sha256: str,
+        content: bytes,
+        now: datetime,
+    ) -> "MaterialPacket": ...
+    def get(self, material_id: str) -> "MaterialPacket | None": ...
+    def raw_bytes(self, material_id: str) -> bytes | None: ...
+    def list_for_project(
+        self, project_id: ProjectId, *, parser_id: str = "", parser_version: str = ""
+    ) -> tuple["MaterialSummaryView", ...]: ...
+    def chunk_count(self, material_id: str) -> int: ...
 
 
 @runtime_checkable

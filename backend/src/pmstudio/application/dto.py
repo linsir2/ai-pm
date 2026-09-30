@@ -302,6 +302,122 @@ class SearchResultsView:
 SEARCH_LIMIT = 50
 
 
+# ── 材料信息包（工具层 C-2）：解析器产出、存储层盖章、渲染器消费 ─────────────
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialChunk:
+    """材料里的一个块：检索、引用、渲染都以它为单位。"""
+
+    chunk_id: str
+    ordinal: int
+    text: str
+    #: 章节链（("2 目标", "2.1 非目标")）；抽不出层级就是 ()
+    heading_path: tuple[str, ...]
+    #: 人话锚点："第 3 页" / "第 12–40 行"——引用与跳转都靠它
+    anchor: str
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedMaterial:
+    """解析器的产出：**草稿**（还没有 id、不知道属于哪个项目）。
+
+    盖章（material_id / project_id）只发生在 `MaterialStore.put()`——所以"谁赋值"没有歧义。
+    """
+
+    origin: str  # "upload" | "web_search" | "web_fetch"
+    title: str
+    source_ref: str  # "attachment:需求.md" / URL
+    media_type: str
+    bytes_len: int
+    chunks: tuple[MaterialChunk, ...]
+    parser_id: str  # "local-text" | "pdfminer" | "bs4-html" | "tavily"
+    parser_version: str
+    truncated: bool = False
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialPacket:
+    """一份材料的信息包——**底层唯一可消费的形态**（完整形态只从存储层出来）。"""
+
+    material_id: str
+    project_id: str
+    parsed: ParsedMaterial
+    created_at: datetime
+    schema_version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialSummaryView:
+    """材料列表里的一行：**不带块正文**（50 份 × 400 块不能塞进一个响应）。"""
+
+    material_id: str
+    origin: str
+    title: str
+    source_ref: str
+    media_type: str
+    bytes_len: int
+    chunk_count: int
+    chars: int
+    parser_id: str
+    parser_version: str
+    truncated: bool
+    warnings: tuple[str, ...]
+    #: 这份包是用**旧解析器**读的吗（界面提示"建议重解析"）
+    stale: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialHit:
+    """检索结果：块级，带来源与锚点（不是一段裸文本）。"""
+
+    material_id: str
+    chunk_id: str
+    score: float
+    excerpt: str
+    anchor: str
+    source_ref: str
+
+
+#: 包结构版本：换形状时 +1，`needs_reparse` 会因此判"该重解析"
+MATERIAL_SCHEMA_VERSION = 1
+
+
+def material_summary_view(
+    packet: MaterialPacket, *, parser_id: str, parser_version: str
+) -> MaterialSummaryView:
+    """包 → 列表里的一行。`stale` 是**算出来的**（不存），因为"当前解析器是谁"会变。"""
+
+    parsed = packet.parsed
+    return MaterialSummaryView(
+        material_id=packet.material_id,
+        origin=parsed.origin,
+        title=parsed.title,
+        source_ref=parsed.source_ref,
+        media_type=parsed.media_type,
+        bytes_len=parsed.bytes_len,
+        chunk_count=len(parsed.chunks),
+        chars=sum(len(chunk.text) for chunk in parsed.chunks),
+        parser_id=parsed.parser_id,
+        parser_version=parsed.parser_version,
+        truncated=parsed.truncated,
+        warnings=parsed.warnings,
+        stale=needs_reparse(packet, parser_id=parser_id, parser_version=parser_version),
+    )
+
+
+def needs_reparse(
+    packet: MaterialPacket, *, parser_id: str, parser_version: str
+) -> bool:
+    """这份包该不该用当前解析器重读一遍（C-2c 的 `reparse` 与列表里的提示都用它）。"""
+
+    if packet.schema_version != MATERIAL_SCHEMA_VERSION:
+        return True
+    parsed = packet.parsed
+    return parsed.parser_id != parser_id or parsed.parser_version != parser_version
+
+
 def _blocks_in(section_blocks: Sequence[BlockView]):
     for block in section_blocks:
         yield block

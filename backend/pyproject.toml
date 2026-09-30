@@ -5,9 +5,14 @@ description = "PM Studio —— 单用户产品文档工作台"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.136",
+    "beautifulsoup4>=4.13",
+    "httpx>=0.28",
     "langgraph>=1.2",
     "litellm>=1.102",
+    "lxml>=5.3",
+    "pdfminer.six>=20250506",
     "pydantic>=2.12",
+    "python-multipart>=0.0.20",
     "uvicorn>=0.47",
 ]
 

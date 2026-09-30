@@ -43,6 +43,40 @@ class PacketParseError(ApplicationError):
         self.purpose = purpose
 
 
+class UnsupportedMaterial(ApplicationError):
+    """这份材料读不了（类型不支持，或者里面抽不出文字）。
+
+    **明确报错，不静默存空**：抽不出文字的材料如果悄悄存成空包，后面所有人都会以为
+    "这份材料读过了"（工具层 C-2 的口径之一）。
+    """
+
+    def __init__(self, message: str, **details: object) -> None:
+        super().__init__(message, code="unsupported_material", **details)
+
+
+class MaterialTooLarge(ApplicationError):
+    """材料超过大小上限（单份 / 单项目 / 单轮）。"""
+
+    def __init__(self, message: str, **details: object) -> None:
+        super().__init__(message, code="material_too_large", **details)
+
+
+class ToolCallFailed(ApplicationError):
+    """工具（联网检索等）调用失败：超时 / 鉴权 / 供应商错误 / 回包不是 JSON。
+
+    与 `ModelCallFailed` 分开：工具失败**不判死整轮**（留痕继续跑），模型失败才走重试那条路。
+    """
+
+    def __init__(
+        self, message: str, *, tool_id: str, status: int | None = None, **details: object
+    ) -> None:
+        super().__init__(
+            message, code="tool_call_failed", tool_id=tool_id, status=status, **details
+        )
+        self.tool_id = tool_id
+        self.status = status
+
+
 class ModelCallFailed(ApplicationError):
     """网关调用本身失败（超时 / 鉴权 / 供应商错误）。
 

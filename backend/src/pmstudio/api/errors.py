@@ -12,6 +12,11 @@ CODE_STATUS = {
     "model_call_failed": 502,
     "model_packet_unparsable": 502,
     "round_busy": 409,
+    # 工具层（C-2）：材料读不了 = 422（是内容问题，不是服务器故障）；太大 = 413
+    "unsupported_material": 422,
+    "material_too_large": 413,
+    # 工具调用失败 = 502（与模型调用失败同一档：上游不通）
+    "tool_call_failed": 502,
 }
 
 
