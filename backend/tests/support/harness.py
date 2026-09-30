@@ -280,7 +280,12 @@ class Harness:
     def get_round(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetRound
 
-        return GetRound(rounds=self.rounds, evidence=self.evidences, catalog=self.seats)
+        return GetRound(
+            rounds=self.rounds,
+            evidence=self.evidences,
+            catalog=self.seats,
+            materials=self.materials,
+        )
 
     def get_versions(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetVersions
@@ -370,6 +375,7 @@ class Harness:
             index=self.index,
             catalog=self.seats,
             checker=self.readiness,
+            materials=self.materials,
         )
 
     def list_projects(self):  # type: ignore[no-untyped-def]
@@ -397,7 +403,10 @@ class Harness:
                 retry_round=self.retry_round(),
                 dig_round=self.dig_round(),
                 get_round=GetRound(
-                    rounds=self.rounds, evidence=self.evidences, catalog=self.seats
+                    rounds=self.rounds,
+                    evidence=self.evidences,
+                    catalog=self.seats,
+                    materials=self.materials,
                 ),
             )
         return self._runner

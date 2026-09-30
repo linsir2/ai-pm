@@ -12,7 +12,13 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import DroppedItem, DropSource, Round, SeatNomination
+from pmstudio.domain.round.round import (
+    DroppedItem,
+    DropSource,
+    MaterialRef,
+    Round,
+    SeatNomination,
+)
 from pmstudio.domain.shared.ids import (
     DocumentId,
     DraftId,
@@ -33,6 +39,7 @@ from tests.support.builders import (
     document_with_feature,
     make_claim,
     make_document,
+    make_material_packet,
     make_round,
     make_seat,
 )
@@ -756,6 +763,41 @@ def test_answer_sets_projection_counts_each_batch_and_keeps_the_text():
 
 def test_a_round_that_never_asked_has_no_answer_sets():
     assert dto.round_view(make_round()).answer_sets == ()
+
+
+def test_round_view_shows_the_material_chunks_that_went_in():
+    """界面要知道"这一轮带了哪份材料的哪几块、它们的编号与锚点"（工具层 C-2）。"""
+
+    round_ = make_round()
+    round_.add_materials(
+        (
+            MaterialRef(material_id="m1", chunk_id="m1#c00", eid=EvidenceId("E9")),
+            MaterialRef(material_id="m1", chunk_id="m1#c01", eid=EvidenceId("E10")),
+        )
+    )
+    packet = make_material_packet("目标：导出", "边界：只给管理员", title="需求.md")
+
+    view = dto.round_view(round_, materials=(packet,))
+
+    assert len(view.materials) == 1
+    card = view.materials[0]
+    assert (card.title, card.source_ref, card.parser_id) == (
+        "需求.md",
+        "attachment:需求.md",
+        "local-text",
+    )
+    assert card.chunk_count == 2
+    assert [chunk.eid for chunk in card.chunks] == ["E9", "E10"]
+    assert [chunk.anchor for chunk in card.chunks] == ["第 1 行", "第 2 行"]
+    assert card.chunks[0].text == "目标：导出"
+
+
+def test_a_round_without_materials_shows_none_even_if_packets_are_passed():
+    """材料是"这一轮带进来的"，不是"项目里有的"——没引用就不显示。"""
+
+    view = dto.round_view(make_round(), materials=(make_material_packet("别的材料"),))
+
+    assert view.materials == ()
 
 
 def test_search_finds_entries_features_ids_and_opinions():

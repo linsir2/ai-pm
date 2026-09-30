@@ -29,7 +29,13 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from tests.support.builders import make_round, make_round_with_contradictions
+from tests.support.builders import (
+    make_material_packet as make_packet,
+)
+from tests.support.builders import (
+    make_round,
+    make_round_with_contradictions,
+)
 
 NOW = datetime(2026, 9, 22, 10, 0)
 PROJECT = ProjectId("p1")
@@ -311,36 +317,6 @@ def test_render_contradictions_says_none_when_there_are_none():
 
 
 # ── 材料信息包的选块与渲染（工具层 C-2）────────────────────────────────
-
-
-def make_packet(*texts: str, title: str = "需求.md", parser_id: str = "local-text"):
-    from pmstudio.application.dto import MaterialChunk, MaterialPacket, ParsedMaterial
-
-    chunks = tuple(
-        MaterialChunk(
-            chunk_id=f"m1#c{index:02d}",
-            ordinal=index,
-            text=text,
-            heading_path=(),
-            anchor=f"第 {index + 1} 行",
-        )
-        for index, text in enumerate(texts)
-    )
-    return MaterialPacket(
-        material_id="m1",
-        project_id="p1",
-        parsed=ParsedMaterial(
-            origin="upload",
-            title=title,
-            source_ref=f"attachment:{title}",
-            media_type="text/markdown",
-            bytes_len=100,
-            chunks=chunks,
-            parser_id=parser_id,
-            parser_version="v1",
-        ),
-        created_at=datetime(2026, 9, 22, 10, 0),
-    )
 
 
 def test_select_chunks_is_the_only_place_that_decides_what_goes_in():

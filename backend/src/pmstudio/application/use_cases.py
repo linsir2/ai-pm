@@ -1784,6 +1784,7 @@ class GetWorkspace:
         index: WorkspaceIndex,
         catalog: SeatCatalog,
         checker: ReadinessChecker,
+        materials: MaterialStore,
     ) -> None:
         self._documents = documents
         self._rounds = rounds
@@ -1791,6 +1792,7 @@ class GetWorkspace:
         self._index = index
         self._catalog = catalog
         self._checker = checker
+        self._materials = materials
 
     async def __call__(self, *, project_id: ProjectId) -> WorkspaceView:
         document = self._documents.get(project_id)
@@ -1806,6 +1808,7 @@ class GetWorkspace:
             seat_titles=titles,
             catalog=self._catalog,
             ledger=ledger,
+            materials=() if round_ is None else _materials_of(round_, store=self._materials),
             readiness=self._checker.check(view),
         )
 
@@ -2113,11 +2116,17 @@ class AbandonRound:
 
 class GetRound:
     def __init__(
-        self, *, rounds: RoundReader, evidence: EvidenceReader, catalog: SeatCatalog
+        self,
+        *,
+        rounds: RoundReader,
+        evidence: EvidenceReader,
+        catalog: SeatCatalog,
+        materials: MaterialStore,
     ) -> None:
         self._rounds = rounds
         self._evidence = evidence
         self._catalog = catalog
+        self._materials = materials
 
     async def __call__(self, *, round_id: RoundId) -> RoundView:
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
@@ -2127,6 +2136,7 @@ class GetRound:
             seat_titles=titles,
             catalog=self._catalog,
             ledger=self._evidence.get(round_.project_id),
+            materials=_materials_of(round_, store=self._materials),
         )
 
 
@@ -2243,6 +2253,19 @@ def external_material_text(round_: Round, *, store: MaterialStore) -> str:
             continue
         entries.append((packet, eids))
     return render_materials(entries).text
+
+
+def _materials_of(round_: Round, *, store: MaterialStore) -> tuple[MaterialPacket, ...]:
+    """这一轮引用过的材料包（按引用顺序，去重）——给 `RoundView.materials` 用。"""
+
+    seen: dict[str, MaterialPacket] = {}
+    for ref in round_.materials:
+        if ref.material_id in seen:
+            continue
+        packet = store.get(ref.material_id)
+        if packet is not None:
+            seen[ref.material_id] = packet
+    return tuple(seen.values())
 
 
 def authorize_named_features(

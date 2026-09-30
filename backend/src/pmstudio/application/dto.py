@@ -151,6 +151,32 @@ class AnswerBatchView:
 
 
 @dataclass(frozen=True, slots=True)
+class RoundMaterialChunkView:
+    """材料卡里的一块：编号（能点回原话）+ 锚点 + 正文。"""
+
+    chunk_id: str
+    eid: str
+    anchor: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class RoundMaterialView:
+    """这一轮带进来的**一份材料**（只含带进来的那些块）。"""
+
+    material_id: str
+    title: str
+    source_ref: str
+    origin: str
+    parser_id: str
+    #: 这份材料总共有多少块（"只带了 3 块 / 共 20 块"靠它）
+    chunk_count: int
+    chunks: tuple[RoundMaterialChunkView, ...]
+    truncated: bool
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RoundView:
     """一轮的只读投影。"""
 
@@ -181,6 +207,8 @@ class RoundView:
     form_id: str | None
     #: 这一轮每一批问卷答了什么（`04-未决.md` F3）。没问过就是空。
     answer_sets: tuple[AnswerBatchView, ...] = ()
+    #: 这一轮**带进提示词**的材料块（工具层 C-2）：界面据此显示材料卡并支持跳转。
+    materials: tuple[RoundMaterialView, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -843,6 +871,7 @@ def round_view(
     seat_titles: Mapping[str, str] = {},
     catalog: SeatCatalog | None = None,
     ledger: EvidenceLedger | None = None,
+    materials: Sequence[MaterialPacket] = (),
 ) -> RoundView:
     warnings: dict[str, str] = {}
     advisories: tuple[str, ...] = ()
@@ -911,7 +940,53 @@ def round_view(
         confirmed_version_no=round_.confirmed_version_no,
         form_id=None if questionnaire is None else str(questionnaire.form_id),
         answer_sets=answer_batches(round_),
+        materials=round_material_views(round_, materials=materials),
     )
+
+
+def round_material_views(
+    round_: Round, *, materials: Sequence[MaterialPacket]
+) -> tuple[RoundMaterialView, ...]:
+    """`Round.materials`（引用）+ 材料包 → 界面要的材料卡。
+
+    只有**这一轮真的引用过**的块才进卡片——材料是"带进来的"，不是"项目里有的"。
+    """
+
+    refs: dict[str, list[tuple[str, str]]] = {}
+    for ref in round_.materials:
+        refs.setdefault(ref.material_id, []).append((ref.chunk_id, str(ref.eid)))
+    by_id = {packet.material_id: packet for packet in materials}
+
+    cards: list[RoundMaterialView] = []
+    for material_id, entries in refs.items():
+        packet = by_id.get(material_id)
+        if packet is None:
+            continue
+        by_chunk = {chunk.chunk_id: chunk for chunk in packet.parsed.chunks}
+        chunks = tuple(
+            RoundMaterialChunkView(
+                chunk_id=chunk_id,
+                eid=eid,
+                anchor=by_chunk[chunk_id].anchor,
+                text=by_chunk[chunk_id].text,
+            )
+            for chunk_id, eid in entries
+            if chunk_id in by_chunk
+        )
+        cards.append(
+            RoundMaterialView(
+                material_id=material_id,
+                title=packet.parsed.title,
+                source_ref=packet.parsed.source_ref,
+                origin=packet.parsed.origin,
+                parser_id=packet.parsed.parser_id,
+                chunk_count=len(packet.parsed.chunks),
+                chunks=chunks,
+                truncated=len(chunks) < len(packet.parsed.chunks),
+                warnings=packet.parsed.warnings,
+            )
+        )
+    return tuple(cards)
 
 
 def workspace_view(
@@ -922,6 +997,7 @@ def workspace_view(
     seat_titles: Mapping[str, str] = {},
     catalog: SeatCatalog | None = None,
     ledger: EvidenceLedger | None = None,
+    materials: Sequence[MaterialPacket] = (),
     readiness: Sequence[ReadinessItem] = (),
 ) -> WorkspaceView:
     return WorkspaceView(
@@ -930,7 +1006,13 @@ def workspace_view(
         round=(
             None
             if round_ is None
-            else round_view(round_, seat_titles=seat_titles, catalog=catalog, ledger=ledger)
+            else round_view(
+                round_,
+                seat_titles=seat_titles,
+                catalog=catalog,
+                ledger=ledger,
+                materials=materials,
+            )
         ),
         readiness=tuple(readiness_view(item) for item in readiness),
     )

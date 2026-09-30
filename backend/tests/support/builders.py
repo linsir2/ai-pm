@@ -32,6 +32,43 @@ def make_document(*, title: str = "订单中台") -> Document:
     return Document.new(document_id=DocumentId("doc1"), project_id=PROJECT, title=title, now=NOW)
 
 
+def make_material_packet(
+    *texts: str,
+    title: str = "需求.md",
+    parser_id: str = "local-text",
+    material_id: str = "m1",
+):
+    """一份已盖章的材料（工具层 C-2）。测试里最常用的材料夹具。"""
+
+    from pmstudio.application.dto import MaterialChunk, MaterialPacket, ParsedMaterial
+
+    chunks = tuple(
+        MaterialChunk(
+            chunk_id=f"{material_id}#c{index:02d}",
+            ordinal=index,
+            text=text,
+            heading_path=(),
+            anchor=f"第 {index + 1} 行",
+        )
+        for index, text in enumerate(texts)
+    )
+    return MaterialPacket(
+        material_id=material_id,
+        project_id=str(PROJECT),
+        parsed=ParsedMaterial(
+            origin="upload",
+            title=title,
+            source_ref=f"attachment:{title}",
+            media_type="text/markdown",
+            bytes_len=100,
+            chunks=chunks,
+            parser_id=parser_id,
+            parser_version="v1",
+        ),
+        created_at=NOW,
+    )
+
+
 def make_claim(
     *,
     text: str = "要做一个订单导出功能",

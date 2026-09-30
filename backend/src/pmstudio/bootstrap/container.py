@@ -205,7 +205,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         rounds=rounds, round_writer=rounds, uow=uow, clock=clock, events=bus
     )
     dig_round = DigRound(rounds=rounds, round_writer=rounds, uow=uow, clock=clock, events=bus)
-    get_round = GetRound(rounds=rounds, evidence=evidences, catalog=catalog)
+    get_round = GetRound(
+        rounds=rounds, evidence=evidences, catalog=catalog, materials=materials
+    )
     runner = RoundRunner(
         start_round=start_round,
         submit_opening=submit_opening,
@@ -236,6 +238,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             index=index,
             catalog=catalog,
             checker=readiness,
+            materials=materials,
         ),
         list_projects=ListProjects(index=index),
         get_round=get_round,
