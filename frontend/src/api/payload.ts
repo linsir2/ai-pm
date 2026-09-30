@@ -5,7 +5,14 @@
    2. 草案默认勾选"你说过的 + 它替你判断的"，**它提议的默认不勾**。 */
 
 import { listFeatures } from "../document/structure";
-import type { AnswerBatchView, ClaimView, DocumentView, DraftView, RoundView } from "./types";
+import type {
+  AnswerBatchView,
+  ClaimView,
+  DocumentView,
+  DraftView,
+  MaterialSummaryView,
+  RoundView,
+} from "./types";
 import { featureFields } from "../state/schema";
 
 export interface AnswerDraft {
@@ -243,4 +250,14 @@ export function integrationSummary(round: RoundView): string {
   if (proposals > 0) parts.push(`出了 ${proposals} 条候选`);
   if (round.list_items.length > 0) parts.push(`${round.list_items.length} 条先记成清单`);
   return parts.length === 0 ? "整合完成" : `整合：${parts.join(" · ")}`;
+}
+
+/** 起轮的请求体：一句话 + 这一轮带进来的材料 id（工具层 C-2）。 */
+export interface StartBody {
+  input: string;
+  material_ids: string[];
+}
+
+export function buildStart(input: string, materials: MaterialSummaryView[]): StartBody {
+  return { input, material_ids: materials.map((item) => item.material_id) };
 }

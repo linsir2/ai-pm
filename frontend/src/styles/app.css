@@ -520,6 +520,66 @@ a {
   margin: var(--space-1) 0 0;
 }
 
+/* 材料（工具层 C-2）：输入框旁边的选择器 + 闭环区/复述卡里的"本轮材料" */
+.materials {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.materials__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.materials__error {
+  color: var(--danger, #b42318);
+  margin: 0;
+}
+
+.materials__list,
+.round-materials__chunks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.materials__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.materials__title {
+  font-weight: 500;
+}
+
+.round-materials {
+  margin: var(--space-3) 0;
+  border-top: var(--hairline);
+  padding-top: var(--space-2);
+}
+
+.round-materials__item summary {
+  cursor: pointer;
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.round-materials__title {
+  font-weight: 500;
+}
+
+.round-materials__text {
+  margin: var(--space-1) 0 var(--space-2);
+  white-space: pre-wrap;
+  max-width: 68ch;
+}
+
 .chapter__body {
   padding-top: var(--space-5);
   border-top: var(--hairline);

@@ -6,6 +6,7 @@ import { seatNominationSummary, selectableLabels, targetOptions } from "../api/p
 import type { DocumentView, RoundView } from "../api/types";
 import { claimLabelText } from "../labels";
 import { EvidenceChip } from "./EvidenceChip";
+import { RoundMaterials } from "./RoundMaterials";
 
 export function OpeningCard({
   round,
@@ -42,6 +43,8 @@ export function OpeningCard({
           下面是它从你这段话里切出来的主张，每条带一个标签（决定怎么处理）和一个去处（决定写进哪）。
           有偏差就在这儿改；改完才开跑席位。
         </p>
+
+        <RoundMaterials materials={round.materials} />
 
         <ul className="claims">
           {round.claims.map((claim) => {

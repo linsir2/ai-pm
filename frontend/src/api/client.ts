@@ -6,6 +6,7 @@ import type {
   DocumentView,
   EditResult,
   EvidenceLookupView,
+  MaterialSummaryView,
   ProjectSummaryView,
   RollbackResult,
   RoundView,
@@ -17,6 +18,12 @@ import type {
 } from "./types";
 
 const BASE = "/api";
+
+/** 起轮的请求体（工具层 C-2 起带材料 id）。 */
+export interface StartBody {
+  input: string;
+  material_ids: string[];
+}
 
 /** 真模型一轮要跑几十秒；给一个宽上限，避免请求永远挂着没人管。 */
 const REQUEST_TIMEOUT_MS = 300_000;
@@ -129,6 +136,29 @@ export const api = {
   /** 这个项目走过的轮次（最新在前）：闭环区顶上那串时间线。 */
   rounds: (projectId: string) => request<RoundHeadView[]>(`/projects/${projectId}/rounds`),
 
+  /** 这个项目有哪些材料（只回摘要，不含块正文）。 */
+  materials: (projectId: string) =>
+    request<MaterialSummaryView[]>(`/projects/${projectId}/attachments`),
+
+  /** 上传一份材料：multipart，解析在后端做（真解析：文本 / PDF / HTML）。 */
+  uploadMaterial: async (projectId: string, file: File): Promise<MaterialSummaryView> => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const response = await fetch(`${BASE}/projects/${projectId}/attachments`, {
+      method: "POST",
+      body: form,          // 不设 Content-Type：让浏览器带 multipart 边界
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      throw new ApiError(
+        typeof body.code === "string" ? body.code : "http_error",
+        typeof body.message === "string" ? body.message : `上传失败（HTTP ${response.status}）`,
+        (body.details as Record<string, unknown> | undefined) ?? {},
+      );
+    }
+    return (await response.json()) as MaterialSummaryView;
+  },
+
   /** 在这个项目里搜：条目 / 功能 / 编号 / 席位发言（F6）。空查询后端直接回空。 */
   search: (projectId: string, query: string) =>
     request<SearchResultsView>(
@@ -158,10 +188,10 @@ export const api = {
       body: "{}",
     }),
 
-  startRound: (projectId: string, input: string) =>
+  startRound: (projectId: string, body: StartBody) =>
     request<RoundView>(`/projects/${projectId}/rounds`, {
       method: "POST",
-      body: JSON.stringify({ input }),
+      body: JSON.stringify(body),
     }),
 
   submitOpening: (roundId: string, body: OpeningBody) =>

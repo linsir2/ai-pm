@@ -292,6 +292,7 @@ export default function App() {
           />
 
           <BottomStrip
+            projectId={project.project_id}
             mode={mode}
             pending={data.pending}
             drawerOpen={
@@ -299,7 +300,10 @@ export default function App() {
               (mode === "questionnaire" || mode === "draft") &&
               round !== null
             }
-            onStartRound={(input) => void data.startRound(input)}
+            materials={data.pendingMaterials}
+            onMaterialUploaded={data.addMaterial}
+            onMaterialRemove={data.removeMaterial}
+            onStartRound={(input) => void data.startRound(input, data.pendingMaterials)}
             onOpenDrawer={() => drafts.setCollapsed(false)}
             onRetry={() => {
               if (round !== null) void data.retry(round.round_id);

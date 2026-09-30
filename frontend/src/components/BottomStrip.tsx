@@ -4,19 +4,31 @@
 import { useState } from "react";
 
 import type { AwaitingMode } from "../api/payload";
+import type { MaterialSummaryView } from "../api/types";
+import { MaterialPicker } from "./MaterialPicker";
 
 export function BottomStrip({
+  projectId,
   mode,
   pending,
   drawerOpen,
   onStartRound,
+  materials = [],
+  onMaterialUploaded,
+  onMaterialRemove,
   onOpenDrawer,
   onRetry,
 }: {
+  /** 当前项目（上传材料要用它拼 URL）。 */
+  projectId: string;
   mode: AwaitingMode;
   pending: string | null;
   drawerOpen: boolean;
   onStartRound: (input: string) => void;
+  /** 这一轮已经选好的材料（上传成功的那些）。 */
+  materials?: MaterialSummaryView[];
+  onMaterialUploaded?: (material: MaterialSummaryView) => void;
+  onMaterialRemove?: (materialId: string) => void;
   onOpenDrawer: () => void;
   onRetry: () => void;
 }) {
@@ -55,6 +67,15 @@ export function BottomStrip({
           }}
         />
         <div className="input__actions">
+          {accepting && onMaterialUploaded !== undefined && onMaterialRemove !== undefined && (
+            <MaterialPicker
+              projectId={projectId}
+              materials={materials}
+              pending={pending !== null}
+              onUploaded={onMaterialUploaded}
+              onRemove={onMaterialRemove}
+            />
+          )}
           <span className="input__hint">
             {accepting
               ? "Ctrl / ⌘ + Enter 提交。会先复述给你看，你确认了才跑席位。"

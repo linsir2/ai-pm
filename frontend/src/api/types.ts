@@ -166,6 +166,8 @@ export interface RoundView {
   form_id: string | null;
   /** 这一轮每一批问卷答了什么（F3）：答了几条、跳了几条、答的是什么。 */
   answer_sets: AnswerBatchView[];
+  /** 这一轮带进提示词的材料块（工具层 C-2）。 */
+  materials: RoundMaterialView[];
 }
 
 export interface AnswerBatchView {
@@ -285,6 +287,8 @@ export interface EvidenceLookupView {
   round_id: string | null;
   seat_id: string | null;
   question_id: string | null;
+  /** 外部材料的指称：`attachment:需求.md#c00` / URL（别的 kind 是 null）。 */
+  external_ref: string | null;
   chain: ChainItemView[];
   used_by: string[];
 }
@@ -325,6 +329,44 @@ export interface SchemaView {
   sections: SectionSchemaView[];
   feature_fields: FeatureFieldSchemaView[];
   limits: LimitsView;
+}
+
+/** 材料（工具层 C-2）。列表与上传回**摘要**（不含块正文）。 */
+export interface MaterialSummaryView {
+  material_id: string;
+  origin: string;
+  title: string;
+  source_ref: string;
+  media_type: string;
+  bytes_len: number;
+  chunk_count: number;
+  chars: number;
+  parser_id: string;
+  parser_version: string;
+  truncated: boolean;
+  warnings: string[];
+  /** 这份材料是用**旧解析器**读的吗（界面提示"建议重解析"）。 */
+  stale: boolean;
+}
+
+export interface RoundMaterialChunkView {
+  chunk_id: string;
+  eid: string;
+  anchor: string;
+  text: string;
+}
+
+/** 本轮材料卡：只含**带进提示词**的那些块。 */
+export interface RoundMaterialView {
+  material_id: string;
+  title: string;
+  source_ref: string;
+  origin: string;
+  parser_id: string;
+  chunk_count: number;
+  chunks: RoundMaterialChunkView[];
+  truncated: boolean;
+  warnings: string[];
 }
 
 /** 时间线上的一行：一轮的头部（不看全文）。 */

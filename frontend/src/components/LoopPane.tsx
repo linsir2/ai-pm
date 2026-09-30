@@ -11,6 +11,7 @@ import { claimLabelText, compactTarget } from "../labels";
 import { labelCounts, rewritesOf } from "../state/progress";
 import { limitsOf } from "../state/schema";
 import { ProgressSteps } from "./ProgressSteps";
+import { RoundMaterials } from "./RoundMaterials";
 import { RoundStatus } from "./RoundStatus";
 import { SeatPacketCard } from "./SeatPacketCard";
 
@@ -53,6 +54,7 @@ export function LoopPane({
         onAbandon={onAbandon}
       />
       <ProgressSteps round={round} limits={limits} />
+      <RoundMaterials materials={round.materials} />
 
       <ol className="timeline">
         <Node index={1} actor="你" title="本轮输入" meta="本轮">

@@ -7,6 +7,7 @@ import {
   buildAnswers,
   buildClaimEdits,
   buildOpeningBody,
+  buildStart,
   defaultAccepted,
   defaultSeats,
   initialClaimEdits,
@@ -17,7 +18,7 @@ import {
   targetOptions,
   unansweredCount,
 } from "./payload";
-import type { DocumentView, RoundView } from "./types";
+import type { DocumentView, MaterialSummaryView, RoundView } from "./types";
 
 const round = {
   round_id: "r1",
@@ -374,5 +375,26 @@ describe("answerBatchSummary", () => {
     expect(answerBatchSummary({ form_id: "f2", answered: 3, skipped: 0, answers: [] })).toBe(
       "已答 3",
     );
+  });
+});
+
+describe("buildStart", () => {
+  it("没选材料就是空的 material_ids（不是 undefined）", () => {
+    expect(buildStart("想做个导出", [])).toEqual({
+      input: "想做个导出",
+      material_ids: [],
+    });
+  });
+
+  it("选了材料就按顺序带上 id", () => {
+    const materials = [
+      { material_id: "m1", title: "需求.md" },
+      { material_id: "m2", title: "spec.pdf" },
+    ] as unknown as MaterialSummaryView[];
+
+    expect(buildStart("按这两份写", materials)).toEqual({
+      input: "按这两份写",
+      material_ids: ["m1", "m2"],
+    });
   });
 });

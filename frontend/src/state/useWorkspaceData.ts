@@ -9,6 +9,7 @@ import { ApiError, api } from "../api/client";
 import type { AnswersBody, EditBody, OpeningBody } from "../api/client";
 import type {
   EditResult,
+  MaterialSummaryView,
   ProjectSummaryView,
   RoundHeadView,
   RoundView,
@@ -49,6 +50,8 @@ export function useWorkspaceData() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResultsView | null>(null);
   const [searchPending, setSearchPending] = useState(false);
+  // 这一轮要带进去的材料（在上传框里选好、还没开轮的那些）
+  const [pendingMaterials, setPendingMaterials] = useState<MaterialSummaryView[]>([]);
   // 我们自己取消掉的那条在途请求会以网络错误回来——别把它当"连不上后端"弹出来
   const abandoning = useRef(false);
   // 点跨轮编号时临时切过去看的那一轮（只读；"回到最新"就清掉）
@@ -231,15 +234,33 @@ export function useWorkspaceData() {
   );
 
   const startRound = useCallback(
-    (input: string) =>
+    (input: string, materials: MaterialSummaryView[] = []) =>
       run("start", async () => {
         const projectId = selected.current;
         if (projectId === null) return;
         setHistoryRound(null); // 推进当前这一轮的动作，先把历史视图关掉
-        dispatch({ type: "round", round: await api.startRound(projectId, input) });
+        dispatch({
+          type: "round",
+          round: await api.startRound(projectId, {
+            input,
+            material_ids: materials.map((item) => item.material_id),
+          }),
+        });
+        setPendingMaterials([]);    // 材料已经随这一轮发出去了
       }),
     [run],
   );
+
+  /** 上传一份材料：成功后挂进"这一轮要带的材料"（还没开轮就能撤掉）。 */
+  const addMaterial = useCallback((material: MaterialSummaryView) => {
+    setPendingMaterials((list) =>
+      list.some((item) => item.material_id === material.material_id) ? list : [...list, material],
+    );
+  }, []);
+
+  const removeMaterial = useCallback((materialId: string) => {
+    setPendingMaterials((list) => list.filter((item) => item.material_id !== materialId));
+  }, []);
 
   const submitOpening = useCallback(
     (roundId: string, body: OpeningBody) =>
@@ -392,6 +413,9 @@ export function useWorkspaceData() {
     searchResults,
     searchPending,
     setSearchQuery,
+    pendingMaterials,
+    addMaterial,
+    removeMaterial,
     historyRound,
     projects,
     booting,
