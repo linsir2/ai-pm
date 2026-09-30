@@ -336,4 +336,6 @@ export interface RoundHeadView {
   claims_count: number;
   questions_count: number;
   confirmed_version_no: number | null;
+  /** 这一轮头 3 条主张的摘要（"上一轮你提过什么"）。 */
+  claim_headlines: string[];
 }

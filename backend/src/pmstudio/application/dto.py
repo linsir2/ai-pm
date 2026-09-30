@@ -219,6 +219,8 @@ class RoundHeadView:
     claims_count: int
     questions_count: int
     confirmed_version_no: int | None
+    #: 头 3 条主张的摘要（"上一轮你提过什么"）；没有就是空
+    claim_headlines: tuple[str, ...] = ()
 
 
 def round_head_view(
@@ -247,6 +249,17 @@ def round_head_view(
             questions_count += _count(form.get("questions"))
 
     version_no = payload.get("confirmed_version_no")
+    headlines: list[str] = []
+    claims = payload.get("claims")
+    if isinstance(claims, Sequence) and not isinstance(claims, str):
+        for claim in claims:
+            if isinstance(claim, Mapping):
+                text = str(claim.get("text") or "").strip()
+                if text:
+                    headlines.append(summarize_line(text))
+            if len(headlines) == 3:
+                break
+
     return RoundHeadView(
         round_id=round_id,
         created_at=created_at,
@@ -255,6 +268,7 @@ def round_head_view(
         claims_count=_count(payload.get("claims")),
         questions_count=questions_count,
         confirmed_version_no=version_no if isinstance(version_no, int) else None,
+        claim_headlines=tuple(headlines),
     )
 
 

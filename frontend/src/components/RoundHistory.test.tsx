@@ -18,6 +18,7 @@ const rounds: RoundHeadView[] = [
     claims_count: 3,
     questions_count: 0,
     confirmed_version_no: 3,
+    claim_headlines: ["导出要有权限"],
   },
   {
     round_id: "r1",
@@ -27,6 +28,7 @@ const rounds: RoundHeadView[] = [
     claims_count: 7,
     questions_count: 5,
     confirmed_version_no: 2,
+    claim_headlines: ["要能按时间筛选", "导出要有权限", "月底前上线"],
   },
 ];
 
@@ -57,6 +59,19 @@ describe("RoundHistory", () => {
     fireEvent.click(screen.getByRole("button", { name: /这个项目走过 2 轮/ }));
 
     expect(screen.getByText(/主张 7 · 问卷 5 · 写入 v2/)).toBeTruthy();
+  });
+
+  it("展开就能看见'上一轮你提过什么'（头三条主张）", () => {
+    render(<RoundHistory rounds={rounds} currentRoundId="r2" onView={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /这个项目走过 2 轮/ }));
+
+    // 两轮都有摘要，所以取第一行（r2 在前面）之外的这一条：按内容找
+    const line = screen.getByText((_, element) =>
+      element?.className === "rounds__claims muted small" &&
+      (element.textContent ?? "").includes("要能按时间筛选"),
+    );
+    expect(line.textContent).toContain("月底前上线");
+    expect(line.textContent).not.toContain("第四条");     // 只带头三条
   });
 
   it("没有轮次就不占地方", () => {

@@ -53,6 +53,11 @@ export function RoundHistory({
                       ? ""
                       : ` · 写入 v${item.confirmed_version_no}`}
                   </span>
+                  {item.claim_headlines.length > 0 && (
+                    <span className="rounds__claims muted small">
+                      你说过：{item.claim_headlines.join(" / ")}
+                    </span>
+                  )}
                 </button>
                 {here && <span className="muted small">（看的就是这一轮）</span>}
               </li>

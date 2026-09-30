@@ -756,6 +756,32 @@ def test_a_round_that_never_asked_has_no_answer_sets():
     assert dto.round_view(make_round()).answer_sets == ()
 
 
+def test_round_head_keeps_the_first_three_claim_headlines():
+    """跨轮可见的"上一轮你提过什么"：头 3 条，各自压一行；没有就是空。"""
+
+    head = dto.round_head_view(
+        round_id="r1",
+        step="done",
+        created_at=NOW,
+        payload={
+            "user_input": "想做个订单导出",
+            "claims": [
+                {"text": "  要能按时间筛选  "},
+                {"text": "导出要有权限"},
+                {"text": "月底前上线"},
+                {"text": "第四条不该出现"},
+            ],
+        },
+    )
+
+    assert head.claim_headlines == ("要能按时间筛选", "导出要有权限", "月底前上线")
+
+    nothing = dto.round_head_view(
+        round_id="r2", step="started", created_at=NOW, payload={"user_input": "x", "claims": []}
+    )
+    assert nothing.claim_headlines == ()
+
+
 def test_round_head_view_reads_only_the_head_and_survives_old_rows():
     """时间线的一行：输入压一行、数主张与题数；老行缺键就回落，不抛。"""
 
