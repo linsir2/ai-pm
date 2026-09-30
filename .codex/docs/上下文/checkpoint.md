@@ -1019,3 +1019,35 @@ E3 真正缺的是"重试带上次报错"，T1/T2 收口。
 老库（P10/P11 写的 payload）读回来正常。
 
 **核验**：见 `.codex/runs/2026-09-30/P16验证.md`。
+
+## P17 · 包 C-2a · 工具层上半：材料信息包 + 上传（2026-09-30，**进行中**）
+
+**拍板**：作者「都按照你推荐的来」+「不要假实现」，并按我在 §11 的两条建议执行：
+**原始字节进 SQLite**（换解析器要能重解析）、**块级编号且只给带进提示词的块发号**。
+方案（v3，含审阅 16 条）`docs/plans/2026-09-30-P17-工具层.md`。
+
+**已完成（C-2a 后台全通）**：
+
+| 提交 | 内容 |
+|---|---|
+| `9b5a7c9` | T1 材料信息包 + `LocalMaterialParser`（UTF-8 / pdfminer / bs4+lxml，切块带锚点） |
+| `9ef8ac4` | T2 存储：`materials`（含原始字节）+ `material_chunks`，按 `(project, sha256)` 去重，列表只回摘要 |
+| `24c8a90` | T4 `select_chunks`（唯一决策点）+ `render_materials` / `render_web_results`（预算截断照实说） |
+| `d6dec71` | T3 材料进本轮：选块 → 只给带进去的块发号 → `Round.materials` → 三处提示词 `$external_material` 槽 |
+| `2dcfa23` | T5 上传/列出端点（multipart 真解析，**端点 22→23**）+ 用例上限与去重 |
+| `250c426` | 真跑抓到的修复：坏 PDF/网页报 `UnsupportedMaterial`(422)，不许漏成 500 |
+
+**真核验**（`/tmp/p17_material_drive.py`，真 SQLite + 真解析器 + 真 multipart）：
+上传 `需求.md`（local-text，2 块）与 `spec.pdf`（pdfminer，1 块）→ 列表只回摘要 →
+起轮带这两份 → 真库 payload 里 `materials = [(m-…9b2d#c00, E1), (…#c01, E2), (m-…4ed1#c00, E3)]`，
+账本里三条 `external`，`external_ref` 分别是 `attachment:需求.md#c00` / `#c01` / `attachment:spec.pdf#c00`，
+原文片段就是真抽出来的文字（PDF 那份抽到 `Hello export`）。
+
+**本批改过的既有测试（3 条，都是契约变更不是迁就实现）**：
+① `test_prompt_library_renders_slots_and_reports_missing`（analyzer 多一个槽，它逐个列出槽名）；
+② `test_round_command_holds_no_business_state`（命令白名单加 `material_ids`——它与 `user_input`/`seats` 同类）；
+③ P16 那批同类：见该节。
+
+**还没做**：T6 前端（输入框上传、材料卡）、`RoundView.materials` 投影（UI 契约，T6 的前置）、
+C-2b 联网（T7 目录与配置 → T8 Tavily → T9 分析者提名+复述卡 → T10 执行与落出处 → T11 真跑）。
+Tavily 密钥**已验证可用**（HTTP 200，单条 content ≈ 1.1k 字符），因此把检索单条截到 300 字。
