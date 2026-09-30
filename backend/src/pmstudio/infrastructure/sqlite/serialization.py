@@ -24,7 +24,14 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import DroppedItem, DropSource, Failure, Round, SeatNomination
+from pmstudio.domain.round.round import (
+    DroppedItem,
+    DropSource,
+    Failure,
+    MaterialRef,
+    Round,
+    SeatNomination,
+)
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
@@ -573,6 +580,15 @@ def round_to_payload(round_: Round) -> dict:
         "failure": _failure_to_json(round_.failure),
         "confirmed_version_no": round_.confirmed_version_no,
         "abandon_reason": round_.abandon_reason,
+        # 这一轮带进提示词的材料块（老行没有这把键 → 空）
+        "materials": [
+            {
+                "material_id": item.material_id,
+                "chunk_id": item.chunk_id,
+                "eid": str(item.eid),
+            }
+            for item in round_.materials
+        ],
     }
 
 
@@ -631,6 +647,14 @@ def round_from_payload(
         # 老行里没有这个键（dig 的额度是后加的）：0
         extra_batches=payload.get("extra_batches") or 0,
         extra_seat_rounds=payload.get("extra_seat_rounds") or 0,
+        materials=tuple(
+            MaterialRef(
+                material_id=item["material_id"],
+                chunk_id=item["chunk_id"],
+                eid=EvidenceId(item["eid"]),
+            )
+            for item in payload.get("materials") or ()
+        ),
         answer_sets=tuple(answer_set_from_json(item) for item in payload["answer_sets"]),
         draft=None if payload["draft"] is None else draft_from_json(payload["draft"]),
         seat_round_count=payload["seat_round_count"],

@@ -7,6 +7,9 @@ $document_state
 ## 本轮用户输入（原话）
 $user_input
 
+## 本轮的外部材料（**不是用户说的话**）
+$external_material
+
 ## 七种标签（只能从这里选）
 $labels
 

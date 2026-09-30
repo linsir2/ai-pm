@@ -14,6 +14,7 @@ from pmstudio.application.agents import schemas
 from pmstudio.application.context import (
     FEATURE_FIELDS_TEXT,
     LABELS_TEXT,
+    NO_MATERIAL_TEXT,
     SECTION_SLOTS_TEXT,
     SECTIONS_TEXT,
     render_seat_catalog,
@@ -151,6 +152,7 @@ class ClaimAnalyzer:
         "feature_fields",
         "section_slots",
         "seat_catalog",
+        "external_material",
         "schema_json",
         "validation_error",
     )
@@ -167,6 +169,7 @@ class ClaimAnalyzer:
         *,
         user_input: str,
         document_state: str,
+        external_material: str = NO_MATERIAL_TEXT,
         round_id: RoundId | None = None,
         validation_error: str = "",
     ) -> Analysis:
@@ -180,6 +183,7 @@ class ClaimAnalyzer:
             feature_fields=FEATURE_FIELDS_TEXT,
             section_slots=SECTION_SLOTS_TEXT,
             seat_catalog=render_seat_catalog(self._catalog.all()),
+            external_material=external_material,
             schema_json=json.dumps(schema, ensure_ascii=False),
             validation_error=validation_error,
         )

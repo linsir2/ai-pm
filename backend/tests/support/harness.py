@@ -29,6 +29,7 @@ from tests.support.fakes import (
     FakeTransaction,
     InMemoryDocumentRepository,
     InMemoryEvidenceRepository,
+    InMemoryMaterialStore,
     InMemoryRoundRepository,
 )
 
@@ -99,6 +100,7 @@ class Harness:
         self.documents = InMemoryDocumentRepository()
         self.rounds = InMemoryRoundRepository()
         self.evidences = InMemoryEvidenceRepository()
+        self.materials = InMemoryMaterialStore()
         self.uow = FakeTransaction(self.documents, self.rounds, self.evidences)
         # gateway 是给"要卡住/要乱来"的测试用的注入口；平时用脚本化网关
         self.gateway = gateway or ScriptedModelGateway(
@@ -151,6 +153,7 @@ class Harness:
             clock=self.clock,
             ids=self.ids,
             events=self.events,
+            materials=self.materials,
         )
 
     def submit_opening(self):  # type: ignore[no-untyped-def]
@@ -181,6 +184,7 @@ class Harness:
             checker=self.readiness,
             clock=self.clock,
             events=self.events,
+            materials=self.materials,
         )
 
     def integrate_round(self):  # type: ignore[no-untyped-def]
@@ -200,6 +204,7 @@ class Harness:
             clock=self.clock,
             ids=self.ids,
             events=self.events,
+            materials=self.materials,
         )
 
     def submit_answers(self):  # type: ignore[no-untyped-def]

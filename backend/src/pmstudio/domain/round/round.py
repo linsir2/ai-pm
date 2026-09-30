@@ -53,6 +53,24 @@ class SeatNomination:
             raise ShapeError("席位提名必须写清为什么请它", seat_id=self.seat_id)
 
 
+@dataclass(frozen=True, slots=True)
+class MaterialRef:
+    """这一轮**带进提示词**的材料块：来源 + 块 + 账本里那条 `external` 出处的编号。
+
+    只放这三个字段。锚点、正文都在材料块里（`MaterialChunk`）——放这儿就是第二份真相源。
+    """
+
+    material_id: str
+    chunk_id: str
+    eid: EvidenceId
+
+    def __post_init__(self) -> None:
+        if not self.material_id.strip():
+            raise ShapeError("材料引用必须带 material_id")
+        if not self.chunk_id.strip():
+            raise ShapeError("材料引用必须带 chunk_id")
+
+
 class DropSource(StrEnum):
     """留痕是谁发现的。"""
 
@@ -141,6 +159,7 @@ class Round:
         proposal_ignore_streak: int = 0,
         extra_batches: int = 0,
         extra_seat_rounds: int = 0,
+        materials: tuple[MaterialRef, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -174,6 +193,7 @@ class Round:
         self._proposal_ignore_streak = proposal_ignore_streak
         self._extra_batches = extra_batches
         self._extra_seat_rounds = extra_seat_rounds
+        self._materials = tuple(materials)
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -682,6 +702,22 @@ class Round:
         """随之放宽的席位轮额度（每一批答案后面都要跟一趟席位轮）。"""
 
         return self._extra_seat_rounds
+
+    @property
+    def materials(self) -> tuple[MaterialRef, ...]:
+        """这一轮**带进提示词**的外部材料块（附件与检索结果同一条路）。"""
+
+        return self._materials
+
+    def add_materials(self, refs: tuple[MaterialRef, ...] | list[MaterialRef]) -> None:
+        """记下这一轮带进来的材料块。不能为空（空就不是"带进来了"）；同一块只留一次。"""
+
+        refs = tuple(refs)
+        if not refs:
+            raise ShapeError("材料引用不能为空")
+        known = {ref.chunk_id for ref in self._materials}
+        fresh = [ref for ref in refs if ref.chunk_id not in known]
+        self._materials = self._materials + tuple(fresh)
 
     def dig(self) -> None:
         """从草案卡回到提问：**把这一轮没问上的那些题重新问一遍**（P14 C6）。

@@ -151,7 +151,9 @@ class RoundRunner:
     async def node_start(self, state: RoundState) -> dict[str, Any]:
         command = state["command"]
         round_id = await self._start_round.create(
-            project_id=ProjectId(command.project_id or ""), user_input=command.user_input
+            project_id=ProjectId(command.project_id or ""),
+            user_input=command.user_input,
+            material_ids=command.material_ids,
         )
         return {"round_id": str(round_id)}
 

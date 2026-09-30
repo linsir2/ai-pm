@@ -373,6 +373,8 @@ WEB_BUDGET = 2000
 WEB_SNIPPET_CHARS = 300
 #: 每个块渲染时除了正文还会多一行「[E12] 第 3 页」——算预算时把它算进去，别超太多
 CHUNK_OVERHEAD = 24
+#: 没有材料时提示词里写这句（**不留空节**：空节会让模型以为"材料被省略了"）
+NO_MATERIAL_TEXT = "（这一轮没有外部材料）"
 
 
 def select_chunks(
@@ -418,7 +420,7 @@ def render_materials(
     """
 
     if not entries:
-        return RenderedMaterial(text="（这一轮没有外部材料）", truncated=False, used_chunk_ids=())
+        return RenderedMaterial(text=NO_MATERIAL_TEXT, truncated=False, used_chunk_ids=())
 
     lines: list[str] = []
     used_ids: list[str] = []

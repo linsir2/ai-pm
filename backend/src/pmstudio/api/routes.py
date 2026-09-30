@@ -175,7 +175,12 @@ async def evidence_lookup(request: Request, project_id: str, eid: str):  # type:
 @router.post("/projects/{project_id}/rounds")
 async def start_round(request: Request, project_id: str, body: StartRoundRequest):  # type: ignore[no-untyped-def]
     view = await services_of(request).runner.run(
-        RoundCommand(kind="start", project_id=project_id, user_input=body.input)
+        RoundCommand(
+            kind="start",
+            project_id=project_id,
+            user_input=body.input,
+            material_ids=tuple(body.material_ids),
+        )
     )
     return as_json(view)
 

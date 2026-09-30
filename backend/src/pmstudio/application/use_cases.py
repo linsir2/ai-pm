@@ -42,13 +42,17 @@ from pmstudio.application.context import (
     render_contradictions,
     render_document_state,
     render_existing_entries,
+    render_materials,
     render_reviews,
     seat_entry_handle,
+    select_chunks,
 )
 from pmstudio.application.deliverable import Deliverable, render_markdown
 from pmstudio.application.dto import (
     DiffView,
     EvidenceLookupView,
+    MaterialChunk,
+    MaterialPacket,
     ProjectSummaryView,
     ReadinessItemView,
     RollbackResult,
@@ -88,6 +92,7 @@ from pmstudio.application.ports import (
     Clock,
     EventPublisher,
     IdGenerator,
+    MaterialStore,
     ProjectFactory,
     RoundCanceller,
     SeatCatalog,
@@ -122,7 +127,7 @@ from pmstudio.domain.round.questionnaire import (
     Question,
     QuestionKind,
 )
-from pmstudio.domain.round.round import DroppedItem, DropSource, Round
+from pmstudio.domain.round.round import DroppedItem, DropSource, MaterialRef, Round
 from pmstudio.domain.round.step import Step
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import (
@@ -186,6 +191,7 @@ class StartRound:
         clock: Clock,
         ids: IdGenerator,
         events: EventPublisher,
+        materials: MaterialStore,
     ) -> None:
         self._documents = documents
         self._rounds = rounds
@@ -199,8 +205,17 @@ class StartRound:
         self._clock = clock
         self._ids = ids
         self._events = events
+        self._materials = materials
 
-    async def create(self, *, project_id: ProjectId, user_input: str) -> RoundId:
+    async def create(
+        self,
+        *,
+        project_id: ProjectId,
+        user_input: str,
+        material_ids: Sequence[str] = (),
+    ) -> RoundId:
+        # 材料在**事务外**读（只读查询），选块是纯函数——所以下面那个事务里只有写入。
+        picked, packets = self._pick_materials(material_ids)
         with self._uow:
             self._documents.get(project_id)  # 项目不存在就地失败
             round_id = RoundId(self._ids.new("r"))
@@ -210,9 +225,46 @@ class StartRound:
                 user_input=user_input,
                 now=self._clock.now(),
             )
+            if picked:
+                # 逐块记 `external` 出处：**只有带进这一轮的块才有编号**（口径见 02 §11.0.28）
+                ledger = self._evidence.get(project_id)
+                round_.add_materials(
+                    [
+                        MaterialRef(
+                            material_id=material_id,
+                            chunk_id=chunk.chunk_id,
+                            eid=ledger.record(
+                                kind=EvidenceKind.EXTERNAL,
+                                text=chunk.text,
+                                source=EvidenceSource(
+                                    external_ref=_external_ref(packets[material_id], chunk)
+                                ),
+                                now=self._clock.now(),
+                            ),
+                        )
+                        for material_id, chunk in picked
+                    ]
+                )
+                self._evidence_writer.save(ledger)
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
         return round_id
+
+    def _pick_materials(
+        self, material_ids: Sequence[str]
+    ) -> tuple[tuple[tuple[str, MaterialChunk], ...], dict[str, MaterialPacket]]:
+        """按用户挑的 id 读材料 → 选块（`select_chunks` 是唯一决策点）。"""
+
+        packets: dict[str, MaterialPacket] = {}
+        for material_id in material_ids:
+            if material_id in packets:
+                continue
+            packet = self._materials.get(material_id)
+            if packet is None:
+                raise ShapeError(f"找不到这份材料：{material_id}", material_id=material_id)
+            packets[material_id] = packet
+        picked = select_chunks([packets[item] for item in dict.fromkeys(material_ids)])
+        return picked, packets
 
     async def analyze(self, *, round_id: RoundId) -> None:
         # 读取不开事务：模型调用不能包在事务里，也没必要读到同一快照。
@@ -238,6 +290,7 @@ class StartRound:
                 analysis = await self._analyzer.analyze(
                     user_input=user_input,
                     document_state=document_state,
+                    external_material=external_material_text(round_, store=self._materials),
                     round_id=round_id,
                     validation_error=repair,
                 )
@@ -364,6 +417,7 @@ class RunSeatRound:
         checker: ReadinessChecker,
         clock: Clock,
         events: EventPublisher,
+        materials: MaterialStore,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -377,6 +431,7 @@ class RunSeatRound:
         self._checker = checker
         self._clock = clock
         self._events = events
+        self._materials = materials
 
     async def __call__(self, *, round_id: RoundId) -> None:
         # 读取阶段不开事务：模型调用绝不能包在事务里。
@@ -395,6 +450,7 @@ class RunSeatRound:
         answer_refs = answer_eids(ledger=ledger, round_id=round_id)
         previous = render_reviews(round_.seat_reviews, titles=titles, ledger=ledger)
         known_eids = frozenset(evidence.eid for evidence in ledger.evidences())
+        external_material = external_material_text(round_, store=self._materials)
 
         results = await asyncio.gather(
             *(
@@ -407,6 +463,7 @@ class RunSeatRound:
                     answered=answered_text,
                     known_eids=known_eids,
                     answer_eids=answer_refs,
+                    external_material=external_material,
                 )
                 for seat in pending
             ),
@@ -467,6 +524,7 @@ class RunSeatRound:
         answered: str,
         known_eids: frozenset[EvidenceId],
         answer_eids: dict[str, str] | None = None,
+        external_material: str = "",
     ) -> None:
         """一个席位：调模型（事务外）→ 交回就落库。`with uow` 里没有 await（守卫会拦）。"""
 
@@ -479,6 +537,7 @@ class RunSeatRound:
                     claims=claims,
                     opinions_so_far=opinions_so_far,
                     answered=answered,
+                    external_material=external_material,
                     known_eids=known_eids,
                     answer_eids=answer_eids or {},
                     round_id=round_id,
@@ -832,6 +891,7 @@ class IntegrateRound:
         clock: Clock,
         ids: IdGenerator,
         events: EventPublisher,
+        materials: MaterialStore,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -846,6 +906,7 @@ class IntegrateRound:
         self._clock = clock
         self._ids = ids
         self._events = events
+        self._materials = materials
 
     async def __call__(self, *, round_id: RoundId) -> None:
         result = await self._integrate_with_repair(round_id=round_id)
@@ -1102,6 +1163,7 @@ class IntegrateRound:
                     answered=answered,
                     skipped=skipped,
                     entry_ids=render_existing_entries(document),
+                    external_material=external_material_text(round_, store=self._materials),
                     validation_error=validation_error,
                     round_id=round_id,
                     authorized_features=authorized_features,
@@ -2076,6 +2138,34 @@ def _system_defaults(
                 now=now,
             )
     return defaults
+
+
+def _external_ref(packet: MaterialPacket, chunk: MaterialChunk) -> str:
+    """材料块在账本里的"外部指称"：`attachment:需求.md#c00` / `https://…`（URL 不加后缀）。"""
+
+    source_ref = packet.parsed.source_ref
+    if source_ref.startswith("http"):
+        return source_ref
+    return f"{source_ref}#c{chunk.ordinal:02d}"
+
+
+def external_material_text(round_: Round, *, store: MaterialStore) -> str:
+    """把这一轮带进来的材料渲染成提示词那一段（三个智能体共用同一个渲染器）。
+
+    没有任何材料时返回 `context.NO_MATERIAL_TEXT`——**不留空节**（空节会让模型以为材料被省略了）。
+    """
+
+    by_material: dict[str, dict[str, EvidenceId]] = {}
+    for ref in round_.materials:
+        by_material.setdefault(ref.material_id, {})[ref.chunk_id] = ref.eid
+    entries: list[tuple[MaterialPacket, dict[str, EvidenceId]]] = []
+    for material_id, eids in by_material.items():
+        packet = store.get(material_id)
+        if packet is None:
+            # 材料不在了（将来允许删材料时会出现）：不编内容，跳过；界面另行提示
+            continue
+        entries.append((packet, eids))
+    return render_materials(entries).text
 
 
 def authorize_named_features(

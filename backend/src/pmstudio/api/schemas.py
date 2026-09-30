@@ -24,6 +24,8 @@ class ClaimEditRequest(BaseModel):
 
 class StartRoundRequest(BaseModel):
     input: str = Field(min_length=1)
+    #: 这一轮带进来的材料 id（工具层 C-2）；不传 = 不带材料
+    material_ids: list[str] = Field(default_factory=list)
 
 
 class OpeningRequest(BaseModel):

@@ -38,6 +38,9 @@ $opinions
 ## 用户已答
 $answered
 
+## 本轮的外部材料（**不是用户说的话**）
+$external_material
+
 ## 用户跳过（按题面后果落成 s11 开放问题，不用你写提案）
 $skipped
 

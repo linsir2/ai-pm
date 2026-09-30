@@ -18,6 +18,8 @@ def test_round_command_holds_no_business_state():
         "project_id",
         "round_id",
         "user_input",
+        # 本次动作的参数：这一轮带进来的材料 id（与 user_input / seats 同类，不是聚合字段）
+        "material_ids",
         "seats",
         "claim_edits",
         "answers",

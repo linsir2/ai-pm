@@ -7,7 +7,11 @@ import json
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.context import FEATURE_FIELDS_TEXT, SECTION_SLOTS_TEXT
+from pmstudio.application.context import (
+    FEATURE_FIELDS_TEXT,
+    NO_MATERIAL_TEXT,
+    SECTION_SLOTS_TEXT,
+)
 from pmstudio.application.ports import ModelGateway, ModelMessage, ModelRequest, PromptLibrary
 from pmstudio.domain.shared.ids import RoundId
 
@@ -91,6 +95,7 @@ class Integrator:
         "answered",
         "skipped",
         "entry_ids",
+        "external_material",
         "limits",
         "feature_fields",
         "section_slots",
@@ -115,6 +120,7 @@ class Integrator:
         answered: str,
         skipped: str,
         entry_ids: str,
+        external_material: str = NO_MATERIAL_TEXT,
         validation_error: str = "",
         round_id: RoundId | None = None,
         authorized_features: str = "",
@@ -131,6 +137,7 @@ class Integrator:
             answered=answered,
             skipped=skipped,
             entry_ids=entry_ids,
+            external_material=external_material,
             limits=LIMITS_TEXT,
             feature_fields=FEATURE_FIELDS_TEXT,
             section_slots=SECTION_SLOTS_TEXT,

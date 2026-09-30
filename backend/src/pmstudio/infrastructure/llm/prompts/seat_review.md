@@ -13,6 +13,9 @@ $opinions_so_far
 ## 用户已经答过的题
 $answered
 
+## 本轮的外部材料（**不是用户说的话**）
+$external_material
+
 ## 意见只有两种形态
 - question：我判断这里缺一个信息，**而且这个信息只有用户能给**。
 - judgment：我判断这里应该是什么，依据是什么。

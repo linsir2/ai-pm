@@ -49,6 +49,7 @@ from pmstudio.infrastructure.llm.litellm_gateway import LiteLLMGateway
 from pmstudio.infrastructure.llm.prompt_library import FilePromptLibrary
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.sqlite import database
+from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
 from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
 from pmstudio.infrastructure.sqlite.repositories import (
@@ -97,6 +98,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
+    materials = SqliteMaterialStore(connection, ids=ids)
     index = SqliteWorkspaceIndex(connection)
     uow = SqliteUnitOfWork(connection)
 
@@ -133,6 +135,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         clock=clock,
         ids=ids,
         events=bus,
+        materials=materials,
     )
     submit_opening = SubmitOpening(
         rounds=rounds,
@@ -155,6 +158,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         checker=readiness,
         clock=clock,
         events=bus,
+        materials=materials,
     )
     integrate_round = IntegrateRound(
         rounds=rounds,
@@ -170,6 +174,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         clock=clock,
         ids=ids,
         events=bus,
+        materials=materials,
     )
     submit_answers = SubmitAnswers(
         rounds=rounds,

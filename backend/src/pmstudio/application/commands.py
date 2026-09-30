@@ -15,6 +15,8 @@ class RoundCommand:
     project_id: str | None = None
     round_id: str | None = None
     user_input: str = ""
+    #: 这一轮带进来的材料（用户在上传框里挑的）；空 = 不带材料
+    material_ids: tuple[str, ...] = ()
     seats: tuple[str, ...] = ()
     claim_edits: tuple[ClaimEdit, ...] = ()
     answers: tuple[AnswerInput, ...] = ()
