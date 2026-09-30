@@ -90,6 +90,24 @@ async def test_health_reports_model():
     assert response.json() == {"status": "ok", "model": "openai/gpt-4o-mini"}
 
 
+async def test_search_endpoint_returns_hits_and_an_empty_query_returns_nothing():
+    """F6：搜得到东西；**空查询回空**（绝不"不填就是全量"）。"""
+
+    app, harness = make_client()
+    async with async_client(app) as client:
+        created = await client.post("/api/projects", json={"title": "订单中台"})
+        project_id = created.json()["project_id"]
+        await client.post(f"/api/projects/{project_id}/rounds", json={"input": "想做个订单导出"})
+        answer = await client.get(f"/api/projects/{project_id}/search", params={"q": "订单导出"})
+        blank = await client.get(f"/api/projects/{project_id}/search")
+
+    assert answer.status_code == 200
+    body = answer.json()
+    assert body["query"] == "订单导出"
+    assert any(hit["kind"] == "evidence" for hit in body["hits"])
+    assert blank.json()["hits"] == []
+
+
 async def test_list_rounds_returns_the_rounds_of_this_project():
     """闭环区顶上那个"这个项目走过哪几轮"由它喂（F4）。"""
 

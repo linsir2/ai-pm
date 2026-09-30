@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { buildEvidenceIndex } from "./api/evidence";
 import { ApiError, api } from "./api/client";
+import type { SearchHitView } from "./api/types";
 import { awaitingMode, buildAnswers, buildOpeningBody } from "./api/payload";
 import { BottomStrip } from "./components/BottomStrip";
 import { DocumentPane } from "./components/DocumentPane";
@@ -98,6 +99,34 @@ export default function App() {
     );
   }, []);
 
+  /** 点搜索结果（F6）：按命中类型各走各的跳法——条目 / 功能 / 编号 / 席位发言。 */
+  const pickSearchHit = useCallback(
+    (hit: SearchHitView) => {
+      if (hit.kind === "opinion") {
+        void data.viewRound(hit.ref);
+        return;
+      }
+      if (hit.kind === "evidence") {
+        jumpToEvidenceById(hit.ref);
+        return;
+      }
+      if (hit.kind === "feature") {
+        setActiveSection("s5");
+        setPendingScroll(`block-${hit.ref}`);
+        return;
+      }
+      const sectionId = doc === null ? null : sectionOfEntry(doc, hit.ref);
+      if (sectionId !== null) {
+        setActiveSection(sectionId);
+        setPendingScroll(`entry-${hit.ref}`);
+        window.setTimeout(() => void jumpToEntry(hit.ref), 320);
+        return;
+      }
+      data.notify("这条内容现在不在文档里（可能在历史版本里）");
+    },
+    [data, doc, jumpToEvidenceById],
+  );
+
   // 手改：三条动作都走同一个入口，改完直接用后端返回的那份文档刷新（不猜）。
   const editApi = useMemo(
     () => ({
@@ -176,6 +205,17 @@ export default function App() {
             onOpenVersions={() => setVersionsOpen(true)}
             theme={theme}
             onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+            search={
+              project === null
+                ? null
+                : {
+                    query: data.searchQuery,
+                    results: data.searchResults,
+                    pending: data.searchPending,
+                    onQueryChange: data.setSearchQuery,
+                    onPick: pickSearchHit,
+                  }
+            }
           />
 
           <SideRail

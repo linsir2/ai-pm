@@ -272,6 +272,142 @@ def round_head_view(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class OpinionSourceView:
+    """一条可被搜到的席位发言（F6）：它出自哪一轮、哪个席位。"""
+
+    round_id: str
+    seat_id: str
+    claim: str
+
+
+@dataclass(frozen=True, slots=True)
+class SearchHitView:
+    """一条搜索结果。`ref` 是"去哪儿找"：条目 id / 块 id / 编号 / 轮次 id。"""
+
+    kind: str  # "entry" | "feature" | "evidence" | "opinion"
+    label: str
+    ref: str
+    where: str
+
+
+@dataclass(frozen=True, slots=True)
+class SearchResultsView:
+    query: str
+    hits: tuple[SearchHitView, ...]
+    truncated: bool
+
+
+#: 一次搜索最多回多少条（超过就明确说"截断了"，不静默丢）
+SEARCH_LIMIT = 50
+
+
+def _blocks_in(section_blocks: Sequence[BlockView]):
+    for block in section_blocks:
+        yield block
+        yield from _blocks_in(block.children)
+
+
+def _where_of(section_id: str, block: BlockView) -> str:
+    """这一块在文档里的地址（形状与 `Target.label()` 一致，便于对照）。"""
+
+    if block.feature_slug is not None and block.field is not None:
+        return f"{section_id}/{block.feature_slug}.{block.field}"
+    if block.feature_slug is not None:
+        return f"{section_id}/{block.feature_slug}"
+    if block.field is not None:
+        return f"{section_id}.{block.field}"
+    return section_id
+
+
+def search_hits(
+    query: str,
+    *,
+    document: DocumentView,
+    evidence: Sequence[tuple[str, str]],
+    opinions: Sequence[OpinionSourceView],
+    limit: int = SEARCH_LIMIT,
+) -> SearchResultsView:
+    """在这个项目里搜（F6）。**纯函数**：现查现算，不建索引、不缓存。
+
+    四条规矩：
+    ① **空查询返回空**——绝不"不填就是全量"；
+    ② 大小写不敏感的子串匹配（单用户够用；不做模糊排序）；
+    ③ 先到先得、到 `limit` 就停，并明确 `truncated=True`；
+    ④ 条目先于功能与出处（人最常找的是"文档里哪句写了"）。
+    """
+
+    needle = query.strip().casefold()
+    if needle == "":
+        return SearchResultsView(query=query, hits=(), truncated=False)
+
+    found: list[SearchHitView] = []
+
+    def full() -> bool:
+        return len(found) > limit
+
+    def add(hit: SearchHitView) -> None:
+        if not full():
+            found.append(hit)
+
+    for section in document.sections:
+        section_id = str(section.section_id)
+        for block in _blocks_in(section.blocks):
+            where = _where_of(section_id, block)
+            if block.feature_slug is not None:
+                # 功能命中：slug / 名称 / **这棵子树里的任何一条内容**（"这个功能里提到过"）
+                name = " ".join(
+                    entry.text
+                    for child in block.children
+                    if child.field == "name"
+                    for entry in child.entries
+                )
+                haystack = " ".join(
+                    [str(block.feature_slug), name]
+                    + [
+                        entry.text
+                        for child in _blocks_in(block.children)
+                        for entry in child.entries
+                    ]
+                )
+                if needle in haystack.casefold():
+                    add(
+                        SearchHitView(
+                            kind="feature",
+                            label=summarize_line(name or str(block.feature_slug)),
+                            ref=str(block.block_id),
+                            where=where,
+                        )
+                    )
+            for entry in block.entries:
+                if needle in entry.text.casefold():
+                    add(
+                        SearchHitView(
+                            kind="entry",
+                            label=summarize_line(entry.text),
+                            ref=str(entry.entry_id),
+                            where=where,
+                        )
+                    )
+
+    for eid, text in evidence:
+        if needle in text.casefold():
+            add(SearchHitView(kind="evidence", label=summarize_line(text), ref=eid, where="出处"))
+
+    for opinion in opinions:
+        if needle in opinion.claim.casefold():
+            add(
+                SearchHitView(
+                    kind="opinion",
+                    label=summarize_line(opinion.claim),
+                    ref=opinion.round_id,
+                    where=opinion.seat_id,
+                )
+            )
+
+    return SearchResultsView(query=query, hits=tuple(found[:limit]), truncated=full())
+
+
 def answer_text(question: Question, answer: Answer) -> str:
     """一条答案的人话写法：「题目 → 选项；备注」。
 

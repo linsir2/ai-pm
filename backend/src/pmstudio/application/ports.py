@@ -11,6 +11,7 @@ from pmstudio.domain.shared.ids import DocumentId, ProjectId, RoundId
 if TYPE_CHECKING:
     from pmstudio.application.commands import RoundCommand
     from pmstudio.application.dto import (
+        OpinionSourceView,
         ProjectSummaryView,
         RoundHeadView,
         RoundOutcomeView,
@@ -132,6 +133,9 @@ class WorkspaceIndex(Protocol):
     def list_rounds(
         self, project_id: ProjectId, *, limit: int = 20
     ) -> tuple["RoundHeadView", ...]: ...
+    def recent_opinions(
+        self, project_id: ProjectId, *, limit_rounds: int = 10
+    ) -> tuple["OpinionSourceView", ...]: ...
 
 
 @runtime_checkable

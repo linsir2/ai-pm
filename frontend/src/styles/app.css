@@ -459,6 +459,67 @@ a {
   color: var(--muted);
 }
 
+/* 顶栏搜索（F6） */
+.search {
+  position: relative;
+  flex: 1;
+  max-width: 320px;
+}
+
+.search__input {
+  width: 100%;
+  padding: 4px var(--space-2);
+  border: var(--hairline);
+  border-radius: 6px;
+  background: var(--surface);
+  color: inherit;
+  font-size: var(--step-1);
+}
+
+.search__panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--surface);
+  border: var(--hairline);
+  border-radius: 8px;
+  box-shadow: var(--shadow, 0 8px 24px rgb(0 0 0 / 12%));
+  padding: var(--space-2);
+}
+
+.search__hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.search__hit {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  text-align: left;
+  background: none;
+  border: none;
+  padding: var(--space-1);
+  cursor: pointer;
+  color: inherit;
+}
+
+.search__label {
+  flex: 1;
+}
+
+.search__empty {
+  margin: var(--space-1) 0 0;
+}
+
 .chapter__body {
   padding-top: var(--space-5);
   border-top: var(--hairline);

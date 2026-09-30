@@ -10,6 +10,7 @@ import sqlite3
 from datetime import UTC, datetime
 
 from pmstudio.application.dto import (
+    OpinionSourceView,
     ProjectSummaryView,
     RoundHeadView,
     RoundOutcomeView,
@@ -313,3 +314,49 @@ class SqliteWorkspaceIndex:
                 )
             )
         return tuple(heads)
+
+    def recent_opinions(
+        self, project_id: ProjectId, *, limit_rounds: int = 10
+    ) -> tuple[OpinionSourceView, ...]:
+        """最近几轮的席位发言（F6 的搜索源之一）。**每一趟都收**（`seat_reviews` 里全在）。
+
+        与 `list_rounds` 同一条只读口径：不建表、不缓存；坏行跳过不抛。
+        """
+
+        rows = self._connection.execute(
+            """
+            SELECT round_id, payload
+            FROM rounds
+            WHERE project_id = ?
+            ORDER BY created_at DESC, round_id DESC
+            LIMIT ?
+            """,
+            (str(project_id), limit_rounds),
+        ).fetchall()
+        found: list[OpinionSourceView] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            reviews = payload.get("seat_reviews")
+            if not isinstance(reviews, list):
+                continue
+            for review in reviews:
+                if not isinstance(review, dict):
+                    continue
+                seat_id = str(review.get("seat_id") or "")
+                opinions = review.get("opinions")
+                if not isinstance(opinions, list):
+                    continue
+                for opinion in opinions:
+                    if not isinstance(opinion, dict):
+                        continue
+                    claim = str(opinion.get("claim") or "").strip()
+                    if claim:
+                        found.append(
+                            OpinionSourceView(
+                                round_id=row["round_id"], seat_id=seat_id, claim=claim
+                            )
+                        )
+        return tuple(found)

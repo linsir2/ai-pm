@@ -339,3 +339,17 @@ export interface RoundHeadView {
   /** 这一轮头 3 条主张的摘要（"上一轮你提过什么"）。 */
   claim_headlines: string[];
 }
+
+/** 一条搜索结果：`ref` 是"去哪儿找"（条目 id / 块 id / 编号 / 轮次 id）。 */
+export interface SearchHitView {
+  kind: "entry" | "feature" | "evidence" | "opinion" | string;
+  label: string;
+  ref: string;
+  where: string;
+}
+
+export interface SearchResultsView {
+  query: string;
+  hits: SearchHitView[];
+  truncated: boolean;
+}

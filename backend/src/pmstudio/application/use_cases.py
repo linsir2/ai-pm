@@ -55,6 +55,7 @@ from pmstudio.application.dto import (
     RoundHeadView,
     RoundView,
     SchemaView,
+    SearchResultsView,
     VersionListView,
     WorkspaceView,
     answer_text,
@@ -64,6 +65,7 @@ from pmstudio.application.dto import (
     readiness_view,
     round_view,
     schema_view,
+    search_hits,
     used_by_entries,
     version_summary_view,
     workspace_view,
@@ -1733,6 +1735,35 @@ class GetWorkspace:
             catalog=self._catalog,
             ledger=ledger,
             readiness=self._checker.check(view),
+        )
+
+
+class SearchProject:
+    """在这个项目里搜（F6）：文档条目 / 功能 / 出处编号 / 最近几轮的席位发言。
+
+    只读三处：文档聚合、账本、轮次索引投影。**没有写端口**，所以它改不了任何东西；
+    也**不建索引表**——现查现算（`02` §11.0.10：跨轮的真相源只有文档与轮次）。
+    """
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        evidence: EvidenceReader,
+        index: WorkspaceIndex,
+    ) -> None:
+        self._documents = documents
+        self._evidence = evidence
+        self._index = index
+
+    async def __call__(self, *, project_id: ProjectId, query: str) -> SearchResultsView:
+        document = self._documents.get(project_id).view()
+        ledger = self._evidence.get(project_id)
+        return search_hits(
+            query,
+            document=document,
+            evidence=tuple((str(item.eid), item.text) for item in ledger.evidences()),
+            opinions=self._index.recent_opinions(project_id),
         )
 
 

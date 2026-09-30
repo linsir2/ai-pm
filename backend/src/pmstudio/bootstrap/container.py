@@ -32,6 +32,7 @@ from pmstudio.application.use_cases import (
     RetryRound,
     RollbackVersion,
     RunSeatRound,
+    SearchProject,
     StartRound,
     SubmitAnswers,
     SubmitOpening,
@@ -231,6 +232,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         get_round=get_round,
         get_schema=GetSchema(),
         list_rounds=ListRounds(index=index),
+        search=SearchProject(documents=documents, evidence=evidences, index=index),
         get_document=GetDocument(documents=documents),
         get_readiness=GetReadiness(documents=documents, checker=readiness),
         export_markdown=ExportMarkdown(

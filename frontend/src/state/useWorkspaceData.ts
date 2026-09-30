@@ -13,6 +13,7 @@ import type {
   RoundHeadView,
   RoundView,
   SchemaView,
+  SearchResultsView,
   WorkspaceEvent,
 } from "../api/types";
 import { setSchema as publishSchema } from "./schema";
@@ -44,6 +45,10 @@ export function useWorkspaceData() {
   const [schema, setSchemaState] = useState<SchemaView | null>(null);
   // 这个项目走过的轮次（F4）：跟着工作区一起刷新——它只读，事件说"这一轮变了"就该重读。
   const [rounds, setRounds] = useState<RoundHeadView[]>([]);
+  // 搜索（F6）：查询与结果都在这里管，防抖 250ms——组件只管画。
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResultsView | null>(null);
+  const [searchPending, setSearchPending] = useState(false);
   // 我们自己取消掉的那条在途请求会以网络错误回来——别把它当"连不上后端"弹出来
   const abandoning = useRef(false);
   // 点跨轮编号时临时切过去看的那一轮（只读；"回到最新"就清掉）
@@ -139,6 +144,35 @@ export function useWorkspaceData() {
   useEffect(() => {
     dispatch({ type: "connection", state: connection });
   }, [connection]);
+
+  useEffect(() => {
+    const projectId = state.projectId;
+    const query = searchQuery.trim();
+    if (projectId === null || query === "") {
+      setSearchResults(null);
+      return;
+    }
+    let alive = true;
+    setSearchPending(true);
+    const timer = window.setTimeout(() => {
+      void api
+        .search(projectId, query)
+        .then((found) => {
+          if (alive) setSearchResults(found);
+        })
+        .catch(() => {
+          // 搜不到/搜挂了都不是错误：面板上什么都不显示就行
+          if (alive) setSearchResults(null);
+        })
+        .finally(() => {
+          if (alive) setSearchPending(false);
+        });
+    }, 250);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery, state.projectId]);
 
   // 事件说"文档变了" / "这一轮变了"，就去把真数据读回来。
   // 写文档会同时改变就绪度（缺的字段补上了），所以整份工作区一起重读——只刷文档会让
@@ -354,6 +388,10 @@ export function useWorkspaceData() {
     state,
     schema,
     rounds,
+    searchQuery,
+    searchResults,
+    searchPending,
+    setSearchQuery,
     historyRound,
     projects,
     booting,

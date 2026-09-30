@@ -189,6 +189,13 @@ async def list_rounds(request: Request, project_id: str, limit: int = 20):  # ty
     )
 
 
+@router.get("/projects/{project_id}/search")
+async def search(request: Request, project_id: str, q: str = ""):  # type: ignore[no-untyped-def]
+    """在这个项目里搜（F6）：条目 / 功能 / 编号 / 席位发言。空查询回空，不回全量。"""
+
+    return as_json(await services_of(request).search(project_id=ProjectId(project_id), query=q))
+
+
 @router.get("/rounds/{round_id}")
 async def get_round(request: Request, round_id: str):  # type: ignore[no-untyped-def]
     view = await services_of(request).get_round(round_id=RoundId(round_id))

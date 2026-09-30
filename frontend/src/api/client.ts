@@ -11,6 +11,7 @@ import type {
   RoundView,
   RoundHeadView,
   SchemaView,
+  SearchResultsView,
   VersionListView,
   WorkspaceView,
 } from "./types";
@@ -127,6 +128,12 @@ export const api = {
 
   /** 这个项目走过的轮次（最新在前）：闭环区顶上那串时间线。 */
   rounds: (projectId: string) => request<RoundHeadView[]>(`/projects/${projectId}/rounds`),
+
+  /** 在这个项目里搜：条目 / 功能 / 编号 / 席位发言（F6）。空查询后端直接回空。 */
+  search: (projectId: string, query: string) =>
+    request<SearchResultsView>(
+      `/projects/${projectId}/search?q=${encodeURIComponent(query)}`,
+    ),
 
   document: (projectId: string) =>
     request<DocumentView>(`/projects/${projectId}/document`),

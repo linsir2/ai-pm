@@ -1,6 +1,13 @@
-import type { DocumentView, ProjectSummaryView, ReadinessItemView } from "../api/types";
+import type {
+  DocumentView,
+  ProjectSummaryView,
+  ReadinessItemView,
+  SearchHitView,
+  SearchResultsView,
+} from "../api/types";
 import { stepText } from "../labels";
 import { Logo } from "./Logo";
+import { SearchBox } from "./SearchBox";
 import { VersionBar } from "./VersionBar";
 
 export function TopBar({
@@ -15,6 +22,7 @@ export function TopBar({
   onOpenVersions,
   theme,
   onToggleTheme,
+  search = null,
 }: {
   projects: ProjectSummaryView[];
   project: ProjectSummaryView | null;
@@ -27,6 +35,14 @@ export function TopBar({
   onOpenVersions?: () => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  /** 搜索框（F6）：有项目才有；没项目时传 null，顶栏就不显示它。 */
+  search?: {
+    query: string;
+    results: SearchResultsView | null;
+    pending: boolean;
+    onQueryChange: (query: string) => void;
+    onPick: (hit: SearchHitView) => void;
+  } | null;
 }) {
   const connectionText =
     connection === "open"
@@ -43,6 +59,8 @@ export function TopBar({
         <span className="wordmark__sub">产品文档工作台</span>
       </span>
       <span className="topbar__divider" />
+
+      {search !== null && <SearchBox {...search} />}
 
       {project !== null && (
         <>

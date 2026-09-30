@@ -173,6 +173,7 @@ class StaticWorkspaceIndex:
         self._latest: dict[str, RoundId] = {}
         self._outcomes: dict[str, list] = {}
         self._heads: dict[str, list] = {}
+        self._opinions: dict[str, list] = {}
 
     def set_summary(self, summary) -> None:  # type: ignore[no-untyped-def]
         self._summaries[summary.project_id] = summary
@@ -204,3 +205,11 @@ class StaticWorkspaceIndex:
 
     def list_rounds(self, project_id: ProjectId, *, limit: int = 20):  # type: ignore[no-untyped-def]
         return tuple(self._heads.get(str(project_id), ())[:limit])
+
+    def set_opinions(self, project_id: str, opinions) -> None:  # type: ignore[no-untyped-def]
+        """测试注入口：最近几轮的席位发言（真实现是读 `rounds.payload.seat_reviews`）。"""
+
+        self._opinions[project_id] = list(opinions)
+
+    def recent_opinions(self, project_id: ProjectId, *, limit_rounds: int = 10):  # type: ignore[no-untyped-def]
+        return tuple(self._opinions.get(str(project_id), ()))

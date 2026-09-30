@@ -30,7 +30,9 @@ from tests.support.builders import (
     NOW,
     ROUND_ID,
     SEAT,
+    document_with_feature,
     make_claim,
+    make_document,
     make_round,
     make_seat,
 )
@@ -754,6 +756,56 @@ def test_answer_sets_projection_counts_each_batch_and_keeps_the_text():
 
 def test_a_round_that_never_asked_has_no_answer_sets():
     assert dto.round_view(make_round()).answer_sets == ()
+
+
+def test_search_finds_entries_features_ids_and_opinions():
+    """F6：一次搜四类东西——文档条目 / 功能 / 出处编号 / 席位发言。"""
+
+    results = dto.search_hits(
+        "导出",
+        document=document_with_feature(one_liner="把订单导出成表格").view(),
+        evidence=(("E7", "用户说：订单要能导出"),),
+        opinions=(
+            dto.OpinionSourceView(
+                round_id="r1", seat_id="seat.data_scale", claim="导出的量级要先定"
+            ),
+        ),
+    )
+
+    kinds = [hit.kind for hit in results.hits]
+    assert "entry" in kinds          # 功能字段里的那句话
+    assert "feature" in kinds        # 功能自己的 slug
+    assert "evidence" in kinds       # 出处原话
+    assert "opinion" in kinds        # 席位发言
+    assert results.truncated is False
+    assert results.query == "导出"
+
+    feature_hit = next(hit for hit in results.hits if hit.kind == "feature")
+    assert feature_hit.ref.startswith("feat-")
+    opinion_hit = next(hit for hit in results.hits if hit.kind == "opinion")
+    assert opinion_hit.ref == "r1"
+
+
+def test_blank_query_returns_nothing_instead_of_everything():
+    results = dto.search_hits(
+        "   ",
+        document=document_with_feature().view(),
+        evidence=(("E7", "什么都搜得到"),),
+        opinions=(),
+    )
+
+    assert results.hits == ()
+
+
+def test_search_stops_at_the_limit_and_says_it_truncated():
+    evidence = tuple((f"E{number}", "导出") for number in range(1, 80))
+
+    results = dto.search_hits(
+        "导出", document=make_document().view(), evidence=evidence, opinions=(), limit=10
+    )
+
+    assert len(results.hits) == 10
+    assert results.truncated is True
 
 
 def test_round_head_keeps_the_first_three_claim_headlines():

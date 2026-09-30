@@ -323,6 +323,13 @@ class Harness:
 
         return ListRounds(index=_RoundHeadIndex(self.rounds))
 
+    def search(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import SearchProject
+
+        return SearchProject(
+            documents=self.documents, evidence=self.evidences, index=self.index
+        )
+
     def get_document(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetDocument
 
@@ -395,6 +402,7 @@ class Harness:
             get_round=self.get_round(),
             get_schema=self.get_schema(),
             list_rounds=self.list_rounds(),
+            search=self.search(),
             get_document=self.get_document(),
             get_readiness=self.get_readiness(),
             export_markdown=self.export_markdown(),
