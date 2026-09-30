@@ -1001,9 +1001,13 @@ E3 真正缺的是"重试带上次报错"，T1/T2 收口。
 
 | 提交 | 内容 |
 |---|---|
-| `4826c15` | C-1a `WorkspaceIndex.list_rounds` + `ListRounds` + `GET /projects/{id}/rounds`（**端点 21→22**）+ 闭环区 `RoundHistory` |
+| `4826c15` | C-1a `WorkspaceIndex.list_rounds` + `ListRounds` + `GET /projects/{id}/rounds`（与 `POST` 共用路径 ⇒ 端点**还是 21**）+ 闭环区 `RoundHistory` |
 | `7cc51b8` | C-1b `RoundHeadView.claim_headlines`（头 3 条主张摘要） |
-| `025f5cb` | C-1c `dto.search_hits` + `WorkspaceIndex.recent_opinions` + `SearchProject` + `GET /projects/{id}/search`（**端点 22→23**）+ 顶栏 `SearchBox` |
+| `025f5cb` | C-1c `dto.search_hits` + `WorkspaceIndex.recent_opinions` + `SearchProject` + `GET /projects/{id}/search`（**端点 21→22**）+ 顶栏 `SearchBox` |
+
+> 更正：`4826c15` / `025f5cb` 两条提交信息里写的"21→22""22→23"是错的——`GET` 与
+> `POST /projects/{id}/rounds` 在 `EXPECTED_PATHS`（集合）里占同一条，所以这一批**净增 1 条**：
+> 21 → **22**。
 
 **三条只读口径**（回写进 `02` §11.0.27）：① 索引层**不是第二份真相源**——不建表、不缓存、现查现算，
 跨轮的真相源仍是文档与轮次；② **空查询返回空**，绝不"不填就是全量"；到 50 条 `truncated=True`，
