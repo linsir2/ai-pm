@@ -90,6 +90,24 @@ async def test_health_reports_model():
     assert response.json() == {"status": "ok", "model": "openai/gpt-4o-mini"}
 
 
+async def test_list_rounds_returns_the_rounds_of_this_project():
+    """闭环区顶上那个"这个项目走过哪几轮"由它喂（F4）。"""
+
+    app, _ = make_client()
+    async with async_client(app) as client:
+        created = await client.post("/api/projects", json={"title": "订单中台"})
+        project_id = created.json()["project_id"]
+        await client.post(f"/api/projects/{project_id}/rounds", json={"input": "想做个订单导出"})
+        response = await client.get(f"/api/projects/{project_id}/rounds")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["step"] == "claims_ready"
+    assert body[0]["claims_count"] == 1
+    assert body[0]["user_input"].startswith("想做个订单导出")
+
+
 async def test_manual_add_with_a_target_writes_the_slot_that_did_not_exist():
     """手改也能给完整 target（`{section_id, field}`）：块还不存在就由 domain 建（F8-①）。"""
 

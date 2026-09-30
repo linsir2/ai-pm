@@ -754,3 +754,40 @@ def test_answer_sets_projection_counts_each_batch_and_keeps_the_text():
 
 def test_a_round_that_never_asked_has_no_answer_sets():
     assert dto.round_view(make_round()).answer_sets == ()
+
+
+def test_round_head_view_reads_only_the_head_and_survives_old_rows():
+    """时间线的一行：输入压一行、数主张与题数；老行缺键就回落，不抛。"""
+
+    head = dto.round_head_view(
+        round_id="r1",
+        step="done",
+        created_at=NOW,
+        payload={
+            "user_input": "  想做订单导出  " + "很长" * 40,
+            "claims": [{"claim_id": "c1"}, {"claim_id": "c2"}],
+            "questionnaire_history": [
+                {"questions": [{"question_id": "q1"}]},
+                {"questions": [{"question_id": "q2"}, {"question_id": "q3"}]},
+            ],
+            "confirmed_version_no": 3,
+        },
+    )
+
+    assert head.round_id == "r1"
+    assert head.step == "done"
+    assert head.created_at == NOW
+    assert head.claims_count == 2
+    assert head.questions_count == 3
+    assert head.confirmed_version_no == 3
+    assert len(head.user_input) <= 61        # 压过一行（带一个省略号）
+    assert "\n" not in head.user_input
+
+    old = dto.round_head_view(
+        round_id="r2",
+        step="seats_running",
+        created_at=NOW,
+        payload={"user_input": "x", "claims": [], "questionnaire": {"questions": []}},
+    )
+    assert old.questions_count == 0
+    assert old.confirmed_version_no is None

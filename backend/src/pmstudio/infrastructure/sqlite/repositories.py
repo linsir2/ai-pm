@@ -9,7 +9,12 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
-from pmstudio.application.dto import ProjectSummaryView, RoundOutcomeView
+from pmstudio.application.dto import (
+    ProjectSummaryView,
+    RoundHeadView,
+    RoundOutcomeView,
+    round_head_view,
+)
 from pmstudio.application.errors import UnknownProject, UnknownRound
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -272,3 +277,39 @@ class SqliteWorkspaceIndex:
                 )
             )
         return tuple(outcomes)
+
+    def list_rounds(
+        self, project_id: ProjectId, *, limit: int = 20
+    ) -> tuple[RoundHeadView, ...]:
+        """这个项目走过的轮次，**最新在前**。与 `recent_rounds` 同一个形状，但给人看。
+
+        两条只读规矩（`02` §11.0.10）：
+        ① **不建表、不缓存**——轮次的真相源是 `rounds` 表本身，这里只是查询入口；
+        ② **坏行跳过，不抛**——老库或手工改坏的 payload 不该让整个项目打不开。
+        """
+
+        rows = self._connection.execute(
+            """
+            SELECT round_id, step, payload, created_at
+            FROM rounds
+            WHERE project_id = ?
+            ORDER BY created_at DESC, round_id DESC
+            LIMIT ?
+            """,
+            (str(project_id), limit),
+        ).fetchall()
+        heads: list[RoundHeadView] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            heads.append(
+                round_head_view(
+                    round_id=row["round_id"],
+                    step=row["step"],
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                    payload=payload,
+                )
+            )
+        return tuple(heads)

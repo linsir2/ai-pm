@@ -28,6 +28,7 @@ from pmstudio.application.use_cases import (
     GetWorkspace,
     IntegrateRound,
     ListProjects,
+    ListRounds,
     RetryRound,
     RollbackVersion,
     RunSeatRound,
@@ -229,6 +230,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         list_projects=ListProjects(index=index),
         get_round=get_round,
         get_schema=GetSchema(),
+        list_rounds=ListRounds(index=index),
         get_document=GetDocument(documents=documents),
         get_readiness=GetReadiness(documents=documents, checker=readiness),
         export_markdown=ExportMarkdown(

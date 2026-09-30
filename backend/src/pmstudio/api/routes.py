@@ -180,6 +180,15 @@ async def start_round(request: Request, project_id: str, body: StartRoundRequest
     return as_json(view)
 
 
+@router.get("/projects/{project_id}/rounds")
+async def list_rounds(request: Request, project_id: str, limit: int = 20):  # type: ignore[no-untyped-def]
+    """这个项目走过的轮次（最新在前）：闭环区顶上那串时间线读它。"""
+
+    return as_json(
+        await services_of(request).list_rounds(project_id=ProjectId(project_id), limit=limit)
+    )
+
+
 @router.get("/rounds/{round_id}")
 async def get_round(request: Request, round_id: str):  # type: ignore[no-untyped-def]
     view = await services_of(request).get_round(round_id=RoundId(round_id))

@@ -10,7 +10,12 @@ from pmstudio.domain.shared.ids import DocumentId, ProjectId, RoundId
 
 if TYPE_CHECKING:
     from pmstudio.application.commands import RoundCommand
-    from pmstudio.application.dto import ProjectSummaryView, RoundOutcomeView, RoundView
+    from pmstudio.application.dto import (
+        ProjectSummaryView,
+        RoundHeadView,
+        RoundOutcomeView,
+        RoundView,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +129,9 @@ class WorkspaceIndex(Protocol):
     def recent_rounds(
         self, project_id: ProjectId, *, limit: int = 5
     ) -> tuple["RoundOutcomeView", ...]: ...
+    def list_rounds(
+        self, project_id: ProjectId, *, limit: int = 20
+    ) -> tuple["RoundHeadView", ...]: ...
 
 
 @runtime_checkable

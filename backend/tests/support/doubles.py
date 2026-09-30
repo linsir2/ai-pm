@@ -172,6 +172,7 @@ class StaticWorkspaceIndex:
         self._summaries: dict[str, ProjectSummaryView] = {}
         self._latest: dict[str, RoundId] = {}
         self._outcomes: dict[str, list] = {}
+        self._heads: dict[str, list] = {}
 
     def set_summary(self, summary) -> None:  # type: ignore[no-untyped-def]
         self._summaries[summary.project_id] = summary
@@ -195,3 +196,11 @@ class StaticWorkspaceIndex:
 
     def recent_rounds(self, project_id: ProjectId, *, limit: int = 5):  # type: ignore[no-untyped-def]
         return tuple(self._outcomes.get(str(project_id), ())[:limit])
+
+    def set_round_heads(self, project_id: str, heads) -> None:  # type: ignore[no-untyped-def]
+        """测试注入口：轮次列表（**最新在前**；真实现是查 `rounds` 表）。"""
+
+        self._heads[project_id] = list(heads)
+
+    def list_rounds(self, project_id: ProjectId, *, limit: int = 20):  # type: ignore[no-untyped-def]
+        return tuple(self._heads.get(str(project_id), ())[:limit])

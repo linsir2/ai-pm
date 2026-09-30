@@ -61,6 +61,32 @@ class InMemoryProjectFactory:
         return document_id
 
 
+class _RoundHeadIndex:
+    """`ListRounds` 在测试里的查询源：把内存仓储里的轮次投影成 `RoundHeadView`。
+
+    与真实现（`SqliteWorkspaceIndex.list_rounds`）同一条口径：最新在前、只读头部几个键。
+    """
+
+    def __init__(self, rounds) -> None:  # type: ignore[no-untyped-def]
+        self._rounds = rounds
+
+    def list_rounds(self, project_id, *, limit: int = 20):  # type: ignore[no-untyped-def]
+        from pmstudio.application.dto import round_head_view
+        from pmstudio.infrastructure.sqlite.serialization import round_to_payload
+
+        rounds = [item for item in self._rounds.all_rounds() if item.project_id == project_id]
+        rounds.sort(key=lambda item: (item.created_at, str(item.round_id)), reverse=True)
+        return tuple(
+            round_head_view(
+                round_id=str(item.round_id),
+                step=str(item.step),
+                created_at=item.created_at,
+                payload=round_to_payload(item),
+            )
+            for item in rounds[:limit]
+        )
+
+
 class Harness:
     def __init__(
         self,
@@ -292,6 +318,11 @@ class Harness:
 
         return GetSchema()
 
+    def list_rounds(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import ListRounds
+
+        return ListRounds(index=_RoundHeadIndex(self.rounds))
+
     def get_document(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetDocument
 
@@ -363,6 +394,7 @@ class Harness:
             list_projects=self.list_projects(),
             get_round=self.get_round(),
             get_schema=self.get_schema(),
+            list_rounds=self.list_rounds(),
             get_document=self.get_document(),
             get_readiness=self.get_readiness(),
             export_markdown=self.export_markdown(),

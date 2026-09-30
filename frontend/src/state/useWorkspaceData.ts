@@ -10,6 +10,7 @@ import type { AnswersBody, EditBody, OpeningBody } from "../api/client";
 import type {
   EditResult,
   ProjectSummaryView,
+  RoundHeadView,
   RoundView,
   SchemaView,
   WorkspaceEvent,
@@ -41,6 +42,8 @@ export function useWorkspaceData() {
   const [pending, setPending] = useState<PendingAction | null>(null);
   // 现行结构（`GET /schema`）：一次会话拉一次。拉不到不影响主流程，界面回落旧默认值。
   const [schema, setSchemaState] = useState<SchemaView | null>(null);
+  // 这个项目走过的轮次（F4）：跟着工作区一起刷新——它只读，事件说"这一轮变了"就该重读。
+  const [rounds, setRounds] = useState<RoundHeadView[]>([]);
   // 我们自己取消掉的那条在途请求会以网络错误回来——别把它当"连不上后端"弹出来
   const abandoning = useRef(false);
   // 点跨轮编号时临时切过去看的那一轮（只读；"回到最新"就清掉）
@@ -50,6 +53,11 @@ export function useWorkspaceData() {
   const loadWorkspace = useCallback(async (projectId: string) => {
     const workspace = await api.workspace(projectId);
     dispatch({ type: "loaded", workspace });
+    // 轮次列表是**另一个只读投影**（不是工作区的一部分）；它失败不该把工作区打崩
+    void api
+      .rounds(projectId)
+      .then(setRounds)
+      .catch(() => setRounds([]));
     return workspace;
   }, []);
 
@@ -345,6 +353,7 @@ export function useWorkspaceData() {
   return {
     state,
     schema,
+    rounds,
     historyRound,
     projects,
     booting,

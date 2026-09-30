@@ -61,6 +61,11 @@ class InMemoryRoundRepository(_InMemoryRepository):
         self.saves += 1
         self._items[round_.round_id] = deepcopy(round_)
 
+    def all_rounds(self) -> tuple[Round, ...]:
+        """按保存顺序给出全部轮次（测试替身专用：真实现是 SQL 的 `ORDER BY`）。"""
+
+        return tuple(deepcopy(item) for item in self._items.values())
+
 
 class InMemoryEvidenceRepository(_InMemoryRepository):
     def __init__(self) -> None:

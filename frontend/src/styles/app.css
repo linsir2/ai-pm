@@ -409,6 +409,56 @@ a {
   align-items: center;
 }
 
+/* 闭环区顶上"这个项目走过哪几轮"（F4） */
+.rounds {
+  border-bottom: var(--hairline);
+  padding: var(--space-2) var(--space-4);
+}
+
+.rounds__toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--step-1);
+}
+
+.rounds__list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.rounds__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.rounds__open {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: var(--space-1) 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+.rounds__open:disabled {
+  cursor: default;
+  color: var(--muted);
+}
+
+.rounds__row--here .rounds__input {
+  color: var(--muted);
+}
+
 .chapter__body {
   padding-top: var(--space-5);
   border-top: var(--hairline);

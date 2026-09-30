@@ -202,6 +202,8 @@ export default function App() {
             round={shownRound}
             doc={doc}
             schema={data.schema}
+            rounds={data.rounds}
+            onViewRound={(roundId) => void data.viewRound(roundId)}
             mode={readingHistory ? null : mode}
             pending={data.pending}
             drafts={drafts}

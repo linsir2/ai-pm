@@ -221,6 +221,74 @@ def test_recent_rounds_returns_newest_first_and_reads_the_tally(repos):
     assert (outcomes[1].proposed_offered, outcomes[1].proposed_accepted) == (1, 0)
 
 
+def test_list_rounds_returns_newest_first_and_skips_broken_rows(tmp_path):
+    """F4 的入口：轮次列表最新在前；payload 坏了的行跳过，不把整次查询打崩。"""
+
+    connection = database.connect(tmp_path / "pmstudio.db")
+    try:
+        rounds = SqliteRoundRepository(connection)
+        index = SqliteWorkspaceIndex(connection)
+        uow = SqliteUnitOfWork(connection)
+        with uow:
+            rounds.save(
+                Round(
+                    round_id=RoundId("r1"),
+                    project_id=PROJECT,
+                    user_input="第一轮：想做个订单导出",
+                    created_at=NOW,
+                    step=Step.DONE,
+                    waiting_on=WaitingOn.NONE,
+                    confirmed_version_no=2,
+                )
+            )
+            rounds.save(
+                Round(
+                    round_id=RoundId("r2"),
+                    project_id=PROJECT,
+                    user_input="第二轮：再加个权限",
+                    created_at=NOW,
+                    step=Step.CLAIMS_READY,
+                    waiting_on=WaitingOn.OPENING,
+                )
+            )
+        connection.execute(
+            "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,"
+            " created_at, updated_at) VALUES ('r-bad', ?, 'started', 'none',"
+            " '{不是 JSON', ?, ?)",
+            (str(PROJECT), NOW.isoformat(), NOW.isoformat()),
+        )
+
+        heads = index.list_rounds(PROJECT, limit=10)
+    finally:
+        connection.close()
+
+    assert [head.round_id for head in heads] == ["r2", "r1"]   # 坏行不在列表里
+    assert heads[0].claims_count == 0
+    assert heads[0].user_input == "第二轮：再加个权限"
+    assert heads[1].confirmed_version_no == 2
+
+
+def test_list_rounds_respects_the_limit_and_the_project(repos):
+    """只取这个项目的；limit 一眼看得出（与 `recent_rounds` 同形，但那是结果投影）。"""
+
+    _, rounds, _, index, uow = repos
+    with uow:
+        for number in range(1, 4):
+            rounds.save(
+                Round(
+                    round_id=RoundId(f"r{number}"),
+                    project_id=PROJECT,
+                    user_input=f"第 {number} 轮",
+                    created_at=NOW,
+                    step=Step.DONE,
+                    waiting_on=WaitingOn.NONE,
+                )
+            )
+
+    assert [head.round_id for head in index.list_rounds(PROJECT, limit=2)] == ["r3", "r2"]
+    assert index.list_rounds(ProjectId("别的项目")) == ()
+
+
 def test_recent_rounds_respects_the_limit(repos):
     _, rounds, _, index, uow = repos
     with uow:

@@ -52,6 +52,7 @@ from pmstudio.application.dto import (
     ProjectSummaryView,
     ReadinessItemView,
     RollbackResult,
+    RoundHeadView,
     RoundView,
     SchemaView,
     VersionListView,
@@ -1733,6 +1734,22 @@ class GetWorkspace:
             ledger=ledger,
             readiness=self._checker.check(view),
         )
+
+
+class ListRounds:
+    """这个项目走过的轮次（F4 + "上一轮的主张"）。
+
+    只读：只注入 `WorkspaceIndex`（查询投影），拿不到任何写端口——所以它不可能改东西。
+    跨轮的真相源仍是轮次表本身，这里只读 payload 的头部几个键。
+    """
+
+    def __init__(self, *, index: WorkspaceIndex) -> None:
+        self._index = index
+
+    async def __call__(
+        self, *, project_id: ProjectId, limit: int = 20
+    ) -> tuple[RoundHeadView, ...]:
+        return self._index.list_rounds(project_id, limit=limit)
 
 
 class GetSchema:

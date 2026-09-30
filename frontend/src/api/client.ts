@@ -9,6 +9,7 @@ import type {
   ProjectSummaryView,
   RollbackResult,
   RoundView,
+  RoundHeadView,
   SchemaView,
   VersionListView,
   WorkspaceView,
@@ -123,6 +124,9 @@ export const api = {
 
   workspace: (projectId: string) =>
     request<WorkspaceView>(`/projects/${projectId}/workspace`),
+
+  /** 这个项目走过的轮次（最新在前）：闭环区顶上那串时间线。 */
+  rounds: (projectId: string) => request<RoundHeadView[]>(`/projects/${projectId}/rounds`),
 
   document: (projectId: string) =>
     request<DocumentView>(`/projects/${projectId}/document`),

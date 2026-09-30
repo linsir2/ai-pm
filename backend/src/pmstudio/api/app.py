@@ -24,6 +24,7 @@ from pmstudio.application.use_cases import (
     GetVersions,
     GetWorkspace,
     ListProjects,
+    ListRounds,
     RollbackVersion,
 )
 from pmstudio.domain.shared.errors import DomainError
@@ -39,6 +40,7 @@ class ApiServices:
     list_projects: ListProjects
     get_round: GetRound
     get_schema: GetSchema
+    list_rounds: ListRounds
     get_document: GetDocument
     get_readiness: GetReadiness
     export_markdown: ExportMarkdown

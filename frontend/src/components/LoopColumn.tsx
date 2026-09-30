@@ -2,17 +2,19 @@
    复述卡是特例——它不是抽屉，它就是这一轮的开场，所以占满整栏。 */
 
 import type { AwaitingMode } from "../api/payload";
-import type { DocumentView, RoundView, SchemaView } from "../api/types";
+import type { DocumentView, RoundHeadView, RoundView, SchemaView } from "../api/types";
 import type { RoundDrafts } from "../state/useRoundDrafts";
 import { DraftDrawer } from "./DraftDrawer";
 import { LoopPane } from "./LoopPane";
 import { OpeningCard } from "./OpeningCard";
 import { QuestionnaireDrawer } from "./QuestionnaireDrawer";
+import { RoundHistory } from "./RoundHistory";
 
 export function LoopColumn({
   round,
   doc,
   schema,
+  rounds = [],
   mode,
   pending,
   drafts,
@@ -24,11 +26,14 @@ export function LoopColumn({
   onDig,
   onRetry,
   onAbandon,
+  onViewRound,
 }: {
   round: RoundView | null;
   doc: DocumentView | null;
   /** `GET /schema` 的投影：只用来取上限常量（拿不到就由下游回落）。 */
   schema: SchemaView | null;
+  /** 这个项目走过的轮次（最新在前）：跨轮的入口（F4）。 */
+  rounds?: RoundHeadView[];
   /** null = 只看不算数（正在看历史轮：不出开场卡、不出抽屉）。 */
   mode: AwaitingMode | null;
   pending: string | null;
@@ -42,6 +47,8 @@ export function LoopColumn({
   onDig: () => void;
   onRetry: () => void;
   onAbandon: () => void;
+  /** 切过去只读看某一轮（复用已有的 `viewRound`）。 */
+  onViewRound: (roundId: string) => void;
 }) {
   const drawerOpen =
     history == null &&
@@ -49,6 +56,11 @@ export function LoopColumn({
 
   return (
     <div className="loop">
+      <RoundHistory
+        rounds={rounds}
+        currentRoundId={round?.round_id ?? null}
+        onView={onViewRound}
+      />
       {history != null && (
         <div className="loop__history">
           <span className="muted small">

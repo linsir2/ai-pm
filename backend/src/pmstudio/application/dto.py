@@ -204,6 +204,60 @@ class RoundOutcomeView:
     proposed_accepted: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class RoundHeadView:
+    """一轮的**头部**（不看全文）：闭环区顶上那串"这个项目走过哪几轮"的一行。
+
+    与 `RoundOutcomeView` 一样只读 `rounds.payload` 的几个键；区别是它给**人**看
+    （输入摘要 / 数 / 版本号），而那个只给 C4 的判据看。
+    """
+
+    round_id: str
+    created_at: datetime
+    step: str
+    user_input: str
+    claims_count: int
+    questions_count: int
+    confirmed_version_no: int | None
+
+
+def round_head_view(
+    *,
+    round_id: str,
+    step: str,
+    created_at: datetime,
+    payload: Mapping[str, object],
+) -> RoundHeadView:
+    """payload → 时间线一行。**纯投影**：缺键回落、坏形状当空，绝不抛。"""
+
+    def _count(value: object) -> int:
+        if isinstance(value, Sequence) and not isinstance(value, str):
+            return len(value)
+        return 0
+
+    history = payload.get("questionnaire_history")
+    if not isinstance(history, Sequence) or isinstance(history, str):
+        # 老行没有历史键：退化成"只有当前这一批"
+        current = payload.get("questionnaire")
+        history = [] if current is None else [current]
+
+    questions_count = 0
+    for form in history:
+        if isinstance(form, Mapping):
+            questions_count += _count(form.get("questions"))
+
+    version_no = payload.get("confirmed_version_no")
+    return RoundHeadView(
+        round_id=round_id,
+        created_at=created_at,
+        step=step,
+        user_input=summarize_line(str(payload.get("user_input") or "")),
+        claims_count=_count(payload.get("claims")),
+        questions_count=questions_count,
+        confirmed_version_no=version_no if isinstance(version_no, int) else None,
+    )
+
+
 def answer_text(question: Question, answer: Answer) -> str:
     """一条答案的人话写法：「题目 → 选项；备注」。
 

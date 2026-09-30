@@ -326,3 +326,14 @@ export interface SchemaView {
   feature_fields: FeatureFieldSchemaView[];
   limits: LimitsView;
 }
+
+/** 时间线上的一行：一轮的头部（不看全文）。 */
+export interface RoundHeadView {
+  round_id: string;
+  created_at: string;
+  step: string;
+  user_input: string;
+  claims_count: number;
+  questions_count: number;
+  confirmed_version_no: number | null;
+}
