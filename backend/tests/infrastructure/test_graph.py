@@ -65,6 +65,11 @@ QUESTION_REPLY = json.dumps(
         ],
         "list_items": [],
         "proposals": [],
+        # 席位那条判断这一趟没被采用——夹具替它申报掉（`02` §11.0.37 的点名重装就
+        # 不会插进来多消耗一次脚本回复，图的那条路径才是这条用例要测的东西）。
+        "dropped_opinions": [
+            {"handle": "seat.data_scale:O1", "reason": "这一趟先不写，留给下一轮"}
+        ],
     },
     ensure_ascii=False,
 )
@@ -87,6 +92,10 @@ DRAFT_REPLY = json.dumps(
                 "evidence_refs": ["E1"],
                 "rationale": "订单含客户信息",
             }
+        ],
+        # 同 `QUESTION_REPLY`：夹具把席位那条判断的去向申报掉。
+        "dropped_opinions": [
+            {"handle": "seat.data_scale:O1", "reason": "与上面那条提案说的是同一件事"}
         ],
     },
     ensure_ascii=False,

@@ -81,6 +81,15 @@ SEAT_REPLY = json.dumps(
     ensure_ascii=False,
 )
 
+#: 夹具补全（`02` §11.0.37）：把席位那几条意见的去向**申报掉**。
+#: 不补的话，"点名重装"会在第一次整合后插进来多消耗一次脚本回复，
+#: 于是第一步就出草案、问卷那一段剧本整个错位。真模型该写成这样。
+SEAT_OPINIONS_ACCOUNTED = [
+    {"handle": f"{seat}:O{index}", "reason": "这一趟先不单列：已并进上面的题或提案"}
+    for seat in ("seat.data_scale", "seat.permissions")
+    for index in (1, 2, 3)
+]
+
 QUESTION_REPLY = json.dumps(
     {
         "questions": [
@@ -116,6 +125,7 @@ QUESTION_REPLY = json.dumps(
         ],
         "list_items": [],
         "proposals": [],
+        "dropped_opinions": SEAT_OPINIONS_ACCOUNTED,
     },
     ensure_ascii=False,
 )
@@ -181,6 +191,7 @@ DRAFT_REPLY = json.dumps(
                 "evidence_refs": ["E3"],
             },
         ],
+        "dropped_opinions": SEAT_OPINIONS_ACCOUNTED,
     },
     ensure_ascii=False,
 )

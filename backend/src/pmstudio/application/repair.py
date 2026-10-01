@@ -8,6 +8,8 @@
    `（隐含于上下文…）` 这类说明被填进 `raw_span` 过两次（L20）。
 """
 
+from collections.abc import Sequence
+
 from pmstudio.application.errors import PacketParseError
 
 #: 说不上具体是哪一种时的兜底话术
@@ -69,7 +71,7 @@ def repair_note(error: PacketParseError) -> str:
         lines.append(
             f"{container} 里**第 {index} 条不是对象**：这一项必须是对象（形状见下面的 schema），"
             "不能是字符串或数字。没内容就不要写占位符——要么给一条真内容，"
-            "要么把这一项删掉（有问题就写成一条疑问）。"
+            "要么把这一项删掉（有问题就把它写成**对应容器里**的一条正经内容）。"
         )
     elif "errors" in details:
         lines.append("过不了 schema 的字段（逐条改）：\n" + _schema_guidance(details["errors"]))
@@ -120,3 +122,29 @@ def _schema_guidance(errors: object, *, limit: int = 4) -> str:
             hint = f"{hint}（允许：{expected}）" if hint else f"允许：{expected}"
         lines.append(f"- {path}：{hint or str(item.get('msg', ''))}")
     return "\n".join(lines) or "字段名与取值都只能取 schema 里列出的那些。"
+
+
+def accounting_note(handles: Sequence[str]) -> str:
+    """没被交代的席位意见 → 一次**点名重装**的话术（`02` §11.0.37）。
+
+    来历（真跑实测）：整合者申报不全，每轮留 8–23 条"既没说丢掉、也没交代落到哪儿"。
+    补提示词那一招没把总量降下来（P22 验证），所以改成**机械兜底**：把缺的那几条
+    点名递回去，要它逐条给去向——与"超限、形状错"用的是同一招（重装一次）。
+
+    只给**地址**（`seat.x:O1`），不给意见正文：正文它在上面的 `$opinions` 里看得到，
+    回喂原串反而可能被照抄（与 `repair_note` 同一条纪律，learnings L20）。
+    """
+
+    listed = "\n".join(f"- {handle}" for handle in handles)
+    return "\n".join(
+        [
+            "上一次的报文里，下面这些席位意见**既没被用起来、也没申报丢弃**"
+            "（系统按「引没引它」逐条核出来的）：",
+            listed,
+            "请只做这一件事：给上面每一条都补上它的去向——",
+            "把某条「判断」用起来了，就把**那条判断自己的出处编号**写进对应提案或题目的 "
+            "evidence_refs（与它依据的编号并列）；",
+            "把某条「疑问」变成了题，就把它的席位条目地址写进那道题的 from_opinions；",
+            "没采用的，就在 dropped_opinions 里逐条写清原因。**一条都不许漏。**",
+        ]
+    )

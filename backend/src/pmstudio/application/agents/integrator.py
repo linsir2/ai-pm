@@ -12,6 +12,7 @@ from pmstudio.application.context import (
     NO_MATERIAL_TEXT,
     SECTION_SLOTS_TEXT,
 )
+from pmstudio.application.errors import PacketParseError
 from pmstudio.application.ports import ModelGateway, ModelMessage, ModelRequest, PromptLibrary
 from pmstudio.domain.shared.ids import RoundId
 
@@ -20,14 +21,19 @@ PURPOSE = "integration"
 
 @dataclass(frozen=True, slots=True)
 class IntegrationOutcome:
-    """整合者这一趟交回的东西：报文 + **容器被截断了几条**。
+    """整合者这一趟交回的东西：报文 + 报文里**没进卡片**的那些条。
 
     截断不是错误（`schemas.parse_packet_trimmed` 的语义）：用例层决定要不要先重装一次，
     溢出最终变成留痕与草案卡上的缺口行（"不静默丢"）。
+
+    `discarded` 是同一类东西的另一半（P23）：容器里**根本不是对象**的元素被摘掉了。
+    席位与主张早就能摘（P22 F17），整合这一包原先不能——因为**摘了没地方记账**；
+    现在用例层有出口了（`Round.dropped` + `Draft.gaps`），所以一起开。
     """
 
     packet: schemas.IntegrationPacket
     overflow: tuple[schemas.Overflow, ...] = ()
+    discarded: tuple[schemas.Discarded, ...] = ()
 
 
 LIMITS_TEXT = "\n".join(
@@ -161,7 +167,21 @@ class Integrator:
                 metadata={} if round_id is None else {"round_id": str(round_id)},
             )
         )
-        packet, overflow = schemas.parse_packet_trimmed(
+        packet, overflow, discarded = schemas.parse_packet_lenient(
             reply.text, schemas.IntegrationPacket, purpose=self.PURPOSE
         )
-        return IntegrationOutcome(packet=packet, overflow=overflow)
+        if discarded and not (
+            packet.questions
+            or packet.list_items
+            or packet.proposals
+            or packet.dropped_opinions
+        ):
+            # 整包都是占位符 = 什么都没给。**必须判成错**（走重装 → 降级那条出口），
+            # 否则它会一路走到 `draft_of(...) is None` → ShapeError → HTTP 409，
+            # 用户看到的是一句莫名其妙的"整合既没有给出题目也没有给出提案"。
+            raise PacketParseError(
+                "整包都是占位符：这一趟等于什么都没给（空返回不等于没意见）",
+                purpose=self.PURPOSE,
+                discarded=(discarded[0].container, discarded[0].index),
+            )
+        return IntegrationOutcome(packet=packet, overflow=overflow, discarded=discarded)

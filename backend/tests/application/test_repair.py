@@ -1,7 +1,7 @@
 """纠错指引（重装时喂给模型的第二段话）：只给要求，不回喂模型写错的那串内容。"""
 
 from pmstudio.application.errors import PacketParseError
-from pmstudio.application.repair import repair_note
+from pmstudio.application.repair import accounting_note, repair_note
 
 #: 真模型在 `edge-long` 上写进去过的那串说明（连括号一起抄进 raw_span）
 SPAN = "（隐含于上下文，仅提及订单导出）"
@@ -198,3 +198,20 @@ def test_a_non_object_item_says_every_item_must_be_an_object():
     assert "不是对象" in note
     assert "占位符" in note
     assert "placeholder" not in note
+
+
+def test_accounting_note_names_the_handles_and_the_two_exits():
+    """F19 的机械兜底：模型没交代的意见，系统点名要它给去向。
+
+    只给**地址**（`seat.x:O1`），不给意见正文——正文它在上面的 `$opinions` 里看得到，
+    回喂原串反而可能被照抄（与 `repair_note` 同一条纪律）。
+    """
+
+    note = accounting_note(("seat.data_scale:O2", "seat.permissions:O5"))
+
+    assert "seat.data_scale:O2" in note
+    assert "seat.permissions:O5" in note
+    assert "from_opinions" in note  # 疑问的出口：写成题就把地址写进 from_opinions
+    assert "evidence_refs" in note  # 判断的出口：采纳了就把它的出处编号引上
+    assert "dropped_opinions" in note  # 没采用的出口：逐条申报原因
+    assert "一条都不许漏" in note

@@ -220,6 +220,101 @@ async def test_a_silently_unused_opinion_is_still_reported():
     assert handles == {f"{SEAT}:O1", f"{SEAT}:O2"}
 
 
+# —— F19 的机械兜底：没交代的意见，点名要模型补一次（`02` §11.0.37） ——
+
+
+def integration_calls(harness) -> int:  # type: ignore[no-untyped-def]
+    return [request.purpose for request in harness.gateway.requests].count("integration")
+
+
+async def test_an_unaccounted_opinion_triggers_exactly_one_targeted_repair():
+    """模型一次没交代全 → 系统点名重装一次 → 它补上 → 最终不留 unaccounted。"""
+
+    harness = harness_with_replies(
+        integration=[
+            draft_reply(refs=["E1"], dropped=[]),
+            draft_reply(
+                refs=["E1"],
+                dropped=[
+                    {"handle": f"{SEAT}:O1", "reason": "与设定重复，不再问"},
+                    {"handle": f"{SEAT}:O2", "reason": "无依据，按提议处理"},
+                ],
+            ),
+        ]
+    )
+
+    round_id = await run_to_integrated(harness)
+
+    round_ = harness.rounds.get(round_id)
+    assert integration_calls(harness) == 2  # 一次正常 + 一次点名
+    assert [item.source for item in round_.dropped] == [DropSource.INTEGRATOR] * 2
+    note = harness.prompts.calls[-1][1]["validation_error"]
+    assert f"{SEAT}:O1" in note and f"{SEAT}:O2" in note
+
+
+async def test_the_targeted_repair_happens_at_most_once():
+    """两次都不交代 → **只多花那一次**，剩下的照旧落成 unaccounted（不再追问第三次）。"""
+
+    harness = harness_with(integration=draft_reply(refs=["E1"], dropped=[]))
+
+    round_id = await run_to_integrated(harness)
+
+    assert integration_calls(harness) == 2
+    handles = {item.handle for item in harness.rounds.get(round_id).dropped}
+    assert handles == {f"{SEAT}:O1", f"{SEAT}:O2"}
+
+
+async def test_no_targeted_repair_when_everything_is_accounted():
+    """一次就交代全 → **不许白花一次调用**。"""
+
+    harness = harness_with(
+        integration=draft_reply(
+            refs=["E2"], dropped=[{"handle": f"{SEAT}:O1", "reason": "与文档重复"}]
+        )
+    )
+
+    await run_to_integrated(harness)
+
+    assert integration_calls(harness) == 1
+
+
+async def test_the_accounting_repair_does_not_eat_the_validation_budget():
+    """解析错与"没交代"是两本账：解析错重装一次之后，仍有一次点名补交代的机会。"""
+
+    harness = harness_with_replies(
+        integration=[
+            draft_reply(refs=["E999"], dropped=[]),  # 编了个不存在的编号 → 校验重装
+            draft_reply(refs=["E1"], dropped=[]),  # 过了，但两条都没交代 → 点名重装
+            draft_reply(
+                refs=["E2"], dropped=[{"handle": f"{SEAT}:O1", "reason": "与文档重复"}]
+            ),
+        ]
+    )
+
+    round_id = await run_to_integrated(harness)
+
+    assert integration_calls(harness) == 3
+    assert {item.handle for item in harness.rounds.get(round_id).dropped} == {f"{SEAT}:O1"}
+
+
+async def test_a_judgment_cited_only_by_a_deferred_question_is_not_a_repair_trigger():
+    """判定与写库取的是**同一份账**：被第 6 道（没排上的）题引用的判断，不算"没交代"。
+
+    这一轮里真正没交代的是那条疑问（O1：没人写它的地址、也没申报丢弃），所以点名重装
+    该只为 O1 发生——O2（被挤到队列里的那道题引用了它的编号）不许出现在点名名单里。
+    """
+
+    harness = harness_with(integration=six_questions_reply(sixth_refs=["E2"]))
+
+    round_id = await run_to_integrated(harness)
+
+    assert integration_calls(harness) == 2  # 一次正常 + 一次点名（只为 O1）
+    note = harness.prompts.calls[-1][1]["validation_error"]
+    assert f"{SEAT}:O1" in note
+    assert f"{SEAT}:O2" not in note
+    assert {item.handle for item in harness.rounds.get(round_id).dropped} == {f"{SEAT}:O1"}
+
+
 def overflow_reply(count: int) -> str:
     """一次交太多：真跑里 44 条提案把整轮打死（报告 F2）。"""
 
@@ -272,8 +367,15 @@ async def test_integration_repacks_when_the_packet_is_an_array():
     修好之后：第一次是归不了位的数组（元素 `{}`）→ 判死前先重装 → 第二次写对 → 整轮照走。
     """
 
+    # 第二次写成**完全交代过**的一份（引用 E2 交代判断、申报疑问）——这条用例只考
+    # "形状错重装一次"，不让归因重装混进来（那是另一条用例的事）。
     harness = harness_with_replies(
-        integration=["[{}]", draft_reply(refs=["E2"], dropped=[])]
+        integration=[
+            "[{}]",
+            draft_reply(
+                refs=["E2"], dropped=[{"handle": f"{SEAT}:O1", "reason": "与文档重复"}]
+            ),
+        ]
     )
 
     round_id = await run_to_integrated(harness)
@@ -335,7 +437,9 @@ async def test_dropped_trace_accumulates_across_passes():
             ],
             "list_items": [],
             "proposals": [],
-            "dropped_opinions": [],
+            # 这条用例考的是"留痕跨趟累加"，所以第一趟就把判断 O2 申报掉——
+            # 不让归因重装（§11.0.37）在这一趟插进来改变剧本。
+            "dropped_opinions": [{"handle": f"{SEAT}:O2", "reason": "无依据，按提议处理"}],
         },
         ensure_ascii=False,
     )
@@ -374,3 +478,55 @@ async def test_dropped_trace_accumulates_across_passes():
 
     assert passes[: len(first_pass)] == first_pass  # 第一趟的留痕还在
     assert len(passes) > len(first_pass)  # 第二趟又留了新的
+
+
+# —— P23 B：整合报文的非对象元素（先给它补上留痕出口，再换 lenient 解析） ——
+
+
+def packet_with_a_placeholder_proposal() -> str:
+    """一份"能出草案"的报文，但第二条提案是个占位符字符串。"""
+
+    payload = json.loads(
+        draft_reply(refs=["E2"], dropped=[{"handle": f"{SEAT}:O1", "reason": "重复"}])
+    )
+    payload["proposals"].append("p2_placeholder")
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def test_a_placeholder_proposal_is_repacked_then_dropped_with_a_trace():
+    """两次都带占位符 → 丢掉那一条 + 留痕 + 草案卡缺口行，**整轮继续**（不判死、不 409）。"""
+
+    harness = harness_with(integration=packet_with_a_placeholder_proposal())
+
+    round_id = await run_to_integrated(harness)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.draft is not None  # 没判死
+    assert [item.text for item in round_.draft.proposals] == ["单次导出应在 60 秒内完成"]
+    assert [
+        (item.handle, item.source)
+        for item in round_.dropped
+        if item.source is DropSource.ASSEMBLY
+    ] == [("提案 #2（不是对象）", DropSource.ASSEMBLY)]
+    assert any("形状不对" in gap for gap in round_.draft.gaps)
+    assert integration_calls(harness) == 2  # 一次正常 + 一次形状重装
+
+
+async def test_a_placeholder_proposal_is_repacked_and_can_be_saved():
+    """第一次带占位符、第二次干净 → 只留一次调用，没有任何丢弃留痕。"""
+
+    harness = harness_with_replies(
+        integration=[
+            packet_with_a_placeholder_proposal(),
+            draft_reply(
+                refs=["E2"], dropped=[{"handle": f"{SEAT}:O1", "reason": "重复"}]
+            ),
+        ]
+    )
+
+    round_id = await run_to_integrated(harness)
+
+    round_ = harness.rounds.get(round_id)
+    assert integration_calls(harness) == 2
+    assert [item.source for item in round_.dropped] == [DropSource.INTEGRATOR]
+    assert not any("形状不对" in gap for gap in round_.draft.gaps)

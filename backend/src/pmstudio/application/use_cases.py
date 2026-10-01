@@ -119,7 +119,7 @@ from pmstudio.application.ports import (
     WebSearchGateway,
     WorkspaceIndex,
 )
-from pmstudio.application.repair import repair_note
+from pmstudio.application.repair import accounting_note, repair_note
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
@@ -829,6 +829,12 @@ class RunSeatRound:
 
 MAX_INTEGRATION_ATTEMPTS = 2
 
+#: 归因补交代的额度（`02` §11.0.37）：报文没错、但模型没给席位意见交代去向时，
+#: 点名重装**一次**。与校验重装分开算——这是另一类问题，修法也不一样（不是改形状，
+#: 是把缺的那几条去向补上）。实测（P22b 两轮）每次整合的 `unaccounted` 大多不为空，
+#: 所以打满时每轮多 1–3 次整合调用。
+MAX_ACCOUNTING_REPAIRS = 1
+
 #: claims 也允许"重装一次"：真模型是抖的（同一份输入换个采样就过），让用户手动点重试
 #: 是把成本推给人。与整合者同一个口径——**必须带上一次错在哪**（`repair_note`），
 #: 否则只是拿同一句提示词再撞一堵墙（`learnings.md` L13）。
@@ -983,6 +989,41 @@ def _discarded_items(
         )
         for item in discarded
     ]
+
+
+#: 整合报文的容器名 → 人话（留痕是给人看的，别甩 `proposals[2]` 这种机器写法）
+_DISCARD_TITLES = {
+    "questions": "题目",
+    "list_items": "清单项",
+    "proposals": "提案",
+    "dropped_opinions": "未申报丢弃",
+}
+
+
+def _packet_discard_items(
+    discarded: tuple[Discarded, ...],
+    *,
+    pass_index: int,
+) -> tuple[DroppedItem, ...]:
+    """整合报文里被摘掉的**非对象元素**：丢那一条 + 留痕（P23）。
+
+    与超限截断（`_overflow_items`）同一个出口、同一条纪律：一条都不许默默丢。
+    它没有席位地址（不是某条意见），所以 handle 用 `提案 #2（不是对象）` 这种带容器名的写法。
+    """
+
+    return tuple(
+        DroppedItem(
+            handle=(
+                f"{_DISCARD_TITLES.get(item.container, item.container)}"
+                f" #{item.index}（不是对象）"
+            ),
+            reason=item.reason,
+            source=DropSource.ASSEMBLY,
+            seat_id=None,
+            pass_index=pass_index,
+        )
+        for item in discarded
+    )
 
 
 def _overflow_items(
@@ -1373,12 +1414,19 @@ class IntegrateRound:
         carried_from_queue: tuple[Question, ...] = ()
         carried_from_open_items: tuple[Question, ...] = ()
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
-        for attempt in range(1, MAX_INTEGRATION_ATTEMPTS + 1):
+        # 两本账分开算（`02` §11.0.37）：
+        #   `validate_left` —— 报文过不了校验时的重装（原来的 2 次）；
+        #   `accounting_left` —— 报文没错、但席位意见没交代去向时的**点名重装**（另算，
+        #     不然它会挤掉"再试一次改正报文"的机会；这两件事的修法也不一样）。
+        validate_left = MAX_INTEGRATION_ATTEMPTS
+        accounting_left = MAX_ACCOUNTING_REPAIRS
+        first_pass = True
+        while True:
             round_ = self._rounds.get(round_id)
             document = self._documents.get(round_.project_id)
             ledger = self._evidence.get(round_.project_id)
             # carried 只算一次：重装时模型看到的是同一份"要优先问的题"（队列在事务里才消费）
-            if attempt == 1:
+            if first_pass:
                 # 跨轮队列 = 文档 s11 里最老的 N 条未决条目；轮内队列 = 本批没问上的题
                 carried_from_queue = round_.peek_deferred(MAX_QUESTIONS_PER_BATCH)
                 carried_from_open_items = deferred_from_open_items(
@@ -1388,6 +1436,7 @@ class IntegrateRound:
                     skip_entries=frozenset(round_.carried_sources().values()),
                 )
                 carried = carried_from_open_items + carried_from_queue
+                first_pass = False
             answered, _, skipped = render_answers(
                 round_, ledger=self._evidence.get(round_.project_id)
             ).partition("--")
@@ -1421,7 +1470,20 @@ class IntegrateRound:
                     previous_list_items=previous_list_items,
                     contradictions=contradictions,
                 )
-                if outcome.overflow and attempt < MAX_INTEGRATION_ATTEMPTS:
+                if outcome.discarded and validate_left > 1:
+                    # 容器里混进了**根本不是对象**的元素（P23）：与席位、主张同一套——
+                    # 先重装一次让它自己改；第二次仍错就在下面丢掉那一条 + 留痕。
+                    first = outcome.discarded[0]
+                    validation_error = repair_note(
+                        PacketParseError(
+                            "模型返回的报文过不了 schema",
+                            purpose="integration",
+                            discarded=(first.container, first.index),
+                        )
+                    )
+                    validate_left -= 1
+                    continue
+                if outcome.overflow and validate_left > 1:
                     # 超限是可修复的错：先让它自己精简一次，第二次才截断（报告 F2/F11）。
                     first = outcome.overflow[0]
                     validation_error = repair_note(
@@ -1435,6 +1497,7 @@ class IntegrateRound:
                             ),
                         )
                     )
+                    validate_left -= 1
                     continue
                 assembled = assemble(
                     outcome.packet,
@@ -1448,6 +1511,9 @@ class IntegrateRound:
                 assembled = replace(
                     assembled,
                     dropped=assembled.dropped
+                    + _packet_discard_items(
+                        outcome.discarded, pass_index=round_.seat_round_count
+                    )
                     + _overflow_items(outcome.overflow, pass_index=round_.seat_round_count),
                 )
                 gaps = dry_run(
@@ -1457,6 +1523,11 @@ class IntegrateRound:
                     count = sum(item.dropped for item in outcome.overflow)
                     gaps = gaps + (
                         f"本轮有 {count} 条内容因单轮上限未进卡片（可在下一轮继续提）",
+                    )
+                if outcome.discarded:
+                    gaps = gaps + (
+                        f"本轮有 {len(outcome.discarded)} 条内容因为报文形状不对没进卡片"
+                        "（模型交回的那一条不是对象，可在下一轮继续提）",
                     )
                 # 骨架六章还空着就说一句（报告 F18）：走 `gaps` 这条既有通道，
                 # 前端 `DraftDrawer` 已经在渲染它（"写入后仍然空着的必填项"），一个字都不用改。
@@ -1484,8 +1555,8 @@ class IntegrateRound:
                 # 以前 `except ApplicationError` 把解析错和网关错一起判死，于是
                 # `repair_note` 对整合从来没生效过（真跑留样 15 与 16 差 55 秒就是证据）。
                 message = getattr(error, "message", str(error))
-                if attempt == MAX_INTEGRATION_ATTEMPTS:
-                    reason = f"整合两次都过不了校验：{message}"
+                if validate_left == 1:
+                    reason = f"整合报文两次都过不了校验：{message}"
                     if seat_questions(round_.current_reviews):
                         # 有可救的东西就别判死：席位的疑问原样落成 s11 开放问题，
                         # 走草案卡让用户自己决定（04-未决 C9；与 C6/C7 的降级同一套语义）。
@@ -1523,6 +1594,7 @@ class IntegrateRound:
                     # 领域错：它自己的话术更具体（如"选择题至少两个选项"），别用通用话盖掉
                     else message
                 )
+                validate_left -= 1
                 continue
             except ApplicationError as error:
                 # 兜底：认不出的应用层错误照旧"失败必须是失败"（与改动前的行为一致）
@@ -1536,13 +1608,28 @@ class IntegrateRound:
                     reason=error.message,
                 )
                 raise
+            # 报文没错，但模型可能**没给席位意见交代去向**（`02` §11.0.37）。
+            # 判定与写库共用 `_unaccounted_for`，所以这里算出来的就是最后会写进
+            # `Round.dropped` 的那一批；点名重装一次，要它逐条给去向。
+            unaccounted = _unaccounted_for(
+                round_,
+                assembled=assembled,
+                proposals=assembled.proposals,
+                questions=assembled.questions + assembled.deferred,
+                ledger=ledger,
+            )
+            if unaccounted and accounting_left:
+                accounting_left -= 1
+                validation_error = accounting_note(
+                    [item.handle for item in unaccounted]
+                )
+                continue
             return IntegrationResult(
                 assembled=assembled,
                 gaps=gaps,
                 carried_from_queue=carried_from_queue,
                 carried_from_open_items=carried_from_open_items,
             )
-        raise AssertionError("不可能走到这里")
 
 
 def _dropped_items_for(
@@ -1560,24 +1647,77 @@ def _dropped_items_for(
     问卷路、草案路、降级路都走这一个出口，所以留痕不会只在某一条路上活着。
     """
 
-    accounted_handles = frozenset(assembled.accounted_handles)
+    return assembled.dropped + _unaccounted_for(
+        round_,
+        assembled=assembled,
+        proposals=proposals,
+        questions=produced_questions,
+        ledger=ledger,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Accounting:
+    """这一趟"哪些席位意见算交代过了"：两个集合（地址 + 它自己的出处编号）。"""
+
+    handles: frozenset[str]
+    eids: frozenset[EvidenceId]
+
+
+def _accounted(
+    round_: Round,
+    *,
+    assembled: Assembly,
+    proposals: Sequence[Proposal],
+    questions: Sequence[Question],
+) -> Accounting:
+    """把"交代过"算成一个值——**判定（要不要点名重装）与写库（留痕）共用这一份实现**。
+
+    两处口径不同的话，要么"为不存在的问题多花一次模型调用"，要么"该报的没报"。
+
+    为什么判定时用 `assembled.proposals`、写库时用加上机械提案的全量也对得上：
+    `__call__` 里补的那些机械提案（s11 落地 / 答案机械落地 / 撤下未决 / 降级）引用的
+    只有 `system_default` 与 `card_answer` 的编号，**从不引用席位判断自己的编号**，
+    所以两份 `eids` 里"属于席位判断"的那部分完全一样。
+    """
+
+    handles = frozenset(assembled.accounted_handles)
     if assembled.degrade_reason is not None:
         # 整合失败时，这一趟的疑问会被原样落进 s11：算交代过；没落地的判断仍会报
-        accounted_handles |= frozenset(
+        handles |= frozenset(
             seat_entry_handle(seat_id, opinion.local_id)
             for seat_id, opinion in seat_questions(round_.current_reviews)
         )
-    accounted_eids = frozenset(
+    eids = frozenset(
         eid for proposal in proposals for eid in proposal.origin.refs
     ) | frozenset(
-        eid for question in produced_questions for eid in question.evidence_refs
+        eid for question in questions for eid in question.evidence_refs
     )
-    return assembled.dropped + unaccounted_drops(
+    return Accounting(handles=handles, eids=eids)
+
+
+def _unaccounted_for(
+    round_: Round,
+    *,
+    assembled: Assembly,
+    proposals: Sequence[Proposal],
+    questions: Sequence[Question],
+    ledger: EvidenceLedger,
+) -> tuple[DroppedItem, ...]:
+    """这一趟**没被交代**的席位意见（`02` §11.1 那三条边界的唯一实现）。
+
+    整合那一趟用它决定"要不要点名重装一次"，写库那一刻用它出留痕——同一份口径。
+    """
+
+    accounted = _accounted(
+        round_, assembled=assembled, proposals=proposals, questions=questions
+    )
+    return unaccounted_drops(
         round_.current_reviews,
         ledger=ledger,
         round_id=round_.round_id,
-        accounted_handles=accounted_handles,
-        accounted_eids=accounted_eids,
+        accounted_handles=accounted.handles,
+        accounted_eids=accounted.eids,
         declared=frozenset(
             item.handle
             for item in assembled.dropped

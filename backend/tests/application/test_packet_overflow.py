@@ -561,3 +561,75 @@ def test_discard_and_overflow_are_reported_together():
     assert len(packet.opinions) == 12
     assert overflow == (schemas.Overflow(container="opinions", kept=12, dropped=1),)
     assert [item.index for item in discarded] == [1]
+
+
+# —— 整合那一包也可以摘非对象元素了（P23 B 案：先给它补上留痕出口） ——
+
+
+def integration_packet_with(**overrides: object) -> str:
+    payload: dict[str, object] = {
+        "questions": [],
+        "list_items": [],
+        "proposals": [],
+        "dropped_opinions": [],
+    }
+    payload.update(overrides)
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def integration_proposal(index: int = 1) -> dict:
+    return {
+        "op": "add",
+        "target": {"zone": "body", "section_id": "s1"},
+        "text": f"第 {index} 条",
+        "origin_type": "derived",
+        "evidence_refs": ["E1"],
+    }
+
+
+def test_a_non_object_proposal_is_dropped_with_container_and_position():
+    packet, overflow, discarded = schemas.parse_packet_lenient(
+        integration_packet_with(proposals=[integration_proposal(), "p2_placeholder"]),
+        schemas.IntegrationPacket,
+        purpose="integration",
+    )
+
+    assert [item.text for item in packet.proposals] == ["第 1 条"]
+    assert overflow == ()
+    assert [(item.container, item.index) for item in discarded] == [("proposals", 2)]
+
+
+def test_a_non_object_question_is_dropped_too():
+    packet, _, discarded = schemas.parse_packet_lenient(
+        integration_packet_with(
+            questions=[
+                {
+                    "kind": "gap",
+                    "title": "第 1 题",
+                    "why": "要定",
+                    "consequence_if_skipped": "先按默认",
+                    "target": {"zone": "body", "section_id": "s1"},
+                },
+                "q2_placeholder",
+            ]
+        ),
+        schemas.IntegrationPacket,
+        purpose="integration",
+    )
+
+    assert [item.title for item in packet.questions] == ["第 1 题"]
+    assert [(item.container, item.index) for item in discarded] == [("questions", 2)]
+
+
+def test_an_object_with_a_bad_field_still_raises_for_integration():
+    """反例：元素是对象、字段写错 → 照旧抛（摘非对象不许掩盖别的错）。"""
+
+    broken = integration_proposal()
+    broken["text"] = None
+
+    with pytest.raises(PacketParseError):
+        schemas.parse_packet_lenient(
+            integration_packet_with(proposals=[integration_proposal(), broken]),
+            schemas.IntegrationPacket,
+            purpose="integration",
+        )

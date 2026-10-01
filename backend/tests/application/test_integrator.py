@@ -239,3 +239,72 @@ async def test_integrator_reports_overflow_instead_of_raising():
 
     assert len(outcome.packet.proposals) == 60
     assert outcome.overflow == (schemas.Overflow(container="proposals", kept=60, dropped=10),)
+
+
+async def test_integrator_reports_a_non_object_item_instead_of_raising():
+    """P23 B：整合的容器里混进占位符 → 摘掉那一条并上报（和席位、主张同一套）。"""
+
+    reply = json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": [
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s1"},
+                    "text": "正常的一条",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E4"],
+                },
+                "p2_placeholder",
+            ],
+            "dropped_opinions": [],
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"integration": reply})
+    integrator = Integrator(model=gateway, prompts=RecordingPrompts())
+
+    outcome = await integrator.integrate(
+        document_state="# 文档",
+        claims="…",
+        opinions="…",
+        answered="…",
+        skipped="…",
+        entry_ids="…",
+    )
+
+    assert [item.text for item in outcome.packet.proposals] == ["正常的一条"]
+    assert [(item.container, item.index) for item in outcome.discarded] == [("proposals", 2)]
+
+
+async def test_a_packet_that_is_all_placeholders_is_an_error_not_an_empty_draft():
+    """整包都是占位符 = 什么都没给：**判成报错**走重装/降级那条路。
+
+    不判死的话它会一路走到 `draft_of(...) is None` → `ShapeError` → HTTP 409，
+    用户看到的是一句莫名其妙的"整合既没有给出题目也没有给出提案"。
+    """
+
+    reply = json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": ["p1_placeholder"],
+            "dropped_opinions": [],
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"integration": reply})
+    integrator = Integrator(model=gateway, prompts=RecordingPrompts())
+
+    with pytest.raises(PacketParseError) as error:
+        await integrator.integrate(
+            document_state="# 文档",
+            claims="…",
+            opinions="…",
+            answered="…",
+            skipped="…",
+            entry_ids="…",
+        )
+
+    assert "占位符" in error.value.message

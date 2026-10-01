@@ -89,6 +89,16 @@ SEAT_REPLY = json.dumps(
     ensure_ascii=False,
 )
 
+#: 夹具补全：把这一轮两条意见的**去向写全**（`02` §11.0.37）。
+#:
+#: 真模型该写成这样：疑问要么写进某道题的 `from_opinions`，要么申报"没采用 + 为什么"；
+#: 判断要么被引用编号，要么申报。夹具不写全，点名重装就会插进来多消耗一次脚本回复，
+#: 把那些**不考归因**的用例（去处写错、题挤不下、dig……）整体搅乱。
+SEAT_OPINIONS_ACCOUNTED = [
+    {"handle": f"{SEAT}:O1", "reason": "与本轮的题/提案说的是同一件事"},
+    {"handle": f"{SEAT}:O2", "reason": "本轮先不写，留给下一轮"},
+]
+
 JUDGMENT_ONLY_REPLY = json.dumps(
     {
         "basis": "读了 s1–s13 与 E1",
@@ -125,10 +135,18 @@ def question_draft() -> dict:
 
 
 def questionnaire_packet(*, title: str = "单次导出的最大行数是多少？") -> str:
-    draft = question_draft()
+    # 夹具补成"模型把意见交代完整"的样子（`02` §11.0.37）：这道题的**地址**指向那条疑问，
+    # 没采用的那条判断逐条申报。不这么做的话，点名重装会插进来多消耗一次脚本回复，
+    # 把所有不考归因的用例搅乱。
+    draft = question_draft() | {"from_opinions": [f"{SEAT}:O1"]}
     draft["title"] = title
     return json.dumps(
-        {"questions": [draft], "list_items": [], "proposals": []},
+        {
+            "questions": [draft],
+            "list_items": [],
+            "proposals": [],
+            "dropped_opinions": [{"handle": f"{SEAT}:O2", "reason": "本轮先不写，留给下一轮"}],
+        },
         ensure_ascii=False,
     )
 
@@ -150,6 +168,10 @@ def questionnaire_packet_with_a_list_item(
                 }
             ],
             "proposals": [],
+            "dropped_opinions": [
+                {"handle": f"{SEAT}:O1", "reason": "与本批那道题说的是同一件事"},
+                {"handle": f"{SEAT}:O2", "reason": "本轮先不写，留给下一轮"},
+            ],
         },
         ensure_ascii=False,
     )
@@ -163,7 +185,12 @@ def attributed_questionnaire_packet() -> str:
 
     draft = question_draft() | {"from_opinions": [f"{SEAT}:O1"]}
     return json.dumps(
-        {"questions": [draft], "list_items": [], "proposals": []},
+        {
+            "questions": [draft],
+            "list_items": [],
+            "proposals": [],
+            "dropped_opinions": [{"handle": f"{SEAT}:O2", "reason": "本轮先不写，留给下一轮"}],
+        },
         ensure_ascii=False,
     )
 
@@ -187,6 +214,10 @@ def draft_packet(*, field: str = "exceptions") -> str:
                     "evidence_refs": ["E1"],
                     "rationale": "订单含客户信息",
                 }
+            ],
+            "dropped_opinions": [
+                {"handle": f"{SEAT}:O1", "reason": "本轮没有必须问用户的东西"},
+                {"handle": f"{SEAT}:O2", "reason": "与上面那条提案说的是同一件事"},
             ],
         },
         ensure_ascii=False,
@@ -690,10 +721,16 @@ OTHER_SEAT_REPLY = json.dumps(
 async def test_second_pass_only_runs_the_narrowed_seats():
     """答完问卷之后：第二趟只调缩编名单里的席位（不看关键词、不看常驻）。"""
 
+    # 第一趟的报文：给 SEAT 那道题带上归因，**并且**替另一个席位申报掉它那条没被采用的判断
+    # ——否则 §11.0.37 的点名重装会插进来多消耗一次脚本回复，剧本就乱了。
+    first = json.loads(attributed_questionnaire_packet())
+    first["dropped_opinions"].append(
+        {"handle": f"{OTHER_SEAT}:O1", "reason": "本轮先不写，留给下一轮"}
+    )
     harness = Harness(
         replies={
             "claims": CLAIMS_REPLY,
-            "integration": [attributed_questionnaire_packet(), draft_packet()],
+            "integration": [json.dumps(first, ensure_ascii=False), draft_packet()],
         },
         seat_replies={SEAT: SEAT_REPLY, OTHER_SEAT: OTHER_SEAT_REPLY},
         # 两个席位的映射都不碰 s8：这道题的 target 正是 s8，
@@ -751,6 +788,7 @@ def packet_with_one_bad_target() -> str:
                     "rationale": "量级在 1 万级",
                 },
             ],
+            "dropped_opinions": SEAT_OPINIONS_ACCOUNTED,
         },
         ensure_ascii=False,
     )
@@ -978,6 +1016,7 @@ def packet_with_questions(count: int, *, prefix: str = "") -> str:
             ],
             "list_items": [],
             "proposals": [],
+            "dropped_opinions": SEAT_OPINIONS_ACCOUNTED,
         },
         ensure_ascii=False,
     )
