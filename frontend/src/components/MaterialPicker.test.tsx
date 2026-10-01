@@ -118,4 +118,83 @@ describe("MaterialPicker", () => {
     expect(screen.getByText(/来源：联网检索/)).toBeTruthy();
     expect(screen.getByText(/来源：抓来的网页/)).toBeTruthy();
   });
+
+  it("粘贴网址 → 点抓取 → 走注入的抓取器 → onUploaded 收到摘要", async () => {
+    const grabbed = { ...summary, material_id: "m9", origin: "web_fetch", title: "竞品页" };
+    const onUploaded = vi.fn();
+    const fetcher = vi.fn(async () => grabbed);
+    render(
+      <MaterialPicker
+        projectId="p1"
+        materials={[]}
+        pending={false}
+        onUploaded={onUploaded}
+        onRemove={() => undefined}
+        fetcher={fetcher}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /粘贴网址/ }));
+    fireEvent.change(screen.getByLabelText("要抓的网址"), {
+      target: { value: "https://example.com/spec" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "抓取" }));
+
+    await vi.waitFor(() => expect(onUploaded).toHaveBeenCalledWith(grabbed));
+    expect(fetcher).toHaveBeenCalledWith("p1", "https://example.com/spec");
+  });
+
+  it("抓不到就照实说是哪一步不行（后端那句话）", async () => {
+    render(
+      <MaterialPicker
+        projectId="p1"
+        materials={[]}
+        pending={false}
+        onUploaded={() => undefined}
+        onRemove={() => undefined}
+        fetcher={async () => {
+          throw new Error("这是内网地址（127.0.0.1）——先把它导出成文件再上传");
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /粘贴网址/ }));
+    fireEvent.change(screen.getByLabelText("要抓的网址"), {
+      target: { value: "http://127.0.0.1:8000/x" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "抓取" }));
+
+    await vi.waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("内网地址"),
+    );
+  });
+
+  it("抓取中按钮禁用并写着「正在抓」（不许连点两次）", async () => {
+    const gate: { release?: (value: MaterialSummaryView) => void } = {};
+    const pendingFetch = new Promise<MaterialSummaryView>((resolve) => {
+      gate.release = resolve;
+    });
+    render(
+      <MaterialPicker
+        projectId="p1"
+        materials={[]}
+        pending={false}
+        onUploaded={() => undefined}
+        onRemove={() => undefined}
+        fetcher={() => pendingFetch}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /粘贴网址/ }));
+    fireEvent.change(screen.getByLabelText("要抓的网址"), {
+      target: { value: "https://example.com/slow" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "抓取" }));
+
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: /正在抓/ })).toBeTruthy());
+    expect(
+      (screen.getByRole("button", { name: /正在抓/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    gate.release?.({ ...summary, origin: "web_fetch" });
+  });
 });

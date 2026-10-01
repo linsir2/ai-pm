@@ -156,7 +156,14 @@ export const api = {
       { method: "POST" },
     ),
 
-  /** 上传一份材料：multipart，解析在后端做（真解析：文本 / PDF / HTML）。 */
+  /** 按网址抓一份网页材料（P27）：后端真抓、真解析；抓不到会带回一句人话。 */
+  fetchMaterial: (projectId: string, url: string) =>
+    request<MaterialSummaryView>(`/projects/${projectId}/attachments/fetch`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+
+  /** 上传一份材料：multipart，解析在后端做（真解析：文本 / PDF / HTML / Word / Excel）。 */
   uploadMaterial: async (projectId: string, file: File): Promise<MaterialSummaryView> => {
     const form = new FormData();
     form.append("file", file, file.name);
