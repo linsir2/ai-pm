@@ -69,6 +69,44 @@ def make_material_packet(
     )
 
 
+def make_web_packet(
+    *,
+    url: str = "https://example.com/rbac",
+    text: str = "行业通行做法是 RBAC：角色绑权限，用户绑角色。",
+    title: str = "权限模型综述",
+):
+    """一条 Tavily 结果的**解析草稿**（工具层 C-2b）。
+
+    形状与 `TavilySearchGateway._packet` 对齐：单块、锚点是"网页摘要"、
+    正文已经截到 `WEB_SNIPPET_CHARS`。**没有 material_id**——那要等存储层盖章。
+    """
+
+    from pmstudio.application.context import WEB_SNIPPET_CHARS
+    from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+
+    snippet = text[:WEB_SNIPPET_CHARS]
+    return ParsedMaterial(
+        origin="web_search",
+        title=title,
+        source_ref=url,
+        media_type="text/html",
+        bytes_len=len(text.encode("utf-8")),
+        chunks=(
+            MaterialChunk(
+                chunk_id="tavily#c00",
+                ordinal=0,
+                text=snippet,
+                heading_path=(),
+                anchor="网页摘要",
+            ),
+        ),
+        parser_id="tavily",
+        parser_version="tavily-rest-v1",
+        truncated=len(text) > len(snippet),
+        warnings=("来自检索：这一轮的检索词",),
+    )
+
+
 def make_claim(
     *,
     text: str = "要做一个订单导出功能",

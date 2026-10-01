@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 
 import { integrationSummary } from "../api/payload";
 import type { LimitsView, RoundView } from "../api/types";
-import { dropsFor, unplacedDrops } from "../document/dropped";
+import { dropsFor, toolDrops, unplacedDrops } from "../document/dropped";
 import { claimLabelText, compactTarget } from "../labels";
 import { labelCounts, rewritesOf } from "../state/progress";
 import { limitsOf } from "../state/schema";
@@ -37,8 +37,12 @@ export function LoopPane({
   const running = pending !== null;
   const counts = labelCounts(round);
   const integrated = round.questions.length > 0 || round.draft !== null;
-  // 挂不到任何席位包上的留痕（地址写歪、或归因对不上号）：闭环区末尾单独一行
-  const unplaced = unplacedDrops(round.dropped, round.seat_packets);
+  // 挂不到任何席位包上的留痕（地址写歪、或归因对不上号）：闭环区末尾单独一行。
+  // 工具那几笔（检索失败 / 没带进去）不是席位的事，单独一段说（`P17b` §2.4）。
+  const unplaced = unplacedDrops(round.dropped, round.seat_packets).filter(
+    (item) => item.source !== "tool",
+  );
+  const toolNotes = toolDrops(round.dropped);
 
   return (
     <div className="loop__scroll">
@@ -183,6 +187,20 @@ export function LoopPane({
             {round.list_items.map((item) => (
               <li className="entry" key={item}>
                 <span className="entry__text muted small">{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {toolNotes.length > 0 && (
+        <div className="loop__group">
+          <p className="loop__label">工具这一趟（联网检索）</p>
+          <ul className="drops">
+            {toolNotes.map((item) => (
+              <li className="drop" key={`${item.handle}-${item.reason}`}>
+                <span className="mono small">{item.handle}</span>
+                <span className="drop__reason">{item.reason}</span>
               </li>
             ))}
           </ul>

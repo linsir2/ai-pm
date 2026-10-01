@@ -37,6 +37,8 @@ from pmstudio.application.assembly import (
     unlanded_open_questions,
 )
 from pmstudio.application.context import (
+    NO_MATERIAL_TEXT,
+    WEB_BUDGET,
     answer_eids,
     render_answers,
     render_claims,
@@ -45,8 +47,10 @@ from pmstudio.application.context import (
     render_existing_entries,
     render_materials,
     render_reviews,
+    render_web_results,
     seat_entry_handle,
     select_chunks,
+    web_block_cost,
 )
 from pmstudio.application.deliverable import Deliverable, render_markdown
 from pmstudio.application.dto import (
@@ -55,6 +59,7 @@ from pmstudio.application.dto import (
     MaterialChunk,
     MaterialPacket,
     MaterialSummaryView,
+    ParsedMaterial,
     ProjectSummaryView,
     ReadinessItemView,
     RollbackResult,
@@ -82,6 +87,7 @@ from pmstudio.application.errors import (
     MaterialTooLarge,
     ModelCallFailed,
     PacketParseError,
+    ToolCallFailed,
     UnknownEvidenceId,
 )
 from pmstudio.application.events import (
@@ -363,8 +369,20 @@ class StartRound:
 
 #: 工具目录里"联网搜索"的 kind（`web_search.toml` 写的就是它）
 WEB_SEARCH_KIND = "web_search"
+#: 联网结果在信息包里的 origin（`TavilySearchGateway` 盖的就是它）
+WEB_ORIGIN = "web_search"
 #: 目录没声明 `max_queries` 时的兜底（真定义在 `web_search.toml` 里）
 DEFAULT_WEB_QUERY_LIMIT = 3
+#: 目录没声明 `max_results` 时的兜底（同理）
+DEFAULT_WEB_LIMIT = 5
+
+
+def _tool_drop(handle: str, reason: str) -> DroppedItem:
+    """工具这一趟的留痕：与席位意见无关，所以 `seat_id` 恒为 None（闭环区单列一句）。"""
+
+    return DroppedItem(
+        handle=handle, reason=reason, source=DropSource.TOOL, seat_id=None, pass_index=1
+    )
 
 
 def web_search_tool(tools: ToolCatalog, *, keys: frozenset[str]) -> ToolDefinition | None:
@@ -382,12 +400,15 @@ def web_search_tool(tools: ToolCatalog, *, keys: frozenset[str]) -> ToolDefiniti
 
 def _checked_queries(
     queries: Sequence[str], *, tools: ToolCatalog, keys: frozenset[str]
-) -> tuple[str, ...]:
-    """用户勾中的检索词过两道闸门：去重保序 → 上限 → 以及"这里到底有没有这个工具"。"""
+) -> tuple[tuple[str, ...], ToolDefinition | None]:
+    """用户勾中的检索词过两道闸门（去重保序 → 上限 → "这里到底有没有这个工具"）。
+
+    返回 `(勾中的检索词, 可用的联网工具)`：一个都不勾就是 `((), None)`——没工具也不算错。
+    """
 
     chosen = tuple(dict.fromkeys(item.strip() for item in queries if item.strip()))
     if not chosen:
-        return ()
+        return (), None
     tool = web_search_tool(tools, keys=keys)
     if tool is None:
         raise ShapeError(
@@ -401,7 +422,7 @@ def _checked_queries(
             limit=limit,
             chosen=len(chosen),
         )
-    return chosen
+    return chosen, tool
 
 
 class SubmitOpening:
@@ -414,6 +435,9 @@ class SubmitOpening:
         tools: ToolCatalog,
         available_tool_keys: frozenset[str],
         web_search: WebSearchGateway | None,
+        evidence: EvidenceReader,
+        evidence_writer: EvidenceWriter,
+        materials: MaterialStore,
         uow: UnitOfWork,
         clock: Clock,
         events: EventPublisher,
@@ -424,6 +448,9 @@ class SubmitOpening:
         self._tools = tools
         self._available_tool_keys = available_tool_keys
         self._web_search = web_search
+        self._evidence = evidence
+        self._evidence_writer = evidence_writer
+        self._materials = materials
         self._uow = uow
         self._clock = clock
         self._events = events
@@ -437,13 +464,20 @@ class SubmitOpening:
         web_queries: Sequence[str] = (),
     ) -> None:
         # 校验全部在**写之前**：请求不对（422）就不该留下半推半就的状态。
-        chosen = _checked_queries(web_queries, tools=self._tools, keys=self._available_tool_keys)
+        chosen, tool = _checked_queries(
+            web_queries, tools=self._tools, keys=self._available_tool_keys
+        )
         if chosen and self._web_search is None:
             # 目录说工具可用、组装点却没接上实现：这是装配错误，必须当场响，不能悄悄跳过
             raise ShapeError(
                 "联网工具声明可用，但组装点没有接上实现（这一轮先别勾联网）",
                 tool_id=WEB_SEARCH_KIND,
             )
+        # **先查后写**：工具调用必须在事务外；查完（或查失败）之后，一次事务把
+        # 复述卡、勾选、出处、材料引用一起落下去。顺序理由见 `P17b` §6：
+        # 先写的话，进程崩在查的中间时重试会直接进席位轮，用户授权的检索被静默跳过。
+        project_id = self._rounds.get(round_id).project_id
+        picks, failure = await self._search(project_id=project_id, chosen=chosen, tool=tool)
         with self._uow:
             round_ = self._rounds.get(round_id)
             # 席位必须在注册表里：不然它会一路走到 `catalog.by_id` 才炸成 500。
@@ -458,8 +492,91 @@ class SubmitOpening:
             if claim_edits:
                 round_.revise_claims(_apply_claim_edits(round_, claim_edits))
             round_.submit_opening(seats=tuple(seats), web_queries_chosen=chosen)
+            if picks:
+                # 与附件同一条规则：**只给选中的块发号**（没选中的块仍在材料表里，F6 搜得到）
+                ledger = self._evidence.get(project_id)
+                material_refs: list[MaterialRef] = []
+                for packet, chunk in picks:
+                    material_refs.append(
+                        MaterialRef(
+                            material_id=packet.material_id,
+                            chunk_id=chunk.chunk_id,
+                            eid=ledger.record(
+                                kind=EvidenceKind.EXTERNAL,
+                                text=chunk.text,
+                                source=EvidenceSource(external_ref=_external_ref(packet, chunk)),
+                                now=self._clock.now(),
+                            ),
+                        )
+                    )
+                round_.add_materials(material_refs)
+                self._evidence_writer.save(ledger)
+            round_.note_dropped(failure)
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
+
+    async def _search(
+        self,
+        *,
+        project_id: ProjectId,
+        chosen: tuple[str, ...],
+        tool: ToolDefinition | None,
+    ) -> tuple[tuple[tuple[MaterialPacket, MaterialChunk], ...], tuple[DroppedItem, ...]]:
+        """**事务外**：查 → 盖章 → 选块。返回（选中的块，要留痕的那几条）。
+
+        失败不抛出去：工具这一趟没成，是**这一轮的留痕**，不是整轮的失败（`P17b` §6）。
+        """
+
+        drops: list[DroppedItem] = []
+        packets: list[MaterialPacket] = []
+        if not chosen or tool is None or self._web_search is None:
+            return (), ()
+        limit = tool.max_results or DEFAULT_WEB_LIMIT
+        for query in chosen:
+            try:
+                drafts = await self._web_search.search(query=query, limit=limit)
+            except ToolCallFailed as error:
+                drops.append(_tool_drop(f"联网检索 {query}", f"检索失败：{error.message}"))
+                break  # 工具坏了就别把剩下的也打出去
+            if not drafts:
+                drops.append(_tool_drop(f"联网检索 {query}", "没有搜到结果"))
+            for draft in drafts:
+                packets.append(self._keep(project_id, draft))
+        picked = select_chunks(packets, budget=WEB_BUDGET, cost=web_block_cost)
+        if 0 < len(picked) < len(packets):
+            missed = len(packets) - len(picked)
+            drops.append(
+                _tool_drop(
+                    f"联网检索结果 {len(packets)} 条",
+                    f"预算只带得下 {len(picked)} 条，还有 {missed} 条没带进去"
+                    "（材料表里留着，搜得到）",
+                )
+            )
+        by_id = {packet.material_id: packet for packet in packets}
+        # 同一块只发一个号：两条查询搜到同一个网址时，包是同一个（URL 去重），
+        # 这里再按 (material_id, chunk_id) 收一次，否则账本里会出现两条指向同一块的出处。
+        unique: dict[tuple[str, str], tuple[MaterialPacket, MaterialChunk]] = {}
+        for material_id, chunk in picked:
+            unique.setdefault((material_id, chunk.chunk_id), (by_id[material_id], chunk))
+        return (
+            tuple(unique.values()),
+            tuple(drops),
+        )
+
+    def _keep(self, project_id: ProjectId, draft: ParsedMaterial) -> MaterialPacket:
+        """一条检索结果入库：**去重键是 URL**（同一网址不重复入库），原始字节=摘要文本。"""
+
+        digest = hashlib.sha256(f"web:{draft.source_ref}".encode()).hexdigest()
+        existing = self._materials.find_by_sha(project_id, digest)
+        if existing is not None:
+            return existing
+        return self._materials.put(
+            project_id=project_id,
+            parsed=draft,
+            sha256=digest,
+            content="\n".join(chunk.text for chunk in draft.chunks).encode("utf-8"),
+            now=self._clock.now(),
+        )
 
 
 class RunSeatRound:
@@ -2319,19 +2436,35 @@ def external_material_text(round_: Round, *, store: MaterialStore) -> str:
     """把这一轮带进来的材料渲染成提示词那一段（三个智能体共用同一个渲染器）。
 
     没有任何材料时返回 `context.NO_MATERIAL_TEXT`——**不留空节**（空节会让模型以为材料被省略了）。
+
+    上传材料与联网检索**分两段渲染**（排面与预算都不一样）：前者一段一份材料、块级编号；
+    后者一条一段（编号 + 标题 + URL + 摘要）。两段都有就都带上，各说各的。
     """
 
     by_material: dict[str, dict[str, EvidenceId]] = {}
     for ref in round_.materials:
         by_material.setdefault(ref.material_id, {})[ref.chunk_id] = ref.eid
-    entries: list[tuple[MaterialPacket, dict[str, EvidenceId]]] = []
+    uploads: list[tuple[MaterialPacket, dict[str, EvidenceId]]] = []
+    found: list[tuple[MaterialPacket, list[EvidenceId]]] = []
     for material_id, eids in by_material.items():
         packet = store.get(material_id)
         if packet is None:
             # 材料不在了（将来允许删材料时会出现）：不编内容，跳过；界面另行提示
             continue
-        entries.append((packet, eids))
-    return render_materials(entries).text
+        if packet.parsed.origin == WEB_ORIGIN:
+            found.append((packet, list(eids.values())))
+        else:
+            uploads.append((packet, eids))
+    parts: list[str] = []
+    if uploads:
+        parts.append(render_materials(uploads).text)
+    if found:
+        parts.append(
+            render_web_results(
+                [(packet, eids[0]) for packet, eids in found if eids]
+            ).text
+        )
+    return "\n\n".join(parts) if parts else NO_MATERIAL_TEXT
 
 
 def _materials_of(round_: Round, *, store: MaterialStore) -> tuple[MaterialPacket, ...]:

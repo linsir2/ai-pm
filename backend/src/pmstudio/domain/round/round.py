@@ -78,6 +78,9 @@ class DropSource(StrEnum):
     INTEGRATOR = "integrator"  # 模型在报文里申报的（原因它自己写）
     ASSEMBLY = "assembly"  # 装配层算出来的：归因对不上号
     UNACCOUNTED = "unaccounted"  # 装配层核出来的：既没说丢、也没交代落到哪儿
+    #: 工具这一趟的：检索失败 / 没搜到结果 / 搜到了但预算带不进去（C-2b）。
+    #: 与席位意见无关，所以 `seat_id` 恒为 None——闭环区会把它单列一句。
+    TOOL = "tool"
 
 
 def widened(target: Target) -> Target:

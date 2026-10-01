@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DroppedView, SeatPacketView } from "../api/types";
-import { dropHeadline, dropsFor, unplacedDrops } from "./dropped";
+import { dropHeadline, dropsFor, toolDrops, unplacedDrops } from "./dropped";
 
 const packet = {
   seat_id: "seat.data_scale",
@@ -36,6 +36,13 @@ const dropped: DroppedView[] = [
     reason: "归因对不上号",
     source: "assembly",
   },
+  {
+    handle: "联网检索 RBAC 权限模型",
+    seat_id: null,
+    pass_index: 1,
+    reason: "检索失败：联网搜索失败：HTTP 504",
+    source: "tool",
+  },
 ];
 
 describe("dropsFor", () => {
@@ -49,6 +56,13 @@ describe("dropsFor", () => {
     expect(unplacedDrops(dropped, [packet]).map((item) => item.handle)).toEqual([
       "seat.data_scale:O1",
       "查不到:O9",
+      "联网检索 RBAC 权限模型",
+    ]);
+  });
+
+  it("工具那几笔（检索失败 / 没带进去）单独拎出来：它们不是「去处写错的」", () => {
+    expect(toolDrops(dropped).map((item) => item.handle)).toEqual([
+      "联网检索 RBAC 权限模型",
     ]);
   });
 

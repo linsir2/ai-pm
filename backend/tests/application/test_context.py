@@ -36,6 +36,10 @@ from tests.support.builders import (
     make_round,
     make_round_with_contradictions,
 )
+from tests.support.builders import (
+    make_web_packet as make_web,
+)
+from tests.support.fakes import InMemoryMaterialStore
 
 NOW = datetime(2026, 9, 22, 10, 0)
 PROJECT = ProjectId("p1")
@@ -386,3 +390,76 @@ def test_render_materials_ignores_chunks_without_an_eid():
 
     assert "[E12]" in rendered.text
     assert "边界：只给管理员" not in rendered.text
+
+
+def test_render_web_results_says_none_instead_of_leaving_it_blank():
+    rendered = context.render_web_results([])
+
+    assert rendered.text == "（这一轮没有联网检索结果）"
+    assert rendered.used_chunk_ids == ()
+    assert rendered.truncated is False
+
+
+def stamp_web(*drafts):  # type: ignore[no-untyped-def]
+    """草稿 → 盖章的信息包（与生产同一条路：`MaterialStore.put` 才是发 id 的地方）。"""
+
+    store = InMemoryMaterialStore()
+    return [
+        store.put(
+            project_id=PROJECT,
+            parsed=draft,
+            sha256=f"web-{index}",
+            content=b"x",
+            now=NOW,
+        )
+        for index, draft in enumerate(drafts)
+    ]
+
+
+def test_render_web_results_is_budgeted_and_says_how_many_it_left_out():
+    """预算挤掉的那几条**要在提示词里说清**：不然模型以为"搜到的就这些"。"""
+
+    first, second = stamp_web(
+        make_web(url="https://a", text="字" * 120),
+        make_web(url="https://b", text="字" * 120),
+    )
+    entries = [
+        (first, EvidenceId("E9")),
+        (second, EvidenceId("E10")),
+    ]
+
+    rendered = context.render_web_results(entries, budget=200)
+
+    assert "[E9]" in rendered.text
+    assert "[E10]" not in rendered.text
+    assert "只带了前 1 条 / 共 2 条" in rendered.text
+    assert rendered.truncated is True
+    assert rendered.used_chunk_ids == ("m1#c00",)
+
+
+def test_the_selection_cost_never_lets_the_renderer_drop_a_numbered_chunk():
+    """§2.1 的核心：**选块的成本 ≥ 渲染的成本**，所以选进来的每一条都会被渲染出来。
+
+    两把尺子量同一件事时，标题 + URL 会把渲染挤到预算外，于是账本里多出一个
+    模型永远看不到的编号——那正是这条不变量要拦的事。
+    """
+
+    packets = stamp_web(
+        *[make_web(url=f"https://example.com/{index}", text="字" * 250) for index in range(6)]
+    )
+
+    picked = context.select_chunks(
+        packets, budget=context.WEB_BUDGET, cost=context.web_block_cost
+    )
+    by_id = {packet.material_id: packet for packet in packets}
+    rendered = context.render_web_results(
+        [
+            (by_id[material_id], EvidenceId(f"E{index + 9}"))
+            for index, (material_id, _) in enumerate(picked)
+        ],
+        budget=context.WEB_BUDGET,
+    )
+
+    assert len(picked) > 1                                   # 这个预算下确实选出了几条
+    assert rendered.truncated is False                       # 渲染一条都没再丢
+    assert rendered.used_chunk_ids == tuple(chunk.chunk_id for _, chunk in picked)

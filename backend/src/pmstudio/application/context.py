@@ -7,7 +7,7 @@
 不是新的真相源（计划 §3.13）。
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from pmstudio.application.dto import MaterialChunk, MaterialPacket
@@ -373,6 +373,9 @@ WEB_BUDGET = 2000
 WEB_SNIPPET_CHARS = 300
 #: 每个块渲染时除了正文还会多一行「[E12] 第 3 页」——算预算时把它算进去，别超太多
 CHUNK_OVERHEAD = 24
+#: 联网结果渲染时每条还会多一个「[E123] 」编号位：选块的成本要把这个位子也算上，
+#: 否则"选进来的最后一条"可能刚好在渲染时被挤掉（账本里就多一个模型看不到的编号）。
+WEB_EID_RESERVE = 12
 #: 没有材料时提示词里写这句（**不留空节**：空节会让模型以为"材料被省略了"）
 NO_MATERIAL_TEXT = "（这一轮没有外部材料）"
 
@@ -381,22 +384,44 @@ def select_chunks(
     packets: Sequence[MaterialPacket],
     *,
     budget: int = MATERIAL_BUDGET,
+    cost: Callable[[MaterialPacket, MaterialChunk], int] | None = None,
 ) -> tuple[tuple[str, MaterialChunk], ...]:
     """**唯一**决定"哪些块进这一轮"的地方：按材料顺序、块顺序取，到预算为止。
 
     返回 `(material_id, chunk)`：调用方拿它去发号（`Round.materials`）与渲染。
+
+    `cost` 默认是"正文 + 每个块那行编号的开销"；联网结果要传 `web_block_cost`——
+    那段渲染每条还要写标题与 URL，成本不一样（**同一件事不许有两把尺子**）。
     """
 
+    weigh = cost or _material_block_cost
     picked: list[tuple[str, MaterialChunk]] = []
     used = 0
     for packet in packets:
         for chunk in packet.parsed.chunks:
-            cost = len(chunk.text) + CHUNK_OVERHEAD
-            if used + cost > budget:
+            if used + weigh(packet, chunk) > budget:
                 return tuple(picked)
             picked.append((packet.material_id, chunk))
-            used += cost
+            used += weigh(packet, chunk)
     return tuple(picked)
+
+
+def _material_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
+    """上传材料那条路的成本：正文 + 一行「[E12] 第 3 页」。"""
+
+    return len(chunk.text) + CHUNK_OVERHEAD
+
+
+def web_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
+    """联网检索结果的成本：**与 `render_web_results` 的排版同源**（标题 + URL + 摘要 + 编号位）。
+
+    为什么必须同源：选块先发生（决定发哪些号），渲染后发生。两把尺子稍有出入，
+    就会出现"发了号却没进提示词"的编号——那正是账本被污染的样子。
+    """
+
+    snippet = chunk.text[:WEB_SNIPPET_CHARS]
+    block = f"{packet.parsed.title}\n{packet.parsed.source_ref}\n{snippet}"
+    return len(block) + WEB_EID_RESERVE
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,7 +492,12 @@ def render_web_results(
     *,
     budget: int = WEB_BUDGET,
 ) -> RenderedMaterial:
-    """检索结果 → 提示词里那一段：一条一段（编号 + 标题 + URL + 摘要）。超预算就说截断。"""
+    """检索结果 → 提示词里那一段：一条一段（编号 + 标题 + URL + 摘要）。
+
+    超预算**照实说**（与材料那段同一个口径）：模型得知道"搜到的比这多"，
+    不然它会以为自己看到的就是全部。正常路径上这个截断不会发生——
+    选块用的是同一套成本（`web_block_cost`），有测试钉着。
+    """
 
     if not entries:
         return RenderedMaterial(
@@ -490,6 +520,8 @@ def render_web_results(
         used += len(block)
         if chunk is not None:
             used_ids.append(chunk.chunk_id)
+    if truncated:
+        lines.append(f"（检索结果太多，只带了前 {len(used_ids)} 条 / 共 {len(entries)} 条）")
     lines.append(
         "（以上是联网检索结果，不是用户说的话；不要再把它说成用户说的话。"
         "要引就引方括号里的编号）"

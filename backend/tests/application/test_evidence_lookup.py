@@ -99,3 +99,23 @@ async def test_lookup_keeps_the_chain_of_a_derived_judgment(world):
     assert view.seat_id == "seat.data_scale"
     assert view.derived_from == (str(e1),)
     assert [item.eid for item in view.chain] == [str(judged), str(e1)]
+
+
+async def test_a_web_result_points_back_at_its_url(world):
+    """联网检索结果和上传材料走同一条出处通道：点编号要能看到它是**哪个网址**（C-2b）。"""
+
+    harness, _ = world
+    ledger = harness.evidences.get(PROJECT)
+    found = ledger.record(
+        kind=EvidenceKind.EXTERNAL,
+        text="行业通行做法是 RBAC：角色绑权限，用户绑角色。",
+        source=EvidenceSource(external_ref="https://example.com/rbac"),
+        now=NOW,
+    )
+    harness.evidences.save(ledger)
+
+    view = await harness.get_evidence()(project_id=PROJECT, eid=str(found))
+
+    assert view.kind == "external"
+    assert view.kind_label == "外部材料"
+    assert view.external_ref == "https://example.com/rbac"

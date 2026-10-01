@@ -23,6 +23,14 @@ export function unplacedDrops(
   );
 }
 
+/** 工具这一趟留下的（检索失败 / 没搜到结果 / 预算没带进去）。
+
+    它们与席位意见无关（`seat_id` 恒为 null），所以不许混进"去处写错的"那一句里——
+    闭环区单列一段，说清是**联网这一步**的事。 */
+export function toolDrops(dropped: DroppedView[]): DroppedView[] {
+  return dropped.filter((item) => item.source === "tool");
+}
+
 export function dropHeadline(packet: SeatPacketView, drops: DroppedView[]): string {
   if (drops.length === 0) return "";
   return `它说的 ${packet.opinions.length} 条里，${drops.length} 条没进卡片`;
