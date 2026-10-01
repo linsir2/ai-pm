@@ -230,3 +230,26 @@ def test_question_bad_unknown_kind_is_rejected():
             consequence_if_skipped="c",
             kind="debate",  # type: ignore[arg-type]
         )
+
+
+# —— P26：空文本提案 ——
+#
+# 领域这条不变量**不放松**："每条提案都有文本"。空文本在**装配层**处理：
+# `add` / `replace` 的空文本丢那一条 + 留痕；`remove` 的空文本补上"被撤下那条的正文"
+# （引用文档，不是编内容）——所以到了领域这里，文本永远不是空的。
+
+
+def test_a_proposal_with_empty_text_is_still_rejected():
+    """不变量还在：任何 op 的提案都必须有文本（空文本在装配层就已经被处理掉了）。"""
+
+    with pytest.raises(ShapeError):
+        proposal("p01", Origin(OriginType.SYSTEM_DEFAULT, (EvidenceId("E1"),)), text="   ")
+
+    with pytest.raises(ShapeError):
+        proposal(
+            "p02",
+            Origin(OriginType.SYSTEM_DEFAULT, (EvidenceId("E1"),)),
+            op=WriteOp.REMOVE,
+            kind=BlockKind.QUESTION,
+            text="",
+        )

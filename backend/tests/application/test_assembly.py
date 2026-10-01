@@ -589,6 +589,65 @@ def test_a_replace_without_an_entry_id_is_still_a_packet_error():
         )
 
 
+def test_an_add_with_empty_text_is_dropped_with_a_trace():
+    """`add` / `replace` 的空文本：没有内容可写 → 丢**这一条** + 留痕（不判死整轮）。"""
+
+    bad = proposal_draft(text="   ")
+    result = assembly.assemble(
+        packet(proposals=[bad, proposal_draft(text="5 万条内 60 秒可下载")]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [item.text for item in result.proposals] == ["5 万条内 60 秒可下载"]
+    assert [item.handle for item in result.dropped] == ["提案 #1"]
+    assert "文本为空" in result.dropped[0].reason
+
+
+def test_a_remove_with_empty_text_fills_in_what_it_deletes():
+    """`remove` 的空文本**照收**，并补上**被撤下那条的正文**（从文档里引用，不是编内容）。
+
+    真跑实测（5 个库 22 处空文本提案）**全部是 `remove`**：模型要撤下 s11 的未决条目时
+    常常不写文本。丢掉它会**让那条该撤下的内容留在文档里**，所以不能丢；补正文之后
+    卡片上是「删除｜<那句话>」而不是一行空白，也守住"每条写入指令都有文本"的不变量。
+    """
+
+    remove = proposal_draft()
+    remove["op"] = "remove"
+    remove["entry_id"] = "en-bootstrap"
+    remove["text"] = ""
+    result = assembly.assemble(
+        packet(proposals=[remove]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [item.op for item in result.proposals] == [WriteOp.REMOVE]
+    assert result.proposals[0].text == "把订单导出成表格"  # en-bootstrap 那条的正文
+    assert result.dropped == ()
+
+
+def test_a_remove_is_not_skipped_as_a_duplicate():
+    """去重只对 `add` 生效：remove 的文本正好照抄了被删那条时，不许被当成"重复"跳过。
+
+    跳过的后果与上面相反——本该撤下的内容悄悄留在文档里。
+    """
+
+    remove = proposal_draft(text="把订单导出成表格")  # 与被删那条一字不差
+    remove["op"] = "remove"
+    remove["entry_id"] = "en-bootstrap"
+    result = assembly.assemble(
+        packet(proposals=[remove]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [item.op for item in result.proposals] == [WriteOp.REMOVE]
+
+
 def test_assemble_replace_accepts_real_entry_id():
     ok = proposal_draft(text="把订单导出成表格（可筛选）")
     ok["op"] = "replace"

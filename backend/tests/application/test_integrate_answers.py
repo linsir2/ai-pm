@@ -2129,3 +2129,68 @@ async def test_an_empty_packet_still_takes_the_graceful_exit():
     round_ = harness.rounds.get(round_id)
     assert round_.step is Step.AWAITING_CONFIRM
     assert any("未归并" in gap for gap in round_.draft.gaps)
+
+
+async def test_an_empty_text_remove_no_longer_degrades_the_round():
+    """P25 现场形状：模型写的 `remove` **文本是空的** → 整包两次不过校验 → 整轮降级。
+
+    照收之后：一次整包调用就出草案，那条 `remove` 照旧生效（要撤下的条目真被撤下）。
+    """
+
+    reply = json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": [
+                {
+                    "op": "remove",
+                    "entry_id": "en-open",
+                    "target": {"zone": "body", "section_id": "s11"},
+                    "text": "",
+                    "origin_type": "system_default",
+                    "evidence_refs": ["E1"],
+                }
+            ],
+            "dropped_opinions": [
+                {"handle": f"{SEAT}:O1", "reason": "本轮没有必须问用户的东西"},
+                {"handle": f"{SEAT}:O2", "reason": "已经落在文档已有内容里"},
+            ],
+        },
+        ensure_ascii=False,
+    )
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": reply},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    harness.seed_project()
+    # 先造一条"要被撤下"的 s11 条目：remove 的 entry_id 必须真存在
+    document = harness.documents.get(PROJECT)
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-seed",
+                entry_id=EntryId("en-open"),
+                op=WriteOp.ADD,
+                target=Target.body("s11"),
+                text="这条未决项要被撤下",
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.QUESTION,
+            )
+        ],
+        now=harness.clock.now(),
+        summary="种一条少人看的条目",
+    )
+    harness.documents.seed(document)
+    start = harness.start_round()
+    round_id = await start.create(project_id=PROJECT, user_input="想做个订单导出的功能")
+    await start.analyze(round_id=round_id)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+    await harness.run_seat_round()(round_id=round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert harness.gateway.purposes.count("integration") == 1  # 不再重装
+    assert round_.draft is not None  # 没降级
+    assert not any("两次都过不了校验" in gap for gap in round_.draft.gaps)
+    assert [item.op for item in round_.draft.proposals] == [WriteOp.REMOVE]

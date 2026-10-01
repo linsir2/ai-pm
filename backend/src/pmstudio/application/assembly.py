@@ -453,24 +453,35 @@ def assemble(
         if slug is not None and slug not in existing_features and slug not in authorized:
             pending_features.setdefault(slug, []).extend(_asking_seats(refs, ledger=ledger))
             continue
-        if (target.label(), normalize(draft.text)) in existing:
+        # 去重只对 `add` 生效：`replace` / `remove` 是在**改既有内容**，拿它们的文本去跟
+        # 文档比"是不是已经有了"没有意义——踩到过的那种坏后果是：模型写一条 `remove`、
+        # 文本正好照抄了被删那条，就被当成"重复"静默跳过，那条本该撤下的内容留在文档里。
+        if draft.op == WriteOp.ADD.value and (target.label(), normalize(draft.text)) in existing:
             continue
-        if _entry_target_missing(draft, document=document):
-            # 条目 id 写错：丢**这一条** + 留痕，与"去处写错"同一条口径（`02` §11.0.2）。
-            # 真跑现场（P24）：模型两次都写不存在的条目 → 整包判死 → 整轮降级、判断全成"没交代"。
+        unusable = _proposal_unusable_reason(draft, document=document)
+        if unusable is not None:
+            # 这一条根本没法用（条目 id 写错 / 文本是空的）：丢**它** + 留痕，
+            # 与"去处写错"同一条口径（`02` §11.0.2）——一次笔误不该让整批白干。
             dropped.append(
                 DroppedItem(
                     handle=f"提案 #{index}",
-                    reason=f"要改的条目不存在：{draft.entry_id}",
+                    reason=unusable,
                     source=DropSource.ASSEMBLY,
                     seat_id=None,
                     pass_index=pass_index,
                 )
             )
             continue
+        text = draft.text
+        if draft.op == WriteOp.REMOVE.value and not text.strip():
+            # `remove` 的文本可以留空（撤哪一条看 entry_id）：这里补上**被撤下那条的正文**，
+            # 卡片上就是「删除｜<那句话>」而不是一行空白；也守住"每条写入指令都有文本"。
+            # 从文档里引用，不是编内容（条目文本本身非空，`Entry.__post_init__` 保证）。
+            text = _entry_text(document, draft.entry_id or "") or ""
         proposals.append(
             _proposal(
                 draft,
+                text=text,
                 target=target,
                 refs=refs,
                 index=index,
@@ -1123,9 +1134,32 @@ def _entry_target_missing(draft: schemas.ProposalDraft, *, document: Document) -
     return not _entry_exists(document, draft.entry_id)
 
 
+def _proposal_unusable_reason(
+    draft: schemas.ProposalDraft, *, document: Document
+) -> str | None:
+    """这一条提案根本没法用吗？能用返回 `None`，不能用返回**人话的原因**（进留痕）。
+
+    两条判据，都是"这一条自己有问题"、不是"整包有问题"：
+
+    - **`add` / `replace` 的文本是空的**：没有内容可写（`remove` 不算——撤下哪一条由
+      `entry_id` 决定，文本只是展示；真跑 22 处空文本全是它）；
+    - **条目 id 指不到东西**：`replace` / `remove` 写错了要改哪一条。
+
+    与"去处写错"（`_target_or_drop`）同一条口径：丢这一条、留痕、继续处理同一批里的其它条目。
+    成因写在这里一处，`assemble` 与 `_proposal` 都读它（规则不许有两份）。
+    """
+
+    if draft.op != WriteOp.REMOVE.value and not draft.text.strip():
+        return "提案文本为空：add / replace 没有内容可写"
+    if _entry_target_missing(draft, document=document):
+        return f"要改的条目不存在：{draft.entry_id}"
+    return None
+
+
 def _proposal(
     draft: schemas.ProposalDraft,
     *,
+    text: str,
     target: Target,
     refs: tuple[EvidenceId, ...],
     index: int,
@@ -1159,7 +1193,7 @@ def _proposal(
             entry_id=entry_id,
             op=op,
             target=target,
-            text=draft.text.strip(),
+            text=text.strip(),
             origin=Origin(
                 type=_origin_type(draft.origin_type, refs=refs, ledger=ledger),
                 refs=refs,
@@ -1265,10 +1299,24 @@ def _question(
 
 
 def _entry_exists(document: Document, entry_id: str) -> bool:
+    return _entry_text(document, entry_id) is not None
+
+
+def _entry_text(document: Document, entry_id: str) -> str | None:
+    """按 id 找一条既有内容的正文（找不到返回 `None`）。**整份文档只走这一遍**。
+
+    用途有两个：判断"要改的条目存不存在"（`_entry_exists`），以及给**空文本的 `remove`**
+    补上"要撤下的是哪一句"——那是从文档里引用，不是编内容。
+    """
+
     for block in document.blocks:
-        if any(str(entry.entry_id) == entry_id for entry in block.entries):
-            return True
-    return any(str(entry.entry_id) == entry_id for entry in document.preference_entries)
+        for entry in block.entries:
+            if str(entry.entry_id) == entry_id:
+                return entry.text
+    for entry in document.preference_entries:
+        if str(entry.entry_id) == entry_id:
+            return entry.text
+    return None
 
 
 def _existing_content(document: Document) -> set[tuple[str, str]]:

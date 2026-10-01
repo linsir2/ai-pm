@@ -178,7 +178,12 @@ class ListItemDraft(BaseModel):
 class ProposalDraft(BaseModel):
     op: Literal["add", "replace", "remove"] = "add"
     target: TargetDraft
-    text: str
+    text: str = Field(
+        description=(
+            "这一条要写进文档的内容。**add / replace 必须有内容**；"
+            "**remove 可以留空**（要撤下哪一条看 entry_id）"
+        )
+    )
     origin_type: Literal["user", "derived", "proposed", "system_default"] = "derived"
     evidence_refs: list[str] = Field(min_length=1)
     rationale: str | None = None
