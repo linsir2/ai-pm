@@ -533,10 +533,53 @@ def test_assemble_rejects_unknown_evidence_refs():
     assert "E77" in exc.value.message
 
 
-def test_assemble_replace_requires_existing_entry_id():
+def test_assemble_a_replace_with_a_missing_entry_is_dropped_with_a_trace():
+    """条目 id 写错（指到不存在的条目）→ 丢**这一条** + 留痕，不放整轮失败。
+
+    与"去处写错"完全同一件（`02` §11.0.2，2026-09-28 拍板）：一次笔误不该让整批白干。
+    真跑现场（P24）：模型两次都写了不存在的条目 id → 整包两次过不了校验 → 整轮降级，
+    12 条判断全成"没交代"。
+    """
+
     bad = proposal_draft()
     bad["op"] = "replace"
     bad["entry_id"] = "不存在的条目"
+    good = proposal_draft(text="5 万条内 60 秒可下载")
+    result = assembly.assemble(
+        packet(proposals=[bad, good]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [item.text for item in result.proposals] == ["5 万条内 60 秒可下载"]  # 好的照进
+    assert [
+        (item.handle, item.source.value) for item in result.dropped
+    ] == [("提案 #1", "assembly")]
+    assert "不存在的条目" in result.dropped[0].reason
+
+
+def test_assemble_a_remove_with_a_missing_entry_is_dropped_too():
+    bad = proposal_draft()
+    bad["op"] = "remove"
+    bad["entry_id"] = "也不存在"
+    result = assembly.assemble(
+        packet(proposals=[bad, proposal_draft()]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert len(result.proposals) == 1
+    assert [item.handle for item in result.dropped] == ["提案 #1"]
+
+
+def test_a_replace_without_an_entry_id_is_still_a_packet_error():
+    """反方向不放松：**字段没给**（不是写错）照旧判死——`entry_id` 是写入语义字段，
+    在 `_WRITE_SEMANTICS_FIELDS` 黑名单里，不许用默认值悄悄改语义。"""
+
+    bad = proposal_draft()
+    bad["op"] = "replace"
     with pytest.raises(PacketParseError):
         assembly.assemble(
             packet(proposals=[bad]),

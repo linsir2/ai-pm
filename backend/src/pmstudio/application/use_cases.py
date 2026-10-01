@@ -1576,6 +1576,20 @@ class IntegrateRound:
                     outcome=outcome,
                     carried=carried,
                 )
+                if (
+                    not assembled.questions
+                    and not assembled.proposals
+                    and not assembled.list_items
+                ):
+                    # 装配完**什么都不剩**——模型整包是空的，或者它写的东西全被丢掉了
+                    # （去处写错 / 条目不存在 / 与文档重复）。判成**报文错**，走既有的
+                    # "重装 → 仍不行就降级"出口；不判的话会一路走到 `draft_of(...) is None`
+                    # → `ShapeError` → **HTTP 409**，用户看到的是一句莫名其妙的错。
+                    # 判据用**装配后**的产物（不是报文）：那才是用户真能拿到的东西。
+                    raise PacketParseError(
+                        "装配完什么都不剩：题、提案、清单项都没有（这一趟等于没给东西）",
+                        purpose="integration",
+                    )
             except ModelCallFailed as error:
                 # 网关类失败：网关自己已经重试 3 次 + 退避，报文重装解决不了它 → 立刻判死
                 fail_round(

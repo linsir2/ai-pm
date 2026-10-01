@@ -455,6 +455,19 @@ def assemble(
             continue
         if (target.label(), normalize(draft.text)) in existing:
             continue
+        if _entry_target_missing(draft, document=document):
+            # 条目 id 写错：丢**这一条** + 留痕，与"去处写错"同一条口径（`02` §11.0.2）。
+            # 真跑现场（P24）：模型两次都写不存在的条目 → 整包判死 → 整轮降级、判断全成"没交代"。
+            dropped.append(
+                DroppedItem(
+                    handle=f"提案 #{index}",
+                    reason=f"要改的条目不存在：{draft.entry_id}",
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=pass_index,
+                )
+            )
+            continue
         proposals.append(
             _proposal(
                 draft,
@@ -1097,6 +1110,19 @@ def _kind_for(target: Target, name: str | None) -> BlockKind:
         ) from error
 
 
+def _entry_target_missing(draft: schemas.ProposalDraft, *, document: Document) -> bool:
+    """这一条是不是"要改 / 要删一个根本不存在的条目"？
+
+    规则只写一处：`assemble` 用它决定"丢这一条"，`_proposal` 用它做自证（见那里的注释）。
+    **缺 `entry_id` 字段不算**——那是字段缺失（`entry_id` 在 `_WRITE_SEMANTICS_FIELDS`
+    黑名单里），照旧判死；这里只管"给了、但指不到东西"。
+    """
+
+    if draft.op == WriteOp.ADD.value or not draft.entry_id:
+        return False
+    return not _entry_exists(document, draft.entry_id)
+
+
 def _proposal(
     draft: schemas.ProposalDraft,
     *,
@@ -1118,7 +1144,9 @@ def _proposal(
             raise PacketParseError(
                 f"{draft.op} 必须给 entry_id（用既有条目清单里的 id）", purpose=PURPOSE
             )
-        if not _entry_exists(document, draft.entry_id):
+        # 自证用：`assemble` 那条路已经在进这里之前丢掉了"条目不存在"的那些，
+        # 所以这一句在正常路径上不可达；留着是为了这个函数单独被调用时也守规矩。
+        if _entry_target_missing(draft, document=document):
             raise PacketParseError(
                 f"要改的条目不存在：{draft.entry_id}",
                 purpose=PURPOSE,

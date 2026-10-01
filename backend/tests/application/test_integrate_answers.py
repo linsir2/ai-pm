@@ -2011,3 +2011,121 @@ async def test_the_dig_command_goes_straight_to_a_new_questionnaire():
         "第三批第 6 题",
         "第三批第 7 题",
     ]
+
+
+# —— P25：条目不存在不再判死整轮（与"去处写错"同一件） ——
+
+
+def packet_with_a_missing_entry(*, only_bad: bool = False) -> str:
+    """一份"能出草案"的报文，但第一条提案 `replace` 指到不存在的条目。"""
+
+    proposals = [
+        {
+            "op": "replace",
+            "entry_id": "r-不存在#99",
+            "target": {
+                "zone": "body",
+                "section_id": "s5",
+                "feature_slug": "order-export",
+                "field": "acceptance",
+            },
+            "text": "这条要改的条目根本不存在",
+            "origin_type": "derived",
+            "evidence_refs": ["E1"],
+        }
+    ]
+    if not only_bad:
+        proposals.append(
+            {
+                "op": "add",
+                "target": {
+                    "zone": "body",
+                    "section_id": "s5",
+                    "feature_slug": "order-export",
+                    "field": "exceptions",
+                },
+                "text": "无导出权限的用户不显示导出入口",
+                "origin_type": "derived",
+                "evidence_refs": ["E1", "E2"],
+            }
+        )
+    return json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": proposals,
+            # 两条席位意见都交代掉，免得归因补交代那条小调用插进来（那不是本用例要测的）
+            "dropped_opinions": [
+                {"handle": f"{SEAT}:O1", "reason": "本轮没有必须问用户的东西"},
+                {"handle": f"{SEAT}:O2", "reason": "已经落在上面那条提案里"},
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_a_missing_entry_no_longer_degrades_the_round():
+    """真跑现场（P24）：`replace` 指到不存在的条目 → 整包两次不过 → 整轮降级。
+
+    现在：**丢那一条 + 留痕**，其余照常出草案；一次整包调用就够（不再重装）。
+    """
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": packet_with_a_missing_entry()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert harness.gateway.purposes.count("integration") == 1  # 不再重装
+    assert round_.draft is not None  # 没降级
+    assert [proposal.text for proposal in round_.draft.proposals] == [
+        "无导出权限的用户不显示导出入口"
+    ]
+    assert not any("两次都过不了校验" in gap for gap in round_.draft.gaps)
+    assert [
+        (item.handle, item.reason) for item in round_.dropped if item.source.value == "assembly"
+    ] == [("提案 #1", "要改的条目不存在：r-不存在#99")]
+
+
+async def test_a_packet_whose_proposals_all_miss_their_entries_degrades():
+    """**全是坏条目**：装配完什么都不剩 → 判成报文错，走既有的降级出口（不是 409）。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": packet_with_a_missing_entry(only_bad=True),
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    # 先把功能授权掉：不然"没授权的功能"会生成一道决策题，装配完就不是"什么都不剩"
+    # ——那是另一条路（人工拍板），本用例要测的是"全坏条目 → 降级"。
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.AWAITING_CONFIRM  # 走的是降级，不是 409
+    assert any("未归并" in gap for gap in round_.draft.gaps)
+    # 席位那一条疑问原样落 s11（判断没落点，照旧算"没交代"——`02` §11.1 的口径）
+    assert [proposal.target.section_id for proposal in round_.draft.proposals] == ["s11"]
+
+
+async def test_an_empty_packet_still_takes_the_graceful_exit():
+    """空包（`{}`）也一样：不再撞 `draft_of(None)` → ShapeError → 409，而是走降级。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": "{}"},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.AWAITING_CONFIRM
+    assert any("未归并" in gap for gap in round_.draft.gaps)
