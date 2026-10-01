@@ -1105,3 +1105,24 @@ T11（拿真密钥真跑一轮，看导出里的"外部材料"编号）。
 
 **下一步**：C-2c（`web_fetch` 抓单页 / docx-xlsx / **docling 重解析** / 按主张取块 / 附件删除），
 以及"材料列表里区分检索来的"这种显示口的小补丁。
+
+## P18 · C-2c-1：材料找得到（2026-10-01，**已交付**）
+
+| 提交 | 内容 |
+|---|---|
+| `7f66bb4` | `MaterialRetriever` 端口 + `SqliteLikeRetriever`（`LIKE ... ESCAPE '\'`、±40 字命中窗口、排序=次数→位置→块长、`score` 与顺序同向）；`MaterialHit` 补 `title`（**死字段终于有生产者**） |
+| `f576d23` | F6 第五类来源=材料：`search_hits(materials=…)`、`kind="material"`、`ref=chunk_id`；`SearchProject` 注入只读端口（空查询不问检索器）；前端 `KIND_TEXT`/`pickSearchHit`/`jumpToChunk`/`data-chunk`/`materialHitTarget` |
+| `720d443` | 材料列表标来源（上传 / 联网检索 / 抓来的网页；认不出照实显示原值） |
+
+**真跑**：`/tmp/p18_search_drive.py`（真 multipart → 真 SQLite → 真 LIKE，**不调模型**）：
+搜「异步队列」「只给管理员」「5 万行」各命中 1 条（带锚点"第 1–4 行"与块 id）；
+搜不到的词、空查询、`5 万%` 都是 0 条。报告 `.codex/runs/2026-10-01/P18验证.md`。
+
+**口径**（`02` §11.0.30）：块级命中；空查询回空且**不进检索器**；`%`/`_`/`\` 按字面（`ESCAPE '\'`）；
+只在本项目里找；`score` 的消费者就是 F6 的展示顺序（**不重排**）。
+**不加端点（仍 23）、不建表、不加索引**；换 FTS5/向量只改 `container.py` 一行。
+
+**执行中改过 1 条自己刚写的测试**（测试写错：把 tuple 当 list 断言），已在验证报告里写明。
+
+**下一步**：C-2c-2（删除 + 重解析，共用"编号发出即冻结"口径）→ 一次**全量真跑审计**
+（回答"现在能不能交付"）→ C-2c-3 按主张取块 → C-2c-4 web_fetch/docling。
