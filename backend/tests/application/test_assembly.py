@@ -1575,6 +1575,28 @@ def test_backbone_gaps_are_silent_when_nothing_is_blocking():
     assert assembly.backbone_gap_lines(readiness=(), proposals=()) == ()
 
 
+def test_backbone_gaps_ignore_an_entry_of_the_wrong_kind():
+    """s12 要的是**验收标准**（见 `SECTION_MIN_ENTRIES`）：写一条普通正文不算填上。
+
+    真跑单轮抽样抓到的：这一轮往 s12 写了 1 条 `text`，文档里 s12 仍然报
+    "还缺 1 条验收标准"，而我那句告警因为"写过 s12"就闭嘴了——等于漏报。
+    """
+
+    text_entry = replace(backbone_proposal("s12"), kind=BlockKind.TEXT)
+    lines = assembly.backbone_gap_lines(
+        readiness=(backbone_blocker("s12"),), proposals=(text_entry,)
+    )
+
+    assert len(lines) == 1
+    assert "s12" in lines[0]
+
+    acceptance = replace(backbone_proposal("s12"), kind=BlockKind.ACCEPTANCE)
+    assert (
+        assembly.backbone_gap_lines(readiness=(backbone_blocker("s12"),), proposals=(acceptance,))
+        == ()
+    )
+
+
 # —— 阻塞题先拿配额（报告 F20） ——
 
 

@@ -14,7 +14,7 @@ from pmstudio.application.context import seat_entry_handle
 from pmstudio.application.errors import PacketParseError, unknown_ref_message
 from pmstudio.application.evidence_refs import candidates_for, normalize_ref
 from pmstudio.domain.authoring.document import Document
-from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
+from pmstudio.domain.authoring.readiness import SECTION_MIN_ENTRIES, ReadinessItem, Severity
 from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS, field_spec
 from pmstudio.domain.provenance.evidence import EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -85,12 +85,20 @@ def backbone_gap_lines(
     为什么用**文档的就绪度**而不是"本轮撞没撞到那几章"：项目跑到第二、三轮以后骨架早就填上了，
     按本轮算会每轮误报一次。这里读的是 `ReadinessChecker` 的事实——填上就不再说话。
     判据只认 `section_min_entries` 这一类阻塞（s1–s4/s10/s12 的"至少 N 条"），
-    且**这一轮写了的那章不算**（写完就该闭嘴）。
+    且**这一轮真写了的那章不算**（写完就该闭嘴）——"真写了"要看**块类型**：
+    s12 要的是验收标准，写一条普通正文不算数（`SECTION_MIN_ENTRIES` 是这条路唯一的尺子，
+    真跑单轮抽样抓到过：往 s12 写了 1 条 text，文档仍报"还缺 1 条验收标准"，
+    而我那句告警因为"写过 s12"就闭嘴了——漏报）。
     """
 
-    written = {
-        str(item.target.section_id) for item in proposals if item.target.section_id is not None
-    }
+    written: set[str] = set()
+    for proposal in proposals:
+        section = proposal.target.section_id
+        if section is None:
+            continue
+        required = SECTION_MIN_ENTRIES.get(str(section), (1, None))[1]
+        if required is None or proposal.kind is required:
+            written.add(str(section))
     missing = [
         section
         for section in BACKBONE_SECTIONS
