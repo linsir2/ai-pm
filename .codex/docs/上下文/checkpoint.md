@@ -1126,3 +1126,27 @@ T11（拿真密钥真跑一轮，看导出里的"外部材料"编号）。
 
 **下一步**：C-2c-2（删除 + 重解析，共用"编号发出即冻结"口径）→ 一次**全量真跑审计**
 （回答"现在能不能交付"）→ C-2c-3 按主张取块 → C-2c-4 web_fetch/docling。
+
+## P19 · C-2c-2：材料的删除与重解析（编号发出即冻结）（2026-10-01，**已交付**）
+
+| 提交 | 内容 |
+|---|---|
+| `89ca228` | T1：`WorkspaceIndex.material_references()`（扫 `rounds.payload.materials[]`，不限轮数、坏行跳过）+ `MaterialSummaryView.eids` + 共享 `list_material_views()` |
+| `873d156` | T2：`UnknownMaterial`(404) / `MaterialFrozen`(409)、`MaterialStore.delete` 补进协议、`DeleteMaterial` 用例、`DELETE /attachments/{id}` → 端点 **24** |
+| `d1aa48e` | T3：`MaterialStore.replace_chunks`（就地换块）、`ReparseMaterial`（没引用→就地；被引用→变体键另出一份；联网材料→422）、`POST …/reparse` → 端点 **25** |
+| `3ecc042` | T4：材料库面板 `MaterialLibrary`（带进这一轮 / 重解析 / 删掉）+ 底部入口 + 库状态整体替换 |
+
+**口径**（`02` §11.0.31）：一份材料只要有**一块**发过编号就**冻结**——不能删（409 列出编号）、
+不能就地重解析（会改指编号）。没被用过的可就地重读（同一个 id、原始字节不动）。
+被引用过的重解析**另出一份**（变体键 `sha256("reparse:{旧id}|{parser}@{version}")`，幂等），
+旧的留着当冻结记录。联网来的材料不重解析（是网页快照）。
+
+**真跑**：`/tmp/p19_material_drive.py`（真 multipart + 真 SQLite + 真端点，模型故意配假以省时间）：
+上传两份 → 起轮引用"甲"（分析失败但引用落库）→ 删"乙" 200 / 删"甲" 409 带 `E1、E2` →
+重解析"甲" 出 2 份、再点一次仍是 2 份。报告 `.codex/runs/2026-10-01/P19验证.md`。
+
+**执行中改过 3 条自己刚写的测试**（都是测试写错）：跨项目删除那条的上传前置、
+bytes 字面量非 ASCII、前端 `getByText(/3 块/)` 撞多元素。
+
+**下一步**：**全量真跑审计**（方法见 `docs/plans/2026-10-01-P19-C2c2-材料冻结口径.md` §11）→
+C-2c-3 按主张取块 → C-2c-4 `web_fetch`/docling/docx-xlsx。
