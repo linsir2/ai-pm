@@ -1,4 +1,4 @@
-"""材料解析：文本 / PDF / HTML 三条**真路径**，产出信息包（`ParsedMaterial`）。
+"""材料解析：文本 / PDF / HTML / Word（+ Excel）几条**真路径**，产出信息包（`ParsedMaterial`）。
 
 它**不盖章**（没有 material_id / project_id）——那是存储层的事（`MaterialStore.put`）。
 换 docling 的时候，只需要再写一个实现了同样端口的类，组装点换一行。
@@ -7,6 +7,9 @@
 1. **抽不出文字就说抽不出**（抛 `UnsupportedMaterial`），不返回空包；
 2. **切块**：按行/按段累积到 `CHUNK_CHARS`，标题行起新块，每块带人话锚点；
 3. **超长材料截断并写明**（`truncated` + `warnings`），不假装完整。
+
+Word / Excel 那种"按文档结构切"的活在同目录的 `office.py` 里——那边只产块，
+分派与"抽不出就说抽不出"这条纪律留在这儿（**这一处**是唯一的入口）。
 """
 
 import re
@@ -19,19 +22,19 @@ from pdfminer.high_level import extract_text as pdf_extract_text
 
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
 from pmstudio.application.errors import UnsupportedMaterial
-
-#: 一个块的目标宽度（字）。中文按字算，500 字约一屏。
-CHUNK_CHARS = 500
-
-#: 单份材料抽出的文字上限：超了截断（提示词预算是另一层，这道防线在解析这一步）
-MAX_MATERIAL_CHARS = 200_000
+from pmstudio.infrastructure.tools.limits import CHUNK_CHARS, MAX_MATERIAL_CHARS
+from pmstudio.infrastructure.tools.office import DOCX_PARSER_ID, docx_chunks
 
 TEXT_SUFFIXES = (".txt", ".md", ".markdown", ".csv", ".json", ".log", ".yaml", ".yml")
 HTML_SUFFIXES = (".html", ".htm")
+DOCX_SUFFIXES = (".docx",)
 
 TEXT_PARSER_ID = "local-text"
 HTML_PARSER_ID = "bs4-html"
 PDF_PARSER_ID = "pdfminer"
+DOCX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
 
 #: 标题行：Markdown `#`、`一、`、`1.2 `、`第 3 章` 都算（认错了最多多切一块，无害）
 _HEADING = re.compile(
@@ -140,16 +143,18 @@ def chunk_pages(pages: list[str] | tuple[str, ...], *, parser_id: str) -> tuple[
 
 
 class LocalMaterialParser:
-    """本地真解析：文本按 UTF-8、PDF 走 pdfminer、HTML 走 bs4+lxml；其余明确拒绝。"""
+    """本地真解析：文本按 UTF-8、PDF 走 pdfminer、HTML 走 bs4+lxml、Word 走 python-docx；
+    其余明确拒绝（**不静默存空**）。"""
 
     def identities(self) -> frozenset[tuple[str, str]]:
-        """我能产出三种身份（文本 / PDF / HTML）——换 docling 之后这一组就全变了。"""
+        """我能产出四种身份（文本 / PDF / HTML / Word）——换 docling 之后这一组就全变了。"""
 
         return frozenset(
             {
                 (TEXT_PARSER_ID, _package_version("pmstudio")),
                 (HTML_PARSER_ID, f"beautifulsoup4 {metadata.version('beautifulsoup4')}"),
                 (PDF_PARSER_ID, _package_version("pdfminer.six")),
+                (DOCX_PARSER_ID, _package_version("python-docx")),
             }
         )
 
@@ -159,10 +164,13 @@ class LocalMaterialParser:
             return self._from_pdf(filename, media_type, data)
         if suffix in HTML_SUFFIXES or media_type == "text/html":
             return self._from_html(filename, media_type, data)
+        if suffix in DOCX_SUFFIXES or media_type == DOCX_MEDIA_TYPE:
+            return self._from_docx(filename, media_type, data)
         if suffix in TEXT_SUFFIXES or media_type.startswith("text/"):
             return self._from_text(filename, media_type, data)
         raise UnsupportedMaterial(
-            f"不支持的材料类型：{filename}（{media_type}）——先把内容另存成 .md / .txt / .pdf",
+            f"不支持的材料类型：{filename}（{media_type}）"
+            "——先把内容另存成 .md / .txt / .pdf / .docx（老 .doc 也请另存为 .docx）",
             filename=filename,
             media_type=media_type,
         )
@@ -202,7 +210,32 @@ class LocalMaterialParser:
             chunks=chunk_text(text, parser_id=HTML_PARSER_ID),
         )
 
+    def _from_docx(self, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
+        """Word：python-docx 按**文档真实顺序**切块（段落与表格交错，表格独占一块）。
+
+        `office` 那层不知道文件名，所以在这里把文件名补进错误详情——界面要说清是哪一份。
+        """
+
+        try:
+            chunks, truncated = docx_chunks(data)
+        except UnsupportedMaterial as error:
+            raise UnsupportedMaterial(
+                error.message, **{**error.details, "filename": filename}
+            ) from error
+        return self._pack(
+            filename=filename,
+            media_type=media_type or DOCX_MEDIA_TYPE,
+            data=data,
+            text="\n".join(chunk.text for chunk in chunks),
+            truncated=truncated,
+            parser_id=DOCX_PARSER_ID,
+            parser_version=_package_version("python-docx"),
+            chunks=chunks,
+        )
+
     def _from_pdf(self, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
+        """PDF：pdfminer 抽文字，按页切块（锚点写第几页）。"""
+
         try:
             raw = pdf_extract_text(BytesIO(data))
         except Exception as error:  # noqa: BLE001 —— 第三方解析器什么都可能抛
