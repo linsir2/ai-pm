@@ -16,6 +16,8 @@ export function BottomStrip({
   materials = [],
   onMaterialUploaded,
   onMaterialRemove,
+  libraryCount = 0,
+  onOpenLibrary,
   onOpenDrawer,
   onRetry,
 }: {
@@ -29,6 +31,9 @@ export function BottomStrip({
   materials?: MaterialSummaryView[];
   onMaterialUploaded?: (material: MaterialSummaryView) => void;
   onMaterialRemove?: (materialId: string) => void;
+  /** 材料库里有几份（入口按钮上的数字）。 */
+  libraryCount?: number;
+  onOpenLibrary?: () => void;
   onOpenDrawer: () => void;
   onRetry: () => void;
 }) {
@@ -75,6 +80,11 @@ export function BottomStrip({
               onUploaded={onMaterialUploaded}
               onRemove={onMaterialRemove}
             />
+          )}
+          {onOpenLibrary !== undefined && (
+            <button type="button" className="btn btn--ghost btn--sm" onClick={onOpenLibrary}>
+              材料库（{libraryCount}）
+            </button>
           )}
           <span className="input__hint">
             {accepting

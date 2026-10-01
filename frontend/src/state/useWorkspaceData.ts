@@ -28,7 +28,9 @@ export type PendingAction =
   | "confirm"
   | "retry"
   | "dig"
-  | "edit";
+  | "edit"
+  /** 材料库上的动作（删 / 重解析）：与"这一轮"无关，但仍然串行，不并发点。 */
+  | "material";
 
 const PROJECT_PARAM = "project";
 
@@ -52,6 +54,8 @@ export function useWorkspaceData() {
   const [searchPending, setSearchPending] = useState(false);
   // 这一轮要带进去的材料（在上传框里选好、还没开轮的那些）
   const [pendingMaterials, setPendingMaterials] = useState<MaterialSummaryView[]>([]);
+  //: **材料库**：这个项目里全部材料（与"这一轮带哪些"是两回事）
+  const [materials, setMaterials] = useState<MaterialSummaryView[]>([]);
   // 我们自己取消掉的那条在途请求会以网络错误回来——别把它当"连不上后端"弹出来
   const abandoning = useRef(false);
   // 点跨轮编号时临时切过去看的那一轮（只读；"回到最新"就清掉）
@@ -66,6 +70,11 @@ export function useWorkspaceData() {
       .rounds(projectId)
       .then(setRounds)
       .catch(() => setRounds([]));
+    // 材料库同理：它是另一个只读投影，失败不该把工作区打崩
+    void api
+      .materials(projectId)
+      .then(setMaterials)
+      .catch(() => setMaterials([]));
     return workspace;
   }, []);
 
@@ -256,11 +265,54 @@ export function useWorkspaceData() {
     setPendingMaterials((list) =>
       list.some((item) => item.material_id === material.material_id) ? list : [...list, material],
     );
+    setMaterials((list) =>
+      list.some((item) => item.material_id === material.material_id) ? list : [...list, material],
+    );
   }, []);
 
   const removeMaterial = useCallback((materialId: string) => {
     setPendingMaterials((list) => list.filter((item) => item.material_id !== materialId));
   }, []);
+
+  /** 材料库面板上的"带进这一轮 / 不带进这一轮"（只改本轮选择，不动库）。 */
+  const toggleMaterial = useCallback(
+    (materialId: string) => {
+      const found = materials.find((item) => item.material_id === materialId);
+      if (found === undefined) return;
+      setPendingMaterials((list) =>
+        list.some((item) => item.material_id === materialId)
+          ? list.filter((item) => item.material_id !== materialId)
+          : [...list, found],
+      );
+    },
+    [materials],
+  );
+
+  /** 删一份材料：接口回"刷新后的列表"，**整体替换**（不猜、不做乐观更新）。 */
+  const deleteMaterial = useCallback(
+    (materialId: string) =>
+      run("material", async () => {
+        const projectId = selected.current;
+        if (projectId === null) return;
+        const list = await api.deleteMaterial(projectId, materialId);
+        setMaterials(list);
+        // 待选清单里那些已经不在库里的，跟着一起清掉（否则起轮会 422）
+        setPendingMaterials((pending) =>
+          pending.filter((item) => list.some((item2) => item2.material_id === item.material_id)),
+        );
+      }),
+    [run],
+  );
+
+  const reparseMaterial = useCallback(
+    (materialId: string) =>
+      run("material", async () => {
+        const projectId = selected.current;
+        if (projectId === null) return;
+        setMaterials(await api.reparseMaterial(projectId, materialId));
+      }),
+    [run],
+  );
 
   const submitOpening = useCallback(
     (roundId: string, body: OpeningBody) =>
@@ -416,6 +468,10 @@ export function useWorkspaceData() {
     pendingMaterials,
     addMaterial,
     removeMaterial,
+    materials,
+    toggleMaterial,
+    deleteMaterial,
+    reparseMaterial,
     historyRound,
     projects,
     booting,

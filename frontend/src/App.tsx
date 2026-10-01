@@ -20,6 +20,7 @@ import { EvidenceScope } from "./components/EvidenceContext";
 import { jumpToChunk, jumpToEntry, jumpToEvidence } from "./components/jump";
 import { sectionOfEntry } from "./document/structure";
 import { LoopColumn } from "./components/LoopColumn";
+import { MaterialLibrary } from "./components/MaterialLibrary";
 import { Onboarding } from "./components/Onboarding";
 import { SideRail } from "./components/SideRail";
 import { Banner, Skeleton } from "./components/States";
@@ -40,6 +41,7 @@ export default function App() {
     window.localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light",
   );
   const [versionsOpen, setVersionsOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
 
@@ -319,6 +321,8 @@ export default function App() {
             materials={data.pendingMaterials}
             onMaterialUploaded={data.addMaterial}
             onMaterialRemove={data.removeMaterial}
+            libraryCount={data.materials.length}
+            onOpenLibrary={() => setLibraryOpen(true)}
             onStartRound={(input) => void data.startRound(input, data.pendingMaterials)}
             onOpenDrawer={() => drafts.setCollapsed(false)}
             onRetry={() => {
@@ -333,6 +337,24 @@ export default function App() {
                 current={doc?.version_no ?? project.version_no}
                 onRollback={data.rollback}
                 onCollapse={() => setVersionsOpen(false)}
+              />
+            </div>
+          )}
+
+          {libraryOpen && (
+            <div className="overlay-slot">
+              <MaterialLibrary
+                materials={data.materials}
+                selected={data.pendingMaterials.map((item) => item.material_id)}
+                pending={data.pending !== null}
+                onToggleSelected={data.toggleMaterial}
+                onDelete={(materialId) => {
+                  if (window.confirm("删掉这份材料？它没被引用过，删了就没了（不可恢复）。")) {
+                    void data.deleteMaterial(materialId);
+                  }
+                }}
+                onReparse={(materialId) => void data.reparseMaterial(materialId)}
+                onCollapse={() => setLibraryOpen(false)}
               />
             </div>
           )}

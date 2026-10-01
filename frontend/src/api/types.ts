@@ -360,6 +360,11 @@ export interface MaterialSummaryView {
   warnings: string[];
   /** 这份材料是用**旧解析器**读的吗（界面提示"建议重解析"）。 */
   stale: boolean;
+  /**
+   * 这份材料被**哪些编号**引用过（P19）：空 = 没被用过，可以删、可以就地重解析；
+   * 有编号 = **冻结**（编号指向它里面的块，删了编号就指向空气）。
+   */
+  eids: string[];
 }
 
 export interface RoundMaterialChunkView {

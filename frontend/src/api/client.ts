@@ -142,6 +142,20 @@ export const api = {
   materials: (projectId: string) =>
     request<MaterialSummaryView[]>(`/projects/${projectId}/attachments`),
 
+  /** 删一份材料。**没被引用过才准删**——被引用过后端回 409（消息里列出编号）。 */
+  deleteMaterial: (projectId: string, materialId: string) =>
+    request<MaterialSummaryView[]>(
+      `/projects/${projectId}/attachments/${encodeURIComponent(materialId)}`,
+      { method: "DELETE" },
+    ),
+
+  /** 用当前解析器把这份材料的原始字节重读一遍（不用重传文件）。返回刷新后的列表。 */
+  reparseMaterial: (projectId: string, materialId: string) =>
+    request<MaterialSummaryView[]>(
+      `/projects/${projectId}/attachments/${encodeURIComponent(materialId)}/reparse`,
+      { method: "POST" },
+    ),
+
   /** 上传一份材料：multipart，解析在后端做（真解析：文本 / PDF / HTML）。 */
   uploadMaterial: async (projectId: string, file: File): Promise<MaterialSummaryView> => {
     const form = new FormData();
