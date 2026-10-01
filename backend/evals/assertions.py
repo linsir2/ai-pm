@@ -19,6 +19,7 @@ EVAL_ASSERTIONS: list[dict] = [
     {"type": "no_duplicate_questions"},
     {"type": "dropped_items_are_explained"},
     {"type": "outside_scope_items_are_labeled"},
+    {"type": "unaccounted_at_most", "count": 2},
 ]
 
 
@@ -87,6 +88,23 @@ def check(assertion: dict, view: RoundView) -> str | None:
     if kind == "dropped_items_are_explained":
         bad = [item.handle for item in view.dropped if not item.reason.strip()]
         return None if not bad else f"这些留痕没写原因：{'、'.join(bad)}"
+
+    if kind == "unaccounted_at_most":
+        # 2026-10-01（F19）：`unaccounted` 是"整合既没说丢掉它、也没交代落到哪"的机械核对，
+        # 每轮 5–26 条，而实测 48–100% 是假阳性——整合者把意见的内容写进了卡片，
+        # 只是没引那条判断自己的编号 / 没写疑问的地址（提示词里从没交代过这件事）。
+        # 修法是补提示词 + 让"本批没排上的题"也算产出；**不去猜**哪条其实被用了。
+        #
+        # 阈值 2 不给 0：这条判据的输入是模型行为，抖一下不该变成红灯；
+        # 要的是"降一个数量级"，不是"允许它继续每轮十几条"。
+        unaccounted = [item.handle for item in view.dropped if item.source == "unaccounted"]
+        limit = assertion["count"]
+        return (
+            None
+            if len(unaccounted) <= limit
+            else f"这一轮有 {len(unaccounted)} 条意见既没被引用也没被申报丢弃："
+            f"{'、'.join(unaccounted[:5])}"
+        )
 
     if kind == "contradiction_is_labelled":
         # 2026-09-29：`conflict` 与 `gap` 在界面上是**分开显示**的（`document/status.ts` 把

@@ -350,8 +350,17 @@ def dropped_from_packet(
 #: 未申报意见的留痕里，引原文引到多少字为止（留痕是给人看的，不是把整句抄进去）
 OPINION_HEAD_CHARS = 40
 
-#: 未申报意见的留痕尾句：说明的是"整合者没交代"，不是"这条意见没价值"
-UNACCOUNTED_TAIL = "（整合既没说丢掉它，也没交代它落到了哪儿）"
+#: 未申报意见的留痕尾句：说明的是"整合者没交代"，不是"这条意见没价值"。
+#: 按**形态**分两句（2026-10-01，F19）：原话术一律是"既没说丢掉也没交代落到哪儿"，
+#: 用户看了等于没看。形态是领域对象自带的，按它说话**不猜任何东西**。
+UNACCOUNTED_TAIL_QUESTION = "（这条疑问没被变成题，整合也没申报丢弃）"
+UNACCOUNTED_TAIL_JUDGMENT = "（这条判断没进任何提案或题目，整合也没申报丢弃）"
+
+
+def _unaccounted_tail(opinion: Opinion) -> str:
+    if opinion.form is OpinionForm.QUESTION:
+        return UNACCOUNTED_TAIL_QUESTION
+    return UNACCOUNTED_TAIL_JUDGMENT
 
 
 def unaccounted_drops(
@@ -387,7 +396,10 @@ def unaccounted_drops(
             items.append(
                 DroppedItem(
                     handle=handle,
-                    reason=f"{opinion.about}：{_opinion_head(opinion)}{UNACCOUNTED_TAIL}",
+                    reason=(
+                        f"{opinion.about}：{_opinion_head(opinion)}"
+                        f"{_unaccounted_tail(opinion)}"
+                    ),
                     source=DropSource.UNACCOUNTED,
                     seat_id=review.seat_id,
                     pass_index=review.pass_index,

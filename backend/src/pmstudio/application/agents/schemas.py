@@ -222,6 +222,25 @@ class Overflow:
     dropped: int
 
 
+#: 非对象元素的统一说法。**不复制模型写的那串**（占位符本身不进留痕）——
+#: 留痕要的是"这里少了一条、为什么少"，不是把模型写的垃圾再抄一遍（learnings L20）。
+NOT_AN_OBJECT = "这一条不是对象（模型写了占位符），没有内容可收"
+
+
+@dataclass(frozen=True, slots=True)
+class Discarded:
+    """容器里被摘掉的一条：**它根本不是对象**，没有内容可判。
+
+    与 `Overflow` 分开：超限是"太多了"，这个是"这一条不成形状"。
+    两者都不是内容错——真跑里一个占位符字符串 `"O2_placeholder"` 曾把整轮打掉
+    （`.codex/runs/2026-10-01/报告.md` F17）。
+    """
+
+    container: str
+    index: int
+    reason: str = NOT_AN_OBJECT
+
+
 #: 顶层数组的元素 → 容器。**顺序本身是判据的一部分**：命中即停，先查特征最强的键。
 #: 题面特征（`title` / `consequence_if_skipped`）必须排在 `evidence_refs` 前面——
 #: 题目也可能带依据编号，先看题面才能把它和提案分开。
@@ -296,15 +315,27 @@ def _allows_none(annotation: object) -> bool:
     return annotation is type(None) or type(None) in get_args(annotation)  # noqa: E721
 
 
-def _normalize_value(value: object, *, annotation: object) -> object:
-    """按注解归一化一个值：列表字段收 `null` / 单个字符串；嵌套报文递归进去。"""
+def _normalize_value(
+    value: object,
+    *,
+    annotation: object,
+    container: str | None = None,
+    discarded: list[Discarded] | None = None,
+) -> object:
+    """按注解归一化一个值：列表字段收 `null` / 单个字符串；嵌套报文递归进去。
+
+    `discarded` 非空时才开启**摘非对象元素**（`parse_packet_lenient`）：
+    那一支只在"元素根本不是对象"时丢，元素是对象但字段写错照旧原样交给 pydantic 报错。
+    """
 
     origin = get_origin(annotation)
     if origin in (Union, UnionType):
         inner = [item for item in get_args(annotation) if item is not type(None)]
         if value is None or len(inner) != 1:
             return value
-        return _normalize_value(value, annotation=inner[0])
+        return _normalize_value(
+            value, annotation=inner[0], container=container, discarded=discarded
+        )
     if origin is list:
         args = get_args(annotation)
         item_type = args[0] if args else object
@@ -313,17 +344,28 @@ def _normalize_value(value: object, *, annotation: object) -> object:
         if isinstance(value, str) and item_type is str:
             return [value]
         if isinstance(value, list) and _is_model(item_type):
-            return [
-                _normalize_model(item, model=item_type) if isinstance(item, dict) else item
-                for item in value
-            ]
+            kept: list[object] = []
+            for position, item in enumerate(value, start=1):
+                if isinstance(item, dict):
+                    kept.append(
+                        _normalize_model(item, model=item_type, discarded=discarded)
+                    )
+                elif discarded is not None:
+                    discarded.append(
+                        Discarded(container=container or "?", index=position)
+                    )
+                else:
+                    kept.append(item)  # 严格路径：原样留着，让 pydantic 报 `model_type`
+            return kept
         return value
     if _is_model(annotation) and isinstance(value, dict):
-        return _normalize_model(value, model=annotation)
+        return _normalize_model(value, model=annotation, discarded=discarded)
     return value
 
 
-def _normalize_model(payload: object, *, model: type[BaseModel]) -> object:
+def _normalize_model(
+    payload: object, *, model: type[BaseModel], discarded: list[Discarded] | None = None
+) -> object:
     """按字段表过一遍：先按注解修形状，再让"非 Optional + 有默认值"的 `null` 用默认值。"""
 
     if not isinstance(payload, dict):
@@ -334,7 +376,9 @@ def _normalize_model(payload: object, *, model: type[BaseModel]) -> object:
         if spec is None:
             fixed[name] = value  # 多余的键交给 pydantic（默认忽略）
             continue
-        normalized = _normalize_value(value, annotation=spec.annotation)
+        normalized = _normalize_value(
+            value, annotation=spec.annotation, container=name, discarded=discarded
+        )
         if (
             normalized is None
             and name not in _WRITE_SEMANTICS_FIELDS
@@ -347,7 +391,9 @@ def _normalize_model(payload: object, *, model: type[BaseModel]) -> object:
     return fixed
 
 
-def _normalize_fields(payload: object, *, model: type[BaseModel]) -> object:
+def _normalize_fields(
+    payload: object, *, model: type[BaseModel], discarded: list[Discarded] | None = None
+) -> object:
     """字段级归一化：机械可判的就地修，**内容字段与写入语义一律不动**。
 
     真跑实测（P7 验证留样 7）：席位把 `evidence_refs` 写成 `null` → 整席位判死。
@@ -358,7 +404,7 @@ def _normalize_fields(payload: object, *, model: type[BaseModel]) -> object:
     黑名单（`op` / `entry_id` / `form`）例外——那三个用默认值会**悄悄改语义**。
     """
 
-    return _normalize_model(payload, model=model)
+    return _normalize_model(payload, model=model, discarded=discarded)
 
 
 def parse_packet[T: BaseModel](text: str, model: type[T], *, purpose: str) -> T:
@@ -399,6 +445,46 @@ def parse_packet_trimmed[T: BaseModel](
     - 溢出条数报回调用方，由用例层写成留痕（不静默丢）。
     """
 
+    return _validate_trimming(
+        _load_normalized(text, model, purpose=purpose, discarded=None),
+        model,
+        purpose=purpose,
+    )
+
+
+def parse_packet_lenient[T: BaseModel](
+    text: str, model: type[T], *, purpose: str
+) -> tuple[T, tuple[Overflow, ...], tuple[Discarded, ...]]:
+    """`parse_packet_trimmed` + **摘掉容器里根本不是对象的元素**（2026-10-01 审计 F17）。
+
+    真跑现场：某个席位的 `opinions[1]` 是模型自己写的占位符字符串 `"O2_placeholder"`，
+    pydantic 报 `model_type` → 不是 `too_long` → 整轮判死（用户只能点一次 `/retry` 重跑那个席位）。
+
+    它不是内容错（那一"条"根本没有内容可判），是**形状错**——与超限同一套语义：
+    丢掉那一条、把位置报回调用方写成留痕，整轮照跑。三条边界：
+
+    1. **只摘非对象**。元素是对象、字段写错（`claim: null`）→ 照旧抛，不许被"丢那一条"掩盖；
+    2. 摘空之后的校验照旧生效（主张一条都不剩 ⇒ `min_length` 拦下，整轮判死——主张是地基）；
+    3. 摘掉的每一条都上报（`Discarded`），**一条都不许默默丢**。
+
+    为什么单独开一个函数、不让 `parse_packet_trimmed` 一起变：整合者那条路还没有"把丢掉的东西
+    写进留痕"的出口，让它静默摘就等于破"一条都不许默默丢掉"的规矩。整合者单独一轮再开。
+    """
+
+    discarded: list[Discarded] = []
+    packet, overflow = _validate_trimming(
+        _load_normalized(text, model, purpose=purpose, discarded=discarded),
+        model,
+        purpose=purpose,
+    )
+    return packet, overflow, tuple(discarded)
+
+
+def _load_normalized(
+    text: str, model: type[BaseModel], *, purpose: str, discarded: list[Discarded] | None
+) -> object:
+    """JSON → 顶层数组重建 → 字段归一化（`discarded` 非空时才摘非对象元素）。"""
+
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as error:
@@ -406,7 +492,14 @@ def parse_packet_trimmed[T: BaseModel](
             f"模型返回的不是合法 JSON：{error.msg}", purpose=purpose, offset=error.pos
         ) from error
     payload = _normalize_payload(payload, model=model, purpose=purpose)
-    payload = _normalize_fields(payload, model=model)
+    return _normalize_fields(payload, model=model, discarded=discarded)
+
+
+def _validate_trimming[T: BaseModel](
+    payload: object, model: type[T], *, purpose: str
+) -> tuple[T, tuple[Overflow, ...]]:
+    """先严格校验；**只有当所有报错都是 `too_long` 时**才截断重试（别的错照旧抛）。"""
+
     try:
         return model.model_validate(payload), ()
     except ValidationError as error:

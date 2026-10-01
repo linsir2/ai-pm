@@ -282,3 +282,34 @@ def test_unknown_assertion_is_an_error():
 
     with pytest.raises(ValueError):
         check({"type": "nope"}, view_of(make_round()))
+
+
+def unaccounted(count: int) -> tuple[DroppedItem, ...]:
+    return tuple(
+        DroppedItem(
+            handle=f"seat.a:O{index}",
+            reason="量级：…（没被变成题，整合也没申报丢弃）",
+            source=DropSource.UNACCOUNTED,
+            seat_id="seat.a",
+            pass_index=1,
+        )
+        for index in range(1, count + 1)
+    )
+
+
+def test_unaccounted_opinions_are_capped():
+    """报告 F19：`unaccounted` 每轮 5–26 条，而它 48–100% 是假阳性（内容其实进了卡片）。
+
+    判据只数 `source=unaccounted` 的条数——**不去猜**哪条"其实被用了"。
+    阈值给 2 不给 0：这条判据的输入是模型行为，抖一下不该变成红灯；
+    但要的是"降一个数量级"，不是"允许它继续每轮十几条"。
+    """
+
+    view = view_of(
+        round_with(
+            [question("q1", target=Target.body("s8"))], dropped=unaccounted(3)
+        )
+    )
+
+    assert check({"type": "unaccounted_at_most", "count": 2}, view) is not None
+    assert check({"type": "unaccounted_at_most", "count": 3}, view) is None

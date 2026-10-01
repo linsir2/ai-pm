@@ -146,6 +146,80 @@ async def test_judgment_accounted_by_a_proposal_still_leaves_the_question_report
     ]
 
 
+async def test_unaccounted_reason_says_which_form_it_was():
+    """报告 F19：原话术一律是"整合既没说丢掉它，也没交代它落到了哪儿"——用户看了等于没看。
+
+    形态是领域对象自带的（疑问 / 判断），按它分两句**不猜任何东西**：
+    疑问该说的是"没被变成题"，判断该说的是"没进任何提案或题目"。
+    """
+
+    harness = harness_with(integration=draft_reply(refs=["E1"], dropped=[]))
+
+    round_id = await run_to_integrated(harness)
+
+    by_handle = {item.handle: item.reason for item in harness.rounds.get(round_id).dropped}
+    assert "没被变成题" in by_handle[f"{SEAT}:O1"]
+    assert "没进任何提案或题目" in by_handle[f"{SEAT}:O2"]
+
+
+def six_questions_reply(*, sixth_refs: list[str]) -> str:
+    """6 道题（上限 5）：第 6 道会被挤进轮内队列，只有它引用了那条判断的编号。"""
+
+    def one(index: int, *, section: str, refs: list[str]) -> dict:
+        return {
+            "kind": "gap",
+            "title": f"第 {index} 件事怎么定",
+            "why": "只有用户能定",
+            "consequence_if_skipped": "先按默认处理",
+            "target": {"zone": "body", "section_id": section},
+            "type": "single",
+            "options": [
+                {"option_id": "a", "text": "甲"},
+                {"option_id": "b", "text": "乙"},
+            ],
+            "evidence_refs": refs,
+            "from_opinions": [],
+        }
+
+    return json.dumps(
+        {
+            "questions": [one(index, section="s1", refs=["E1"]) for index in range(1, 6)]
+            + [one(6, section="s2", refs=sixth_refs)],
+            "list_items": [],
+            "dropped_opinions": [],
+            "proposals": [],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_a_judgment_cited_only_by_a_deferred_question_is_accounted():
+    """报告 F19 的漏算：本批没排上的题**已经产出**了，它引用的判断当然算"交代过"。
+
+    以前只把"保留下来的那 5 道题"当产出（`produced_questions=assembled.questions`），
+    被挤进轮内队列的第 6 道题里的引用整条被漏掉 → 那条判断被误报"没人交代"。
+    """
+
+    harness = harness_with(integration=six_questions_reply(sixth_refs=["E2"]))
+
+    round_id = await run_to_integrated(harness)
+
+    round_ = harness.rounds.get(round_id)
+    assert len(round_.deferred) == 1  # 确实有一道被挤到本批之外
+    assert {item.handle for item in round_.dropped} == {f"{SEAT}:O1"}  # 疑问照旧报，判断被交代了
+
+
+async def test_a_silently_unused_opinion_is_still_reported():
+    """反例必须留着：既没被引用、也没写地址、也没申报 → 照旧报，不许因为改了话术就放松。"""
+
+    harness = harness_with(integration=draft_reply(refs=["E1"], dropped=[]))
+
+    round_id = await run_to_integrated(harness)
+
+    handles = {item.handle for item in harness.rounds.get(round_id).dropped}
+    assert handles == {f"{SEAT}:O1", f"{SEAT}:O2"}
+
+
 def overflow_reply(count: int) -> str:
     """一次交太多：真跑里 44 条提案把整轮打死（报告 F2）。"""
 

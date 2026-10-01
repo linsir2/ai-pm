@@ -35,6 +35,19 @@ def test_limits_tell_the_model_to_process_open_items():
     assert "remove" in LIMITS_TEXT
 
 
+def test_limits_say_an_adopted_opinion_must_be_cited():
+    """真跑审计 F19：整合者把判断的内容写进提案，却只引它依据的用户编号（E4）、
+    不引那条判断自己的编号（E9）→ 判据说"这条意见没人交代"，而它的内容其实已经进卡片了。
+
+    实测：4 条车道 13 个轮次里，`unaccounted` 有 48–100% 是这种情况。
+    判据考的是"引它自己的编号"，提示词就必须先说——考一件从没交代过的事，
+    等于在惩罚模型的猜测（learnings L22）。
+    """
+
+    assert "那条判断自己的出处编号" in LIMITS_TEXT
+    assert "变成题" in LIMITS_TEXT  # 疑问那条路：变成题就要留地址
+
+
 async def test_integrator_passes_the_open_item_list():
     gateway = ScriptedModelGateway(replies={"integration": INTEGRATION_REPLY})
     prompts = RecordingPrompts()

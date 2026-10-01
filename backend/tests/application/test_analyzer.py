@@ -716,3 +716,94 @@ async def test_analyzer_still_sends_the_section_table_to_the_model():
     await analyzer.analyze(user_input=INPUT, document_state="# 文档")
 
     assert "s5 功能需求" in prompts.calls[0][1]["sections"]
+
+
+# —— 容器里的"非对象元素"：主张这一包曾是唯一没有 `/retry` 的失败路 ——
+
+
+def claims_with_a_placeholder(*, contradiction: tuple[int, int] | None = None) -> str:
+    """三条主张的第 2 条写成占位符字符串（形状错），第 1、3 条是真主张。"""
+
+    payload = {
+        "basis": "读了 s1–s13 全文（当前为空文档）与本轮输入",
+        "claims": [
+            {
+                "text": "要做一个订单导出功能",
+                "raw_span": "想做个订单导出的功能",
+                "label": "need",
+                "zone": "body",
+                "section_id": "s5",
+            },
+            "c2_placeholder",
+            {
+                "text": "登录页太丑",
+                "raw_span": "登录页太丑了",
+                "label": "preference",
+                "zone": "preference",
+            },
+        ],
+        "seats": [{"seat_id": SEAT, "why": "你说到了导出"}],
+    }
+    if contradiction is not None:
+        payload["contradictions"] = [
+            {
+                "claim_a": contradiction[0],
+                "claim_b": contradiction[1],
+                "why": "一个说不能改，一个说要能改",
+            }
+        ]
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def test_a_non_object_claim_is_dropped_with_a_trace():
+    """元素不是对象 → 丢掉那一条 + 留痕；其余主张照收，**起轮不判死**。"""
+
+    analyzer = make_analyzer(
+        ScriptedModelGateway(replies={"claims": claims_with_a_placeholder()}), RecordingPrompts()
+    )
+
+    analysis = await analyzer.analyze(user_input=CASE_A_INPUT, document_state="# 文档")
+
+    assert [item.text for item in analysis.claims] == ["要做一个订单导出功能", "登录页太丑"]
+    assert [item.claim_id for item in analysis.claims] == ["c1", "c2"]
+    assert [item.handle for item in analysis.dropped] == ["主张 #2（不是对象）"]
+    assert "不是对象" in analysis.dropped[0].reason
+    assert analysis.dropped[0].source is DropSource.ASSEMBLY
+
+
+async def test_a_contradiction_ordinal_is_remapped_after_a_dropped_claim():
+    """丢了一条主张之后，模型写的"第 3 条"必须还能指到第 3 条**它自己**说的主张。
+
+    序号是模型按它交回的那个数组报的；丢一条会让后面的整体前移，
+    所以要用"原始序号 → 落下来的第几条"这张表换算，而不是直接拿下标去取。
+    """
+
+    analyzer = make_analyzer(
+        ScriptedModelGateway(replies={"claims": claims_with_a_placeholder(contradiction=(1, 3))}),
+        RecordingPrompts(),
+    )
+
+    analysis = await analyzer.analyze(user_input=CASE_A_INPUT, document_state="# 文档")
+
+    assert [(item.claim_id_a, item.claim_id_b) for item in analysis.contradictions] == [
+        ("c1", "c2")
+    ]
+    assert analysis.contradictions[0].why
+
+
+async def test_a_contradiction_pointing_at_a_dropped_claim_is_dropped_too():
+    """序号指到那条被丢掉的占位符上 → 这对互斥没有两侧，丢那一条 + 留痕。"""
+
+    analyzer = make_analyzer(
+        ScriptedModelGateway(replies={"claims": claims_with_a_placeholder(contradiction=(2, 3))}),
+        RecordingPrompts(),
+    )
+
+    analysis = await analyzer.analyze(user_input=CASE_A_INPUT, document_state="# 文档")
+
+    assert analysis.contradictions == ()
+    assert [item.handle for item in analysis.dropped] == [
+        "主张 #2（不是对象）",
+        "互斥对子 2↔3",
+    ]
+    assert "没切进来" in analysis.dropped[1].reason

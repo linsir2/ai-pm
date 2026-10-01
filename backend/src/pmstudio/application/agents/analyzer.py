@@ -7,7 +7,7 @@
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
@@ -203,12 +203,19 @@ class ClaimAnalyzer:
         # 主张这一包**超限不判死**（P21 F16-a）：席位（`use_cases`）与整合者早就走这条路，
         # 只有分析者还在严格解析——而它是**唯一一条没有 `/retry` 可点**的失败路
         # （轮次都还没建出来）。截断保留它自己排的前 N 条，溢出写成留痕。
-        packet, overflow = schemas.parse_packet_trimmed(
+        packet, overflow, discarded = schemas.parse_packet_lenient(
             reply.text, schemas.ClaimsPacket, purpose=self.PURPOSE
         )
         seats, dropped = nominations_from_packet(packet, catalog=self._catalog)
         claims, claim_drops = claims_from_packet(packet, user_input=user_input)
-        contradictions, contradiction_drops = contradictions_from_packet(packet, claims=claims)
+        # 被摘掉的那些条（根本不是对象）会让后面主张的序号整体前移，而互斥对子是按
+        # **模型自己写的序号**指认的——所以要用"原始序号 → 落下来的第几条"换算，
+        # 不能直接拿下标去取（真跑 F17 那一包只错了一条，换算错了就等于把互斥指到别人身上）。
+        claims_discarded = tuple(item for item in discarded if item.container == "claims")
+        positions = ClaimPositions.after_discarding(kept=len(claims), discarded=claims_discarded)
+        contradictions, contradiction_drops = contradictions_from_packet(
+            packet, claims=claims, positions=positions
+        )
         web_queries, query_drops = web_queries_from_packet(packet)
         return Analysis(
             claims=claims,
@@ -216,6 +223,7 @@ class ClaimAnalyzer:
             dropped=(
                 dropped
                 + claims_overflow_drops(overflow)
+                + discarded_claim_drops(claims_discarded)
                 + claim_drops
                 + contradiction_drops
                 + query_drops
@@ -243,6 +251,68 @@ def claims_overflow_drops(overflows: Sequence[schemas.Overflow]) -> tuple[Droppe
         )
         for item in overflows
     )
+
+
+def discarded_claim_drops(
+    discarded: Sequence[schemas.Discarded],
+) -> tuple[DroppedItem, ...]:
+    """切不出来（那一"条"根本不是对象）的主张：**丢那一条 + 留痕**（审计 F17）。
+
+    与"超限截断"（`claims_overflow_drops`）同一个口径：说清**第几条**、**为什么**，
+    不把模型写的那串占位符抄进留痕——回喂原串等于给它一个可以照抄的模板（learnings L20）。
+    """
+
+    return tuple(
+        DroppedItem(
+            handle=f"主张 #{item.index}（不是对象）",
+            reason=item.reason,
+            source=DropSource.ASSEMBLY,
+            seat_id=None,
+            pass_index=1,
+        )
+        for item in discarded
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimPositions:
+    """模型交回的第 i 条主张（1 起）→ 落下来的第几条（1 起）；被摘掉的不在表里。
+
+    序号只有这一处有权威：`c{i}` 是我们按数组下标发的，提示词里从没出现过。
+    """
+
+    total: int
+    mapping: Mapping[int, int]
+
+    @classmethod
+    def identity(cls, *, total: int) -> "ClaimPositions":
+        return cls(total=total, mapping={index: index for index in range(1, total + 1)})
+
+    @classmethod
+    def after_discarding(
+        cls, *, kept: int, discarded: Sequence[schemas.Discarded]
+    ) -> "ClaimPositions":
+        """`kept` = 落下来的条数；被摘掉的原始位置从序号里剔除，其余依次前移。"""
+
+        lost = {item.index for item in discarded}
+        total = kept + len(discarded)
+        return cls(
+            total=total,
+            mapping={
+                original: new
+                for new, original in enumerate(
+                    (index for index in range(1, total + 1) if index not in lost), start=1
+                )
+            },
+        )
+
+    def in_range(self, position: int) -> bool:
+        return 1 <= position <= self.total
+
+    def resolve(self, position: int) -> int | None:
+        """原始序号 → 落下来的第几条；被摘掉（或越界）返回 `None`。"""
+
+        return self.mapping.get(position)
 
 
 def nominations_from_packet(
@@ -372,7 +442,10 @@ def claims_from_packet(
 
 
 def contradictions_from_packet(
-    packet: schemas.ClaimsPacket, *, claims: Sequence[Claim]
+    packet: schemas.ClaimsPacket,
+    *,
+    claims: Sequence[Claim],
+    positions: ClaimPositions | None = None,
 ) -> tuple[tuple[Contradiction, ...], tuple[DroppedItem, ...]]:
     """报文里的"第几条 ↔ 第几条" → 领域值对象；写歪的**丢那一条 + 留痕**。
 
@@ -380,18 +453,24 @@ def contradictions_from_packet(
     与"未知席位提名"同一个口径：一条判断写错，不该让整轮重跑（模型重跑一次要几十秒）。
 
     序号 → 主张 id（`c{i}`）的映射只有这一处：id 是我们按数组下标发的，提示词里从没出现过。
+    `positions` 把"模型交回的原始序号"换算成"落下来的第几条"——有主张被摘掉时两者不同
+    （不传就是恒等映射，老调用方照旧）。
     """
 
-    total = len(claims)
+    table = positions or ClaimPositions.identity(total=len(claims))
     keep: list[Contradiction] = []
     dropped: list[DroppedItem] = []
     for item in packet.contradictions:
         handle = f"互斥对子 {item.claim_a}↔{item.claim_b}"
         reason: str | None = None
-        if not (1 <= item.claim_a <= total and 1 <= item.claim_b <= total):
-            reason = f"这一轮只有 {total} 条主张，序号越界；已丢弃该条互斥判断"
+        left, right = table.resolve(item.claim_a), table.resolve(item.claim_b)
+        if not (table.in_range(item.claim_a) and table.in_range(item.claim_b)):
+            reason = f"这一轮只有 {table.total} 条主张，序号越界；已丢弃该条互斥判断"
         elif item.claim_a == item.claim_b:
             reason = "自己跟自己不叫互斥；已丢弃该条互斥判断"
+        elif left is None or right is None:
+            # 指到的那条主张没切进来（它根本不是对象）：这对互斥也就没有两侧了。
+            reason = "这条互斥判断指到的主张没切进来（它不是对象，已被摘掉）；已丢弃该条互斥判断"
         if reason is not None:
             dropped.append(
                 DroppedItem(
@@ -403,11 +482,12 @@ def contradictions_from_packet(
                 )
             )
             continue
+        assert left is not None and right is not None  # 上面两个分支已把 None 挡掉
         try:
             keep.append(
                 Contradiction(
-                    claim_id_a=claims[item.claim_a - 1].claim_id,
-                    claim_id_b=claims[item.claim_b - 1].claim_id,
+                    claim_id_a=claims[left - 1].claim_id,
+                    claim_id_b=claims[right - 1].claim_id,
                     why=item.why,
                 )
             )

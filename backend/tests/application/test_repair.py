@@ -176,3 +176,25 @@ def test_a_missing_kind_gets_the_three_values_and_the_criterion():
     assert "questions.0.kind" in note
     assert "gap" in note and "conflict" in note and "decision" in note
     assert "互斥" in note
+
+
+def test_a_non_object_item_says_every_item_must_be_an_object():
+    """真跑报告 F17：`opinions[1]` 是一个占位符字符串。
+
+    重装那一次要说清两件事：**哪一条**、**该是什么形状**。
+    不许把模型写的那串占位符回喂回去（learnings L20：回喂等于给它一个可以照抄的模板）。
+    """
+
+    note = repair_note(
+        PacketParseError(
+            "模型返回的报文过不了 schema",
+            purpose="seat_review",
+            discarded=("opinions", 2),
+        )
+    )
+
+    assert "opinions" in note
+    assert "第 2 条" in note
+    assert "不是对象" in note
+    assert "占位符" in note
+    assert "placeholder" not in note

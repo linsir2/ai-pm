@@ -733,7 +733,11 @@ def test_an_unaccounted_opinion_says_what_it_was_about():
 
     assert "导出的数据量级" in items[0].reason  # opinion.about
     assert "量级决定同步还是异步" in items[0].reason  # opinion.claim
-    assert "既没说丢掉它" in items[0].reason  # 原话保留：它说明的是**整合者没交代**
+    # 尾句按**形态**分两句（2026-10-01 F19）：原话术"既没说丢掉它，也没交代它落到了哪儿"
+    # 一律套用，用户看了等于没看。这里这条是判断，所以说的是"没进任何提案或题目"。
+    # 要守的意图没变：尾句说明的是**整合者没交代**，不是"这条意见没价值"。
+    assert "没进任何提案或题目" in items[0].reason
+    assert "整合也没申报丢弃" in items[0].reason
 
 
 def test_a_long_unaccounted_claim_is_truncated_in_the_trace():

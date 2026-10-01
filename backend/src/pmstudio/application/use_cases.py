@@ -13,7 +13,7 @@ from datetime import datetime
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import Integrator
-from pmstudio.application.agents.schemas import Overflow
+from pmstudio.application.agents.schemas import Discarded, Overflow
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.assembly import (
     NEW_FEATURE_YES,
@@ -741,6 +741,18 @@ class RunSeatRound:
                     raise
                 validation_error = repair_note(error)
                 continue
+            if outcome.discarded and attempt < MAX_SEAT_ATTEMPTS:
+                # 容器里混进了**根本不是对象**的元素（真跑 F17：`opinions[1]` 是占位符字符串）。
+                # 与超限同一个口径：先重装一次让它自己改；第二次仍错才丢掉那一条。
+                first = outcome.discarded[0]
+                validation_error = repair_note(
+                    PacketParseError(
+                        "模型返回的报文过不了 schema",
+                        purpose="seat_review",
+                        discarded=(first.container, first.index),
+                    )
+                )
+                continue
             if outcome.overflow and attempt < MAX_SEAT_ATTEMPTS:
                 # **先重装、再截断**（报告 F4）：超限是可修复的错，先让它自己精简一次。
                 # 判定点放在用例层：重试策略归这里，席位 agent 只负责"报文 → 领域对象"。
@@ -767,6 +779,15 @@ class RunSeatRound:
                 _truncation_items(
                     review.seat_id,
                     outcome.overflow,
+                    pass_index=round_.seat_round_count,
+                )
+            )
+            # 非对象元素被摘掉的那些条也要留痕（`02` §11.0.35）：一个占位符换一行留痕，
+            # 而不是换一次整轮判死。
+            round_.note_dropped(
+                _discarded_items(
+                    review.seat_id,
+                    outcome.discarded,
                     pass_index=round_.seat_round_count,
                 )
             )
@@ -934,6 +955,31 @@ def _truncation_items(
             pass_index=pass_index,
         )
         for item in overflow
+    ]
+
+
+def _discarded_items(
+    seat_id: str,
+    discarded: tuple[Discarded, ...],
+    *,
+    pass_index: int,
+) -> list[DroppedItem]:
+    """席位交回的**非对象元素**被摘掉的那几条：留痕带上位置（`02` §11.0.35）。
+
+    它没有 `local_id`（那一"条"根本不是对象），所以 handle 用 `seat.x:opinions[2]`
+    这种带位置的写法——用户查得到"是这一包里的第几条"，而模型写的那串占位符**不进留痕**
+    （回喂原串等于给它一个可以照抄的模板，learnings L20）。
+    """
+
+    return [
+        DroppedItem(
+            handle=f"{seat_id}:{item.container}[{item.index}]",
+            reason=item.reason,
+            source=DropSource.ASSEMBLY,
+            seat_id=seat_id,
+            pass_index=pass_index,
+        )
+        for item in discarded
     ]
 
 
@@ -1281,7 +1327,10 @@ class IntegrateRound:
                 round_,
                 assembled=assembled,
                 proposals=proposals,
-                produced_questions=assembled.questions,
+                # **含本批没排上的那些**（F19 的漏算）：它们已经被组装出来了，只是没进这一批
+                # 的 5 个名额。它们引用的判断当然算"交代过"——少算这一截，那条判断会被误报
+                # "没人交代"，而它的内容其实已经在题目里了。
+                produced_questions=assembled.questions + assembled.deferred,
                 ledger=ledger,
             )
             form_id = FormId(self._ids.new("f"))

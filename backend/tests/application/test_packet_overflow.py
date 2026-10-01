@@ -454,3 +454,110 @@ def test_trimmed_claims_parse_still_rejects_real_shape_errors():
 
     with pytest.raises(PacketParseError):
         schemas.parse_packet_trimmed(broken, schemas.ClaimsPacket, purpose="claims")
+
+
+# —— 容器里的"非对象元素"：真跑里一个占位符把整轮打掉（2026-10-01 审计 F17） ——
+
+
+def seat_packet_with(elements: list) -> str:
+    return json.dumps(
+        {"basis": "读了 s1–s13 与 E1", "opinions": elements}, ensure_ascii=False
+    )
+
+
+def opinion(local_id: str, *, about: str = "量级") -> dict:
+    return {
+        "local_id": local_id,
+        "form": "judgment",
+        "about": about,
+        "claim": "单次导出应在 60 秒内完成",
+        "because": "量级在 1 万级",
+        "evidence_refs": [],
+    }
+
+
+def test_a_non_object_opinion_is_dropped_with_its_position():
+    """现场：`opinions[1]` 是模型写的占位符字符串 `"O2_placeholder"`（报告 F17）。
+
+    它不是"内容错"（那条根本没有内容可判），是**形状错**——与"超限截断"同一套语义：
+    丢掉那一条 + 把位置报出来，整轮照跑。
+    """
+
+    packet, overflow, discarded = schemas.parse_packet_lenient(
+        seat_packet_with([opinion("O1"), "O2_placeholder"]),
+        schemas.SeatPacket,
+        purpose="seat_review",
+    )
+
+    assert [item.local_id for item in packet.opinions] == ["O1"]
+    assert overflow == ()
+    assert [(item.container, item.index) for item in discarded] == [("opinions", 2)]
+    assert "不是对象" in discarded[0].reason
+
+
+def test_trimmed_parse_still_refuses_to_drop_silently():
+    """边界钉子：**摘掉一条**这件事只开给有留痕出口的调用方（`parse_packet_lenient`）。
+
+    `parse_packet_trimmed` 剩下的调用点是整合者，它这一趟还没有"把丢掉的提案写进留痕"的出口
+    ——让它静默摘，就等于破"一条都不许默默丢掉"这条规矩。所以它照旧抛。
+
+    （`parse_packet_lenient` 的摘除行为由上面那条用例钉着；两者是同一份实现的两种开关。）
+    """
+
+    with pytest.raises(PacketParseError):
+        schemas.parse_packet_trimmed(
+            seat_packet_with([opinion("O1"), "placeholder"]),
+            schemas.SeatPacket,
+            purpose="seat_review",
+        )
+
+    packet, overflow = schemas.parse_packet_trimmed(
+        seat_packet_with([opinion("O1")]), schemas.SeatPacket, purpose="seat_review"
+    )
+
+    assert overflow == ()
+    assert len(packet.opinions) == 1  # 签名与返回值形状都没变（2 元组）
+
+
+def test_dropping_a_placeholder_does_not_mask_a_real_field_error():
+    """反例必须留着：元素**是对象但字段写错** → 照旧抛，不许被"丢那一条"掩盖。"""
+
+    broken = opinion("O2")
+    broken["claim"] = None
+
+    with pytest.raises(PacketParseError):
+        schemas.parse_packet_lenient(
+            seat_packet_with([opinion("O1"), "placeholder", broken]),
+            schemas.SeatPacket,
+            purpose="seat_review",
+        )
+
+
+def test_a_fully_placeholder_claims_packet_is_still_an_error():
+    """主张是地基：一条都切不出来时不许"空着往下跑"（`min_length` 照旧生效）。"""
+
+    raw = json.dumps(
+        {
+            "basis": "读了文档",
+            "claims": ["placeholder"],
+            "seats": [{"seat_id": "seat.rules", "why": "要有人表态"}],
+        },
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(PacketParseError):
+        schemas.parse_packet_lenient(raw, schemas.ClaimsPacket, purpose="claims")
+
+
+def test_discard_and_overflow_are_reported_together():
+    """两种形状错叠加：丢掉第 1 条 + 剩下的超限截断，两份账都要报，互不掩盖。"""
+
+    raw = seat_packet_with(["placeholder", *[opinion(f"O{i}") for i in range(1, 14)]])
+
+    packet, overflow, discarded = schemas.parse_packet_lenient(
+        raw, schemas.SeatPacket, purpose="seat_review"
+    )
+
+    assert len(packet.opinions) == 12
+    assert overflow == (schemas.Overflow(container="opinions", kept=12, dropped=1),)
+    assert [item.index for item in discarded] == [1]

@@ -27,13 +27,16 @@ PURPOSE = "seat_review"
 
 @dataclass(frozen=True, slots=True)
 class SeatOutcome:
-    """一个席位这一趟交回的东西：领域对象 + **报文被截断了几条**。
+    """一个席位这一趟交回的东西：领域对象 + 报文里**没进卡片**的那些条。
 
     截断不是错误（`schemas.parse_packet_trimmed` 的语义）：整轮照跑，溢出由用例层写成留痕。
+    `discarded` 同理（2026-10-01 审计 F17）：元素根本不是对象的那些条被摘掉，
+    位置报回用例层写成留痕——一个占位符不该把整轮打掉。
     """
 
     review: SeatReview
     overflow: tuple[schemas.Overflow, ...] = ()
+    discarded: tuple[schemas.Discarded, ...] = ()
 
 
 class SeatReviewer:
@@ -94,7 +97,7 @@ class SeatReviewer:
                 },
             )
         )
-        packet, overflow = schemas.parse_packet_trimmed(
+        packet, overflow, discarded = schemas.parse_packet_lenient(
             reply.text, schemas.SeatPacket, purpose=self.PURPOSE
         )
         return SeatOutcome(
@@ -105,6 +108,7 @@ class SeatReviewer:
                 answer_eids=answer_eids or {},
             ),
             overflow=overflow,
+            discarded=discarded,
         )
 
 

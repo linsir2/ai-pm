@@ -62,6 +62,15 @@ def repair_note(error: PacketParseError) -> str:
             f"顶层只允许这些键——{keys}；每个键的值才是数组。"
             '例如：{"questions": [ … ], "proposals": [ … ]}。不要只输出里面那个数组。'
         )
+    elif "discarded" in details:
+        # 真跑 F17：`opinions[1]` 是一个占位符字符串。它不是"内容错"（那一"条"没有内容可判），
+        # 是形状错——与超限同一套话术口径：说清**哪一条**、**该是什么形状**。
+        container, index = details["discarded"]  # type: ignore[misc]
+        lines.append(
+            f"{container} 里**第 {index} 条不是对象**：这一项必须是对象（形状见下面的 schema），"
+            "不能是字符串或数字。没内容就不要写占位符——要么给一条真内容，"
+            "要么把这一项删掉（有问题就写成一条疑问）。"
+        )
     elif "errors" in details:
         lines.append("过不了 schema 的字段（逐条改）：\n" + _schema_guidance(details["errors"]))
     elif "offset" in details:

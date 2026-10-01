@@ -311,3 +311,70 @@ async def test_run_seat_round_still_fails_when_the_seat_repack_also_fails():
         await harness.run_seat_round()(round_id=round_id)
 
     assert harness.rounds.get(round_id).step is Step.FAILED
+
+
+#: 真跑 L2 第 3 轮：`opinions[1]` 是模型自己写的占位符字符串 `"O2_placeholder"`（报告 F17）。
+#: 它与 `UNPARSABLE_SEAT_REPLY` 不是一类：那个是"对象里字段写错"，这个是"元素根本不是对象"。
+PLACEHOLDER_SEAT_REPLY = json.dumps(
+    {
+        "basis": "读了 s1–s13 全文与 E1",
+        "opinions": [
+            {
+                "local_id": "O1",
+                "form": "judgment",
+                "about": "导出的性能上限",
+                "claim": "单次导出应在 60 秒内完成",
+                "because": "量级在 1 万级，同步实现可满足",
+                "evidence_refs": ["E1"],
+            },
+            "O2_placeholder",
+        ],
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_run_seat_round_repacks_a_placeholder_opinion_once():
+    """第一次回占位符 → 先重装一次（与超限同一个口径）；救回来就不留痕。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={SEAT: [PLACEHOLDER_SEAT_REPLY, SEAT_REPLY]},
+    )
+    harness.seed_project()
+    round_id = await started_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    await harness.run_seat_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert len(round_.current_reviews[0].opinions) == 1  # 落下来的是第二次那份
+    assert round_.dropped == ()
+    assert [request.purpose for request in harness.gateway.requests].count("seat_review") == 2
+    assert "不是对象" in harness.prompts.calls[-1][1]["validation_error"]
+    assert GENERATION_FAILED not in harness.events.names
+
+
+async def test_run_seat_round_drops_a_placeholder_and_traces_it_instead_of_failing():
+    """两次都回占位符 → 丢掉那一条 + 留痕，**整轮继续**（F17 的现场不再判死）。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={SEAT: [PLACEHOLDER_SEAT_REPLY, PLACEHOLDER_SEAT_REPLY]},
+    )
+    harness.seed_project()
+    round_id = await started_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    await harness.run_seat_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert len(round_.current_reviews[0].opinions) == 1  # 好的那条留着
+    assert round_.pending_seats == ()
+    assert round_.step is Step.SEATS_RUNNING
+    assert GENERATION_FAILED not in harness.events.names
+
+    traces = [item for item in round_.dropped if "不是对象" in item.reason]
+    assert len(traces) == 1
+    assert traces[0].seat_id == SEAT
+    assert traces[0].handle == f"{SEAT}:opinions[2]"
