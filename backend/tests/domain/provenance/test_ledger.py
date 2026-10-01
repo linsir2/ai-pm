@@ -180,3 +180,69 @@ def test_chain_walks_derived_from_and_dedups():
     second = record_derived(ledger, basis=(user, first), text="判断二")
     chain = ledger.chain(second)
     assert [item.eid for item in chain] == [second, first, user]
+def test_find_by_local_can_be_scoped_to_one_round():
+    """真跑抓到（P22 回归）：两轮的 `p1:O1` 会撞名，只按 (席位, 条目) 找会串到上一轮。
+
+    带 `round_id` 时必须精确命中那一轮；老行（没有 `round_id`）当兜底——
+    老文档里的判断照旧查得到，不许因为修这个洞让历史轮次变成"查不到编号"。
+    """
+
+    ledger = empty_ledger()
+    user = record_user_input(ledger)
+    old = ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="第一轮：导出要分页",
+        source=EvidenceSource(
+            seat_id="seat.x", local_id="p1:O1", derived_from=(user,), rationale="同类做法"
+        ),
+        now=NOW,
+    )
+    new = ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="第二轮：导出要脱敏",
+        source=EvidenceSource(
+            seat_id="seat.x",
+            local_id="p1:O1",
+            round_id=RoundId("r-two"),
+            derived_from=(user,),
+            rationale="合规要求",
+        ),
+        now=NOW,
+    )
+
+    assert ledger.find_by_local(seat_id="seat.x", local_id="p1:O1").eid == old
+    assert (
+        ledger.find_by_local(seat_id="seat.x", local_id="p1:O1", round_id=RoundId("r-two")).eid
+        == new
+    )
+    assert (
+        ledger.find_by_local(seat_id="seat.x", local_id="p1:O1", round_id=RoundId("r-one")).eid
+        == old
+    )
+
+
+def test_find_by_local_strict_mode_refuses_the_legacy_fallback():
+    """写入端那条路要严格：老行（没有 `round_id`）**不许**让新的一轮复用它的编号——
+    真跑里就是这么串的号。读取端才需要那条兜底。
+    """
+
+    ledger = empty_ledger()
+    user = record_user_input(ledger)
+    ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="第一轮：导出要分页",
+        source=EvidenceSource(
+            seat_id="seat.x", local_id="p1:O1", derived_from=(user,), rationale="同类做法"
+        ),
+        now=NOW,
+    )
+
+    assert (
+        ledger.find_by_local(
+            seat_id="seat.x",
+            local_id="p1:O1",
+            round_id=RoundId("r-two"),
+            allow_legacy=False,
+        )
+        is None
+    )

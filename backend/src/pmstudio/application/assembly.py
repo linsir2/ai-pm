@@ -367,6 +367,7 @@ def unaccounted_drops(
     reviews: Sequence[SeatReview],
     *,
     ledger: EvidenceLedger,
+    round_id: RoundId | None = None,
     accounted_handles: frozenset[str],
     accounted_eids: frozenset[EvidenceId],
     declared: frozenset[str],
@@ -390,6 +391,7 @@ def unaccounted_drops(
             own = ledger.find_by_local(
                 seat_id=review.seat_id,
                 local_id=f"p{review.pass_index}:{opinion.local_id}",
+                round_id=round_id,
             )
             if own is not None and own.eid in accounted_eids:
                 continue

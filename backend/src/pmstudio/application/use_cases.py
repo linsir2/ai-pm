@@ -639,7 +639,9 @@ class RunSeatRound:
         answered_text = render_answers(round_, ledger=ledger)
         # 席位把 `q3` 翻译成 E 编号时，只许翻**本轮**的答案（跨轮同号会把出处指错）
         answer_refs = answer_eids(ledger=ledger, round_id=round_id)
-        previous = render_reviews(round_.seat_reviews, titles=titles, ledger=ledger)
+        previous = render_reviews(
+            round_.seat_reviews, titles=titles, ledger=ledger, round_id=round_id
+        )
         known_eids = frozenset(evidence.eid for evidence in ledger.evidences())
         external_material = external_material_text(round_, store=self._materials)
 
@@ -1403,7 +1405,10 @@ class IntegrateRound:
                     ),
                     claims=render_claims(round_.claims),
                     opinions=render_reviews(
-                        round_.current_reviews, titles=titles, ledger=ledger
+                        round_.current_reviews,
+                        titles=titles,
+                        ledger=ledger,
+                        round_id=round_id,
                     ),
                     answered=answered,
                     skipped=skipped,
@@ -1570,6 +1575,7 @@ def _dropped_items_for(
     return assembled.dropped + unaccounted_drops(
         round_.current_reviews,
         ledger=ledger,
+        round_id=round_.round_id,
         accounted_handles=accounted_handles,
         accounted_eids=accounted_eids,
         declared=frozenset(

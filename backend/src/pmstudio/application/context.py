@@ -206,14 +206,24 @@ def seat_entry_handle(seat_id: str, local_id: str) -> str:
 
 
 def _own_eid(
-    review: SeatReview, local_id: str, *, ledger: EvidenceLedger | None
+    review: SeatReview,
+    local_id: str,
+    *,
+    ledger: EvidenceLedger | None,
+    round_id: RoundId,
 ) -> EvidenceId | None:
-    """这条意见自己的出处编号（只有"判断"有；"疑问"不进账本，所以没有）。"""
+    """这条意见自己的出处编号（只有"判断"有；"疑问"不进账本，所以没有）。
+
+    **必须带轮次**：趟数每轮从 1 重来，只按 (席位, 条目) 反查会把**上一轮的编号**显示给
+    整合者——它照着引，等于把溯源链引到另一条判断上（真跑抓到过，P22 回归）。
+    """
 
     if ledger is None:
         return None
     evidence = ledger.find_by_local(
-        seat_id=review.seat_id, local_id=f"p{review.pass_index}:{local_id}"
+        seat_id=review.seat_id,
+        local_id=f"p{review.pass_index}:{local_id}",
+        round_id=round_id,
     )
     return None if evidence is None else evidence.eid
 
@@ -223,6 +233,7 @@ def render_reviews(
     *,
     titles: Mapping[str, str],
     ledger: EvidenceLedger | None = None,
+    round_id: RoundId,
 ) -> str:
     """席位意见的渲染。**两套身份必须各叫各的名字**：
 
@@ -239,7 +250,7 @@ def render_reviews(
         for opinion in review.opinions:
             form = "疑问" if opinion.form is OpinionForm.QUESTION else "判断"
             handle = seat_entry_handle(review.seat_id, opinion.local_id)
-            own_eid = _own_eid(review, opinion.local_id, ledger=ledger)
+            own_eid = _own_eid(review, opinion.local_id, ledger=ledger, round_id=round_id)
             refs = " ".join(str(eid) for eid in opinion.evidence_refs)
             if own_eid is not None:
                 identity = f"（席位条目 {handle} · 出处编号 {own_eid}）"

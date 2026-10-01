@@ -149,6 +149,7 @@ def test_render_reviews_shows_forms_basis_and_refs():
         (_review_with_two_opinions(),),
         titles={"seat.data_scale": "数据规模与性能"},
         ledger=_ledger_with_judgment_numbered(),
+        round_id=RoundId("r1"),
     )
     assert "数据规模与性能" in text
     assert "疑问" in text
@@ -163,6 +164,7 @@ def test_render_reviews_names_seat_entries_without_pretending_they_are_evidence(
         (_review_with_two_opinions(),),
         titles={"seat.data_scale": "数据规模与性能"},
         ledger=_ledger_with_judgment_numbered(),
+        round_id=RoundId("r1"),
     )
     assert "席位条目 seat.data_scale:O2" in text
     assert "席位条目 seat.data_scale:O1" in text
@@ -175,10 +177,59 @@ def test_render_reviews_names_seat_entries_without_pretending_they_are_evidence(
 
 def test_render_reviews_without_ledger_still_names_seat_entries():
     text = context.render_reviews(
-        (_review_with_two_opinions(),), titles={"seat.data_scale": "数据规模与性能"}
+        (_review_with_two_opinions(),),
+        titles={"seat.data_scale": "数据规模与性能"},
+        round_id=RoundId("r1"),
     )
     assert "席位条目 seat.data_scale:O2" in text
     assert "出处编号" not in text
+
+
+def test_render_reviews_shows_the_number_of_its_own_round():
+    """真跑抓到（P22 回归）：两轮的 `p2:O2` 撞名，只按 (席位, 条目) 反查会把**上一轮的编号**
+    显示给整合者——它照着引，等于把溯源链引到另一条判断上（用户点编号看到的是别的意见）。
+    """
+
+    ledger = EvidenceLedger.empty(ProjectId("p1"))
+    user = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做一个订单导出功能",
+        source=EvidenceSource(round_id=RoundId("r-old"), raw_span="想做个订单导出的功能"),
+        now=NOW,
+    )
+    ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="上一轮：导出要分页",
+        source=EvidenceSource(
+            seat_id="seat.data_scale",
+            local_id="p2:O2",
+            round_id=RoundId("r-old"),
+            derived_from=(user,),
+            rationale="同类做法",
+        ),
+        now=NOW,
+    )
+    own = ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="这一轮：导出要脱敏",
+        source=EvidenceSource(
+            seat_id="seat.data_scale",
+            local_id="p2:O2",
+            round_id=RoundId("r-new"),
+            derived_from=(user,),
+            rationale="合规要求",
+        ),
+        now=NOW,
+    )
+
+    text = context.render_reviews(
+        (_review_with_two_opinions(),),
+        titles={"seat.data_scale": "数据规模与性能"},
+        ledger=ledger,
+        round_id=RoundId("r-new"),
+    )
+
+    assert f"出处编号 {own}" in text
 
 
 def test_render_readiness_has_hard_rule_and_severity_tags():

@@ -29,6 +29,7 @@ from pmstudio.domain.shared.ids import (
     ProjectId,
     ProposalId,
     QuestionId,
+    RoundId,
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
@@ -1520,6 +1521,73 @@ def test_a_question_covering_both_sides_is_stamped_as_conflict():
     )
 
     assert result.questions[0].kind is QuestionKind.CONFLICT
+
+
+def test_unaccounted_lookup_is_scoped_to_the_round():
+    """真跑抓到（P22 回归）：两轮的 `p1:O1` 撞名，按 (席位, 条目) 反查会命中**上一轮**那条。
+
+    后果有两个：① 它自己的编号被引用了，却仍被报成"没人交代"；
+    ② 整合者看到的是上一轮的编号。所以反查必须带轮次。
+    """
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    user = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做一个订单导出功能",
+        source=EvidenceSource(round_id=RoundId("r-one"), raw_span="想做个订单导出的功能"),
+        now=NOW,
+    )
+    old = ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="上一轮：导出要分页",
+        source=EvidenceSource(
+            seat_id=SEAT,
+            local_id="p1:O1",
+            round_id=RoundId("r-one"),
+            derived_from=(user,),
+            rationale="同类做法",
+        ),
+        now=NOW,
+    )
+    own = ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="这一轮：导出要脱敏",
+        source=EvidenceSource(
+            seat_id=SEAT,
+            local_id="p1:O1",
+            round_id=RoundId("r-two"),
+            derived_from=(user,),
+            rationale="合规要求",
+        ),
+        now=NOW,
+    )
+    review = SeatReview(
+        seat_id=SEAT,
+        basis="读了 E1",
+        opinions=(
+            Opinion(
+                local_id="O1",
+                form=OpinionForm.JUDGMENT,
+                about="导出的脱敏口径",
+                claim="这一轮：导出要脱敏",
+                because="合规要求",
+                evidence_refs=(user,),
+            ),
+        ),
+    )
+
+    def drops(accounted: frozenset[EvidenceId]) -> tuple:  # type: ignore[type-arg]
+        return assembly.unaccounted_drops(
+            (review,),
+            ledger=ledger,
+            round_id=RoundId("r-two"),
+            accounted_handles=frozenset(),
+            accounted_eids=accounted,
+            declared=frozenset(),
+        )
+
+    assert drops(frozenset({own})) == ()  # 它自己的编号被引用 → 交代过
+    assert [item.handle for item in drops(frozenset({old}))] == [f"{SEAT}:O1"]  # 上一轮的不算数
 
 
 # —— 骨架六章还空着：草案卡上要说一句（报告 F18） ——

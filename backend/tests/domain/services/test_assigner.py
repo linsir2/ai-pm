@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -217,3 +218,87 @@ def test_assign_opinions_is_idempotent_under_retry():
     assert [str(item.eid) for item in first] == [str(item.eid) for item in second]
     assert len(ledger) == size
     assert ledger.find_by_local(seat_id="seat.data_scale", local_id="p1:O1") is not None
+
+
+def test_the_same_opinion_slot_in_a_later_round_is_a_different_evidence():
+    """真跑抓到（P22 回归）：两轮的 `(席位, 趟, 条目 id)` 会撞号。
+
+    现场：第二轮 `seat.permissions:O3` 拿到了第一轮的编号 E15，而 E15 的账本文本是
+    第一轮那条完全不同的判断——用户点编号看到的不是支撑这条内容的那句话。
+
+    身份必须是 **(轮次, 趟, 席位, 条目 id)**：趟数每轮都从 1 重来，只带趟数不够。
+    """
+
+    from pmstudio.domain.provenance.evidence import EvidenceSource
+
+    ledger = new_ledger()
+    user = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做订单导出",
+        source=EvidenceSource(round_id=ROUND, raw_span="想做个订单导出"),
+        now=NOW,
+    )
+    first = SeatReview(
+        seat_id="seat.data_scale",
+        basis="读了 s5 与 E1",
+        opinions=(
+            Opinion(
+                local_id="O1",
+                form=OpinionForm.JUDGMENT,
+                about="第一轮的判断",
+                claim="第一轮：导出要分页",
+                because="同类做法",
+                evidence_refs=(user,),
+            ),
+        ),
+    )
+    second = replace(
+        first,
+        opinions=(
+            replace(first.opinions[0], about="第二轮的判断", claim="第二轮：导出要脱敏"),
+        ),
+    )
+
+    assigner = EvidenceAssigner()
+    one = assigner.assign_opinions((first,), ledger=ledger, round_id=RoundId("r-one"), now=NOW)
+    two = assigner.assign_opinions((second,), ledger=ledger, round_id=RoundId("r-two"), now=NOW)
+
+    assert str(one[0].eid) != str(two[0].eid)
+    assert ledger.get(two[0].eid).text == "第二轮：导出要脱敏"
+    assert ledger.get(one[0].eid).text == "第一轮：导出要分页"
+
+
+def test_retrying_the_same_round_still_reuses_the_number():
+    """反方向不放松：**同一轮**重放（重试那一趟）照旧复用编号，不许每跑一次就多占一个号。"""
+
+    from pmstudio.domain.provenance.evidence import EvidenceSource
+
+    ledger = new_ledger()
+    user = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做订单导出",
+        source=EvidenceSource(round_id=ROUND, raw_span="想做个订单导出"),
+        now=NOW,
+    )
+    review = SeatReview(
+        seat_id="seat.data_scale",
+        basis="读了 s5 与 E1",
+        opinions=(
+            Opinion(
+                local_id="O1",
+                form=OpinionForm.JUDGMENT,
+                about="性能上限",
+                claim="60 秒内完成",
+                because="同类做法",
+                evidence_refs=(user,),
+            ),
+        ),
+    )
+
+    assigner = EvidenceAssigner()
+    first = assigner.assign_opinions((review,), ledger=ledger, round_id=ROUND, now=NOW)
+    size = len(ledger)
+    again = assigner.assign_opinions((review,), ledger=ledger, round_id=ROUND, now=NOW)
+
+    assert str(first[0].eid) == str(again[0].eid)
+    assert len(ledger) == size

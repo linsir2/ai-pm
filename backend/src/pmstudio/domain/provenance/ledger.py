@@ -10,7 +10,13 @@ from pmstudio.domain.shared.errors import (
     ShapeError,
     UnknownEvidence,
 )
-from pmstudio.domain.shared.ids import EvidenceId, ProjectId, evidence_id, evidence_seq
+from pmstudio.domain.shared.ids import (
+    EvidenceId,
+    ProjectId,
+    RoundId,
+    evidence_id,
+    evidence_seq,
+)
 
 
 class EvidenceLedger:
@@ -121,14 +127,41 @@ class EvidenceLedger:
     def superseded_by(self, eid: EvidenceId) -> EvidenceId | None:
         return self._superseded_by.get(eid)
 
-    def find_by_local(self, *, seat_id: str, local_id: str) -> Evidence | None:
-        """按"哪个席位的哪条意见"找已记的出处——幂等重放的依据（计划 §3.1 ⑤）。"""
+    def find_by_local(
+        self,
+        *,
+        seat_id: str,
+        local_id: str,
+        round_id: RoundId | None = None,
+        allow_legacy: bool = True,
+    ) -> Evidence | None:
+        """按"哪个席位、哪一轮、哪条意见"找已记的出处。
 
+        `local_id` 存的是 `p{趟}:{O1}`，而**趟数每轮都从 1 重来**——只按 (席位, 条目)
+        找会串到上一轮。真跑抓到过（P22 回归）：第二轮 `seat.permissions:O3` 解析到了
+        第一轮的编号 E15，账本文本与那条意见对不上（用户点编号看到的是别的判断）。
+
+        三条口径：
+
+        - `round_id=None`：老行为（按 (席位, 条目) 取第一条）——只有历史调用点才该这么用；
+        - `round_id` 给了：**精确命中那一轮**；
+        - `allow_legacy`：精确命中不到时，允许回落到"没有轮次信息"的老行
+          （P22 之前写的出处 `source.round_id` 是空的）。**写入端必须传 False**——
+          否则新的一轮会复用老行的编号，正是真跑里串号的那条路。
+        """
+
+        legacy: Evidence | None = None
         for evidence in self._by_id.values():
             source = evidence.source
-            if source.seat_id == seat_id and source.local_id == local_id:
+            if source.seat_id != seat_id or source.local_id != local_id:
+                continue
+            if round_id is None:
                 return evidence
-        return None
+            if source.round_id == round_id:
+                return evidence
+            if allow_legacy and source.round_id is None and legacy is None:
+                legacy = evidence
+        return legacy
 
     def is_superseded(self, eid: EvidenceId) -> bool:
         return eid in self._superseded_by

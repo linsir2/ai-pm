@@ -26,7 +26,7 @@ from pmstudio.domain.round.questionnaire import (
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import MAX_SEAT_ROUNDS
 from pmstudio.domain.services.scope_guard import ScopeGuard
-from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS
 
 SEAT_COMPLETED = "completed"
@@ -1294,7 +1294,7 @@ def _seat_packets(
                     because=opinion.because,
                     eids=tuple(str(eid) for eid in opinion.evidence_refs),
                     basis_note=opinion.basis_note,
-                    eid=_eid_for(review, opinion, ledger=ledger),
+                    eid=_eid_for(review, opinion, ledger=ledger, round_id=round_.round_id),
                 )
                 for opinion in review.opinions
             )
@@ -1321,14 +1321,24 @@ def _seat_packets(
 
 
 def _eid_for(
-    review: SeatReview | None, opinion, *, ledger: EvidenceLedger | None  # type: ignore[no-untyped-def]
+    review: SeatReview | None,  # type: ignore[no-untyped-def]
+    opinion,
+    *,
+    ledger: EvidenceLedger | None,
+    round_id: RoundId,
 ) -> str | None:
-    """判断自己拿到的编号：按 (seat_id, f"p{pass}:{local_id}") 从账本反查（计划 §3.1 ⑤）。"""
+    """判断自己拿到的编号：按 **(轮次, seat_id, f"p{pass}:{local_id}")** 从账本反查。
+
+    轮次不能省：趟数每轮从 1 重来，只按 (席位, 条目) 反查会把上一轮的编号显示成这一轮的
+    （真跑抓到过，P22 回归）。
+    """
 
     if ledger is None or review is None:
         return None
     evidence = ledger.find_by_local(
-        seat_id=review.seat_id, local_id=f"p{review.pass_index}:{opinion.local_id}"
+        seat_id=review.seat_id,
+        local_id=f"p{review.pass_index}:{opinion.local_id}",
+        round_id=round_id,
     )
     return None if evidence is None else str(evidence.eid)
 

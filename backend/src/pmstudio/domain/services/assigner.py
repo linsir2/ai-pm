@@ -63,7 +63,15 @@ class EvidenceAssigner:
                 if opinion.form is OpinionForm.QUESTION:
                     continue
                 key = f"p{review.pass_index}:{opinion.local_id}"
-                existing = ledger.find_by_local(seat_id=review.seat_id, local_id=key)
+                # 幂等只在**同一轮**内成立：趟数每轮从 1 重来，不带轮次找会把上一轮的编号
+                # 当成"这条已经记过"（真跑抓到过：第二轮复用了第一轮的编号，账本文本对不上）。
+                # 所以这里**不许**回落到老行（allow_legacy=False）——新的一轮该拿新号。
+                existing = ledger.find_by_local(
+                    seat_id=review.seat_id,
+                    local_id=key,
+                    round_id=round_id,
+                    allow_legacy=False,
+                )
                 if existing is not None:  # 幂等：重试时复用第一次的编号，不占新号
                     assignments.append(
                         OpinionAssignment(
@@ -79,6 +87,7 @@ class EvidenceAssigner:
                     kind=kind,
                     text=opinion.claim,
                     source=EvidenceSource(
+                        round_id=round_id,
                         seat_id=review.seat_id,
                         local_id=key,
                         derived_from=opinion.evidence_refs,
