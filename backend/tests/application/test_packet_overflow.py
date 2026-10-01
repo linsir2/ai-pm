@@ -392,3 +392,65 @@ def test_array_rebuild_and_field_normalisation_compose():
 
     assert len(packet.dropped_opinions) == 1
     assert len(packet.list_items) == 1
+
+
+# —— 主张（claims）：真跑里唯一一条"没有 /retry 可点"的判死（P21 F16-a） ——
+
+
+def claims_packet_json(count: int) -> str:
+    return json.dumps(
+        {
+            "basis": "读了文档与本轮输入",
+            "claims": [
+                {
+                    "text": f"第 {index} 件事",
+                    "raw_span": "用户原话",
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s1",
+                }
+                for index in range(1, count + 1)
+            ],
+            "seats": [{"seat_id": "seat.rules", "why": "要有人表态"}],
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_claims_cap_fits_a_long_input():
+    """真跑 `.codex/runs/2026-10-01/报告.md` F16：一份"把前面几章补齐"的长输入
+    被切出 17 条主张，12 条上限把整轮判死——用户连轮次都建不出来（起轮没有 `/retry`）。
+    """
+
+    assert cap(schemas.ClaimsPacket, "claims") == 20
+
+
+def test_seventeen_claims_are_not_trimmed_at_all():
+    packet, overflow = schemas.parse_packet_trimmed(
+        claims_packet_json(17), schemas.ClaimsPacket, purpose="claims"
+    )
+
+    assert len(packet.claims) == 17
+    assert overflow == ()
+
+
+def test_twenty_five_claims_are_trimmed_to_the_cap_and_reported():
+    packet, overflow = schemas.parse_packet_trimmed(
+        claims_packet_json(25), schemas.ClaimsPacket, purpose="claims"
+    )
+
+    assert len(packet.claims) == 20
+    assert packet.claims[0].text == "第 1 件事"  # 保留模型给的前 20 条（顺序即优先级）
+    assert overflow == (schemas.Overflow(container="claims", kept=20, dropped=5),)
+
+
+def test_trimmed_claims_parse_still_rejects_real_shape_errors():
+    """'超限不判死'只对 too_long 生效；别的毛病照旧抛（不许放松）。"""
+
+    broken = json.dumps(
+        {"basis": "读了文档", "claims": [{"text": "少了必填字段"}], "seats": []},
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(PacketParseError):
+        schemas.parse_packet_trimmed(broken, schemas.ClaimsPacket, purpose="claims")

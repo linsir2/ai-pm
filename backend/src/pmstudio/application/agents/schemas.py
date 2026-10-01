@@ -85,7 +85,10 @@ class ContradictionDraft(BaseModel):
 
 class ClaimsPacket(BaseModel):
     basis: str = Field(description="你读了哪些章节与编号才切出这些主张")
-    claims: list[ClaimDraft] = Field(min_length=1, max_length=12)
+    #: 12 → 20（P21 F16-a）：真跑里一份"把前面几章补齐"的长输入被切出 17 条主张，
+    #: 12 条上限直接把整轮判死（起轮 502，且**没有 `/retry` 可点**）。
+    #: 20 条装得下长输入；再超就是模型失准，走 `parse_packet_trimmed` 截断 + 留痕，一样不判死。
+    claims: list[ClaimDraft] = Field(min_length=1, max_length=20)
     seats: list[SeatPickDraft] = Field(
         min_length=1,
         max_length=7,

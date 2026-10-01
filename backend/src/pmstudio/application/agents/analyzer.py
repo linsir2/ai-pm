@@ -200,7 +200,12 @@ class ClaimAnalyzer:
                 metadata={} if round_id is None else {"round_id": str(round_id)},
             )
         )
-        packet = schemas.parse_packet(reply.text, schemas.ClaimsPacket, purpose=self.PURPOSE)
+        # 主张这一包**超限不判死**（P21 F16-a）：席位（`use_cases`）与整合者早就走这条路，
+        # 只有分析者还在严格解析——而它是**唯一一条没有 `/retry` 可点**的失败路
+        # （轮次都还没建出来）。截断保留它自己排的前 N 条，溢出写成留痕。
+        packet, overflow = schemas.parse_packet_trimmed(
+            reply.text, schemas.ClaimsPacket, purpose=self.PURPOSE
+        )
         seats, dropped = nominations_from_packet(packet, catalog=self._catalog)
         claims = claims_from_packet(packet, user_input=user_input)
         contradictions, contradiction_drops = contradictions_from_packet(packet, claims=claims)
@@ -208,10 +213,30 @@ class ClaimAnalyzer:
         return Analysis(
             claims=claims,
             seats=seats,
-            dropped=dropped + contradiction_drops + query_drops,
+            dropped=dropped + claims_overflow_drops(overflow) + contradiction_drops + query_drops,
             contradictions=contradictions,
             web_queries=web_queries,
         )
+
+
+def claims_overflow_drops(overflows: Sequence[schemas.Overflow]) -> tuple[DroppedItem, ...]:
+    """主张被截断的留痕（`04-未决.md` C5 后半：一条都不许默默丢掉）。
+
+    与席位（`use_cases.py` 的 `:O{kept+1}..`）和整合（`提案 #{kept+1} 起`）同一个口径：
+    说清"从第几条起、一共几条"，**不把丢掉的内容再抄一遍**——留给用户的是
+    "这里少了东西"，不是一段没人认领的正文。
+    """
+
+    return tuple(
+        DroppedItem(
+            handle=f"主张 #{item.kept + 1} 起（共 {item.dropped} 条）",
+            reason=f"超出上限 {item.kept} 条：保留了它自己排的前 {item.kept} 条，其余没切进来",
+            source=DropSource.ASSEMBLY,
+            seat_id=None,
+            pass_index=1,
+        )
+        for item in overflows
+    )
 
 
 def nominations_from_packet(
