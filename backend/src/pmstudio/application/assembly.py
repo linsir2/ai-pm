@@ -531,13 +531,18 @@ def assemble(
             )
             continue
         fresh.append(question)
-    # 引了**用户自己说过的话**的题排在模型自出的题前面（F12）：用户明确提的需求，
-    # 不该被模型自己发现的题挤掉这一批的配额。`sorted` 稳定 → 同组内保持模型给的顺序。
+    # 排序两级（`sorted` 稳定 → 同级保持模型给的顺序）：
+    #   ① **阻塞题先问**（P21 F20）：只有它挡交付，被挤进 `deferred` 就会落成 s11 的
+    #      〔未决·阻塞〕——真跑里一轮产出的阻塞题没被问出去，ready 就"永远差一轮"。
+    #      老账那一侧本来就是阻塞优先（`deferred_from_open_items`），这里补齐新题这一侧。
+    #   ② 引了**用户自己说过的话**的题次之（F12）：用户明确提的需求，
+    #      不该被模型自己发现的题挤掉这一批的配额。
     ordered.extend(
         sorted(
             fresh,
             key=lambda question: (
-                0 if _asks_user_something(question.evidence_refs, ledger=ledger) else 1
+                0 if question.blocking else 1,
+                0 if _asks_user_something(question.evidence_refs, ledger=ledger) else 1,
             ),
         )
     )

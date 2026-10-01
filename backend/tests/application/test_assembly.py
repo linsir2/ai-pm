@@ -1575,6 +1575,58 @@ def test_backbone_gaps_are_silent_when_nothing_is_blocking():
     assert assembly.backbone_gap_lines(readiness=(), proposals=()) == ()
 
 
+# —— 阻塞题先拿配额（报告 F20） ——
+
+
+def test_blocking_questions_get_the_quota_before_optional_ones():
+    """真跑实测（`.codex/runs/2026-10-01/报告.md` F20）：一轮产出的阻塞题没被问出去，
+    直接落成 s11 的〔未决·阻塞〕，于是 ready "永远差一轮"。
+
+    配额只有 5 个名额（`MAX_QUESTIONS_PER_BATCH`），先给挡交付的那几道。
+    `s7` 不在 `BLOCKING_SECTIONS` 里，所以是普通题；`s1/s3/s4` 在，所以是阻塞题。
+    """
+
+    result = assembly.assemble(
+        packet(
+            questions=[
+                question_draft(title="普通题一？", target={"zone": "body", "section_id": "s7"}),
+                question_draft(title="普通题二？", target={"zone": "body", "section_id": "s7"}),
+                question_draft(title="普通题三？", target={"zone": "body", "section_id": "s7"}),
+                question_draft(title="阻塞题一？", target={"zone": "body", "section_id": "s1"}),
+                question_draft(title="阻塞题二？", target={"zone": "body", "section_id": "s3"}),
+                question_draft(title="阻塞题三？", target={"zone": "body", "section_id": "s4"}),
+            ]
+        ),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    asked = [item.title for item in result.questions]
+
+    assert len(asked) == 5
+    assert {"阻塞题一？", "阻塞题二？", "阻塞题三？"} <= set(asked)
+    assert sum(1 for item in result.questions if item.blocking) == 3
+
+
+def test_blocking_first_does_not_reorder_within_the_same_priority():
+    """同级保持模型给的顺序（`sorted` 稳定）——别把"先阻塞"做成"乱序"。"""
+
+    result = assembly.assemble(
+        packet(
+            questions=[
+                question_draft(title="阻塞一？", target={"zone": "body", "section_id": "s1"}),
+                question_draft(title="阻塞二？", target={"zone": "body", "section_id": "s2"}),
+            ]
+        ),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert [item.title for item in result.questions] == ["阻塞一？", "阻塞二？"]
+
+
 def test_a_question_with_only_one_side_stays_as_the_model_labelled_it():
     """只引了一侧 ⇒ 不盖章（别把普通题都标成矛盾）。"""
 
