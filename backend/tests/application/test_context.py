@@ -446,6 +446,35 @@ def test_render_materials_ignores_chunks_without_an_eid():
     assert "边界：只给管理员" not in rendered.text
 
 
+def test_a_fetched_page_shows_its_url_in_the_prompt():
+    """抓来的网页（P27）：头一行写清是**抓来的网页**，并带上它的网址。
+
+    模型该知道自己读的是"用户点名的那个页面"；点编号时，账本里的外部指称也是这个 URL。
+    """
+
+    packet = make_packet(
+        "竞品把导出放在管理员菜单里。",
+        title="竞品页",
+        origin="web_fetch",
+        source_ref="https://example.com/spec",
+    )
+
+    rendered = context.render_materials([(packet, {"m1#c00": EvidenceId("E12")})])
+
+    assert "【抓来的网页】竞品页" in rendered.text
+    assert "来源：https://example.com/spec" in rendered.text
+
+
+def test_an_uploaded_material_does_not_repeat_its_attachment_ref():
+    """上传材料的头**不写来源**：`attachment:需求.md` 与标题重复，白占预算。"""
+
+    packet = make_packet("目标：导出", title="需求.md")
+
+    rendered = context.render_materials([(packet, {"m1#c00": EvidenceId("E12")})])
+
+    assert "来源：" not in rendered.text
+
+
 def test_render_web_results_says_none_instead_of_leaving_it_blank():
     rendered = context.render_web_results([])
 

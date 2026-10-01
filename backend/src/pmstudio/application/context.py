@@ -536,6 +536,11 @@ def render_materials(
             f"【{ORIGIN_TITLES.get(parsed.origin, parsed.origin)}】{parsed.title}"
             f"（{parsed.media_type} · 由 {parsed.parser_id} 抽出）"
         )
+        if parsed.origin != UPLOAD_ORIGIN:
+            # 非上传来源（抓来的网页…）把**出处**写出来：模型该知道自己读的是哪一页，
+            # 点编号时账本里的外部指称也是它。上传材料的 `attachment:标题` 与标题重复，
+            # 不占这份预算。
+            head += f"\n来源：{parsed.source_ref}"
         lines.append(head)
         for chunk in parsed.chunks:
             eid = eids.get(chunk.chunk_id)
@@ -565,6 +570,9 @@ ORIGIN_TITLES: dict[str, str] = {
     "web_search": "联网检索结果",
     "web_fetch": "抓来的网页",
 }
+
+#: 上传材料的 origin（只有它不写"来源"——`attachment:标题` 与标题重复）
+UPLOAD_ORIGIN = "upload"
 
 
 def render_web_results(

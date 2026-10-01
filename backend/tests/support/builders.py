@@ -37,6 +37,8 @@ def make_material_packet(
     title: str = "需求.md",
     parser_id: str = "local-text",
     material_id: str = "m1",
+    origin: str = "upload",
+    source_ref: str | None = None,
 ):
     """一份已盖章的材料（工具层 C-2）。测试里最常用的材料夹具。"""
 
@@ -56,9 +58,9 @@ def make_material_packet(
         material_id=material_id,
         project_id=str(PROJECT),
         parsed=ParsedMaterial(
-            origin="upload",
+            origin=origin,
             title=title,
-            source_ref=f"attachment:{title}",
+            source_ref=source_ref or f"attachment:{title}",
             media_type="text/markdown",
             bytes_len=100,
             chunks=chunks,
