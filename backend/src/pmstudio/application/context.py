@@ -7,7 +7,7 @@
 不是新的真相源（计划 §3.13）。
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from pmstudio.application.dto import MaterialChunk, MaterialPacket
@@ -19,7 +19,9 @@ from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.views import BlockView, DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
-from pmstudio.domain.round.opinion import OpinionForm, SeatReview
+from pmstudio.domain.round.draft import Proposal
+from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
+from pmstudio.domain.round.questionnaire import Question
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
@@ -248,22 +250,89 @@ def render_reviews(
         if not review.opinions:
             lines.append("- （没有需要补充的意见）")
         for opinion in review.opinions:
-            form = "疑问" if opinion.form is OpinionForm.QUESTION else "判断"
-            handle = seat_entry_handle(review.seat_id, opinion.local_id)
-            own_eid = _own_eid(review, opinion.local_id, ledger=ledger, round_id=round_id)
-            refs = " ".join(str(eid) for eid in opinion.evidence_refs)
-            if own_eid is not None:
-                identity = f"（席位条目 {handle} · 出处编号 {own_eid}）"
-            elif ledger is not None:
-                identity = f"（席位条目 {handle} · 没有出处编号）"
-            else:
-                identity = f"（席位条目 {handle}）"
-            lines.append(f"- [{form}]{identity}关于{opinion.about}")
-            lines.append(f"  结论：{opinion.claim}")
-            lines.append(f"  理由：{opinion.because}")
-            lines.append(f"  依据：{refs or opinion.basis_note or '（无依据）'}")
+            lines.extend(_opinion_lines(review, opinion, ledger=ledger, round_id=round_id))
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks) or "（没有席位意见）"
+
+
+def _opinion_lines(
+    review: SeatReview,
+    opinion: Opinion,
+    *,
+    ledger: EvidenceLedger | None,
+    round_id: RoundId,
+) -> list[str]:
+    """一条意见的渲染（`render_reviews` 与 `render_selected_opinions` 共用同一份）。"""
+
+    form = "疑问" if opinion.form is OpinionForm.QUESTION else "判断"
+    handle = seat_entry_handle(review.seat_id, opinion.local_id)
+    own_eid = _own_eid(review, opinion.local_id, ledger=ledger, round_id=round_id)
+    refs = " ".join(str(eid) for eid in opinion.evidence_refs)
+    if own_eid is not None:
+        identity = f"（席位条目 {handle} · 出处编号 {own_eid}）"
+    elif ledger is not None:
+        identity = f"（席位条目 {handle} · 没有出处编号）"
+    else:
+        identity = f"（席位条目 {handle}）"
+    return [
+        f"- [{form}]{identity}关于{opinion.about}",
+        f"  结论：{opinion.claim}",
+        f"  理由：{opinion.because}",
+        f"  依据：{refs or opinion.basis_note or '（无依据）'}",
+    ]
+
+
+def render_selected_opinions(
+    reviews: Sequence[SeatReview],
+    handles: Collection[str],
+    *,
+    ledger: EvidenceLedger | None = None,
+    round_id: RoundId,
+) -> str:
+    """**只**渲染点名的那几条席位意见（归因补交代那条小调用的输入，`02` §11.0.38）。
+
+    与 `render_reviews` 共用同一份单条渲染——两处形状必须一模一样，
+    不然模型看到的"这条意见"和系统核算的"这条意见"就对不上了。
+    """
+
+    wanted = set(handles)
+    lines: list[str] = []
+    for review in reviews:
+        for opinion in review.opinions:
+            if seat_entry_handle(review.seat_id, opinion.local_id) not in wanted:
+                continue
+            lines.extend(_opinion_lines(review, opinion, ledger=ledger, round_id=round_id))
+    return "\n".join(lines) or "（没有要点名的席位意见）"
+
+
+def render_citations(
+    *,
+    accounted_handles: Collection[str],
+    questions: Sequence[Question],
+    proposals: Sequence[Proposal],
+) -> str:
+    """这一趟**核算真正读过的东西**：题目归因过的席位条目地址 + 题/提案引用过的编号。
+
+    为什么只给这两样：`assembly.unaccounted_drops` 的三条边界里，① 看的是
+    `accounted_handles`、② 看的是题与提案的引用编号——**判据读什么，提示词就只给什么**。
+    给多了（比如把文档正文塞进去），模型就会拿"我写过类似的话"当"我用过了"。
+    """
+
+    refs: list[str] = []
+    for question in questions:
+        refs.extend(str(eid) for eid in question.evidence_refs)
+    for proposal in proposals:
+        refs.extend(str(eid) for eid in proposal.origin.refs)
+    seen: dict[str, None] = dict.fromkeys(refs)
+    handles = sorted(accounted_handles)
+    return "\n".join(
+        [
+            "### 这一趟题目归因过的席位条目（归因对上了的）",
+            "、".join(handles) or "（没有）",
+            "### 这一趟题目与提案引用过的出处编号",
+            "、".join(seen) or "（没有）",
+        ]
+    )
 
 
 def render_answers(round_: Round, *, ledger: EvidenceLedger | None = None) -> str:

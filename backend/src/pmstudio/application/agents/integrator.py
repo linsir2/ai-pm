@@ -36,6 +36,14 @@ class IntegrationOutcome:
     discarded: tuple[schemas.Discarded, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class DispositionOutcome:
+    """小调用交回的东西：只有"没采用"的申报（+ 被摘掉的那几条）。"""
+
+    packet: schemas.DispositionsPacket
+    discarded: tuple[schemas.Discarded, ...] = ()
+
+
 LIMITS_TEXT = "\n".join(
     [
         "- 一批最多 5 道题；多出来的放进 list_items（本轮不挡交付）",
@@ -117,6 +125,13 @@ class Integrator:
         "contradictions",
     )
 
+    #: 归因补交代用的**小调用**（`02` §11.0.38）：同一个席位身份、另一种提示词，
+    #: 只回答"我点名的那些里，哪些是你没采用的"。它**不重写**题目与提案——
+    #: 真跑证明"重写整包"会补一批又漏一批（P23：点名 3/4/3 条补了 2/4/3，总量没降）。
+    DISPOSITIONS_PURPOSE = "opinion_dispositions"
+    DISPOSITIONS_PROMPT = "opinion_dispositions"
+    DISPOSITIONS_SLOTS = ("opinions", "produced", "schema_json")
+
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
         self._model = model
         self._prompts = prompts
@@ -185,3 +200,38 @@ class Integrator:
                 discarded=(discarded[0].container, discarded[0].index),
             )
         return IntegrationOutcome(packet=packet, overflow=overflow, discarded=discarded)
+
+    async def dispositions(
+        self,
+        *,
+        opinions: str,
+        produced: str,
+        round_id: RoundId | None = None,
+    ) -> DispositionOutcome:
+        """归因补交代：只问"我点名的那些里，哪些是你没采用的"。
+
+        与 `integrate()` 共用同一个席位身份与模型网关，但**提示词更小**（只给点名的意见 +
+        核算读过的引用），而且**不重写**题目与提案——真跑（P23）证明重写整包会"补一批、
+        又漏一批"，总量降不下来。
+        """
+
+        schema = schemas.DispositionsPacket.model_json_schema()
+        prompt = self._prompts.render(
+            self.DISPOSITIONS_PROMPT,
+            opinions=opinions,
+            produced=produced,
+            schema_json=json.dumps(schema, ensure_ascii=False),
+        )
+        reply = await self._model.complete(
+            ModelRequest(
+                purpose=self.DISPOSITIONS_PURPOSE,
+                messages=(ModelMessage(role="user", content=prompt),),
+                schema_name="DispositionsPacket",
+                response_schema=schema,
+                metadata={} if round_id is None else {"round_id": str(round_id)},
+            )
+        )
+        packet, _, discarded = schemas.parse_packet_lenient(
+            reply.text, schemas.DispositionsPacket, purpose=self.DISPOSITIONS_PURPOSE
+        )
+        return DispositionOutcome(packet=packet, discarded=discarded)

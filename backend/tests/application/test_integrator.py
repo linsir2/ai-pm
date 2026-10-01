@@ -308,3 +308,46 @@ async def test_a_packet_that_is_all_placeholders_is_an_error_not_an_empty_draft(
         )
 
     assert "占位符" in error.value.message
+
+
+async def test_dispositions_returns_the_declaration_packet():
+    """归因补交代的小调用：同一个席位、另一种提示词、另一个 purpose（`02` §11.0.38）。"""
+
+    reply = json.dumps(
+        {"dropped_opinions": [{"handle": "seat.x:O2", "reason": "与文档已有内容重复"}]},
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"opinion_dispositions": reply})
+    prompts = RecordingPrompts()
+    integrator = Integrator(model=gateway, prompts=prompts)
+
+    outcome = await integrator.dispositions(
+        opinions="上述几条意见", produced="题目 #1：evidence_refs=[E1]"
+    )
+
+    assert [item.handle for item in outcome.packet.dropped_opinions] == ["seat.x:O2"]
+    assert gateway.requests[-1].purpose == "opinion_dispositions"
+    assert prompts.calls[-1][0] == "opinion_dispositions"
+
+
+async def test_dispositions_drops_a_non_object_entry_without_raising():
+    """小调用也会遇上占位符：与整包同一条口径——摘掉那一条、上报，其余照收。"""
+
+    reply = json.dumps(
+        {
+            "dropped_opinions": [
+                {"handle": "seat.x:O2", "reason": "重复"},
+                "O3_placeholder",
+            ]
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"opinion_dispositions": reply})
+    integrator = Integrator(model=gateway, prompts=RecordingPrompts())
+
+    outcome = await integrator.dispositions(opinions="…", produced="…")
+
+    assert [item.handle for item in outcome.packet.dropped_opinions] == ["seat.x:O2"]
+    assert [(item.container, item.index) for item in outcome.discarded] == [
+        ("dropped_opinions", 2)
+    ]

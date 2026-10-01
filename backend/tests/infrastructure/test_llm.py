@@ -60,6 +60,7 @@ def test_every_prompt_placeholder_is_declared_by_its_agent():
         "analyzer": ClaimAnalyzer.PROMPT_SLOTS,
         "seat_review": SeatReviewer.PROMPT_SLOTS,
         "integrator": Integrator.PROMPT_SLOTS,
+        "opinion_dispositions": Integrator.DISPOSITIONS_SLOTS,
     }
     for name, slots in expected.items():
         text = (PROMPTS / f"{name}.md").read_text(encoding="utf-8")

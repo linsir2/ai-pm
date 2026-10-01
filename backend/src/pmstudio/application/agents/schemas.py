@@ -197,6 +197,25 @@ class DroppedOpinionDraft(BaseModel):
     reason: str = Field(min_length=1, description="一句话：为什么这条意见没有进卡片")
 
 
+class DispositionsPacket(BaseModel):
+    """归因补交代那条**小调用**的唯一回答形状（`02` §11.0.38）。
+
+    只有 `dropped_opinions` 一个字段，而且只回答"我点名的那些里，哪些是你没采用的"。
+    为什么不让它回"我用了"：那样等于**让模型自己把"没人交代"这条指标清零**，
+    而 `04-未决.md` C5 早就否掉了"赌模型老实交代"这条设计。**它没列的就仍算没交代**，
+    沉默还是沉默——这条指标才不会被自报抹平。
+    """
+
+    dropped_opinions: list[DroppedOpinionDraft] = Field(
+        default_factory=list,
+        max_length=84,
+        description=(
+            "上面点名的意见里，你**没采用**的那些：handle 照抄 + 一句话原因"
+            "（重复 / 无依据 / 与本轮无关 / 已经落到别处…）。**一条都不许漏**"
+        ),
+    )
+
+
 class IntegrationPacket(BaseModel):
     questions: list[QuestionDraft] = Field(default_factory=list, max_length=12)
     list_items: list[ListItemDraft] = Field(default_factory=list, max_length=20)

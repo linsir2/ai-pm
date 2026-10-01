@@ -12,8 +12,13 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
-from pmstudio.application.agents.integrator import Integrator
-from pmstudio.application.agents.schemas import Discarded, Overflow
+from pmstudio.application.agents.integrator import IntegrationOutcome, Integrator
+from pmstudio.application.agents.schemas import (
+    Discarded,
+    DispositionsPacket,
+    IntegrationPacket,
+    Overflow,
+)
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.assembly import (
     NEW_FEATURE_YES,
@@ -42,12 +47,14 @@ from pmstudio.application.context import (
     WEB_BUDGET,
     answer_eids,
     render_answers,
+    render_citations,
     render_claims,
     render_contradictions,
     render_document_state,
     render_existing_entries,
     render_materials,
     render_reviews,
+    render_selected_opinions,
     render_web_results,
     seat_entry_handle,
     select_chunks,
@@ -119,7 +126,7 @@ from pmstudio.application.ports import (
     WebSearchGateway,
     WorkspaceIndex,
 )
-from pmstudio.application.repair import accounting_note, repair_note
+from pmstudio.application.repair import repair_note
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
@@ -829,11 +836,15 @@ class RunSeatRound:
 
 MAX_INTEGRATION_ATTEMPTS = 2
 
-#: 归因补交代的额度（`02` §11.0.37）：报文没错、但模型没给席位意见交代去向时，
-#: 点名重装**一次**。与校验重装分开算——这是另一类问题，修法也不一样（不是改形状，
-#: 是把缺的那几条去向补上）。实测（P22b 两轮）每次整合的 `unaccounted` 大多不为空，
-#: 所以打满时每轮多 1–3 次整合调用。
-MAX_ACCOUNTING_REPAIRS = 1
+#: 归因补交代的额度（`02` §11.0.38）：报文没错、但模型没给席位意见交代去向时，
+#: 用**小调用**问"这些里哪些是你没采用的"。与校验重装分开算——那是另一类问题
+#: （改形状 vs 补去向），修法也不一样。
+#:
+#: 为什么是 2 而不是 1：P23 真跑里第一次点名（整包重写）之后模型**会补**
+#: （点名 3/4/3 条，它补了 2/4/3），但重写出的报文又漏了别的，总量降不下来。
+#: 现在的补交代**不重写**任何题与提案，所以第二次一般能收干净；
+#: 另配一条"点数没降就不再花"的护栏（见 `_integrate_with_repair` 第二段）。
+MAX_ACCOUNTING_REPAIRS = 2
 
 #: claims 也允许"重装一次"：真模型是抖的（同一份输入换个采样就过），让用户手动点重试
 #: 是把成本推给人。与整合者同一个口径——**必须带上一次错在哪**（`repair_note`），
@@ -1400,7 +1411,65 @@ class IntegrateRound:
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
 
+    def _assemble_and_gaps(
+        self,
+        *,
+        round_: Round,
+        document: Document,
+        ledger: EvidenceLedger,
+        outcome: IntegrationOutcome,
+        carried: Sequence[Question],
+    ) -> tuple[Assembly, tuple[str, ...]]:
+        """装配 + 这一趟的留痕 + 草案卡缺口行。
+
+        拿到报文时走一次；**每次把"没采用的申报"并回报文之后再走一次**。
+        `assemble` 与 `dry_run` 都是纯函数（后者在深拷贝上跑），重复调用只花 CPU，
+        不会多发一次模型请求。
+        """
+
+        assembled = assemble(
+            outcome.packet,
+            round_=round_,
+            document=document,
+            ledger=ledger,
+            carried=carried,
+            contradictions=contradiction_pairs(round_),
+        )
+        # 截断 / 形状错掉的那几条要留痕 + 在草案卡缺口行里说清（"不静默丢"）。
+        assembled = replace(
+            assembled,
+            dropped=assembled.dropped
+            + _packet_discard_items(outcome.discarded, pass_index=round_.seat_round_count)
+            + _overflow_items(outcome.overflow, pass_index=round_.seat_round_count),
+        )
+        gaps = dry_run(
+            document, assembled.proposals, round_=round_, now=self._clock.now()
+        )
+        if outcome.overflow:
+            count = sum(item.dropped for item in outcome.overflow)
+            gaps = gaps + (
+                f"本轮有 {count} 条内容因单轮上限未进卡片（可在下一轮继续提）",
+            )
+        if outcome.discarded:
+            gaps = gaps + (
+                f"本轮有 {len(outcome.discarded)} 条内容因为报文形状不对没进卡片"
+                "（模型交回的那一条不是对象，可在下一轮继续提）",
+            )
+        # 骨架六章还空着就说一句（报告 F18）：走 `gaps` 这条既有通道，
+        # 前端 `DraftDrawer` 已经在渲染它（"写入后仍然空着的必填项"），一个字都不用改。
+        gaps = gaps + backbone_gap_lines(
+            readiness=self._checker.check(document.view()),
+            proposals=assembled.proposals,
+        )
+        return assembled, gaps
+
     async def _integrate_with_repair(self, *, round_id: RoundId):  # type: ignore[no-untyped-def]
+        """先拿到一份能过校验的整包，再在**便宜的那一层**补交代（`02` §11.0.38）。
+
+        两段是刻意分开的：第一段的每次重试都是**整包调用**（改形状 / 改内容），
+        第二段的每次补交代都是**小调用**（只问几条意见的去向，不重写题与提案）。
+        混在一个循环里写过一版（P23），真跑证明"重写整包"会补一批又漏一批。
+        """
         # 上一次失败留下的报错（如果有）就是这次第一次尝试的起点：重试不再"盲调"（P13 C1/C2）。
         # 取走即清——不清的话，陈年错误会被后面每个动作当成校验错误递进去。
         retry_hint = self._rounds.get(round_id).retry_hint
@@ -1414,13 +1483,14 @@ class IntegrateRound:
         carried_from_queue: tuple[Question, ...] = ()
         carried_from_open_items: tuple[Question, ...] = ()
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
-        # 两本账分开算（`02` §11.0.37）：
-        #   `validate_left` —— 报文过不了校验时的重装（原来的 2 次）；
-        #   `accounting_left` —— 报文没错、但席位意见没交代去向时的**点名重装**（另算，
-        #     不然它会挤掉"再试一次改正报文"的机会；这两件事的修法也不一样）。
+        # 两本账分开算（`02` §11.0.37/§11.0.38）：
+        #   `validate_left` —— 报文过不了校验时的重装（**整包**，原来的 2 次）；
+        #   `accounting_left` —— 报文没错、但席位意见没交代去向时的补交代
+        #     （**小调用**，另算；不然它会挤掉"再试一次改正报文"的机会）。
         validate_left = MAX_INTEGRATION_ATTEMPTS
         accounting_left = MAX_ACCOUNTING_REPAIRS
         first_pass = True
+        # —— 第一段：拿到一份能过校验的整包 ——
         while True:
             round_ = self._rounds.get(round_id)
             document = self._documents.get(round_.project_id)
@@ -1499,41 +1569,12 @@ class IntegrateRound:
                     )
                     validate_left -= 1
                     continue
-                assembled = assemble(
-                    outcome.packet,
+                assembled, gaps = self._assemble_and_gaps(
                     round_=round_,
                     document=document,
                     ledger=ledger,
+                    outcome=outcome,
                     carried=carried,
-                    contradictions=contradiction_pairs(round_),
-                )
-                # 截断掉的那几条要留痕 + 在草案卡缺口行里说清（"不静默丢"）。
-                assembled = replace(
-                    assembled,
-                    dropped=assembled.dropped
-                    + _packet_discard_items(
-                        outcome.discarded, pass_index=round_.seat_round_count
-                    )
-                    + _overflow_items(outcome.overflow, pass_index=round_.seat_round_count),
-                )
-                gaps = dry_run(
-                    document, assembled.proposals, round_=round_, now=self._clock.now()
-                )
-                if outcome.overflow:
-                    count = sum(item.dropped for item in outcome.overflow)
-                    gaps = gaps + (
-                        f"本轮有 {count} 条内容因单轮上限未进卡片（可在下一轮继续提）",
-                    )
-                if outcome.discarded:
-                    gaps = gaps + (
-                        f"本轮有 {len(outcome.discarded)} 条内容因为报文形状不对没进卡片"
-                        "（模型交回的那一条不是对象，可在下一轮继续提）",
-                    )
-                # 骨架六章还空着就说一句（报告 F18）：走 `gaps` 这条既有通道，
-                # 前端 `DraftDrawer` 已经在渲染它（"写入后仍然空着的必填项"），一个字都不用改。
-                gaps = gaps + backbone_gap_lines(
-                    readiness=self._checker.check(document.view()),
-                    proposals=assembled.proposals,
                 )
             except ModelCallFailed as error:
                 # 网关类失败：网关自己已经重试 3 次 + 退避，报文重装解决不了它 → 立刻判死
@@ -1609,8 +1650,22 @@ class IntegrateRound:
                 )
                 raise
             # 报文没错，但模型可能**没给席位意见交代去向**（`02` §11.0.37）。
-            # 判定与写库共用 `_unaccounted_for`，所以这里算出来的就是最后会写进
-            # `Round.dropped` 的那一批；点名重装一次，要它逐条给去向。
+            break
+
+        # —— 第二段：归因补交代（`02` §11.0.38）——
+        #
+        # 与第一段分开是因为**修法不一样**：第一段要么改整包（校验错），要么判死；
+        # 这一段只用**小调用**问"我点名的那些里，哪些是你没采用的"，然后把它并回原报文，
+        # **绝不重写题目与提案**。真跑（P23）证明重写整包会"补一批、又漏一批"：
+        # 点名 3/4/3 条它补了 2/4/3 条，可重写出来的报文又漏了别的，总量降不下来。
+        missing_before: int | None = None
+        while True:
+            accounted = _accounted(
+                round_,
+                assembled=assembled,
+                proposals=assembled.proposals,
+                questions=assembled.questions + assembled.deferred,
+            )
             unaccounted = _unaccounted_for(
                 round_,
                 assembled=assembled,
@@ -1618,18 +1673,50 @@ class IntegrateRound:
                 questions=assembled.questions + assembled.deferred,
                 ledger=ledger,
             )
-            if unaccounted and accounting_left:
-                accounting_left -= 1
-                validation_error = accounting_note(
-                    [item.handle for item in unaccounted]
+            if not unaccounted or not accounting_left:
+                break
+            if missing_before is not None and len(unaccounted) >= missing_before:
+                # 上一趟点过名之后**没见少**：再点一次大概率还是这样，别白花钱。
+                break
+            named = frozenset(item.handle for item in unaccounted)
+            try:
+                answer = await self._integrator.dispositions(
+                    opinions=render_selected_opinions(
+                        round_.current_reviews,
+                        named,
+                        ledger=ledger,
+                        round_id=round_id,
+                    ),
+                    produced=render_citations(
+                        accounted_handles=accounted.handles,
+                        questions=assembled.questions + assembled.deferred,
+                        proposals=assembled.proposals,
+                    ),
+                    round_id=round_id,
                 )
-                continue
-            return IntegrationResult(
-                assembled=assembled,
-                gaps=gaps,
-                carried_from_queue=carried_from_queue,
-                carried_from_open_items=carried_from_open_items,
+            except ApplicationError:
+                # 补交代是**锦上添花**：这一步挂了不该把一整轮判死（报文本身是好的）。
+                # 剩下的照旧写进 `Round.dropped`（source=unaccounted）——沉默仍是沉默。
+                break
+            accounting_left -= 1
+            missing_before = len(unaccounted)
+            outcome = replace(
+                outcome,
+                packet=_merge_dispositions(outcome.packet, answer.packet, named=named),
             )
+            assembled, gaps = self._assemble_and_gaps(
+                round_=round_,
+                document=document,
+                ledger=ledger,
+                outcome=outcome,
+                carried=carried,
+            )
+        return IntegrationResult(
+            assembled=assembled,
+            gaps=gaps,
+            carried_from_queue=carried_from_queue,
+            carried_from_open_items=carried_from_open_items,
+        )
 
 
 def _dropped_items_for(
@@ -1724,6 +1811,34 @@ def _unaccounted_for(
             if item.source is DropSource.INTEGRATOR
         ),
     )
+
+
+def _merge_dispositions(
+    packet: IntegrationPacket,
+    answer: DispositionsPacket,
+    *,
+    named: frozenset[str],
+) -> IntegrationPacket:
+    """把小调用交回的"没采用的申报"并回原报文（`02` §11.0.38）。
+
+    两条边界：
+
+    - **只认点过名的 handle**：这次问的就是那几条，答案里多出来的地址不并入——
+      它不是"哪条意见没进卡片"，并进来只会给留痕添噪音；
+    - **按 handle 去重**：模型可能把已经申报过的又说一遍。
+
+    返回**新**报文（不原地改）：并回去的只有 `dropped_opinions`，题目与提案一个字不动。
+    """
+
+    existing = {item.handle for item in packet.dropped_opinions}
+    merged = list(packet.dropped_opinions)
+    for item in answer.dropped_opinions:
+        if item.handle in named and item.handle not in existing:
+            merged.append(item)
+            existing.add(item.handle)
+    if len(merged) == len(packet.dropped_opinions):
+        return packet
+    return packet.model_copy(update={"dropped_opinions": merged})
 
 
 class SubmitAnswers:

@@ -633,3 +633,25 @@ def test_an_object_with_a_bad_field_still_raises_for_integration():
             schemas.IntegrationPacket,
             purpose="integration",
         )
+
+
+def test_the_dispositions_packet_carries_only_dropped_opinions():
+    """归因补交代那条小调用的回答形状：**只有** dropped_opinions（`02` §11.0.38）。
+
+    为什么不让它回"我用了"：那等于让模型自己把"没人交代"这条指标清零——
+    `04-未决.md` C5 早就否掉了"赌模型老实交代"。
+    """
+
+    raw = json.dumps(
+        {"dropped_opinions": [{"handle": "seat.x:O1", "reason": "与文档重复"}]},
+        ensure_ascii=False,
+    )
+
+    packet, overflow, discarded = schemas.parse_packet_lenient(
+        raw, schemas.DispositionsPacket, purpose="opinion_dispositions"
+    )
+
+    assert [item.handle for item in packet.dropped_opinions] == ["seat.x:O1"]
+    assert set(schemas.DispositionsPacket.model_fields) == {"dropped_opinions"}
+    assert overflow == ()
+    assert discarded == ()

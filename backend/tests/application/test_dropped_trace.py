@@ -84,6 +84,29 @@ def harness_with(*, integration: str) -> Harness:
     )
 
 
+def dispositions_reply(*handles: str) -> str:
+    """归因补交代那条**小调用**的回包：只申报"我没采用的"（`02` §11.0.38）。
+
+    不传 handle = "这些我都用上了"——一个都不列。**没列的就仍算没交代**，
+    所以调用方要看清自己写的是哪种剧本。
+    """
+
+    return json.dumps(
+        {
+            "dropped_opinions": [
+                {"handle": handle, "reason": "本轮先不写，留给下一轮"} for handle in handles
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+def dispositions_calls(harness) -> int:  # type: ignore[no-untyped-def]
+    return [request.purpose for request in harness.gateway.requests].count(
+        "opinion_dispositions"
+    )
+
+
 async def run_to_integrated(harness: Harness):
     """走一遍：建轮 → 抽主张 → 交席位编制 → 跑席位 → 整合。"""
 
@@ -228,40 +251,73 @@ def integration_calls(harness) -> int:  # type: ignore[no-untyped-def]
 
 
 async def test_an_unaccounted_opinion_triggers_exactly_one_targeted_repair():
-    """模型一次没交代全 → 系统点名重装一次 → 它补上 → 最终不留 unaccounted。"""
+    """模型一次没交代全 → 系统用**小调用**问一次 → 它补上 → 最终不留 unaccounted。
 
-    harness = harness_with_replies(
-        integration=[
-            draft_reply(refs=["E1"], dropped=[]),
-            draft_reply(
-                refs=["E1"],
-                dropped=[
-                    {"handle": f"{SEAT}:O1", "reason": "与设定重复，不再问"},
-                    {"handle": f"{SEAT}:O2", "reason": "无依据，按提议处理"},
-                ],
-            ),
-        ]
+    P24 之前这里是"再发一次整包"，真跑证明那样会补一批又漏一批（P23）；
+    现在补交代走小调用，**整包只发一次**。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": draft_reply(refs=["E1"], dropped=[]),
+            "opinion_dispositions": dispositions_reply(f"{SEAT}:O1", f"{SEAT}:O2"),
+        },
+        seat_replies={SEAT: SEAT_REPLY},
     )
 
     round_id = await run_to_integrated(harness)
 
     round_ = harness.rounds.get(round_id)
-    assert integration_calls(harness) == 2  # 一次正常 + 一次点名
+    assert integration_calls(harness) == 1  # 整包只发一次
+    assert dispositions_calls(harness) == 1  # 补交代走小调用
     assert [item.source for item in round_.dropped] == [DropSource.INTEGRATOR] * 2
-    note = harness.prompts.calls[-1][1]["validation_error"]
-    assert f"{SEAT}:O1" in note and f"{SEAT}:O2" in note
+    named = harness.prompts.calls[-1][1]["opinions"]
+    assert f"{SEAT}:O1" in named and f"{SEAT}:O2" in named
 
 
-async def test_the_targeted_repair_happens_at_most_once():
-    """两次都不交代 → **只多花那一次**，剩下的照旧落成 unaccounted（不再追问第三次）。"""
+async def test_the_disposition_loop_stops_at_two():
+    """补交代额度是 2：报了一条（有进展）→ 再问一次；第二次不报 → 收手。"""
 
-    harness = harness_with(integration=draft_reply(refs=["E1"], dropped=[]))
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": draft_reply(refs=["E1"], dropped=[]),
+            "opinion_dispositions": [
+                dispositions_reply(f"{SEAT}:O1"),
+                dispositions_reply(),
+            ],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
 
     round_id = await run_to_integrated(harness)
 
-    assert integration_calls(harness) == 2
+    assert integration_calls(harness) == 1
+    assert dispositions_calls(harness) == 2
     handles = {item.handle for item in harness.rounds.get(round_id).dropped}
-    assert handles == {f"{SEAT}:O1", f"{SEAT}:O2"}
+    assert handles == {f"{SEAT}:O1", f"{SEAT}:O2"}  # O1 被申报，O2 仍算没交代
+
+
+async def test_a_disposition_that_makes_no_progress_stops_early():
+    """第一次补交代**一条都没补**（点数没降）→ 不再花第二次（`02` §11.0.38 的护栏）。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": draft_reply(refs=["E1"], dropped=[]),
+            "opinion_dispositions": dispositions_reply(),  # 一个都不列 = 没进展
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+
+    round_id = await run_to_integrated(harness)
+
+    assert dispositions_calls(harness) == 1
+    assert {item.handle for item in harness.rounds.get(round_id).dropped} == {
+        f"{SEAT}:O1",
+        f"{SEAT}:O2",
+    }
 
 
 async def test_no_targeted_repair_when_everything_is_accounted():
@@ -276,25 +332,67 @@ async def test_no_targeted_repair_when_everything_is_accounted():
     await run_to_integrated(harness)
 
     assert integration_calls(harness) == 1
+    assert dispositions_calls(harness) == 0
 
 
-async def test_the_accounting_repair_does_not_eat_the_validation_budget():
-    """解析错与"没交代"是两本账：解析错重装一次之后，仍有一次点名补交代的机会。"""
+async def test_a_disposition_about_a_handle_we_did_not_name_is_ignored():
+    """小调用只能影响它被点名的那几条：多写的 handle 不并入（不给留痕添噪音）。"""
 
-    harness = harness_with_replies(
-        integration=[
-            draft_reply(refs=["E999"], dropped=[]),  # 编了个不存在的编号 → 校验重装
-            draft_reply(refs=["E1"], dropped=[]),  # 过了，但两条都没交代 → 点名重装
-            draft_reply(
-                refs=["E2"], dropped=[{"handle": f"{SEAT}:O1", "reason": "与文档重复"}]
-            ),
-        ]
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": draft_reply(refs=["E1"], dropped=[]),
+            "opinion_dispositions": dispositions_reply(f"{SEAT}:O1", f"{SEAT}:O9"),
+        },
+        seat_replies={SEAT: SEAT_REPLY},
     )
 
     round_id = await run_to_integrated(harness)
 
-    assert integration_calls(harness) == 3
-    assert {item.handle for item in harness.rounds.get(round_id).dropped} == {f"{SEAT}:O1"}
+    handles = {item.handle for item in harness.rounds.get(round_id).dropped}
+    assert handles == {f"{SEAT}:O1", f"{SEAT}:O2"}  # O9 不是这一轮的条目，被忽略
+
+
+async def test_a_failed_disposition_call_does_not_fail_the_round():
+    """补交代是**锦上添花**：这一步挂了不该把一整轮判死。
+
+    这条用例故意**不给** `opinion_dispositions` 写脚本——假网关没有脚本时直接抛错
+    （不许返回空串），正好模拟"这一步失败了"。
+    """
+
+    harness = harness_with(integration=draft_reply(refs=["E1"], dropped=[]))
+
+    round_id = await run_to_integrated(harness)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.draft is not None  # 轮次照旧走到草案卡
+    assert dispositions_calls(harness) == 1  # 试过一次
+    assert {item.handle for item in round_.dropped} == {f"{SEAT}:O1", f"{SEAT}:O2"}
+
+
+async def test_the_accounting_repair_does_not_eat_the_validation_budget():
+    """解析错与"没交代"是两本账：解析错重装一次（整包）之后，补交代照样有小调用的额度。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            # 第一发编了个不存在的编号 → 校验重装；第二发过了但两条都没交代
+            "integration": [
+                draft_reply(refs=["E999"], dropped=[]),
+                draft_reply(refs=["E1"], dropped=[]),
+            ],
+            "opinion_dispositions": dispositions_reply(f"{SEAT}:O1", f"{SEAT}:O2"),
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+
+    round_id = await run_to_integrated(harness)
+
+    assert integration_calls(harness) == 2  # 一发失败 + 一发成功
+    assert dispositions_calls(harness) == 1
+    assert {item.source for item in harness.rounds.get(round_id).dropped} == {
+        DropSource.INTEGRATOR
+    }
 
 
 async def test_a_judgment_cited_only_by_a_deferred_question_is_not_a_repair_trigger():
@@ -304,14 +402,22 @@ async def test_a_judgment_cited_only_by_a_deferred_question_is_not_a_repair_trig
     该只为 O1 发生——O2（被挤到队列里的那道题引用了它的编号）不许出现在点名名单里。
     """
 
-    harness = harness_with(integration=six_questions_reply(sixth_refs=["E2"]))
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": six_questions_reply(sixth_refs=["E2"]),
+            "opinion_dispositions": dispositions_reply(),
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
 
     round_id = await run_to_integrated(harness)
 
-    assert integration_calls(harness) == 2  # 一次正常 + 一次点名（只为 O1）
-    note = harness.prompts.calls[-1][1]["validation_error"]
-    assert f"{SEAT}:O1" in note
-    assert f"{SEAT}:O2" not in note
+    assert integration_calls(harness) == 1
+    assert dispositions_calls(harness) == 1
+    named = harness.prompts.calls[-1][1]["opinions"]
+    assert f"{SEAT}:O1" in named
+    assert f"{SEAT}:O2" not in named
     assert {item.handle for item in harness.rounds.get(round_id).dropped} == {f"{SEAT}:O1"}
 
 

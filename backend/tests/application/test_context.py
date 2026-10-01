@@ -7,6 +7,7 @@ from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
+from pmstudio.domain.round.draft import Origin, OriginType, Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
     Answer,
@@ -19,10 +20,12 @@ from pmstudio.domain.round.questionnaire import (
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.ids import (
     DocumentId,
+    EntryId,
     EvidenceId,
     FeatureSlug,
     FormId,
     ProjectId,
+    ProposalId,
     QuestionId,
     RoundId,
 )
@@ -514,3 +517,61 @@ def test_the_selection_cost_never_lets_the_renderer_drop_a_numbered_chunk():
     assert len(picked) > 1                                   # 这个预算下确实选出了几条
     assert rendered.truncated is False                       # 渲染一条都没再丢
     assert rendered.used_chunk_ids == tuple(chunk.chunk_id for _, chunk in picked)
+
+
+# —— 归因补交代的两个渲染（P24：判据读什么，提示词就只给什么） ——
+
+
+def test_render_selected_opinions_renders_only_the_named_handles():
+    """"只出申报"那条小调用只该看到**点名的**那几条意见，不该把整批再喂一遍。"""
+
+    review = _review_with_two_opinions()  # 一条疑问 O1 + 一条判断 O2（pass_index=2）
+    ledger = _ledger_with_judgment_numbered()
+
+    text = context.render_selected_opinions(
+        (review,),
+        {"seat.data_scale:O2"},
+        ledger=ledger,
+        round_id=RoundId("r1"),
+    )
+
+    assert "seat.data_scale:O2" in text
+    assert "seat.data_scale:O1" not in text  # 没点名的不出现
+    assert "单次导出应在 60 秒内完成" in text  # 正文要给（不然没法判断用没用上）
+
+
+def test_render_citations_lists_exactly_what_the_accounting_reads():
+    """核算读的是"题的席位条目地址 + 题/提案引用过的编号"，渲染就只给这两样。
+
+    给多了（比如把整篇文档塞进去），模型就会拿"我写过类似的话"当"我用过了"。
+    """
+
+    question = Question(
+        question_id=QuestionId("q1"),
+        target=Target.body("s8"),
+        type=QuestionType.SINGLE,
+        title="单次导出最大行数？",
+        why="量级决定同步还是异步",
+        consequence_if_skipped="按同步实现",
+        options=(Option("a", "少于 1 万"), Option("b", "1 万–10 万")),
+        evidence_refs=(EvidenceId("E4"),),
+        asked_by=("seat.data_scale",),
+    )
+    proposal = Proposal(
+        proposal_id=ProposalId("p01"),
+        entry_id=EntryId("entry-abc"),
+        op=WriteOp.ADD,
+        target=Target.body("s1"),
+        text="现状是纸单子",
+        origin=Origin(type=OriginType.USER, refs=(EvidenceId("E9"),)),
+    )
+
+    text = context.render_citations(
+        accounted_handles=frozenset({"seat.data_scale:O2"}),
+        questions=(question,),
+        proposals=(proposal,),
+    )
+
+    assert "seat.data_scale:O2" in text
+    assert "E4" in text and "E9" in text
+    assert "纸单子" not in text  # 不渲染正文：判据不看它，提示词也就不给
