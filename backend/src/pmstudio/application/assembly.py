@@ -14,6 +14,7 @@ from pmstudio.application.context import seat_entry_handle
 from pmstudio.application.errors import PacketParseError, unknown_ref_message
 from pmstudio.application.evidence_refs import candidates_for, normalize_ref
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
 from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS, field_spec
 from pmstudio.domain.provenance.evidence import EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -58,6 +59,57 @@ OPEN_QUESTION_HOME = "s11"
 BLOCKING_SECTIONS = frozenset({"s1", "s2", "s3", "s4", "s5", "s8", "s10", "s12"})
 REQUIRED_FEATURE_FIELD_NAMES = frozenset(spec.name for spec in REQUIRED_FEATURE_FIELDS)
 BLOCKING_MARK = "〔未决·阻塞〕"
+
+#: 骨架章节：不写就没有交付物、而真跑里最常被整章漏掉的那六章（报告 F18）
+BACKBONE_SECTIONS = ("s1", "s2", "s3", "s4", "s10", "s12")
+
+#: 骨架六章的中文名（与 `01-规格.md` §4 的章名一致；只给人看，不当判据）
+BACKBONE_TITLES = {
+    "s1": "背景与问题",
+    "s2": "目标与非目标",
+    "s3": "用户与受众",
+    "s4": "范围与边界",
+    "s10": "假设、约束与依赖",
+    "s12": "上线、验收与迭代",
+}
+
+
+def backbone_gap_lines(
+    *, readiness: Sequence[ReadinessItem], proposals: Sequence[Proposal]
+) -> tuple[str, ...]:
+    """文档里骨架六章还空着、这一轮也没往那儿写 —— 草案卡上的一句实话（报告 F18）。
+
+    真跑实测：叙述式输入第 1 轮的 12 条主张有 10 条落进 `s5/*.user_story`，s1/s2/s3/s4
+    零条 → 8 个阻塞，而**草案卡上什么都不说**（用户要点到导出才知道）。
+
+    为什么用**文档的就绪度**而不是"本轮撞没撞到那几章"：项目跑到第二、三轮以后骨架早就填上了，
+    按本轮算会每轮误报一次。这里读的是 `ReadinessChecker` 的事实——填上就不再说话。
+    判据只认 `section_min_entries` 这一类阻塞（s1–s4/s10/s12 的"至少 N 条"），
+    且**这一轮写了的那章不算**（写完就该闭嘴）。
+    """
+
+    written = {
+        str(item.target.section_id) for item in proposals if item.target.section_id is not None
+    }
+    missing = [
+        section
+        for section in BACKBONE_SECTIONS
+        if section not in written
+        and any(
+            item.severity is Severity.BLOCKER
+            and item.code == "section_min_entries"
+            and str(item.section_id) == section
+            for item in readiness
+        )
+    ]
+    if not missing:
+        return ()
+    names = "、".join(f"{section} {BACKBONE_TITLES[section]}" for section in missing)
+    return (
+        f"⚠ 文档里这几章还是空的（这一轮也没往那儿写）：{names}。"
+        "随手补一条也算——现状与不做的代价、要达成什么、谁在用、本期做与不做、"
+        "假设与依赖、上线时间与验收标准；不补的话导出永远是「未通过」。",
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -307,6 +307,35 @@ def test_there_is_no_progress_line_without_any_feature():
     assert _feature_progress(make_document()) is None
 
 
+def backbone_filled_document():  # type: ignore[no-untyped-def]
+    """把骨架六章填到达标：s1/s3/s10 各 1 条、s2/s4 各 2 条、s12 一条验收标准。"""
+
+    document = make_document()
+    plan = (
+        ("s1", 1, BlockKind.TEXT),
+        ("s2", 2, BlockKind.TEXT),
+        ("s3", 1, BlockKind.TEXT),
+        ("s4", 2, BlockKind.TEXT),
+        ("s10", 1, BlockKind.TEXT),
+        ("s12", 1, BlockKind.ACCEPTANCE),
+    )
+    instructions = [
+        WriteInstruction(
+            instruction_id=f"i-{section}-{offset}",
+            entry_id=EntryId(f"en-{section}-{offset}"),
+            op=WriteOp.ADD,
+            target=Target.body(section),
+            text=f"{section} 的第 {offset + 1} 条",
+            refs=(EvidenceId("E1"),),
+            kind=kind,
+        )
+        for section, count, kind in plan
+        for offset in range(count)
+    ]
+    document.apply(instructions, now=NOW, summary="干跑", authorized_new_features=frozenset())
+    return document
+
+
 def test_dry_run_puts_the_progress_line_first():
     """进度行走 `gaps` 这条既有通道（前端已经在渲染 gaps，一个字都不用改）。"""
 
@@ -337,6 +366,44 @@ async def test_the_draft_card_says_how_much_is_still_missing():
     assert draft.gaps[0].startswith("s5 已填 1/6 个必填字段")
     assert "还有 5 个空着" in draft.gaps[0]
     assert any("仍然为空" in item for item in draft.gaps[1:])
+
+
+async def test_the_draft_card_names_the_empty_backbone_chapters():
+    """报告 F18：叙述式输入第 1 轮 12 条主张有 10 条落 s5，骨架六章零条 → 8 个阻塞，
+    而草案卡上什么都不说。现在卡片自己得说出"这几章还是空的、这一轮也没写"。
+    """
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": draft_packet()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    harness.documents.save(make_document())  # 空文档：骨架六章一条都没有
+
+    await harness.integrate_round()(round_id=round_id)
+
+    draft = harness.rounds.get(round_id).draft
+    assert draft is not None
+    assert any("还是空的" in gap and "s1" in gap for gap in draft.gaps)
+
+
+async def test_the_draft_card_shuts_up_once_the_backbone_is_filled():
+    """骨架填上之后不许再吵——否则项目跑到第二轮，每轮都弹一次假警报。"""
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": draft_packet()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    harness.documents.save(backbone_filled_document())
+
+    await harness.integrate_round()(round_id=round_id)
+
+    draft = harness.rounds.get(round_id).draft
+    assert draft is not None
+    assert not any("还是空的" in gap for gap in draft.gaps)
 
 
 async def test_integrate_round_repairs_once_when_validation_fails():

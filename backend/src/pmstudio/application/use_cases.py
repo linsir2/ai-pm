@@ -20,6 +20,7 @@ from pmstudio.application.assembly import (
     OPEN_QUESTION_HOME,
     Assembly,
     assemble,
+    backbone_gap_lines,
     contradiction_pairs,
     deferred_from_open_items,
     degraded_question_proposals,
@@ -1403,6 +1404,12 @@ class IntegrateRound:
                     gaps = gaps + (
                         f"本轮有 {count} 条内容因单轮上限未进卡片（可在下一轮继续提）",
                     )
+                # 骨架六章还空着就说一句（报告 F18）：走 `gaps` 这条既有通道，
+                # 前端 `DraftDrawer` 已经在渲染它（"写入后仍然空着的必填项"），一个字都不用改。
+                gaps = gaps + backbone_gap_lines(
+                    readiness=self._checker.check(document.view()),
+                    proposals=assembled.proposals,
+                )
             except ModelCallFailed as error:
                 # 网关类失败：网关自己已经重试 3 次 + 退避，报文重装解决不了它 → 立刻判死
                 fail_round(

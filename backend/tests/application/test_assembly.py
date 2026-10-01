@@ -7,9 +7,10 @@ from pmstudio.application.agents import schemas
 from pmstudio.application.errors import PacketParseError
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
+from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
-from pmstudio.domain.round.draft import OriginType
+from pmstudio.domain.round.draft import Origin, OriginType, Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
     AnswerSet,
@@ -21,7 +22,14 @@ from pmstudio.domain.round.questionnaire import (
 )
 from pmstudio.domain.round.round import DropSource, Round
 from pmstudio.domain.round.step import Step
-from pmstudio.domain.shared.ids import EntryId, EvidenceId, FormId, ProjectId, QuestionId
+from pmstudio.domain.shared.ids import (
+    EntryId,
+    EvidenceId,
+    FormId,
+    ProjectId,
+    ProposalId,
+    QuestionId,
+)
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import (
@@ -1508,6 +1516,63 @@ def test_a_question_covering_both_sides_is_stamped_as_conflict():
     )
 
     assert result.questions[0].kind is QuestionKind.CONFLICT
+
+
+# —— 骨架六章还空着：草案卡上要说一句（报告 F18） ——
+
+
+def backbone_blocker(section_id: str) -> ReadinessItem:
+    return ReadinessItem(
+        section_id=section_id,
+        code="section_min_entries",
+        title=f"{section_id} 还缺 1 条内容",
+        detail="至少 1 条：现状 / 问题 / 不做的代价",
+        severity=Severity.BLOCKER,
+    )
+
+
+def backbone_proposal(section_id: str) -> Proposal:
+    return Proposal(
+        proposal_id=ProposalId("p01"),
+        entry_id=EntryId(f"{ROUND_ID}#01"),
+        op=WriteOp.ADD,
+        target=Target.body(section_id),
+        text="现状：车间还在用纸单子",
+        origin=Origin(OriginType.USER, (EvidenceId("E1"),)),
+        kind=BlockKind.TEXT,
+    )
+
+
+def test_backbone_gaps_name_the_empty_chapters():
+    lines = assembly.backbone_gap_lines(
+        readiness=(backbone_blocker("s1"), backbone_blocker("s2"), backbone_blocker("s8")),
+        proposals=(),
+    )
+
+    assert len(lines) == 1
+    assert "s1" in lines[0] and "s2" in lines[0]
+    assert "s8" not in lines[0]  # s8 是六个槽，不在这条告警的范围内
+    assert "背景与问题" in lines[0] and "目标与非目标" in lines[0]
+    assert lines[0].startswith("⚠")
+
+
+def test_backbone_gaps_skip_the_chapter_this_round_writes_to():
+    lines = assembly.backbone_gap_lines(
+        readiness=(backbone_blocker("s1"), backbone_blocker("s2")),
+        proposals=(backbone_proposal("s1"),),
+    )
+
+    assert len(lines) == 1
+    assert "s2" in lines[0]
+    assert "s1" not in lines[0]
+
+
+def test_backbone_gaps_are_silent_when_nothing_is_blocking():
+    """骨架填上了（就绪度不再报阻塞）→ 一个字都不说，别每轮误报一次。"""
+
+    warn_only = replace(backbone_blocker("s1"), severity=Severity.WARN)
+    assert assembly.backbone_gap_lines(readiness=(warn_only,), proposals=()) == ()
+    assert assembly.backbone_gap_lines(readiness=(), proposals=()) == ()
 
 
 def test_a_question_with_only_one_side_stays_as_the_model_labelled_it():
