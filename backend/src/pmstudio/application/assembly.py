@@ -150,9 +150,25 @@ def normalize(text: str) -> str:
 
 
 def question_key(question: Question) -> tuple[str, str]:
-    """题目的身份：**同一个去处 + 同一个问法**算同一件事（与 eval 的重复题判据同一口径）。"""
+    """题目的身份：**同一个去处 + 同一个问法**算同一件事（与 eval 的重复题判据同一口径）。
 
-    return (question.target.label(), " ".join(question.title.split()))
+    问法里**首尾标点不算数**（P28 T0 真案例）：模型同一轮里出过
+    "会员请假审批的时限与超时转交规则？" 与 "…规则" 两份，一份进问卷、一份降级成 s11，
+    下一轮又被当 carried 问一遍。只剥**首尾**标点——中间的问号、破折号、括号照旧算数
+    （"最大行数是多少？还是多少？" 与 "最大行数是多少" 是两道题）。
+    """
+
+    return (question.target.label(), _asked_how(question.title))
+
+
+#: 问法首尾要剥掉的标点（中英混排都算）：`？?！!。.，,、；;：: 空格 引号 括号`
+_EDGE_PUNCTUATION = "？?！!。.，,、；;：: \t\n\u3000“”\"'‘’（）()《》<>【】[]"
+
+
+def _asked_how(title: str) -> str:
+    """问法归一化：压空白 + 剥首尾标点（只动首尾，别把中间的问号吃掉）。"""
+
+    return " ".join(title.split()).strip(_EDGE_PUNCTUATION)
 
 
 def _first_question_number(round_: Round) -> int:

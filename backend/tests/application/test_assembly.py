@@ -379,6 +379,46 @@ def test_the_same_place_asked_differently_is_not_a_duplicate():
     assert [str(item.question_id) for item in result.questions] == ["q2"]
 
 
+def test_the_same_question_with_a_different_trailing_punctuation_is_a_duplicate():
+    """**标点不算问法**（P28 T0 真案例）：同一去处、同一句话，只差一个句末问号 → 同一道题。
+
+    真跑现场（`.codex/runs/2026-10-02/P28-T0测量.md` §2.2）：模型同一轮里出了两份
+    「会员请假审批的时限与超时转交规则？／…规则」（少一个问号），一份进了问卷、一份被降级成 s11，
+    下一轮又把它当 carried 问了一遍——用户被同一件事问了两次。
+    """
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(title="单次导出的最大行数是多少")]),  # 少一个问号
+        round_=round_that_already_asked("单次导出的最大行数是多少？"),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert result.questions == ()
+    assert result.deferred == ()
+
+
+def test_question_key_ignores_surrounding_punctuation_only():
+    """归一化只动**首尾标点**：中间的问号、破折号、括号一律保留（那是不同的问法）。"""
+
+    def key(title: str) -> tuple[str, str]:
+        return assembly.question_key(
+            Question(
+                question_id=QuestionId("q1"),
+                target=Target.body("s8"),
+                type=QuestionType.TEXT,
+                title=title,
+                why="验判重键",
+                consequence_if_skipped="按默认走",
+            )
+        )
+
+    assert key("最大行数是多少？") == key("最大行数是多少")
+    assert key(" 最大行数是多少？！ ") == key("最大行数是多少")
+    assert key("“最大行数是多少”") == key("最大行数是多少")
+    assert key("最大行数是多少？还是多少？") != key("最大行数是多少")
+
+
 def test_question_from_unparsable_opinion_is_dropped_not_fatal():
     """归因解析不出来只丢归因、留痕，不判死整轮（题目本身可能没问题）。"""
 
