@@ -14,7 +14,13 @@ from pmstudio.application.context import seat_entry_handle
 from pmstudio.application.errors import PacketParseError, unknown_ref_message
 from pmstudio.application.evidence_refs import candidates_for, normalize_ref
 from pmstudio.domain.authoring.document import Document
-from pmstudio.domain.authoring.readiness import SECTION_MIN_ENTRIES, ReadinessItem, Severity
+from pmstudio.domain.authoring.readiness import (
+    BLOCKING_MARK,
+    SECTION_MIN_ENTRIES,
+    SETTLED_MARK,
+    ReadinessItem,
+    Severity,
+)
 from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS, field_spec
 from pmstudio.domain.provenance.evidence import EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -58,7 +64,6 @@ OPEN_QUESTION_HOME = "s11"
 #: 缺了这些章节的内容就"交不出去"——命中它们的题目算阻塞型（`01` §4 / `02` §⑤）
 BLOCKING_SECTIONS = frozenset({"s1", "s2", "s3", "s4", "s5", "s8", "s10", "s12"})
 REQUIRED_FEATURE_FIELD_NAMES = frozenset(spec.name for spec in REQUIRED_FEATURE_FIELDS)
-BLOCKING_MARK = "〔未决·阻塞〕"
 
 #: 骨架章节：不写就没有交付物、而真跑里最常被整章漏掉的那六章（报告 F18）
 BACKBONE_SECTIONS = ("s1", "s2", "s3", "s4", "s10", "s12")
@@ -888,12 +893,16 @@ def landed_answer_proposals(
     （报告 F6）。所以出草案那一刻核查：这条答案的出处编号被这一趟的提案/题目引用了吗？
     `cited` 由调用方从**本轮**的提案与题目里收（那是一趟的产物，装配层看不到）。
 
-    三种**不落地**：
+    两种**不落地**：
     ① `target` 是未授权的新功能 slug（在 `notes` 里说清为什么）；
-    ② **去处就是 s11**（老格式的 carried 题、或整合者自己把题问在 s11 上）——那里的"结论"
-       由机械 `remove` 与队列处理，不往正文塞。判据是**去处**不是来源（2026-09-29 P11 C2）：
-       带着原去处回来的 carried 题，答案照落回原章节（真跑里四条答案就是因为这条一刀切才蒸发的）；
-    ③ 答案已经被引用（整合者干完了活）。
+    ② 答案已经被引用（整合者干完了活）。
+
+    **去处就是 s11 的答案照落**，落成 `〔已定〕<答案>`（`P28 T5`，口径变更 + 实证）：
+    老口径是"不落"——那里的结论由机械 `remove` 撤下未决条目就完事；真跑测量推翻了它
+    （`.codex/runs/2026-10-02/P28-T0测量.md` §2.3：已确认轮次里 **9 条** s11 答案在文档里
+    一个字都找不到，"以OMS为唯一库存主数据源"就这么没了）。现在是"撤下未决条目 **+** 落一条
+    已定记录"；`〔已定〕` 同时是就绪度的判据——它不是未决，不挡交付。
+    判据仍然是**去处**不是来源（P11 C2）：带着原去处回来的 carried 题，答案照落回原章节。
 
     空答（既没选项也没自由文本）没有内容可落：跳过，也不留噪声。
     """
@@ -936,10 +945,6 @@ def landed_answer_proposals(
                     "（要写就先答一次「这是不是独立功能」）。"
                 )
                 continue
-            if question.target.section_id == OPEN_QUESTION_HOME:
-                # 去处就是 s11：那里的"结论"由机械 remove 与队列处理，不往正文塞一段"用户已定"
-                # （2026-09-29 P11 C2：判据是**去处**，不是来源——带原去处回来的 carried 题照落）
-                continue
             try:
                 kind = _kind_for(question.target, None)
             except (PacketParseError, DomainError) as error:
@@ -956,11 +961,17 @@ def landed_answer_proposals(
                     entry_id=EntryId(f"{round_.round_id}#{index:02d}"),
                     op=WriteOp.ADD,
                     target=question.target,
-                    text=f"用户已定：{detail}",
+                    # 落进 s11 的带「已定」前缀（它不是未决）；其余章节照旧「用户已定：…」
+                    text=(
+                        f"{SETTLED_MARK}{detail}"
+                        if question.target.section_id == OPEN_QUESTION_HOME
+                        else f"用户已定：{detail}"
+                    ),
                     origin=Origin(
                         OriginType.USER,
                         (eid,),
-                        "问卷答案机械落地（整合者没有引用它）",
+                        "问卷答案机械落地（整合者没有引用它）"
+                        + ("，原未决项已定" if question.target.section_id == OPEN_QUESTION_HOME else ""),
                     ),
                     kind=kind,
                 )

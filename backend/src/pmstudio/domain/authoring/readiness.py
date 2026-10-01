@@ -19,7 +19,11 @@ from pmstudio.domain.shared.ids import SectionId
 from pmstudio.domain.shared.sections import SECTION_SLOTS
 from pmstudio.domain.shared.writing import BlockKind
 
+#: 阻塞型未决条目的前缀（`01` §4：命中它的 s11 才挡交付）
 BLOCKING_MARK = "〔未决·阻塞〕"
+#: 已定记录的前缀（`P28 T5`）：s11 目标题的答案落进来时带这个前缀——
+#: 它是"这个问题已经定了"的记录，**不算未决**，不挡交付。
+SETTLED_MARK = "〔已定〕"
 
 #: 章节级"至少几条非空条目"：(条数下限, 只数哪种块；None = 不挑种类)
 SECTION_MIN_ENTRIES: dict[str, tuple[int, BlockKind | None]] = {
@@ -194,7 +198,14 @@ class ReadinessChecker:
     def _open_questions(self, section: SectionView | None) -> list[ReadinessItem]:
         if section is None:
             return []
-        entries = [entry for block in section.blocks for entry in block.entries]
+        # 已定记录不算未决（`P28 T5`）：不带这一句，"答过的问题"会被算成"还开着的问题"，
+        # 让就绪度说假话。老文档没有这种条目，行为不变。
+        entries = [
+            entry
+            for block in section.blocks
+            for entry in block.entries
+            if not entry.text.startswith(SETTLED_MARK)
+        ]
         if not entries:
             return []
         blocking = [entry for entry in entries if entry.text.startswith(BLOCKING_MARK)]

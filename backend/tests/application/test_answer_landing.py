@@ -157,9 +157,15 @@ def test_an_authorized_new_feature_still_lands():
     assert landed.notes == ()
 
 
-def test_an_answer_whose_target_is_s11_is_not_landed():
-    """**去处**是 s11 的答案不落地（老格式 carried 题就是这种）：那里的"结论"由机械 `remove`
-    和队列处理，再往正文塞一条「用户已定」没有去处可落（P11 C2：判据是去处，不是来源）。"""
+def test_an_answer_whose_target_is_s11_lands_as_a_settled_record():
+    """**去处**是 s11 的答案也落地，但落成「〔已定〕…」——**口径变更（P28 T5，有实证）**。
+
+    旧口径是"不落"（P11 C2）：那里的结论由机械 `remove` 撤下未决条目就完事。
+    P28 的 T0 测量把这条口径推翻了：**9 条**已确认轮次里的 s11 答案，文档里一个字都找不到
+    （`以OMS为唯一库存主数据源` 就这样没了，见 `.codex/runs/2026-10-02/P28-T0测量.md` §2.3）
+    ——问题撤了、答案也丢了。所以改成"撤下未决条目 **+** 落一条已定记录"。
+    「〔已定〕」这个前缀同时是**就绪度的判据**：它不是未决，不挡交付（`readiness.SETTLED_MARK`）。
+    """
 
     landed = assembly.landed_answer_proposals(
         round_with_one_answer(target=Target.body("s11"), carried=True),
@@ -167,7 +173,13 @@ def test_an_answer_whose_target_is_s11_is_not_landed():
         document=document(),
     )
 
-    assert landed.proposals == ()
+    assert len(landed.proposals) == 1
+    proposal = landed.proposals[0]
+    assert proposal.op is WriteOp.ADD
+    assert proposal.target == Target.body("s11")
+    assert proposal.text == "〔已定〕少于 1 万"
+    assert proposal.origin.refs == (EvidenceId("E1"),)
+    assert proposal.origin.type.value == "user"   # 用户自己答的，卡片上默认勾选
     assert landed.notes == ()
 
 

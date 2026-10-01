@@ -134,6 +134,38 @@ def test_plain_open_question_is_a_warning_and_blocking_one_is_a_blocker():
     assert "单次导出最大行数未定" in blocker.detail
 
 
+def test_a_settled_record_in_s11_is_not_an_open_question():
+    """`〔已定〕…` 是"这条未决已经定了"的记录，**不算未决**（P28 T5）。
+
+    为什么要有这个标记：s11 目标题的答案以前直接蒸发（9 条真案例，见
+    `.codex/runs/2026-10-02/P28-T0测量.md`）——现在落进 s11，但它不是"还开着的问题"，
+    不该被算成"有 N 项未决"，更不该挡交付。
+    """
+
+    document = empty_doc()
+    write(
+        document,
+        target=Target.body("s11"),
+        text="〔已定〕以 OMS 为唯一库存主数据源，平台侧只读。",
+    )
+
+    # 只看 s11 那一条：空文档本来就有一堆别的缺口（s1/s2/… 的必填）
+    assert ("s11", "open_blocking_question") not in by_key(document)
+
+
+def test_settled_records_do_not_hide_real_open_questions():
+    """已定记录不算未决，但**不能把真未决也一起藏掉**。"""
+
+    document = empty_doc()
+    write(document, target=Target.body("s11"), text="〔已定〕以 OMS 为唯一库存主数据源。")
+    write(document, target=Target.body("s11"), text="导出记录保留期未定（待决人：PM）")
+
+    warning = by_key(document)[("s11", "open_blocking_question")]
+
+    assert warning.severity is Severity.WARN
+    assert "1 项" in warning.title
+
+
 def test_missing_main_flow_is_a_warning_when_features_exist():
     items = by_key(two_thin_features())
     assert items[("s6", "section_kind_present")].severity is Severity.WARN
