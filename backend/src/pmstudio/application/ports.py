@@ -161,6 +161,17 @@ class WebSearchGateway(Protocol):
 
 
 @runtime_checkable
+class WebFetcher(Protocol):
+    """按网址抓**一份**网页 → 解析草稿（与 `MaterialParser` 同一个形状）。
+
+    与 `WebSearchGateway` 的区别：这是**用户点名的一个页面**，所以要抓正文、块级
+    （搜回来的只是线索，300 字摘要就够）。抓不到就抛 `ToolCallFailed`——不吞、不假装抓到。
+    """
+
+    async def fetch(self, *, url: str) -> "ParsedMaterial": ...
+
+
+@runtime_checkable
 class MaterialStore(Protocol):
     """材料的唯一入口/出口。**只有这里能盖章**（material_id / project_id）。"""
 

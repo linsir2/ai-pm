@@ -35,6 +35,9 @@ HTML_SUFFIXES = (".html", ".htm")
 DOCX_SUFFIXES = (".docx",)
 XLSX_SUFFIXES = (".xlsx",)
 
+#: 材料太长被截断时写进信息包的那句话（几条解析路共用同一句，界面与提示词都照它说）
+TRUNCATED_WARNING = "材料太长，只保留前 {limit} 字（已截断）"
+
 TEXT_PARSER_ID = "local-text"
 HTML_PARSER_ID = "bs4-html"
 PDF_PARSER_ID = "pdfminer"
@@ -57,6 +60,34 @@ def _package_version(distribution: str) -> str:
         return f"{distribution} {metadata.version(distribution)}"
     except metadata.PackageNotFoundError:  # pragma: no cover - 装上了就一定拿得到
         return f"{distribution} unknown"
+
+
+def html_parser_version() -> str:
+    """`bs4-html` 这一档的解析器身份。
+
+    上传 `.html` 与**抓网页**必须写同一个——否则抓来的网页会被 `needs_reparse` 判成
+    "旧解析器读的"（同一份实现、两个入口，身份只能有一份）。
+    """
+
+    return f"beautifulsoup4 {metadata.version('beautifulsoup4')}"
+
+
+def html_text(data: bytes) -> tuple[str, str | None]:
+    """HTML →（正文, `<title>` 或 None）。上传 `.html` 与抓网页**共用这一条**。
+
+    script / style 一律剥掉；畸形输入抛 `UnsupportedMaterial`（调用方补文件名或网址）。
+    """
+
+    try:
+        soup = BeautifulSoup(data, "lxml")
+    except Exception as error:  # noqa: BLE001 —— lxml 对畸形输入也可能抛
+        raise UnsupportedMaterial(
+            f"这份网页读不了（{type(error).__name__}）——换一份、或另存成文本再给我"
+        ) from error
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    title = soup.title.get_text(strip=True) if soup.title is not None else ""
+    return soup.get_text("\n", strip=True).strip(), (title or None)
 
 
 def _is_heading(line: str) -> bool:
@@ -159,7 +190,7 @@ class LocalMaterialParser:
         return frozenset(
             {
                 (TEXT_PARSER_ID, _package_version("pmstudio")),
-                (HTML_PARSER_ID, f"beautifulsoup4 {metadata.version('beautifulsoup4')}"),
+                (HTML_PARSER_ID, html_parser_version()),
                 (PDF_PARSER_ID, _package_version("pdfminer.six")),
                 (DOCX_PARSER_ID, _package_version("python-docx")),
                 (XLSX_PARSER_ID, _package_version("openpyxl")),
@@ -186,7 +217,7 @@ class LocalMaterialParser:
         )
 
     def _from_text(self, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
-        text, truncated = _cap_text(data.decode("utf-8", errors="replace").strip())
+        text, truncated = cap_text(data.decode("utf-8", errors="replace").strip())
         return self._pack(
             filename=filename,
             media_type=media_type,
@@ -200,15 +231,10 @@ class LocalMaterialParser:
 
     def _from_html(self, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
         try:
-            soup = BeautifulSoup(data, "lxml")
-        except Exception as error:  # noqa: BLE001 —— 同上：lxml 对畸形输入也可能抛
-            raise UnsupportedMaterial(
-                f"这份网页读不了（{type(error).__name__}）——换一份、或另存成文本再给我",
-                filename=filename,
-            ) from error
-        for tag in soup(["script", "style"]):
-            tag.decompose()
-        text, truncated = _cap_text(soup.get_text("\n", strip=True).strip())
+            text, _ = html_text(data)
+        except UnsupportedMaterial as error:
+            raise UnsupportedMaterial(error.message, filename=filename) from error
+        text, truncated = cap_text(text)
         return self._pack(
             filename=filename,
             media_type=media_type or "text/html",
@@ -216,7 +242,7 @@ class LocalMaterialParser:
             text=text,
             truncated=truncated,
             parser_id=HTML_PARSER_ID,
-            parser_version=f"beautifulsoup4 {metadata.version('beautifulsoup4')}",
+            parser_version=html_parser_version(),
             chunks=chunk_text(text, parser_id=HTML_PARSER_ID),
         )
 
@@ -315,7 +341,7 @@ class LocalMaterialParser:
             )
         warnings: list[str] = []
         if truncated:
-            warnings.append(f"材料太长，只保留前 {MAX_MATERIAL_CHARS} 字（已截断）")
+            warnings.append(TRUNCATED_WARNING.format(limit=MAX_MATERIAL_CHARS))
         warnings.extend(extra_warnings)
         return ParsedMaterial(
             origin="upload",
@@ -331,7 +357,7 @@ class LocalMaterialParser:
         )
 
 
-def _cap_text(text: str) -> tuple[str, bool]:
+def cap_text(text: str) -> tuple[str, bool]:
     """文字上限：**先截再切块**，所以信息包里永远不会超。"""
 
     if len(text) <= MAX_MATERIAL_CHARS:
