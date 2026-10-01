@@ -138,6 +138,36 @@ async def test_a_web_result_is_not_reparsable():
     assert harness.materials.get(packet.material_id).parsed.parser_version == "v0-旧解析器"
 
 
+async def test_a_fetched_page_is_reparsable():
+    """抓来的网页（`P27`）**可以重解析**：留下的原始字节就是那次的 HTML——
+
+    与联网搜回来的"快照"（上一条）刻意不同：那份的字节是摘要拼的，重读没有意义；
+    这份的字节是真 HTML，换了抽取器（docling / 更强的正文抽取）能重读出新结果。
+    """
+
+    harness = Harness(replies={})
+    harness.seed_project()
+    html = (
+        b"<html><head><title>Example</title></head>"
+        b"<body><p>\xe5\x85\x88\xe7\xbb\x99\xe4\xbd\xa0\xe7\x9c\x8b</p></body></html>"
+    )
+    packet = harness.materials.put(
+        project_id=PROJECT,
+        parsed=old_parse(title="Example Domain", origin="web_fetch", media_type="text/html"),
+        sha256="d" * 64,
+        content=html,
+        now=harness.clock.now(),
+    )
+
+    listed = await harness.reparse_material()(
+        project_id=PROJECT, material_id=packet.material_id
+    )
+
+    reparsed = next(item for item in listed if item.material_id == packet.material_id)
+    assert reparsed.parser_id == "bs4-html"          # 真按 HTML 那一支重读
+    assert reparsed.parser_version != "v0-旧解析器"
+
+
 async def test_an_unreadable_material_reports_it_instead_of_writing_garbage():
     harness = Harness(replies={})
     harness.seed_project()
