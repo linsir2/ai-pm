@@ -25,7 +25,9 @@ def usecase(harness: Harness) -> UploadMaterial:
 
 
 def lister(harness: Harness) -> ListMaterials:
-    return ListMaterials(materials=harness.materials, parser=harness.parser)
+    return ListMaterials(
+        materials=harness.materials, parser=harness.parser, index=harness.material_index
+    )
 
 
 def seeded() -> Harness:
@@ -51,6 +53,53 @@ async def test_upload_parses_and_lists():
 
     listed = await lister(harness)(project_id=PROJECT)
     assert [item.title for item in listed] == ["需求.md"]
+
+
+async def test_the_list_says_which_materials_have_been_used():
+    """列表带 `eids`：被引用过的写清是哪几个编号，没被用过的空着（P19 的冻结判据）。"""
+
+    harness = seeded()
+    used = await usecase(harness)(
+        project_id=PROJECT,
+        filename="用过的.md",
+        media_type="text/markdown",
+        data="# 目标\n导出要有权限".encode(),
+    )
+    unused = await usecase(harness)(
+        project_id=PROJECT,
+        filename="没用的.md",
+        media_type="text/markdown",
+        data="# 边界\n只给管理员".encode(),
+    )
+
+    # 让"用过的"那份进一轮：直接往轮次里记一条材料引用（真相源就是它）
+    from pmstudio.domain.round.round import MaterialRef, Round
+    from pmstudio.domain.round.step import Step, WaitingOn
+    from pmstudio.domain.shared.ids import EvidenceId, RoundId
+
+    round_ = Round(
+        round_id=RoundId("r1"),
+        project_id=PROJECT,
+        user_input="按这份写",
+        created_at=harness.clock.now(),
+        step=Step.DONE,
+        waiting_on=WaitingOn.NONE,
+    )
+    round_.add_materials(
+        (
+            MaterialRef(
+                material_id=used.material_id,
+                chunk_id=f"{used.material_id}#c00",
+                eid=EvidenceId("E4"),
+            ),
+        )
+    )
+    harness.rounds.save(round_)
+
+    listed = {item.material_id: item for item in await lister(harness)(project_id=PROJECT)}
+
+    assert listed[used.material_id].eids == ("E4",)
+    assert listed[unused.material_id].eids == ()
 
 
 async def test_oversize_is_refused_before_parsing():

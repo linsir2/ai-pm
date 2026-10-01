@@ -360,3 +360,38 @@ class SqliteWorkspaceIndex:
                             )
                         )
         return tuple(found)
+
+    def material_references(self, project_id: ProjectId) -> dict[str, tuple[str, ...]]:
+        """这份材料被哪些编号引用过：`{material_id: (E4, E9)}`（`P19` 的冻结判据）。
+
+        三件事说清楚：
+
+        ① **真相源是轮次**（`rounds.payload.materials[]` 的 `material_id` + `eid`）——
+           账本里的 `external_ref` 是按标题拼的（`attachment:<标题>#cNN`），两份同名文件会撞；
+        ② 与 `list_rounds` / `recent_opinions` 同一条只读口径：**不建表、不缓存**，
+           坏行**跳过不抛**（手工改坏的 payload 不该让整个项目打不开）；
+        ③ **不限轮数**（不是"最近 N 轮"）：冻结判据必须看到全部历史，漏一轮就会误删。
+        """
+
+        rows = self._connection.execute(
+            "SELECT payload FROM rounds WHERE project_id = ? ORDER BY created_at, round_id",
+            (str(project_id),),
+        ).fetchall()
+        found: dict[str, list[str]] = {}
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            materials = payload.get("materials")
+            if not isinstance(materials, list):
+                continue
+            for item in materials:
+                if not isinstance(item, dict):
+                    continue
+                material_id = str(item.get("material_id") or "").strip()
+                eid = str(item.get("eid") or "").strip()
+                if not material_id or not eid:
+                    continue
+                found.setdefault(material_id, []).append(eid)
+        return {material_id: tuple(eids) for material_id, eids in found.items()}

@@ -219,6 +219,16 @@ class WorkspaceIndex(Protocol):
     def recent_opinions(
         self, project_id: ProjectId, *, limit_rounds: int = 10
     ) -> tuple["OpinionSourceView", ...]: ...
+    def material_references(
+        self, project_id: ProjectId
+    ) -> Mapping[str, tuple[str, ...]]:
+        """这份材料被**哪些编号**引用过：`{material_id: (E4, E9)}`（P19）。
+
+        它是"编号发出即冻结"的唯一判据（真相源是轮次 payload 的 `materials[]`）：
+        空 = 没被引用过 = 可以删、可以就地重解析。**只读**，不建表、不缓存。
+        """
+
+        ...
 
 
 @runtime_checkable

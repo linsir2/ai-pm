@@ -2060,14 +2060,40 @@ class UploadMaterial:
 class ListMaterials:
     """这个项目有哪些材料（**只回摘要**，块正文一个字都不进列表）。"""
 
-    def __init__(self, *, materials: MaterialStore, parser: MaterialParser) -> None:
+    def __init__(
+        self, *, materials: MaterialStore, parser: MaterialParser, index: WorkspaceIndex
+    ) -> None:
         self._materials = materials
         self._parser = parser
+        self._index = index
 
     async def __call__(self, *, project_id: ProjectId) -> tuple[MaterialSummaryView, ...]:
-        return self._materials.list_for_project(
-            project_id, current=self._parser.identities()
+        return list_material_views(
+            project_id=project_id,
+            materials=self._materials,
+            parser=self._parser,
+            index=self._index,
         )
+
+
+def list_material_views(
+    *,
+    project_id: ProjectId,
+    materials: MaterialStore,
+    parser: MaterialParser,
+    index: WorkspaceIndex,
+) -> tuple[MaterialSummaryView, ...]:
+    """材料列表的**唯一一份**口径：摘要（仓储给）+ "被哪些编号引用过"（索引给）。
+
+    引用那一列（`eids`）是 `P19` 的冻结判据：**空 = 没被用过 = 可以删、可以就地重解析**。
+    它不进材料表——真相源是轮次 payload（`02` §11.0.10："跨轮的真相源只有文档与轮次"）。
+    """
+
+    references = index.material_references(project_id)
+    return tuple(
+        replace(item, eids=references.get(item.material_id, ()))
+        for item in materials.list_for_project(project_id, current=parser.identities())
+    )
 
 
 class SearchProject:

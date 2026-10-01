@@ -285,7 +285,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         upload_material=UploadMaterial(
             documents=documents, materials=materials, parser=parser, clock=clock, uow=uow
         ),
-        list_materials=ListMaterials(materials=materials, parser=parser),
+        list_materials=ListMaterials(materials=materials, parser=parser, index=index),
         get_document=GetDocument(documents=documents),
         get_readiness=GetReadiness(documents=documents, checker=readiness),
         export_markdown=ExportMarkdown(

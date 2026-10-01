@@ -11,7 +11,13 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
-from pmstudio.domain.round.round import DroppedItem, DropSource, Round, SeatNomination
+from pmstudio.domain.round.round import (
+    DroppedItem,
+    DropSource,
+    MaterialRef,
+    Round,
+    SeatNomination,
+)
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EntryId, EvidenceId, FormId, ProjectId, QuestionId, RoundId
 from pmstudio.domain.shared.target import Target
@@ -287,6 +293,80 @@ def test_list_rounds_respects_the_limit_and_the_project(repos):
 
     assert [head.round_id for head in index.list_rounds(PROJECT, limit=2)] == ["r3", "r2"]
     assert index.list_rounds(ProjectId("别的项目")) == ()
+
+
+def test_material_references_tells_which_numbers_came_from_which_material(tmp_path):
+    """"编号发出即冻结"的判据：这份材料被**哪些编号**引用过（P19）。
+
+    真相源是轮次 payload（`materials[].material_id` + `eid`）——账本里的 `external_ref`
+    是按标题拼的，两份同名文件会撞，不能当判据。
+    """
+
+    connection = database.connect(tmp_path / "pmstudio.db")
+    try:
+        rounds = SqliteRoundRepository(connection)
+        index = SqliteWorkspaceIndex(connection)
+        uow = SqliteUnitOfWork(connection)
+        first = Round(
+            round_id=RoundId("r1"),
+            project_id=PROJECT,
+            user_input="第一轮",
+            created_at=NOW,
+            step=Step.DONE,
+            waiting_on=WaitingOn.NONE,
+        )
+        first.add_materials(
+            (MaterialRef(material_id="m1", chunk_id="m1#c00", eid=EvidenceId("E4")),)
+        )
+        second = Round(
+            round_id=RoundId("r2"),
+            project_id=PROJECT,
+            user_input="第二轮",
+            created_at=NOW,
+            step=Step.DONE,
+            waiting_on=WaitingOn.NONE,
+        )
+        second.add_materials(
+            (
+                MaterialRef(material_id="m1", chunk_id="m1#c07", eid=EvidenceId("E9")),
+                MaterialRef(material_id="m2", chunk_id="m2#c00", eid=EvidenceId("E10")),
+            )
+        )
+        with uow:
+            rounds.save(first)
+            rounds.save(second)
+        connection.execute(
+            "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,"
+            " created_at, updated_at) VALUES ('r-bad', ?, 'started', 'none',"
+            " '{不是 JSON', ?, ?)",
+            (str(PROJECT), NOW.isoformat(), NOW.isoformat()),
+        )
+
+        references = index.material_references(PROJECT)
+    finally:
+        connection.close()
+
+    assert references == {"m1": ("E4", "E9"), "m2": ("E10",)}
+    assert references.get("m3") is None            # 没被引用过 = 可以删 / 可以就地重解析
+
+
+def test_material_references_ignores_other_projects(repos):
+    _, rounds, _, index, uow = repos
+    other = Round(
+        round_id=RoundId("r-other"),
+        project_id=ProjectId("p2"),
+        user_input="别家的一轮",
+        created_at=NOW,
+        step=Step.DONE,
+        waiting_on=WaitingOn.NONE,
+    )
+    other.add_materials(
+        (MaterialRef(material_id="m9", chunk_id="m9#c00", eid=EvidenceId("E1")),)
+    )
+    with uow:
+        rounds.save(other)
+
+    assert index.material_references(PROJECT) == {}
 
 
 def test_recent_rounds_respects_the_limit(repos):

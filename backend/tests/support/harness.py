@@ -90,6 +90,26 @@ class _RoundHeadIndex:
         )
 
 
+class _RoundMaterialIndex:
+    """材料引用在测试里的查询源：把内存仓储里的轮次投影成 `{material_id: (eid, …)}`。
+
+    与真实现（`SqliteWorkspaceIndex.material_references` 扫 `rounds.payload`）同一条口径：
+    只看 `Round.materials`，不限轮数，不带任何写能力。
+    """
+
+    def __init__(self, rounds) -> None:  # type: ignore[no-untyped-def]
+        self._rounds = rounds
+
+    def material_references(self, project_id):  # type: ignore[no-untyped-def]
+        found: dict[str, list[str]] = {}
+        for item in self._rounds.all_rounds():
+            if item.project_id != project_id:
+                continue
+            for ref in item.materials:
+                found.setdefault(ref.material_id, []).append(str(ref.eid))
+        return {material_id: tuple(eids) for material_id, eids in found.items()}
+
+
 class Harness:
     def __init__(
         self,
@@ -120,6 +140,7 @@ class Harness:
         self.ids = SeqIds()
         self.events = RecordingPublisher()
         self.index = StaticWorkspaceIndex()
+        self.material_index = _RoundMaterialIndex(self.rounds)
         self.seats = StaticSeatCatalog(tuple(seats) if seats else (make_seat(),))
         # 工具目录用**真实现**（读真 TOML）：判据 `requires` / `max_queries` 是数据，
         # 用替身就测不出".toml 写错了"这件事（与材料解析器同一个理由）。
@@ -383,7 +404,9 @@ class Harness:
     def list_materials(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import ListMaterials
 
-        return ListMaterials(materials=self.materials, parser=self.parser)
+        return ListMaterials(
+            materials=self.materials, parser=self.parser, index=self.material_index
+        )
 
     def get_document(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetDocument

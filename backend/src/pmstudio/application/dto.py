@@ -407,6 +407,9 @@ class MaterialSummaryView:
     warnings: tuple[str, ...]
     #: 这份包是用**旧解析器**读的吗（界面提示"建议重解析"）
     stale: bool
+    #: 这份材料被**哪些编号**引用过（`P19`）：空 = 没被用过 = 可以删、可以就地重解析。
+    #: 有编号的**冻结**：编号指向它里面的块，删了会让 `E7` 指向空气，改形状会让编号改指。
+    eids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
