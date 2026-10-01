@@ -11,7 +11,7 @@ from pmstudio.application.ports import ModelReply, ModelRequest, SeatDefinition
 from pmstudio.domain.shared.ids import ProjectId, RoundId
 
 if TYPE_CHECKING:
-    from pmstudio.application.dto import ParsedMaterial
+    from pmstudio.application.dto import MaterialHit, ParsedMaterial
 
 SCRIPTED_MODEL = "scripted"
 
@@ -188,6 +188,24 @@ class RecordingWebSearch:
         self.calls.append((query, limit))
         if self.failure is not None:
             raise self.failure
+        return self.returns
+
+
+class RecordingMaterialRetriever:
+    """材料检索替身：记录每次查询，按配置回命中（**只在测试里**）。
+
+    真实现是 `infrastructure/sqlite/materials.py` 的 `SqliteLikeRetriever`——
+    排序口径只在那边测一次，这里不复制一份，免得两套口径慢慢漂移。
+    """
+
+    def __init__(self, *, returns: Sequence["MaterialHit"] = ()) -> None:
+        self.calls: list[tuple[str, str, int]] = []
+        self.returns = tuple(returns)
+
+    def search(
+        self, *, project_id: ProjectId, query: str, limit: int = 5
+    ) -> tuple["MaterialHit", ...]:
+        self.calls.append((str(project_id), query, limit))
         return self.returns
 
 

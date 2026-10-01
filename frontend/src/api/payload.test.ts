@@ -12,13 +12,19 @@ import {
   defaultSeats,
   initialClaimEdits,
   integrationSummary,
+  materialHitTarget,
   selectableLabels,
   seatNominationSummary,
   targetBody,
   targetOptions,
   unansweredCount,
 } from "./payload";
-import type { DocumentView, MaterialSummaryView, RoundView } from "./types";
+import type {
+  DocumentView,
+  MaterialSummaryView,
+  RoundMaterialView,
+  RoundView,
+} from "./types";
 
 const round = {
   round_id: "r1",
@@ -405,5 +411,28 @@ describe("buildStart", () => {
       input: "按这两份写",
       material_ids: ["m1", "m2"],
     });
+  });
+});
+
+describe("materialHitTarget", () => {
+  const materials = [
+    {
+      material_id: "m1",
+      title: "诊断报告.pdf",
+      chunks: [{ chunk_id: "m1#c03", eid: "E7", anchor: "第 3 页", text: "…" }],
+    },
+  ] as unknown as RoundMaterialView[];
+
+  it("命中块在本轮材料里 → 能跳，并告诉你跳去哪份材料的哪一块", () => {
+    expect(materialHitTarget("m1#c03", materials)).toEqual({
+      found: true,
+      title: "诊断报告.pdf",
+      anchor: "第 3 页",
+    });
+  });
+
+  it("命中块不在本轮材料里 → 说实话（还没进过任何一轮，所以没有编号）", () => {
+    expect(materialHitTarget("m9#c00", materials)).toEqual({ found: false });
+    expect(materialHitTarget("m1#c03", [])).toEqual({ found: false });
   });
 });

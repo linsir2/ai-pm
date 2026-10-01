@@ -16,6 +16,12 @@ const results: SearchResultsView = {
   hits: [
     { kind: "entry", label: "按时间筛选导出", ref: "en-1", where: "s5/order-export.one_liner" },
     { kind: "opinion", label: "导出的量级要先定", ref: "r1", where: "seat.data_scale" },
+    {
+      kind: "material",
+      label: "诊断报告.pdf：…结论：导出要走异步队列…",
+      ref: "m1#c03",
+      where: "材料 · 第 3 页 §2.1",
+    },
   ],
 };
 
@@ -54,6 +60,13 @@ describe("SearchBox", () => {
 
     expect(screen.getByText(/s5\/order-export\.one_liner/)).toBeTruthy();
     expect(screen.getByText(/seat\.data_scale/)).toBeTruthy();
+  });
+
+  it("材料那一类也有中文名（不许把 kind 原样甩出来）", () => {
+    draw({ query: "异步队列", results });
+
+    expect(screen.getByText("材料")).toBeTruthy();
+    expect(screen.getByText(/诊断报告\.pdf/)).toBeTruthy();
   });
 
   it("截断了就说出来；查询为空时什么都不弹", () => {

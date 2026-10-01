@@ -52,7 +52,7 @@ from pmstudio.infrastructure.llm.litellm_gateway import LiteLLMGateway
 from pmstudio.infrastructure.llm.prompt_library import FilePromptLibrary
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.sqlite import database
-from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
+from pmstudio.infrastructure.sqlite.materials import SqliteLikeRetriever, SqliteMaterialStore
 from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
 from pmstudio.infrastructure.sqlite.repositories import (
@@ -118,6 +118,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     rounds = SqliteRoundRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
     materials = SqliteMaterialStore(connection, ids=ids)
+    # 材料检索 v1：LIKE（中文可靠、零索引）。换 FTS5 / 向量只改这一行（`P18` C-2c-1）
+    material_search = SqliteLikeRetriever(connection)
     parser = LocalMaterialParser()
     index = SqliteWorkspaceIndex(connection)
     uow = SqliteUnitOfWork(connection)
@@ -277,7 +279,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         get_round=get_round,
         get_schema=GetSchema(),
         list_rounds=ListRounds(index=index),
-        search=SearchProject(documents=documents, evidence=evidences, index=index),
+        search=SearchProject(
+            documents=documents, evidence=evidences, index=index, materials=material_search
+        ),
         upload_material=UploadMaterial(
             documents=documents, materials=materials, parser=parser, clock=clock, uow=uow
         ),

@@ -24,3 +24,16 @@ export function jumpToEntry(entryId: string): boolean {
   }, 700);
   return true;
 }
+
+/** 搜到的材料命中：滚到本轮材料卡的那一块并闪一下（找不到就返回 false，由调用方说人话）。 */
+export function jumpToChunk(chunkId: string): boolean {
+  const target = document.querySelector<HTMLElement>(`[data-chunk="${CSS.escape(chunkId)}"]`);
+  if (target === null) return false;
+
+  target.scrollIntoView({ block: "center", behavior: "smooth" });
+  target.dataset.flash = "on";
+  window.setTimeout(() => {
+    delete target.dataset.flash;
+  }, 700);
+  return true;
+}

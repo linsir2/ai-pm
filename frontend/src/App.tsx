@@ -7,12 +7,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { buildEvidenceIndex } from "./api/evidence";
 import { ApiError, api } from "./api/client";
 import type { SearchHitView } from "./api/types";
-import { awaitingMode, buildAnswers, buildOpeningBody } from "./api/payload";
+import {
+  awaitingMode,
+  buildAnswers,
+  buildOpeningBody,
+  materialHitTarget,
+} from "./api/payload";
 import { BottomStrip } from "./components/BottomStrip";
 import { DocumentPane } from "./components/DocumentPane";
 import { EditScope } from "./components/EditContext";
 import { EvidenceScope } from "./components/EvidenceContext";
-import { jumpToEntry, jumpToEvidence } from "./components/jump";
+import { jumpToChunk, jumpToEntry, jumpToEvidence } from "./components/jump";
 import { sectionOfEntry } from "./document/structure";
 import { LoopColumn } from "./components/LoopColumn";
 import { Onboarding } from "./components/Onboarding";
@@ -113,6 +118,17 @@ export default function App() {
       if (hit.kind === "feature") {
         setActiveSection("s5");
         setPendingScroll(`block-${hit.ref}`);
+        return;
+      }
+      if (hit.kind === "material") {
+        // 材料命中：只有"这一块已经带进某一轮"才跳得动（跳的是**当前正在看的那一轮**的材料卡）
+        const target = materialHitTarget(hit.ref, shownRound?.materials ?? []);
+        if (target.found && jumpToChunk(hit.ref)) return;
+        data.notify(
+          target.found
+            ? `这一块在「${target.title}」（${target.anchor}），但它现在不在页面上——切到它所在的那一轮再看。`
+            : "这一块还没带进任何一轮（所以它没有编号）；它在材料列表里，等它进某一轮才会发 E 编号。",
+        );
         return;
       }
       const sectionId = doc === null ? null : sectionOfEntry(doc, hit.ref);

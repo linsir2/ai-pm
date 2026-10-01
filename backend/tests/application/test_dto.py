@@ -875,6 +875,34 @@ def test_blank_query_returns_nothing_instead_of_everything():
     assert results.hits == ()
 
 
+def test_material_hits_land_last_with_their_title_and_anchor():
+    """F6 的第五类来源：材料块（`P18`）。排在最后——人最常找的是"文档里哪句写了"。"""
+
+    results = dto.search_hits(
+        "导出",
+        document=document_with_feature(one_liner="把订单导出成表格").view(),
+        evidence=(("E7", "用户说：订单要能导出"),),
+        opinions=(),
+        materials=(
+            dto.MaterialHit(
+                material_id="m1",
+                chunk_id="m1#c03",
+                score=3.0,
+                excerpt="…结论：导出要走异步队列…",
+                anchor="第 3 页 §2.1",
+                source_ref="attachment:诊断报告.pdf",
+                title="诊断报告.pdf",
+            ),
+        ),
+    )
+
+    assert [hit.kind for hit in results.hits][-1] == "material"
+    material = results.hits[-1]
+    assert material.ref == "m1#c03"
+    assert material.label == "诊断报告.pdf：…结论：导出要走异步队列…"
+    assert material.where == "材料 · 第 3 页 §2.1"
+
+
 def test_search_stops_at_the_limit_and_says_it_truncated():
     evidence = tuple((f"E{number}", "导出") for number in range(1, 80))
 

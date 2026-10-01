@@ -15,6 +15,7 @@ const KIND_TEXT: Record<string, string> = {
   feature: "功能",
   evidence: "出处",
   opinion: "席位",
+  material: "材料",
 };
 
 export function SearchBox({
@@ -41,7 +42,7 @@ export function SearchBox({
         id="project-search"
         className="search__input"
         type="search"
-        placeholder="搜文档 / 功能 / 编号 / 席位"
+        placeholder="搜文档 / 功能 / 编号 / 席位 / 材料"
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
       />

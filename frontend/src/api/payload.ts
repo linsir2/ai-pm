@@ -11,6 +11,7 @@ import type {
   DocumentView,
   DraftView,
   MaterialSummaryView,
+  RoundMaterialView,
   RoundView,
 } from "./types";
 import { featureFields } from "../state/schema";
@@ -262,4 +263,25 @@ export interface StartBody {
 
 export function buildStart(input: string, materials: MaterialSummaryView[]): StartBody {
   return { input, material_ids: materials.map((item) => item.material_id) };
+}
+
+/**
+ * 点搜索结果里的**材料**命中之后该去哪（`P18` C-2c-1）。
+ *
+ * 两种情况，都得说实话：
+ * - 命中的块**在本轮材料里** → 能跳：滚到材料卡的那一块（`jumpToChunk`）；
+ * - **不在**（那份材料还没被带进任何一轮） → 跳不了：它没有编号、也不在材料卡上，
+ *   界面得说清"还没带进任何一轮"，不许假装能跳、也不许掉进"这条内容不在文档里"的兜底。
+ */
+export function materialHitTarget(
+  chunkId: string,
+  materials: RoundMaterialView[],
+): { found: true; title: string; anchor: string } | { found: false } {
+  for (const material of materials) {
+    const chunk = material.chunks.find((item) => item.chunk_id === chunkId);
+    if (chunk !== undefined) {
+      return { found: true, title: material.title, anchor: chunk.anchor };
+    }
+  }
+  return { found: false };
 }

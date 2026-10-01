@@ -502,6 +502,7 @@ def search_hits(
     document: DocumentView,
     evidence: Sequence[tuple[str, str]],
     opinions: Sequence[OpinionSourceView],
+    materials: Sequence[MaterialHit] = (),
     limit: int = SEARCH_LIMIT,
 ) -> SearchResultsView:
     """在这个项目里搜（F6）。**纯函数**：现查现算，不建索引、不缓存。
@@ -580,6 +581,19 @@ def search_hits(
                     where=opinion.seat_id,
                 )
             )
+
+    # 第五类来源：材料块（`P18` C-2c-1）。排在最后——它是外部事实、不算权威；
+    # 顺序就用检索器给的顺序（`MaterialHit.score` 的消费者在这一处，不再重排）。
+    for material in materials:
+        add(
+            SearchHitView(
+                kind="material",
+                label=f"{material.title}：{summarize_line(material.excerpt)}",
+                # 落点是**块 id**：前端据此滚到本轮材料卡的那一块（没进过轮次就没有块可跳）
+                ref=material.chunk_id,
+                where=f"材料 · {material.anchor}",
+            )
+        )
 
     return SearchResultsView(query=query, hits=tuple(found[:limit]), truncated=full())
 

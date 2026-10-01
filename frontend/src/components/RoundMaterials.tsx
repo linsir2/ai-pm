@@ -32,7 +32,9 @@ export function RoundMaterials({ materials }: { materials: RoundMaterialView[] }
           ))}
           <ol className="round-materials__chunks">
             {material.chunks.map((chunk) => (
-              <li key={chunk.chunk_id}>
+              // `data-chunk` 是搜索结果里"材料命中"的跳转落点（`jumpToChunk`）：
+              // 同一时刻只会有一处材料卡在页面上（复述卡或闭环区，不是两个都画）
+              <li key={chunk.chunk_id} data-chunk={chunk.chunk_id}>
                 <span className="muted small mono">{chunk.anchor}</span>
                 <EvidenceChip eids={[chunk.eid]} />
                 <p className="round-materials__text">{chunk.text}</p>

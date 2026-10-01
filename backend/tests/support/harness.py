@@ -18,6 +18,7 @@ from pmstudio.domain.shared.ids import DocumentId, ProjectId
 from tests.support.builders import PROJECT, make_document, make_seat
 from tests.support.doubles import (
     FixedClock,
+    RecordingMaterialRetriever,
     RecordingPrompts,
     RecordingPublisher,
     RecordingWebSearch,
@@ -99,6 +100,7 @@ class Harness:
         gateway: ModelGateway | None = None,
         available_tool_keys: frozenset[str] = frozenset({"tavily_api_key"}),
         web_search: RecordingWebSearch | None = None,
+        material_retriever: RecordingMaterialRetriever | None = None,
     ) -> None:
         self.documents = InMemoryDocumentRepository()
         self.rounds = InMemoryRoundRepository()
@@ -127,6 +129,7 @@ class Harness:
         self.tools = TomlToolCatalog(TOOLS_DIR)
         self.available_tool_keys = available_tool_keys
         self.web_search = web_search or RecordingWebSearch()
+        self.material_retriever = material_retriever or RecordingMaterialRetriever()
         self.analyzer = ClaimAnalyzer(
             model=self.gateway, prompts=self.prompts, catalog=self.seats
         )
@@ -360,7 +363,10 @@ class Harness:
         from pmstudio.application.use_cases import SearchProject
 
         return SearchProject(
-            documents=self.documents, evidence=self.evidences, index=self.index
+            documents=self.documents,
+            evidence=self.evidences,
+            index=self.index,
+            materials=self.material_retriever,
         )
 
     def upload_material(self):  # type: ignore[no-untyped-def]

@@ -153,6 +153,38 @@ async def test_search_endpoint_returns_hits_and_an_empty_query_returns_nothing()
     assert blank.json()["hits"] == []
 
 
+async def test_search_endpoint_includes_material_hits():
+    """材料也是搜得到的东西（`P18` C-2c-1）：命中带块 id（点得动的落点）与锚点。"""
+
+    from pmstudio.application.dto import MaterialHit
+
+    harness = Harness(replies={}, seat_replies={})
+    harness.material_retriever.returns = (
+        MaterialHit(
+            material_id="m1",
+            chunk_id="m1#c03",
+            score=3.0,
+            excerpt="…结论：导出要走异步队列…",
+            anchor="第 3 页 §2.1",
+            source_ref="attachment:诊断报告.pdf",
+            title="诊断报告.pdf",
+        ),
+    )
+    app = create_app(_services(harness))
+    async with async_client(app) as client:
+        created = await client.post("/api/projects", json={"title": "订单中台"})
+        project_id = created.json()["project_id"]
+        found = await client.get(
+            f"/api/projects/{project_id}/search", params={"q": "异步队列"}
+        )
+
+    assert found.status_code == 200
+    hits = found.json()["hits"]
+    assert [hit["kind"] for hit in hits] == ["material"]
+    assert hits[0]["ref"] == "m1#c03"
+    assert hits[0]["where"] == "材料 · 第 3 页 §2.1"
+
+
 async def test_list_rounds_returns_the_rounds_of_this_project():
     """闭环区顶上那个"这个项目走过哪几轮"由它喂（F4）。"""
 

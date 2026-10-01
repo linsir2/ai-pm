@@ -54,6 +54,7 @@ from pmstudio.application.context import (
 )
 from pmstudio.application.deliverable import Deliverable, render_markdown
 from pmstudio.application.dto import (
+    SEARCH_LIMIT,
     DiffView,
     EvidenceLookupView,
     MaterialChunk,
@@ -103,6 +104,7 @@ from pmstudio.application.ports import (
     EventPublisher,
     IdGenerator,
     MaterialParser,
+    MaterialRetriever,
     MaterialStore,
     ProjectFactory,
     RoundCanceller,
@@ -2081,10 +2083,12 @@ class SearchProject:
         documents: DocumentReader,
         evidence: EvidenceReader,
         index: WorkspaceIndex,
+        materials: MaterialRetriever,
     ) -> None:
         self._documents = documents
         self._evidence = evidence
         self._index = index
+        self._materials = materials
 
     async def __call__(self, *, project_id: ProjectId, query: str) -> SearchResultsView:
         document = self._documents.get(project_id).view()
@@ -2094,6 +2098,14 @@ class SearchProject:
             document=document,
             evidence=tuple((str(item.eid), item.text) for item in ledger.evidences()),
             opinions=self._index.recent_opinions(project_id),
+            # 空查询连检索器都不问（省一次扫表；`search_hits` 那边也会早早回空）
+            materials=(
+                ()
+                if query.strip() == ""
+                else self._materials.search(
+                    project_id=project_id, query=query, limit=SEARCH_LIMIT
+                )
+            ),
         )
 
 
