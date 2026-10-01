@@ -10,12 +10,14 @@
 """
 
 import json
+import sqlite3
 from dataclasses import dataclass, replace
 from datetime import datetime
 
 from pmstudio.application.dto import (
     MATERIAL_SCHEMA_VERSION,
     MaterialChunk,
+    MaterialHit,
     MaterialPacket,
     MaterialSummaryView,
     ParsedMaterial,
@@ -227,3 +229,106 @@ def _restamp(parsed: ParsedMaterial, material_id: str) -> ParsedMaterial:
             for chunk in parsed.chunks
         ),
     )
+
+
+class SqliteLikeRetriever:
+    """材料检索 v1：`LIKE` 子串 + 命中窗口。**中文可靠、零索引、零迁移。**
+
+    口径（`docs/plans/2026-10-01-P18-C2c1-材料找得到.md` §3）：
+
+    ① **块级**返回——材料卡、编号、锚点全是块级的，命中"一份材料"说不清是哪一句；
+    ② 空查询**回空**（绝不"不填就是全量"，与 F6 同一条规矩）；`%` / `_` / `\\` 按**字面**匹配
+       （`ESCAPE '\\'`，否则用户搜 "100%" 会命中一片）；
+    ③ 只在这个项目里找（`WHERE m.project_id = ?`）——串味会让用户看到别家的材料；
+    ④ 排序 = 命中次数 ↓ → 命中位置靠前 → 块更短（并列按 `chunk_id` 稳定）。
+       `score` 与这个顺序**同向**，它的消费者就是 F6 的展示顺序（`search_hits` 不重排）。
+
+    什么时候该升级：真跑量出"整句子串命中率不够"时，换 `FTS5(trigram)` / 向量——
+    **只换这个类**，`MaterialRetriever` 的调用方一行不改。
+    """
+
+    #: 片段窗口：命中词前后各留多少字（列表里一行放不下整块）
+    EXCERPT_WINDOW = 40
+
+    _SQL = """
+        SELECT c.chunk_id, c.material_id, c.text, c.anchor, c.ordinal,
+               m.title, m.source_ref
+        FROM material_chunks c
+        JOIN materials m ON m.material_id = c.material_id
+        WHERE m.project_id = ? AND c.text LIKE ? ESCAPE '\\'
+        ORDER BY c.material_id, c.ordinal
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def search(
+        self, *, project_id: ProjectId, query: str, limit: int = 5
+    ) -> tuple[MaterialHit, ...]:
+        needle = query.strip()
+        if needle == "" or limit <= 0:
+            return ()
+        rows = self._connection.execute(
+            self._SQL, (str(project_id), f"%{_like_literal(needle)}%")
+        ).fetchall()
+        scored = sorted(
+            (_score(row, needle) for row in rows),
+            key=lambda item: (-item.occurrences, item.first_at, len(item.text), item.chunk_id),
+        )
+        return tuple(item.hit for item in scored[:limit])
+
+
+@dataclass(frozen=True, slots=True)
+class _Scored:
+    """排序用的中间量：`occurrences / first_at` 只服务于顺序，不进任何投影。"""
+
+    occurrences: int
+    first_at: int
+    text: str
+    chunk_id: str
+    hit: MaterialHit
+
+
+def _like_literal(needle: str) -> str:
+    """把 `LIKE` 的通配符转义掉——用户搜的是**字面量**，不是模式。"""
+
+    return needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _score(row: sqlite3.Row, needle: str) -> _Scored:
+    """一行命中 → 排序中间量 + 投影。分数与顺序同向（次数为主，位置与长度次之）。"""
+
+    text = str(row["text"])
+    folded = text.casefold()
+    target = needle.casefold()
+    occurrences = folded.count(target)
+    first_at = folded.find(target)
+    score = occurrences - (max(first_at, 0) / 10_000) - (len(text) / 1_000_000)
+    return _Scored(
+        occurrences=occurrences,
+        first_at=max(first_at, 0),
+        text=text,
+        chunk_id=str(row["chunk_id"]),
+        hit=MaterialHit(
+            material_id=str(row["material_id"]),
+            chunk_id=str(row["chunk_id"]),
+            score=score,
+            excerpt=_excerpt(text, target),
+            anchor=str(row["anchor"]),
+            source_ref=str(row["source_ref"]),
+            title=str(row["title"]),
+        ),
+    )
+
+
+def _excerpt(text: str, needle: str) -> str:
+    """命中词前后各 `EXCERPT_WINDOW` 字；命中词本身一定在窗口里。"""
+
+    at = text.casefold().find(needle)
+    if at < 0:  # 理论上进不来（SQL 已经筛过）；真进来就老老实实给开头
+        return text[: SqliteLikeRetriever.EXCERPT_WINDOW * 2]
+    start = max(0, at - SqliteLikeRetriever.EXCERPT_WINDOW)
+    end = min(len(text), at + len(needle) + SqliteLikeRetriever.EXCERPT_WINDOW)
+    head = "…" if start > 0 else ""
+    tail = "…" if end < len(text) else ""
+    return f"{head}{text[start:end]}{tail}"

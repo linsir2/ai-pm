@@ -11,6 +11,7 @@ from pmstudio.domain.shared.ids import DocumentId, ProjectId, RoundId
 if TYPE_CHECKING:
     from pmstudio.application.commands import RoundCommand
     from pmstudio.application.dto import (
+        MaterialHit,
         MaterialPacket,
         MaterialSummaryView,
         OpinionSourceView,
@@ -180,6 +181,22 @@ class MaterialStore(Protocol):
     def count_for_project(self, project_id: ProjectId) -> int: ...
     def find_by_sha(self, project_id: ProjectId, sha256: str) -> "MaterialPacket | None": ...
     def chunk_count(self, material_id: str) -> int: ...
+
+
+@runtime_checkable
+class MaterialRetriever(Protocol):
+    """在**已经存下来**的材料块里找东西：块级返回，带锚点与分数——调用方不看实现。
+
+    与 `MaterialParser` / `MaterialStore` 同一套路子：v1 是 SQLite `LIKE`（中文子串可靠、
+    零索引、零迁移），升级位（`FTS5(trigram)` / 向量）在**同一个协议**后面，
+    调用方一行不改（换实现只改 `bootstrap/container.py` 一行）。
+
+    它只读：给 F6 全局搜索用（`SearchProject`），"按主张取块"是 C-2c-3 的事。
+    """
+
+    def search(
+        self, *, project_id: ProjectId, query: str, limit: int = 5
+    ) -> tuple["MaterialHit", ...]: ...
 
 
 @runtime_checkable

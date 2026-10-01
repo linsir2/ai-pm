@@ -411,7 +411,11 @@ class MaterialSummaryView:
 
 @dataclass(frozen=True, slots=True)
 class MaterialHit:
-    """检索结果：块级，带来源与锚点（不是一段裸文本）。"""
+    """检索结果：块级，带来源与锚点（不是一段裸文本）。
+
+    `score` 的消费者是 **F6 的展示顺序**（检索器给什么顺序就显示什么顺序，
+    `search_hits` 不再重排）；`excerpt` 是命中词前后的一小段，用来在列表里放一行。
+    """
 
     material_id: str
     chunk_id: str
@@ -419,6 +423,8 @@ class MaterialHit:
     excerpt: str
     anchor: str
     source_ref: str
+    #: 材料标题（列表那行的开头："权限系统设计详解：<片段>"）
+    title: str
 
 
 #: 包结构版本：换形状时 +1，`needs_reparse` 会因此判"该重解析"
