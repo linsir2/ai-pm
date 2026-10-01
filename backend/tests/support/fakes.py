@@ -174,6 +174,37 @@ class InMemoryMaterialStore:
         self._packets[material_id] = updated
         return updated
 
+    def refresh(self, material_id: str, *, parsed, content: bytes):  # type: ignore[no-untyped-def]
+        """就地刷新（与 SQLite 实现同口径：id / 去重键 / `created_at` 都不动，
+        原始字节、块、解析器身份一起换）——用途是"同一个网址再抓一次"。"""
+
+        known = self._packets.get(material_id)
+        if known is None:
+            raise KeyError(material_id)
+        stamped = replace(
+            parsed,
+            chunks=tuple(
+                MaterialChunk(
+                    chunk_id=f"{material_id}#c{chunk.ordinal:02d}",
+                    ordinal=chunk.ordinal,
+                    text=chunk.text,
+                    heading_path=chunk.heading_path,
+                    anchor=chunk.anchor,
+                )
+                for chunk in parsed.chunks
+            ),
+            bytes_len=len(content),
+        )
+        updated = MaterialPacket(
+            material_id=material_id,
+            project_id=known.project_id,
+            parsed=stamped,
+            created_at=known.created_at,
+        )
+        self._packets[material_id] = updated
+        self._raw[material_id] = content
+        return updated
+
 
 class InMemoryEvidenceRepository(_InMemoryRepository):
     def __init__(self) -> None:

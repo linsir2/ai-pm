@@ -12,6 +12,7 @@ from pmstudio.domain.shared.ids import ProjectId, RoundId
 
 if TYPE_CHECKING:
     from pmstudio.application.dto import MaterialHit, ParsedMaterial
+    from pmstudio.application.ports import FetchedPage
 
 SCRIPTED_MODEL = "scripted"
 
@@ -189,6 +190,36 @@ class RecordingWebSearch:
         if self.failure is not None:
             raise self.failure
         return self.returns
+
+
+class RecordingWebFetch:
+    """按网址抓取的替身：记录每个网址，按配置依次返回页面或抛错（**只在测试里**）。
+
+    真实现是 `infrastructure/tools/fetch.py` 的 `HttpxWebFetcher`（它自己那份护栏
+    有 15 条用例钉着）。这里只让"点了抓取之后库里发生了什么"可被断言。
+    """
+
+    def __init__(
+        self,
+        *,
+        returns: Sequence["FetchedPage"] = (),
+        failure: Exception | None = None,
+    ) -> None:
+        self.calls: list[str] = []
+        self.returns = tuple(returns)
+        self.failure = failure
+        self._index = 0
+
+    async def fetch(self, *, url: str) -> "FetchedPage":
+        self.calls.append(url)
+        if self.failure is not None:
+            raise self.failure
+        if not self.returns:
+            raise AssertionError("这个用例没有给替身准备页面（returns 是空的）")
+        # 连抓同一个网址两次时，第二次给第二份（内容变了的那个场景）
+        page = self.returns[min(self._index, len(self.returns) - 1)]
+        self._index += 1
+        return page
 
 
 class RecordingMaterialRetriever:

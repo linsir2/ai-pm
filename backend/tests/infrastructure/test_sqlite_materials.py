@@ -152,3 +152,26 @@ def test_other_projects_materials_are_not_listed(store):
     )
 
     assert store.list_for_project(PROJECT, current=frozenset()) == ()
+
+
+def test_refresh_replaces_bytes_and_chunks_but_keeps_identity(store):
+    """同址再抓（`P27`）：原始字节、块、解析器身份与标题一起换；id / 去重键 / 创建时间不动。"""
+
+    saved = store.put(
+        project_id=PROJECT, parsed=parsed_material("旧正文"), sha256="2" * 64,
+        content=b"old html", now=NOW,
+    )
+
+    refreshed = store.refresh(
+        saved.material_id,
+        parsed=parsed_material("新正文", "还有一段"),
+        content=b"new html",
+    )
+
+    assert refreshed.material_id == saved.material_id
+    assert refreshed.created_at == saved.created_at
+    assert store.raw_bytes(saved.material_id) == b"new html"
+    assert [chunk.text for chunk in refreshed.parsed.chunks] == ["新正文", "还有一段"]
+    assert refreshed.parsed.chunks[0].chunk_id == f"{saved.material_id}#c00"
+    assert refreshed.parsed.bytes_len == len(b"new html")
+    assert len(store.list_for_project(PROJECT, current=frozenset())) == 1

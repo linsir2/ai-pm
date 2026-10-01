@@ -47,7 +47,7 @@ def page(handler_calls: list[str], **headers):
 async def test_fetch_returns_a_parsed_material_with_anchors():
     calls: list[str] = []
 
-    parsed = await fetcher(page(calls)).fetch(url="https://example.com/spec")
+    parsed = (await fetcher(page(calls)).fetch(url="https://example.com/spec")).parsed
 
     assert calls == ["https://example.com/spec"]
     assert parsed.origin == "web_fetch"
@@ -70,7 +70,7 @@ async def test_a_page_without_a_title_falls_back_to_the_url():
             200, headers={"content-type": "text/html"}, content=b"<p>no title here</p>"
         )
 
-    parsed = await fetcher(handler).fetch(url="https://example.com/no-title")
+    parsed = (await fetcher(handler).fetch(url="https://example.com/no-title")).parsed
 
     assert parsed.title == "https://example.com/no-title"
 
@@ -157,11 +157,12 @@ async def test_redirect_chain_is_followed_and_the_final_url_is_reported():
             return httpx.Response(302, headers={"location": "https://cdn.example.com/final"})
         return httpx.Response(200, headers={"content-type": "text/html"}, content=PAGE)
 
-    parsed = await fetcher(handler).fetch(url="https://example.com/go")
+    page_ = await fetcher(handler).fetch(url="https://example.com/go")
 
     assert calls == ["https://example.com/go", "https://cdn.example.com/final"]
-    assert parsed.source_ref == "https://cdn.example.com/final"
-    assert any("跳转" in warning for warning in parsed.warnings)
+    assert page_.parsed.source_ref == "https://cdn.example.com/final"
+    assert page_.content == PAGE          # 原始字节跟着一起回来
+    assert any("跳转" in warning for warning in page_.parsed.warnings)
 
 
 async def test_too_many_redirects_is_a_tool_failure():

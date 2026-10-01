@@ -146,6 +146,55 @@ class SqliteMaterialStore:
                 material_id,
             ),
         )
+        self._write_chunks(material_id, stamped)
+        updated = self.get(material_id)
+        if updated is None:  # pragma: no cover - 上面刚 UPDATE 过，只有并发删才会到这里
+            raise KeyError(material_id)
+        return updated
+
+    def refresh(
+        self, material_id: str, *, parsed: ParsedMaterial, content: bytes
+    ) -> MaterialPacket:
+        """就地刷新（`P27`）：**原始字节、块、解析器身份、标题与出处一起换**。
+
+        只给"没被任何一轮引用过"的材料用（用例那边判，`P19` 的同一道边）——
+        用途是"同一个网址再抓一次"。`material_id`、去重键、`created_at` 都不动。
+        """
+
+        stamped = _restamp(parsed, material_id)
+        self._connection.execute(
+            "DELETE FROM material_chunks WHERE material_id = ?", (material_id,)
+        )
+        self._connection.execute(
+            """
+            UPDATE materials
+            SET origin = ?, title = ?, source_ref = ?, media_type = ?, bytes_len = ?,
+                parser_id = ?, parser_version = ?, schema_version = ?, truncated = ?,
+                warnings = ?, content = ?
+            WHERE material_id = ?
+            """,
+            (
+                stamped.origin,
+                stamped.title,
+                stamped.source_ref,
+                stamped.media_type,
+                len(content),
+                stamped.parser_id,
+                stamped.parser_version,
+                MATERIAL_SCHEMA_VERSION,
+                int(stamped.truncated),
+                json.dumps(list(stamped.warnings), ensure_ascii=False),
+                content,
+                material_id,
+            ),
+        )
+        self._write_chunks(material_id, stamped)
+        updated = self.get(material_id)
+        if updated is None:  # pragma: no cover - 上面刚 UPDATE 过，只有并发删才会到这里
+            raise KeyError(material_id)
+        return updated
+
+    def _write_chunks(self, material_id: str, stamped: ParsedMaterial) -> None:
         for chunk in stamped.chunks:
             self._connection.execute(
                 """
@@ -162,10 +211,6 @@ class SqliteMaterialStore:
                     chunk.anchor,
                 ),
             )
-        updated = self.get(material_id)
-        if updated is None:  # pragma: no cover - 上面刚 UPDATE 过，只有并发删才会到这里
-            raise KeyError(material_id)
-        return updated
 
     # ── 读 ────────────────────────────────────────────────────────────────
 

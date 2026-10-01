@@ -21,6 +21,7 @@ from tests.support.doubles import (
     RecordingMaterialRetriever,
     RecordingPrompts,
     RecordingPublisher,
+    RecordingWebFetch,
     RecordingWebSearch,
     ScriptedModelGateway,
     SeqIds,
@@ -120,6 +121,7 @@ class Harness:
         gateway: ModelGateway | None = None,
         available_tool_keys: frozenset[str] = frozenset({"tavily_api_key"}),
         web_search: RecordingWebSearch | None = None,
+        fetcher: RecordingWebFetch | None = None,
         material_retriever: RecordingMaterialRetriever | None = None,
     ) -> None:
         self.documents = InMemoryDocumentRepository()
@@ -150,6 +152,7 @@ class Harness:
         self.tools = TomlToolCatalog(TOOLS_DIR)
         self.available_tool_keys = available_tool_keys
         self.web_search = web_search or RecordingWebSearch()
+        self.fetcher = fetcher or RecordingWebFetch()
         self.material_retriever = material_retriever or RecordingMaterialRetriever()
         self.analyzer = ClaimAnalyzer(
             model=self.gateway, prompts=self.prompts, catalog=self.seats
@@ -427,6 +430,19 @@ class Harness:
             index=self.material_index,
             uow=self.uow,
             clock=self.clock,
+        )
+
+    def fetch_material(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import FetchMaterial
+
+        return FetchMaterial(
+            documents=self.documents,
+            materials=self.materials,
+            parser=self.parser,
+            fetcher=self.fetcher,
+            index=self.material_index,
+            clock=self.clock,
+            uow=self.uow,
         )
 
     def get_document(self):  # type: ignore[no-untyped-def]

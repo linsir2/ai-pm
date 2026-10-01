@@ -123,6 +123,7 @@ from pmstudio.application.ports import (
     SeatDefinition,
     ToolCatalog,
     ToolDefinition,
+    WebFetcher,
     WebSearchGateway,
     WorkspaceIndex,
 )
@@ -2389,6 +2390,100 @@ class UploadMaterial:
                 now=self._clock.now(),
             )
         return material_summary_view(packet, current=self._parser.identities())
+
+
+class FetchMaterial:
+    """按网址抓一份网页材料：**抓取在事务外、落库在事务内**（与上传、检索同一条纪律）。
+
+    与"联网检索"分开：那是分析者提名、用户勾选之后的**搜线索**（300 字摘要），
+    这是用户**点名的一个页面**——抓正文、块级，跟上传的材料走同一条链。
+
+    同一个网址再抓一次 = **刷新**（照 `P19` 的两条路）：
+
+    - **没被引用过**（没发过编号）→ 就地换内容与块：`material_id`、去重键、
+      `created_at` 都不动（界面"这一轮选了哪几份"是按 id 记的，不受影响）；
+    - **被引用过** → **另出一份**（变体键 `fetch:{网址}|{新字节的 sha256 前 12 位}`），
+      旧的冻结留着——那些块挂着编号，改内容就等于改指编号。
+
+    为什么不能永远幂等复用：网页是会改的。点了"再抓一次"却拿到上次的副本，
+    用户只会以为这个功能坏了。抓不到就 `ToolCallFailed` 往上走（HTTP 502），**库里一行都不留**。
+    """
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        materials: MaterialStore,
+        parser: MaterialParser,
+        fetcher: WebFetcher,
+        index: WorkspaceIndex,
+        clock: Clock,
+        uow: UnitOfWork,
+    ) -> None:
+        self._documents = documents
+        self._materials = materials
+        self._parser = parser
+        self._fetcher = fetcher
+        self._index = index
+        self._clock = clock
+        self._uow = uow
+
+    async def __call__(self, *, project_id: ProjectId, url: str) -> MaterialSummaryView:
+        # 抓取在**事务外**（网络可能很慢，别占着写事务）；抓不到就照实报，不写垃圾
+        page = await self._fetcher.fetch(url=url)
+        digest = _fetch_key(url)
+        with self._uow:
+            self._documents.get(project_id)      # 项目不存在就地失败
+            existing = self._materials.find_by_sha(project_id, digest)
+            if existing is None:
+                if self._materials.count_for_project(
+                    project_id
+                ) >= MAX_MATERIALS_PER_PROJECT:
+                    raise MaterialTooLarge(
+                        f"这个项目的材料已经到上限（{MAX_MATERIALS_PER_PROJECT} 份）",
+                        project_id=str(project_id),
+                    )
+                packet = self._materials.put(
+                    project_id=project_id,
+                    parsed=page.parsed,
+                    sha256=digest,
+                    content=page.content,
+                    now=self._clock.now(),
+                )
+            elif self._index.material_references(project_id).get(existing.material_id, ()):
+                # 发过编号：不就地改（那些编号指着它里面的块）——另出一份，旧的冻结留着
+                packet = self._materials.put(
+                    project_id=project_id,
+                    parsed=page.parsed,
+                    sha256=_refetch_key(url, page.content),
+                    content=page.content,
+                    now=self._clock.now(),
+                )
+            else:
+                packet = self._materials.refresh(
+                    existing.material_id, parsed=page.parsed, content=page.content
+                )
+        return material_summary_view(packet, current=self._parser.identities())
+
+
+def _fetch_key(url: str) -> str:
+    """按网址去重：同一个网址重复抓**不新增一行**（抓的就是那一页）。
+
+    与检索那条路的 `web:{url}` 分开算：一条是"用户点名、我抓的整页"，
+    一条是"搜回来的线索"，两者同时存在是对的。
+    """
+
+    return hashlib.sha256(f"fetch:{url}".encode()).hexdigest()
+
+
+def _refetch_key(url: str, content: bytes) -> str:
+    """同址再抓、但旧的那份已经发过编号时的**变体键**：`fetch:{网址}|{新字节指纹}`。
+
+    带内容指纹是为了幂等——连点两次、页面没变，就还是那一份，不会生出第三份。
+    """
+
+    fingerprint = hashlib.sha256(content).hexdigest()[:12]
+    return hashlib.sha256(f"fetch:{url}|{fingerprint}".encode()).hexdigest()
 
 
 class ListMaterials:

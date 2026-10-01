@@ -19,6 +19,7 @@ import httpx
 
 from pmstudio.application.dto import ParsedMaterial
 from pmstudio.application.errors import ToolCallFailed, UnsupportedMaterial
+from pmstudio.application.ports import FetchedPage
 from pmstudio.infrastructure.tools.extract import (
     HTML_PARSER_ID,
     TRUNCATED_WARNING,
@@ -58,7 +59,7 @@ class HttpxWebFetcher:
         self._client = client
         self._resolve = resolve
 
-    async def fetch(self, *, url: str) -> ParsedMaterial:
+    async def fetch(self, *, url: str) -> FetchedPage:
         target = _checked_url(url)
         body, media_type, final_url = await self._read(target)
         try:
@@ -79,17 +80,21 @@ class HttpxWebFetcher:
             warnings.append(f"这个网址跳转过（最终地址：{final_url}）")
         if truncated:
             warnings.append(TRUNCATED_WARNING.format(limit=MAX_MATERIAL_CHARS))
-        return ParsedMaterial(
-            origin=FETCH_ORIGIN,
-            title=page_title or final_url,
-            source_ref=final_url,
-            media_type=media_type,
-            bytes_len=len(body),
-            chunks=chunks,
-            parser_id=HTML_PARSER_ID,
-            parser_version=html_parser_version(),
-            truncated=truncated,
-            warnings=tuple(warnings),
+        return FetchedPage(
+            parsed=ParsedMaterial(
+                origin=FETCH_ORIGIN,
+                title=page_title or final_url,
+                source_ref=final_url,
+                media_type=media_type,
+                bytes_len=len(body),
+                chunks=chunks,
+                parser_id=HTML_PARSER_ID,
+                parser_version=html_parser_version(),
+                truncated=truncated,
+                warnings=tuple(warnings),
+            ),
+            # 抓到的 HTML 原始字节跟着一起走（材料表要存它，重解析靠它）
+            content=body,
         )
 
     async def _read(self, url: str) -> tuple[bytes, str, str]:

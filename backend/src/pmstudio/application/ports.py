@@ -162,13 +162,26 @@ class WebSearchGateway(Protocol):
 
 @runtime_checkable
 class WebFetcher(Protocol):
-    """按网址抓**一份**网页 → 解析草稿（与 `MaterialParser` 同一个形状）。
+    """按网址抓**一份**网页 → `FetchedPage`（解析草稿 + 原始字节）。
 
     与 `WebSearchGateway` 的区别：这是**用户点名的一个页面**，所以要抓正文、块级
     （搜回来的只是线索，300 字摘要就够）。抓不到就抛 `ToolCallFailed`——不吞、不假装抓到。
     """
 
-    async def fetch(self, *, url: str) -> "ParsedMaterial": ...
+    async def fetch(self, *, url: str) -> "FetchedPage": ...
+
+
+@dataclass(frozen=True, slots=True)
+class FetchedPage:
+    """一次抓取的产出：**解析草稿 + 原始字节**。
+
+    为什么要带原始字节：材料表存的是"原始字节 + 解析结果"（换解析器时要能重解析，
+    用户不用重抓）。解析草稿里没有 bytes——投影里不许出现 bytes 这条不变量不动，
+    所以字节只在这条**端口 → 用例 → 存储**的路上走，绝不进任何 API 投影。
+    """
+
+    parsed: "ParsedMaterial"
+    content: bytes
 
 
 @runtime_checkable
@@ -207,6 +220,20 @@ class MaterialStore(Protocol):
         只用于"没被任何一轮引用过"的材料：`material_id`、去重键、原始字节、标题都不动，
         只把块按新解析器重建，并更新 `parser_id / parser_version / schema_version /
         truncated / warnings`。**别拿它改被引用过的材料**——那会让编号改指。
+        """
+
+        ...
+
+
+    def refresh(
+        self, material_id: str, *, parsed: "ParsedMaterial", content: bytes
+    ) -> "MaterialPacket":
+        """**就地**刷新一份材料：原始字节、块、解析器身份、截断与告警一起换（`P27`）。
+
+        只给"没被任何一轮引用过"的材料用（用例那边判，`P19` 的同一道边）——
+        它的用途是"同一个网址再抓一次"，网页变了就把这份更新到最新；
+        被引用过的材料改内容会改指编号，只能走"另出一份"。
+        `material_id`、去重键、`created_at` 都不动。
         """
 
         ...
