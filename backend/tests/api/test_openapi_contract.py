@@ -12,6 +12,7 @@ EXPECTED_PATHS = {
     "/api/projects/{project_id}/export/markdown",
     "/api/projects/{project_id}/edits",
     "/api/projects/{project_id}/attachments",
+    "/api/projects/{project_id}/attachments/{material_id}",
     "/api/projects/{project_id}/rounds",
     "/api/projects/{project_id}/search",
     "/api/projects/{project_id}/versions",

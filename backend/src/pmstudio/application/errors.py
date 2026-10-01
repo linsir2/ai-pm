@@ -117,6 +117,36 @@ class UnknownEvidenceId(ApplicationError):
         super().__init__(f"这个项目里没有编号 {eid}", code="unknown_evidence", eid=str(eid))
 
 
+class UnknownMaterial(ApplicationError):
+    """这个项目里没有这份材料（删/重解析时给错了 id）——资源不在，404。"""
+
+    def __init__(self, material_id: object) -> None:
+        super().__init__(
+            f"这个项目里没有这份材料：{material_id}",
+            code="unknown_material",
+            material_id=str(material_id),
+        )
+
+
+class MaterialFrozen(ApplicationError):
+    """这份材料已经发过编号：**编号发出即冻结**（`P19`）。
+
+    编号指向它里面的块——删了 `E7` 会指向空气；就地改形状会让 `E7` 改指别的内容。
+    所以被引用过的材料只能**留着**（要用新解析器读，走"另出一份"那条路）。
+    """
+
+    def __init__(self, material_id: object, *, eids: tuple[str, ...], action: str) -> None:
+        listed = "、".join(eids)
+        super().__init__(
+            f"这份材料已经发过编号 {listed}，不能{action}"
+            "——编号指向它里面的块，不能回收、也不能改指。",
+            code="material_frozen",
+            material_id=str(material_id),
+            eids=list(eids),
+            action=action,
+        )
+
+
 class RoundBusy(ApplicationError):
     """同一个 round 上已经有一个动作在跑。
 

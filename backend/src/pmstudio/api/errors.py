@@ -9,6 +9,9 @@ CODE_STATUS = {
     # 读一个不存在的版本 / 编号是"资源不在"，不是形状错误
     "unknown_version": 404,
     "unknown_evidence": 404,
+    # 材料层的"资源不在"与"状态不允许"（P19）
+    "unknown_material": 404,
+    "material_frozen": 409,
     "model_call_failed": 502,
     "model_packet_unparsable": 502,
     "round_busy": 409,

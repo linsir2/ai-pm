@@ -15,6 +15,7 @@ from pmstudio.application.use_cases import (
     AbandonRound,
     ConfirmDraft,
     CreateProject,
+    DeleteMaterial,
     DigRound,
     EditEntry,
     ExportMarkdown,
@@ -286,6 +287,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             documents=documents, materials=materials, parser=parser, clock=clock, uow=uow
         ),
         list_materials=ListMaterials(materials=materials, parser=parser, index=index),
+        delete_material=DeleteMaterial(
+            materials=materials, parser=parser, index=index, uow=uow
+        ),
         get_document=GetDocument(documents=documents),
         get_readiness=GetReadiness(documents=documents, checker=readiness),
         export_markdown=ExportMarkdown(

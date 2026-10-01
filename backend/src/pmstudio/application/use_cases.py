@@ -85,11 +85,13 @@ from pmstudio.application.dto import (
 )
 from pmstudio.application.errors import (
     ApplicationError,
+    MaterialFrozen,
     MaterialTooLarge,
     ModelCallFailed,
     PacketParseError,
     ToolCallFailed,
     UnknownEvidenceId,
+    UnknownMaterial,
 )
 from pmstudio.application.events import (
     DOC_CHANGED,
@@ -2094,6 +2096,48 @@ def list_material_views(
         replace(item, eids=references.get(item.material_id, ()))
         for item in materials.list_for_project(project_id, current=parser.identities())
     )
+
+
+class DeleteMaterial:
+    """删一份材料：**只有没被引用过的才准删**（`P19`：编号发出即冻结）。
+
+    为什么判据这么硬：编号（`E7`）指向的是**材料里的块**。删了它，`E7` 就指向空气；
+    而证据链是这个项目的底线（`01` §6：每条内容都要能点回原话）。所以"删"只在
+    **没有任何一轮引用过它**时允许——那时候它连一个编号都没有，删了不留痕。
+
+    返回**刷新后的材料列表**：界面就地在列表上操作，一次拿到真相，不用自己猜。
+    """
+
+    def __init__(
+        self,
+        *,
+        materials: MaterialStore,
+        parser: MaterialParser,
+        index: WorkspaceIndex,
+        uow: UnitOfWork,
+    ) -> None:
+        self._materials = materials
+        self._parser = parser
+        self._index = index
+        self._uow = uow
+
+    async def __call__(
+        self, *, project_id: ProjectId, material_id: str
+    ) -> tuple[MaterialSummaryView, ...]:
+        packet = self._materials.get(material_id)
+        if packet is None or packet.project_id != str(project_id):
+            raise UnknownMaterial(material_id)
+        eids = self._index.material_references(project_id).get(material_id, ())
+        if eids:
+            raise MaterialFrozen(material_id, eids=eids, action="删")
+        with self._uow:
+            self._materials.delete(material_id)
+        return list_material_views(
+            project_id=project_id,
+            materials=self._materials,
+            parser=self._parser,
+            index=self._index,
+        )
 
 
 class SearchProject:

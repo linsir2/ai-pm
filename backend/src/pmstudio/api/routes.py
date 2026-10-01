@@ -233,6 +233,20 @@ async def list_attachments(request: Request, project_id: str):  # type: ignore[n
     )
 
 
+@router.delete("/projects/{project_id}/attachments/{material_id}")
+async def delete_attachment(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, material_id: str
+):
+    """删一份材料。**只有没被引用过的才准删**（编号发出即冻结，`P19`）——
+    被引用过就 409，消息里会列出是哪几个编号。返回刷新后的材料列表。"""
+
+    return as_json(
+        await services_of(request).delete_material(
+            project_id=ProjectId(project_id), material_id=material_id
+        )
+    )
+
+
 @router.get("/projects/{project_id}/search")
 async def search(request: Request, project_id: str, q: str = ""):  # type: ignore[no-untyped-def]
     """在这个项目里搜（F6）：条目 / 功能 / 编号 / 席位发言。空查询回空，不回全量。"""

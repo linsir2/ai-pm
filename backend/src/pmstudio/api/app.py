@@ -12,6 +12,7 @@ from pmstudio.application.ports import EventStream, RoundOrchestrator
 from pmstudio.application.use_cases import (
     AbandonRound,
     CreateProject,
+    DeleteMaterial,
     DigRound,
     EditEntry,
     ExportMarkdown,
@@ -47,6 +48,7 @@ class ApiServices:
     search: SearchProject
     upload_material: UploadMaterial
     list_materials: ListMaterials
+    delete_material: DeleteMaterial
     get_document: GetDocument
     get_readiness: GetReadiness
     export_markdown: ExportMarkdown

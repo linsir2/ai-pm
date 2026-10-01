@@ -408,6 +408,16 @@ class Harness:
             materials=self.materials, parser=self.parser, index=self.material_index
         )
 
+    def delete_material(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import DeleteMaterial
+
+        return DeleteMaterial(
+            materials=self.materials,
+            parser=self.parser,
+            index=self.material_index,
+            uow=self.uow,
+        )
+
     def get_document(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetDocument
 
@@ -491,6 +501,7 @@ class Harness:
             search=self.search(),
             upload_material=self.upload_material(),
             list_materials=self.list_materials(),
+            delete_material=self.delete_material(),
             get_document=self.get_document(),
             get_readiness=self.get_readiness(),
             export_markdown=self.export_markdown(),

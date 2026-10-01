@@ -181,6 +181,14 @@ class MaterialStore(Protocol):
     def count_for_project(self, project_id: ProjectId) -> int: ...
     def find_by_sha(self, project_id: ProjectId, sha256: str) -> "MaterialPacket | None": ...
     def chunk_count(self, material_id: str) -> int: ...
+    def delete(self, material_id: str) -> None:
+        """删掉这份材料（块随 `ON DELETE CASCADE` 一起走，原始字节也不留）。
+
+        **谁决定能不能删**：用例（`DeleteMaterial`）——被引用过的材料不许删（编号不能悬空）。
+        仓储只负责"删干净"，不做判据。
+        """
+
+        ...
 
 
 @runtime_checkable

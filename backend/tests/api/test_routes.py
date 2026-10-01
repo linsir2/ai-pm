@@ -153,6 +153,84 @@ async def test_search_endpoint_returns_hits_and_an_empty_query_returns_nothing()
     assert blank.json()["hits"] == []
 
 
+async def test_delete_attachment_over_http():
+    """删一份没被用过的材料 → 200 + 刷新后的列表；再删一次 → 404。"""
+
+    app, _ = make_client()
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        saved = (
+            await client.post(
+                f"/api/projects/{project_id}/attachments",
+                files={"file": ("需求.md", "# 目标\n导出".encode(), "text/markdown")},
+            )
+        ).json()
+        deleted = await client.delete(
+            f"/api/projects/{project_id}/attachments/{saved['material_id']}"
+        )
+        again = await client.delete(
+            f"/api/projects/{project_id}/attachments/{saved['material_id']}"
+        )
+
+    assert deleted.status_code == 200
+    assert deleted.json() == []
+    assert again.status_code == 404
+    assert again.json()["code"] == "unknown_material"
+
+
+async def test_deleting_a_used_material_is_a_409_with_the_numbers():
+    """被引用过的材料：409 + 消息里列出编号（编号发出即冻结，`P19`）。"""
+
+    app, harness = make_client()
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        await client.post(
+            f"/api/projects/{project_id}/rounds", json={"input": "想做个订单导出"}
+        )
+        saved = (
+            await client.post(
+                f"/api/projects/{project_id}/attachments",
+                files={"file": ("需求.md", "# 目标\n导出".encode(), "text/markdown")},
+            )
+        ).json()
+
+    from pmstudio.domain.round.round import MaterialRef, Round
+    from pmstudio.domain.round.step import Step, WaitingOn
+    from pmstudio.domain.shared.ids import EvidenceId, ProjectId, RoundId
+
+    round_ = Round(
+        round_id=RoundId("r-used"),
+        project_id=ProjectId(project_id),
+        user_input="按这份写",
+        created_at=harness.clock.now(),
+        step=Step.DONE,
+        waiting_on=WaitingOn.NONE,
+    )
+    round_.add_materials(
+        (
+            MaterialRef(
+                material_id=saved["material_id"],
+                chunk_id=f"{saved['material_id']}#c00",
+                eid=EvidenceId("E4"),
+            ),
+        )
+    )
+    harness.rounds.save(round_)
+
+    async with async_client(app) as client:
+        refused = await client.delete(
+            f"/api/projects/{project_id}/attachments/{saved['material_id']}"
+        )
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "material_frozen"
+    assert "E4" in refused.json()["message"]
+
+
 async def test_search_endpoint_includes_material_hits():
     """材料也是搜得到的东西（`P18` C-2c-1）：命中带块 id（点得动的落点）与锚点。"""
 
