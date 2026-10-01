@@ -207,13 +207,19 @@ class ClaimAnalyzer:
             reply.text, schemas.ClaimsPacket, purpose=self.PURPOSE
         )
         seats, dropped = nominations_from_packet(packet, catalog=self._catalog)
-        claims = claims_from_packet(packet, user_input=user_input)
+        claims, claim_drops = claims_from_packet(packet, user_input=user_input)
         contradictions, contradiction_drops = contradictions_from_packet(packet, claims=claims)
         web_queries, query_drops = web_queries_from_packet(packet)
         return Analysis(
             claims=claims,
             seats=seats,
-            dropped=dropped + claims_overflow_drops(overflow) + contradiction_drops + query_drops,
+            dropped=(
+                dropped
+                + claims_overflow_drops(overflow)
+                + claim_drops
+                + contradiction_drops
+                + query_drops
+            ),
             contradictions=contradictions,
             web_queries=web_queries,
         )
@@ -293,8 +299,23 @@ def nominations_from_packet(
     return tuple(picked), tuple(dropped)
 
 
-def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tuple[Claim, ...]:
+def claims_from_packet(
+    packet: schemas.ClaimsPacket, *, user_input: str
+) -> tuple[tuple[Claim, ...], tuple[DroppedItem, ...]]:
+    """报文 → 主张 + **就地修掉的那些字段的留痕**（P21 F16-b）。
+
+    只有一类毛病就地修：**非 `guess` 标签却带了 `assumption`**（领域规则见
+    `domain/round/claim.py` 的"只有猜测才带假设"）。修法是**把假设摘掉、主张本体留下**——
+    主张是用户原话在文档里的落点（`c{i}` 还被互斥对子按"第几条"指认着），
+    丢一条会让后面所有序号整体错位；而字段写歪只是模型的笔误。
+
+    仍然判死的两类：**原话在输入里找不到**（编造，`04-未决.md` 的可追溯不变式）、
+    以及主张本体过不了领域校验（空文本 / 猜测不带假设 / 决定不给拍板人）——
+    那些不是"修一下"能解决的，交给重装一次去处理。
+    """
+
     claims: list[Claim] = []
+    dropped: list[DroppedItem] = []
     for index, draft in enumerate(packet.claims, start=1):
         claim_id = f"c{index}"
         span = grounded_span(draft.raw_span, user_input)
@@ -306,6 +327,21 @@ def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tupl
                 position=index,
                 raw_span=draft.raw_span,
             )
+        assumption = draft.assumption
+        if assumption is not None and draft.label.strip().lower() != ClaimLabel.GUESS.value:
+            dropped.append(
+                DroppedItem(
+                    handle=f"主张 {claim_id} 的假设",
+                    reason=(
+                        f"只有猜测才带假设：这条主张标的是 {draft.label}，"
+                        "假设字段已丢掉；主张本身保留"
+                    ),
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                )
+            )
+            assumption = None
         try:
             claims.append(
                 Claim(
@@ -316,10 +352,10 @@ def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tupl
                     raw_span=span,
                     assumption=(
                         Assumption(
-                            failure_consequence=draft.assumption.failure_consequence,
-                            verification=draft.assumption.verification,
+                            failure_consequence=assumption.failure_consequence,
+                            verification=assumption.verification,
                         )
-                        if draft.assumption is not None
+                        if assumption is not None
                         else None
                     ),
                     decided_by=draft.decided_by,
@@ -332,7 +368,7 @@ def claims_from_packet(packet: schemas.ClaimsPacket, *, user_input: str) -> tupl
                 claim_id=claim_id,
                 domain_code=error.code,
             ) from error
-    return tuple(claims)
+    return tuple(claims), tuple(dropped)
 
 
 def contradictions_from_packet(

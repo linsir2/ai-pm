@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from pmstudio.application.agents.analyzer import ClaimAnalyzer, grounded_span
 from pmstudio.application.agents.schemas import ClaimsPacket
 from pmstudio.application.errors import PacketParseError
-from pmstudio.domain.round.round import SeatNomination
+from pmstudio.domain.round.round import DropSource, SeatNomination
 from pmstudio.domain.round.web_query import WebQuery
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
@@ -603,3 +603,75 @@ async def test_a_query_without_a_reason_is_dropped_with_a_trace():
     assert [item.query for item in analysis.web_queries] == ["订单导出的行业规范"]
     assert [item.handle for item in analysis.dropped] == ["检索词 RBAC"]
     assert "为什么" in analysis.dropped[0].reason
+
+
+ASSUMPTION_ON_CONSTRAINT_INPUT = "点检记录不能改，出了事故要能查是谁点的、几点点的。"
+
+
+async def test_assumption_on_a_non_guess_claim_is_stripped_not_fatal():
+    """真跑 `.codex/runs/2026-10-01/报告.md` F16：第 6 条主张带 `assumption` 但标签是
+    `constraint` → 领域校验 `只有猜测才带假设` → 整轮判死、起轮 502、没有 `/retry` 可点。
+
+    口径与 P8 的字段级容错一致：**丢字段、不丢主张**——主张是用户原话在文档里的落点，
+    丢了它等于把用户说过的一句话从证据链里挖掉。
+    """
+
+    reply = json.dumps(
+        {
+            "basis": "读了文档与本轮输入",
+            "claims": [
+                {
+                    "text": "点检记录不许改",
+                    "raw_span": "点检记录不能改",
+                    "label": "constraint",
+                    "zone": "body",
+                    "section_id": "s5",
+                    "assumption": {
+                        "failure_consequence": "改不了会说不清责任",
+                        "verification": "看审计日志",
+                    },
+                }
+            ],
+            "seats": [{"seat_id": SEAT, "why": "涉及留痕"}],
+        },
+        ensure_ascii=False,
+    )
+    analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": reply}), RecordingPrompts())
+
+    analysis = await analyzer.analyze(
+        user_input=ASSUMPTION_ON_CONSTRAINT_INPUT, document_state="# 文档"
+    )
+
+    assert len(analysis.claims) == 1
+    assert analysis.claims[0].assumption is None
+    assert analysis.claims[0].label is ClaimLabel.CONSTRAINT
+    assert [item.handle for item in analysis.dropped] == ["主张 c1 的假设"]
+    assert [item.reason for item in analysis.dropped] == [
+        "只有猜测才带假设：这条主张标的是 constraint，假设字段已丢掉；主张本身保留"
+    ]
+    assert analysis.dropped[0].source is DropSource.ASSEMBLY
+
+
+async def test_guess_without_assumption_is_still_fatal():
+    """反方向不放松：标了猜测却不给假设，仍是模型的错（它该补的是 `assumption`）。"""
+
+    reply = json.dumps(
+        {
+            "basis": "读了文档",
+            "claims": [
+                {
+                    "text": "可能要做离线点检",
+                    "raw_span": "想做个订单导出的功能",
+                    "label": "guess",
+                    "zone": "body",
+                    "section_id": "s5",
+                }
+            ],
+            "seats": [{"seat_id": SEAT, "why": "涉及离线"}],
+        },
+        ensure_ascii=False,
+    )
+    analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": reply}), RecordingPrompts())
+
+    with pytest.raises(PacketParseError):
+        await analyzer.analyze(user_input=INPUT, document_state="# 文档")
