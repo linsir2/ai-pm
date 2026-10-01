@@ -971,7 +971,11 @@ def landed_answer_proposals(
                         OriginType.USER,
                         (eid,),
                         "问卷答案机械落地（整合者没有引用它）"
-                        + ("，原未决项已定" if question.target.section_id == OPEN_QUESTION_HOME else ""),
+                        + (
+                            "，原未决项已定"
+                            if question.target.section_id == OPEN_QUESTION_HOME
+                            else ""
+                        ),
                     ),
                     kind=kind,
                 )
