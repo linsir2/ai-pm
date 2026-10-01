@@ -23,11 +23,17 @@ from pdfminer.high_level import extract_text as pdf_extract_text
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
 from pmstudio.application.errors import UnsupportedMaterial
 from pmstudio.infrastructure.tools.limits import CHUNK_CHARS, MAX_MATERIAL_CHARS
-from pmstudio.infrastructure.tools.office import DOCX_PARSER_ID, docx_chunks
+from pmstudio.infrastructure.tools.office import (
+    DOCX_PARSER_ID,
+    XLSX_PARSER_ID,
+    docx_chunks,
+    xlsx_chunks,
+)
 
 TEXT_SUFFIXES = (".txt", ".md", ".markdown", ".csv", ".json", ".log", ".yaml", ".yml")
 HTML_SUFFIXES = (".html", ".htm")
 DOCX_SUFFIXES = (".docx",)
+XLSX_SUFFIXES = (".xlsx",)
 
 TEXT_PARSER_ID = "local-text"
 HTML_PARSER_ID = "bs4-html"
@@ -35,6 +41,7 @@ PDF_PARSER_ID = "pdfminer"
 DOCX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 #: 标题行：Markdown `#`、`一、`、`1.2 `、`第 3 章` 都算（认错了最多多切一块，无害）
 _HEADING = re.compile(
@@ -147,7 +154,7 @@ class LocalMaterialParser:
     其余明确拒绝（**不静默存空**）。"""
 
     def identities(self) -> frozenset[tuple[str, str]]:
-        """我能产出四种身份（文本 / PDF / HTML / Word）——换 docling 之后这一组就全变了。"""
+        """我能产出五种身份（文本 / PDF / HTML / Word / Excel）——换 docling 之后这一组就全变了。"""
 
         return frozenset(
             {
@@ -155,6 +162,7 @@ class LocalMaterialParser:
                 (HTML_PARSER_ID, f"beautifulsoup4 {metadata.version('beautifulsoup4')}"),
                 (PDF_PARSER_ID, _package_version("pdfminer.six")),
                 (DOCX_PARSER_ID, _package_version("python-docx")),
+                (XLSX_PARSER_ID, _package_version("openpyxl")),
             }
         )
 
@@ -166,11 +174,13 @@ class LocalMaterialParser:
             return self._from_html(filename, media_type, data)
         if suffix in DOCX_SUFFIXES or media_type == DOCX_MEDIA_TYPE:
             return self._from_docx(filename, media_type, data)
+        if suffix in XLSX_SUFFIXES or media_type == XLSX_MEDIA_TYPE:
+            return self._from_xlsx(filename, media_type, data)
         if suffix in TEXT_SUFFIXES or media_type.startswith("text/"):
             return self._from_text(filename, media_type, data)
         raise UnsupportedMaterial(
             f"不支持的材料类型：{filename}（{media_type}）"
-            "——先把内容另存成 .md / .txt / .pdf / .docx（老 .doc 也请另存为 .docx）",
+            "——先把内容另存成 .md / .txt / .pdf / .docx / .xlsx（老 .doc / .xls 也请另存）",
             filename=filename,
             media_type=media_type,
         )
@@ -233,6 +243,27 @@ class LocalMaterialParser:
             chunks=chunks,
         )
 
+    def _from_xlsx(self, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
+        """Excel：openpyxl 一个工作表一块（值取缓存结果；公式没算过的那几格照实说）。"""
+
+        try:
+            chunks, truncated, warnings = xlsx_chunks(data)
+        except UnsupportedMaterial as error:
+            raise UnsupportedMaterial(
+                error.message, **{**error.details, "filename": filename}
+            ) from error
+        return self._pack(
+            filename=filename,
+            media_type=media_type or XLSX_MEDIA_TYPE,
+            data=data,
+            text="\n".join(chunk.text for chunk in chunks),
+            truncated=truncated,
+            parser_id=XLSX_PARSER_ID,
+            parser_version=_package_version("openpyxl"),
+            chunks=chunks,
+            extra_warnings=warnings,
+        )
+
     def _from_pdf(self, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
         """PDF：pdfminer 抽文字，按页切块（锚点写第几页）。"""
 
@@ -273,6 +304,7 @@ class LocalMaterialParser:
         parser_id: str,
         parser_version: str,
         chunks: tuple[MaterialChunk, ...],
+        extra_warnings: tuple[str, ...] = (),
     ) -> ParsedMaterial:
         stripped = text.strip()
         if not stripped or not chunks:
@@ -284,6 +316,7 @@ class LocalMaterialParser:
         warnings: list[str] = []
         if truncated:
             warnings.append(f"材料太长，只保留前 {MAX_MATERIAL_CHARS} 字（已截断）")
+        warnings.extend(extra_warnings)
         return ParsedMaterial(
             origin="upload",
             title=filename,
