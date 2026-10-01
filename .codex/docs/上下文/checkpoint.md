@@ -1077,3 +1077,31 @@ Tavily 密钥**已验证可用**（HTTP 200，单条 content ≈ 1.1k 字符）�
 **还没做（C-2b 下半）**：T9（`ClaimsPacket.web_queries` + `Round.web_queries/chosen` + 复述卡勾选）→
 T10（`SubmitOpening` 里事务外调 Tavily → 落块级 `external` 出处 → 与附件同一句渲染）→
 T11（拿真密钥真跑一轮，看导出里的"外部材料"编号）。
+
+## P17b · C-2b 下半：联网检索闭环（2026-10-01，**已交付**）
+
+| 提交 | 内容 |
+|---|---|
+| `49d544d` | **T9**：分析者提名 0–3 条检索词（`web_queries`，带 why；超限/没 why **丢那条+留痕**不重跑）+ `WebQuery` 值对象 + `Round.web_queries / web_queries_chosen`（payload 两把键，老行回落）+ `RoundView.web_queries / web_search_available` + `OpeningRequest.web_queries` + 复述卡那一栏（**默认不勾**） |
+| `f63ea93` | **T10**：`SubmitOpening` 事务外查 Tavily（`limit` 来自 TOML）→ URL 去重 → `select_chunks(cost=web_block_cost)` → 一个事务落勾选+逐块 `external` 出处+`Round.materials`；失败/空结果/预算挤掉 → `Round.dropped(source=tool)`；`external_material_text` 按 origin 分两段；前端"工具这一趟"单列一段 |
+
+**真跑（T11）**：`/tmp/p17b_web_drive.py`（真模型 deepseek-v4-flash + 真 Tavily）
+→ 5 条结果落成 E4–E8（ref 是 URL）、席位与整合者提示词里都带上了、导出附录 A 有网址、**留样 0 次密钥泄漏**；
+坏 key 那一跑 401 → 留痕"检索失败：联网搜索失败：HTTP 401"，轮次照跑到 `awaiting_answers`（**不判死**）。
+报告：`.codex/runs/2026-10-01/P17验证-C2b.md`。
+
+**本批钉死的两条口径**（`02` §11.0.29）：
+
+1. **选块与渲染同一把尺子**：`web_block_cost` = 标题 + URL + 摘要 + `WEB_EID_RESERVE`，
+   保证"编号 == 带进提示词的块"在联网这条路上也成立（两把尺子会出现"发了号却没进提示词"的编号）；
+2. **先查后写**：工具调用在事务外，写只有一个事务——先写的话崩在中间时重试会直接进席位轮，
+   用户授权的检索被静默跳过。
+
+**执行中抓到的真 bug**：两条查询搜到同一个网址时，包去重了但**账本里写了两条指向同一块的出处**
+（单测 `test_the_same_url_twice_is_one_material` 抓到）；修法是发号前按 `(material_id, chunk_id)` 再收一次。
+
+**改过的既有测试（都是契约变更）**：`test_graph_state.py`（命令多一个字段）、
+`test_packet_overflow.py`（claims 报文 expected_keys 多一条）、`payload.test.ts`（起轮体多一把 `web_queries`）。
+
+**下一步**：C-2c（`web_fetch` 抓单页 / docx-xlsx / **docling 重解析** / 按主张取块 / 附件删除），
+以及"材料列表里区分检索来的"这种显示口的小补丁。

@@ -142,6 +142,54 @@ async def test_unknown_material_id_is_a_shape_error():
         await started_round(harness, material_ids=["m-不存在"])
 
 
+def test_a_proposal_backed_only_by_material_is_downgraded_to_proposed():
+    """材料**不算权威**（`02` §11.0.3）：说成 `derived` 也没用——回溯不到用户输入，
+    就落进"它提议的"那一组（默认不勾）。这条不变量靠既有规则兜住，这里只把它钉死。"""
+
+    from pmstudio.application import assembly
+    from pmstudio.application.agents import schemas
+    from pmstudio.domain.provenance.evidence import EvidenceSource
+    from pmstudio.domain.provenance.ledger import EvidenceLedger
+    from pmstudio.domain.round.draft import OriginType
+    from tests.support.builders import document_with_feature, make_round
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    found = ledger.record(
+        kind=EvidenceKind.EXTERNAL,
+        text="行业通行做法是 RBAC",
+        source=EvidenceSource(external_ref="https://example.com/rbac"),
+        now=NOW,
+    )
+
+    result = assembly.assemble(
+        schemas.IntegrationPacket.model_validate(
+            {
+                "questions": [],
+                "list_items": [],
+                "proposals": [
+                    {
+                        "op": "add",
+                        "target": {
+                            "zone": "body",
+                            "section_id": "s5",
+                            "feature_slug": "order-export",
+                            "field": "one_liner",
+                        },
+                        "text": "权限模型采用行业通行的 RBAC",
+                        "origin_type": "derived",
+                        "evidence_refs": [str(found)],
+                    }
+                ],
+            }
+        ),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger,
+    )
+
+    assert result.proposals[0].origin.type is OriginType.PROPOSED
+
+
 async def test_the_seat_prompt_also_carries_the_material(tmp_path):
     """席位也要看得到材料（三个智能体共用同一个渲染结果）。"""
 
