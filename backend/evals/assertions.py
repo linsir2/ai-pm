@@ -19,8 +19,19 @@ EVAL_ASSERTIONS: list[dict] = [
     {"type": "no_duplicate_questions"},
     {"type": "dropped_items_are_explained"},
     {"type": "outside_scope_items_are_labeled"},
-    {"type": "unaccounted_at_most", "count": 2},
 ]
+
+#: **没进默认集**的那一条：`unaccounted_at_most`。
+#:
+#: 为什么：默认集里那七条量的是**结构**（编号形状、题数、标注对齐……），而
+#: `unaccounted` 量的是**模型行为率**——四个车道 13 个轮次实测 4–26 条/轮，
+#: 补了提示词之后 2–3 轮实测 8–23 条/轮，**没有可测的下降**（见
+#: `.codex/runs/2026-10-01/P22验证.md`）。给这种量挂一个"默认必须过"的阈值，
+#: 换来的是一盏人人学会忽略的红灯（真跑 4–17 倍超阈）。
+#:
+#: 要盯它就卸在**某条用例**上（case JSON 的 `extra_assertions`，与
+#: `contradiction_is_labelled` 同一个用法），或者用只读脚本
+#: `.codex/runs/2026-10-01/bin/measure_unaccounted.py` 复量。
 
 
 def normalized_title(text: str) -> str:
