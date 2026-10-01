@@ -18,7 +18,7 @@ from collections.abc import Callable
 import httpx
 
 from pmstudio.application.dto import ParsedMaterial
-from pmstudio.application.errors import ToolCallFailed, UnsupportedMaterial
+from pmstudio.application.errors import FetchRefused, ToolCallFailed, UnsupportedMaterial
 from pmstudio.application.ports import FetchedPage
 from pmstudio.infrastructure.tools.extract import (
     HTML_PARSER_ID,
@@ -130,10 +130,9 @@ class HttpxWebFetcher:
                             )
                         media_type = _media_type(response)
                         if media_type not in WEB_MEDIA_TYPES:
-                            raise ToolCallFailed(
+                            raise FetchRefused(
                                 f"这个地址返回的不是网页（{media_type or '没写类型'}）"
-                                "——先把内容下载下来再上传",
-                                tool_id=TOOL_ID,
+                                "——先把内容下载下来再上传"
                             )
                         body = await _read_capped(response)
                 except httpx.HTTPError as error:
@@ -154,17 +153,16 @@ def _checked_url(url: str) -> str:
 
     text = (url or "").strip()
     if not text:
-        raise ToolCallFailed("先给一个网址（http / https 开头）", tool_id=TOOL_ID)
+        raise FetchRefused("先给一个网址（http / https 开头）")
     parsed = httpx.URL(text)
     if parsed.scheme not in ("http", "https"):
-        raise ToolCallFailed(
-            f"只抓 http / https 的网页（这个地址的协议是「{parsed.scheme or '没写'}」）",
-            tool_id=TOOL_ID,
+        raise FetchRefused(
+            f"只抓 http / https 的网页（这个地址的协议是「{parsed.scheme or '没写'}」）"
         )
     if parsed.userinfo:
-        raise ToolCallFailed("网址里不要带账号密码", tool_id=TOOL_ID)
+        raise FetchRefused("网址里不要带账号密码")
     if not parsed.host:
-        raise ToolCallFailed(f"这个地址没有主机名：{text}", tool_id=TOOL_ID)
+        raise FetchRefused(f"这个地址没有主机名：{text}")
     return str(parsed)
 
 
@@ -179,9 +177,8 @@ def _assert_public(url: str, *, resolve: Callable[[str], tuple[str, ...]]) -> No
     for address in addresses:
         parsed = ipaddress.ip_address(address)
         if not parsed.is_global:
-            raise ToolCallFailed(
-                f"这是内网地址（{host} → {parsed}）——先把它导出成文件再上传",
-                tool_id=TOOL_ID,
+            raise FetchRefused(
+                f"这是内网地址（{host} → {parsed}）——先把它导出成文件再上传"
             )
 
 
@@ -196,9 +193,8 @@ async def _read_capped(response: httpx.Response) -> bytes:
     async for part in response.aiter_bytes():
         body.extend(part)
         if len(body) > MAX_FETCH_BYTES:
-            raise ToolCallFailed(
+            raise FetchRefused(
                 f"这个页面太大了（超过 {MAX_FETCH_BYTES // 1024 // 1024}MB）"
-                "——先把它下载下来、另存成文件再上传",
-                tool_id=TOOL_ID,
+                "——先把它下载下来、另存成文件再上传"
             )
     return bytes(body)

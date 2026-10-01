@@ -20,6 +20,8 @@ CODE_STATUS = {
     "material_too_large": 413,
     # 工具调用失败 = 502（与模型调用失败同一档：上游不通）
     "tool_call_failed": 502,
+    # "这个地址不能用"（不是网页 / 内网 / 没协议）= 422：是你给的东西不行，不是服务器故障
+    "fetch_refused": 422,
 }
 
 

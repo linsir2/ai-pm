@@ -1,4 +1,4 @@
-"""14 个端点：解析请求 → 调用例 → 序列化返回。业务判断一个都不在这儿。"""
+"""端点层：解析请求 → 调用例 → 序列化返回。业务判断一个都不在这儿。"""
 
 from typing import Annotated
 from urllib.parse import quote
@@ -11,6 +11,7 @@ from pmstudio.api.schemas import (
     ConfirmRequest,
     CreateProjectRequest,
     EditEntryRequest,
+    FetchRequest,
     OpeningRequest,
     StartRoundRequest,
 )
@@ -230,6 +231,22 @@ async def list_attachments(request: Request, project_id: str):  # type: ignore[n
 
     return as_json(
         await services_of(request).list_materials(project_id=ProjectId(project_id))
+    )
+
+
+@router.post("/projects/{project_id}/attachments/fetch", status_code=201)
+async def fetch_attachment(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, body: FetchRequest
+):
+    """按网址抓一份网页材料（用户点名的那一页）：**抓取在事务外、落库在事务内**。
+
+    同一个网址再抓一次 = 刷新（没被引用过就地换；发过编号的另出一份）——见 `P27`。
+    """
+
+    return as_json(
+        await services_of(request).fetch_material(
+            project_id=ProjectId(project_id), url=body.url
+        )
     )
 
 

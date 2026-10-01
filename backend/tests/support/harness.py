@@ -528,6 +528,7 @@ class Harness:
             search=self.search(),
             upload_material=self.upload_material(),
             list_materials=self.list_materials(),
+            fetch_material=self.fetch_material(),
             delete_material=self.delete_material(),
             reparse_material=self.reparse_material(),
             get_document=self.get_document(),

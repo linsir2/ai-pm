@@ -28,6 +28,12 @@ class StartRoundRequest(BaseModel):
     material_ids: list[str] = Field(default_factory=list)
 
 
+class FetchRequest(BaseModel):
+    """按网址抓一份网页材料（`P27`）：只收网址本身（护栏在 `HttpxWebFetcher` 里）。"""
+
+    url: str = Field(min_length=1, max_length=2000)
+
+
 class OpeningRequest(BaseModel):
     seats: list[str] = Field(min_length=1)
     claim_edits: list[ClaimEditRequest] = Field(default_factory=list)

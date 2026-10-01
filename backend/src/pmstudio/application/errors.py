@@ -77,6 +77,17 @@ class ToolCallFailed(ApplicationError):
         self.status = status
 
 
+class FetchRefused(ApplicationError):
+    """这个地址**不能用**：不是 http/https、带账号密码、内网地址、返回的不是网页、页面太大。
+
+    与 `ToolCallFailed` 分开：那是"抓的时候出了问题"（超时 / 上游 5xx，502），
+    这是"你给的东西本身不行"（422）——界面照样只显示 message，但码不同，复盘时一眼分得清。
+    """
+
+    def __init__(self, message: str, *, tool_id: str = "tool.web_fetch", **details: object) -> None:
+        super().__init__(message, code="fetch_refused", tool_id=tool_id, **details)
+
+
 class ModelCallFailed(ApplicationError):
     """网关调用本身失败（超时 / 鉴权 / 供应商错误）。
 

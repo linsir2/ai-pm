@@ -83,12 +83,52 @@ def _services(harness: Harness) -> ApiServices:
     return harness.api_services(model_name="openai/gpt-4o-mini")
 
 
-def make_client():
+def make_client(*, fetcher=None):  # type: ignore[no-untyped-def]
     harness = Harness(
         replies={"claims": CLAIMS_REPLY, "integration": QUESTION_REPLY},
         seat_replies={"seat.data_scale": SEAT_REPLY},
+        fetcher=fetcher,
     )
     return create_app(_services(harness)), harness
+
+
+#: 抓网页那两个用例里的页面字节（真 `HttpxWebFetcher` + 真 HTTP 语义，不联网）
+FETCHED_PAGE = (
+    "<html><head><title>导出权限（竞品）</title></head><body>"
+    "<p>竞品把导出放在管理员菜单里。</p></body></html>"
+).encode()
+
+
+def real_fetcher(*, status: int = 200, content_type: str = "text/html", content: bytes = None):  # type: ignore[assignment]
+    """**真实现** + `MockTransport`：走真护栏、真 bs4、真切块，只是不出网。"""
+
+    import ipaddress
+
+    import httpx
+
+    from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            headers={"content-type": content_type},
+            content=FETCHED_PAGE if content is None else content,
+        )
+
+    def resolve(host: str) -> tuple[str, ...]:
+        """字面 IP 照实解析（内网那几个就该被判出来）；域名给一个固定公网 IP（不出网）。"""
+
+        if host == "localhost":
+            return ("127.0.0.1",)
+        try:
+            return (str(ipaddress.ip_address(host)),)
+        except ValueError:
+            return ("93.184.216.34",)
+
+    return HttpxWebFetcher(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        resolve=resolve,
+    )
 
 
 async def test_health_reports_model():
@@ -133,6 +173,78 @@ async def test_upload_of_an_unsupported_type_is_422_with_a_code():
 
     assert response.status_code == 422
     assert response.json()["code"] == "unsupported_material"
+
+
+async def test_fetch_endpoint_pulls_a_page_and_lists_it():
+    """按网址抓材料（`P27`）：走**真抓取器**（MockTransport 不出网）、真解析、真落库。"""
+
+    app, _ = make_client(fetcher=real_fetcher())
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        response = await client.post(
+            f"/api/projects/{project_id}/attachments/fetch",
+            json={"url": "https://example.com/spec"},
+        )
+        listed = await client.get(f"/api/projects/{project_id}/attachments")
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["origin"] == "web_fetch"
+    assert body["source_ref"] == "https://example.com/spec"
+    assert body["title"] == "导出权限（竞品）"
+    assert body["chunk_count"] == 1
+    assert "chunks" not in body                  # 摘要投影：不回块正文
+    assert [item["title"] for item in listed.json()] == ["导出权限（竞品）"]
+
+
+async def test_fetch_endpoint_refuses_a_private_address_with_422():
+    """内网地址：**422 + 一句人话**，而且一次请求都不发（护栏在用例之前）。"""
+
+    app, _ = make_client(fetcher=real_fetcher())
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        response = await client.post(
+            f"/api/projects/{project_id}/attachments/fetch",
+            json={"url": "http://127.0.0.1:8000/secret"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "fetch_refused"
+    assert "内网" in response.json()["message"]
+
+
+async def test_fetch_endpoint_reports_a_site_failure_as_502():
+    """站点那边出问题（404 / 超时）是 **502**：与"你给的地址不行"分开。"""
+
+    app, _ = make_client(fetcher=real_fetcher(status=404))
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        response = await client.post(
+            f"/api/projects/{project_id}/attachments/fetch",
+            json={"url": "https://example.com/gone"},
+        )
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "tool_call_failed"
+
+
+async def test_fetch_endpoint_rejects_an_empty_url():
+    app, _ = make_client(fetcher=real_fetcher())
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        response = await client.post(
+            f"/api/projects/{project_id}/attachments/fetch", json={"url": ""}
+        )
+
+    assert response.status_code == 422        # pydantic 的 min_length 就挡了
 
 
 async def test_search_endpoint_returns_hits_and_an_empty_query_returns_nothing():

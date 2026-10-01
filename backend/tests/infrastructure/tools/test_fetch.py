@@ -9,7 +9,7 @@ import socket
 import httpx
 import pytest
 
-from pmstudio.application.errors import ToolCallFailed, UnsupportedMaterial
+from pmstudio.application.errors import FetchRefused, ToolCallFailed, UnsupportedMaterial
 from pmstudio.infrastructure.tools.fetch import MAX_FETCH_BYTES, HttpxWebFetcher
 
 PAGE = (
@@ -91,7 +91,7 @@ async def test_non_html_content_type_is_a_tool_failure():
             200, headers={"content-type": "application/pdf"}, content=b"%PDF-1.4"
         )
 
-    with pytest.raises(ToolCallFailed) as error:
+    with pytest.raises(FetchRefused) as error:
         await fetcher(handler).fetch(url="https://example.com/spec.pdf")
 
     assert "不是网页" in str(error.value)
@@ -115,7 +115,7 @@ async def test_too_large_is_a_tool_failure():
             content=b"x" * (MAX_FETCH_BYTES + 1),
         )
 
-    with pytest.raises(ToolCallFailed) as error:
+    with pytest.raises(FetchRefused) as error:
         await fetcher(handler).fetch(url="https://example.com/huge")
 
     assert "太大" in str(error.value)
@@ -127,7 +127,7 @@ async def test_private_address_is_refused_without_any_request():
     calls: list[str] = []
 
     for url in ("http://127.0.0.1:8000/x", "http://localhost/secret", "http://10.0.0.5/"):
-        with pytest.raises(ToolCallFailed) as error:
+        with pytest.raises(FetchRefused) as error:
             await fetcher(page(calls)).fetch(url=url)
         assert "内网" in str(error.value)
 
@@ -141,7 +141,7 @@ async def test_redirect_to_a_private_address_is_refused():
         calls.append(str(request.url))
         return httpx.Response(302, headers={"location": "http://10.0.0.5/inside"})
 
-    with pytest.raises(ToolCallFailed) as error:
+    with pytest.raises(FetchRefused) as error:
         await fetcher(handler).fetch(url="https://example.com/go")
 
     assert "内网" in str(error.value)
@@ -181,7 +181,7 @@ async def test_too_many_redirects_is_a_tool_failure():
 async def test_a_url_that_is_not_a_plain_public_web_page_is_refused(url):
     calls: list[str] = []
 
-    with pytest.raises(ToolCallFailed):
+    with pytest.raises(FetchRefused):
         await fetcher(page(calls)).fetch(url=url)
 
     assert calls == []

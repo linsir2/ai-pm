@@ -16,6 +16,7 @@ from pmstudio.application.use_cases import (
     DigRound,
     EditEntry,
     ExportMarkdown,
+    FetchMaterial,
     GetDocument,
     GetEvidence,
     GetReadiness,
@@ -49,6 +50,7 @@ class ApiServices:
     search: SearchProject
     upload_material: UploadMaterial
     list_materials: ListMaterials
+    fetch_material: FetchMaterial
     delete_material: DeleteMaterial
     reparse_material: ReparseMaterial
     get_document: GetDocument

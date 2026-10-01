@@ -10,7 +10,7 @@ from pmstudio.api.app import ApiServices, create_app
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.seat import SeatReviewer
-from pmstudio.application.ports import ModelGateway
+from pmstudio.application.ports import ModelGateway, WebFetcher
 from pmstudio.application.use_cases import (
     AbandonRound,
     ConfirmDraft,
@@ -19,6 +19,7 @@ from pmstudio.application.use_cases import (
     DigRound,
     EditEntry,
     ExportMarkdown,
+    FetchMaterial,
     GetDocument,
     GetEvidence,
     GetReadiness,
@@ -66,6 +67,7 @@ from pmstudio.infrastructure.sqlite.repositories import (
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from pmstudio.infrastructure.tools.catalog import TomlToolCatalog
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
+from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
 from pmstudio.infrastructure.tools.tavily import TavilySearchGateway
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +125,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     # 材料检索 v1：LIKE（中文可靠、零索引）。换 FTS5 / 向量只改这一行（`P18` C-2c-1）
     material_search = SqliteLikeRetriever(connection)
     parser = LocalMaterialParser()
+    # 按网址抓网页（P27）：真 httpx，护栏在实现里（只抓公开网页、限 3 跳 / 15s / 5MB）。
+    # 与解析器一样，换实现（无头浏览器 / 更强的正文抽取）只改这一行。
+    fetcher: WebFetcher = HttpxWebFetcher()
     index = SqliteWorkspaceIndex(connection)
     uow = SqliteUnitOfWork(connection)
 
@@ -288,6 +293,15 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             documents=documents, materials=materials, parser=parser, clock=clock, uow=uow
         ),
         list_materials=ListMaterials(materials=materials, parser=parser, index=index),
+        fetch_material=FetchMaterial(
+            documents=documents,
+            materials=materials,
+            parser=parser,
+            fetcher=fetcher,
+            index=index,
+            clock=clock,
+            uow=uow,
+        ),
         delete_material=DeleteMaterial(
             materials=materials, parser=parser, index=index, uow=uow
         ),
