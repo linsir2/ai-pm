@@ -103,4 +103,18 @@ describe("MaterialPicker", () => {
 
     expect(screen.getByText(/不是你说的话/)).toBeTruthy();
   });
+
+  it("列表标出它是怎么来的：上传 / 联网检索（认不出的照实显示原值）", () => {
+    draw({
+      materials: [
+        summary,
+        { ...summary, material_id: "m2", title: "权限模型详解", origin: "web_search" },
+        { ...summary, material_id: "m3", title: "怪东西", origin: "web_fetch" },
+      ],
+    });
+
+    expect(screen.getByText(/来源：上传/)).toBeTruthy();
+    expect(screen.getByText(/来源：联网检索/)).toBeTruthy();
+    expect(screen.getByText(/来源：抓来的网页/)).toBeTruthy();
+  });
 });

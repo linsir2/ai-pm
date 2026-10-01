@@ -10,6 +10,13 @@ import { useRef, useState } from "react";
 import { api } from "../api/client";
 import type { MaterialSummaryView } from "../api/types";
 
+/** 这份材料是怎么来的（`origin` 由后端在盖章时写死）。认不出的**照实显示原值**，不猜。 */
+const ORIGIN_TEXT: Record<string, string> = {
+  upload: "上传",
+  web_search: "联网检索",
+  web_fetch: "抓来的网页",
+};
+
 export function MaterialPicker({
   projectId,
   materials,
@@ -80,6 +87,7 @@ export function MaterialPicker({
             <li className="materials__item" key={item.material_id}>
               <span className="materials__title">{item.title}</span>
               <span className="muted small">
+                来源：{ORIGIN_TEXT[item.origin] ?? item.origin} ·{" "}
                 {item.chunk_count} 块 · {item.chars} 字 · {item.parser_id}
                 {item.truncated ? " · 已截断" : ""}
                 {item.stale ? " · 建议重解析" : ""}
