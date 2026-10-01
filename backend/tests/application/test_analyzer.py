@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -12,6 +13,9 @@ from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
 from tests.support.builders import SEAT, make_seat
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway, StaticSeatCatalog
+
+#: 提示词本体：归位规则这类"模型每轮都看得见"的东西，钉在文件上比钉在槽里准
+PROMPTS_DIR = Path(__file__).resolve().parents[2] / "src/pmstudio/infrastructure/llm/prompts"
 
 INPUT = "想做个订单导出的功能，运营每天都要用，数据量大概几万。登录页太丑了。下个月必须上线。"
 
@@ -675,3 +679,40 @@ async def test_guess_without_assumption_is_still_fatal():
 
     with pytest.raises(PacketParseError):
         await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+
+def test_analyzer_prompt_routes_backbone_sentences_to_their_chapters():
+    """真跑实测（`.codex/runs/2026-10-01/报告.md` F18）：一份叙述式输入里 12 条主张
+    有 **10 条**落进 `s5/*.user_story`，s1/s2/s3/s4 **零条** → 整合者拿不到写那几章的授权
+    → 8 个阻塞；而带材料那条车道反而归得准，说明是提示词没说清，不是模型不会。
+    """
+
+    body = (PROMPTS_DIR / "analyzer.md").read_text(encoding="utf-8")
+
+    # 锚点用归位表的表头（不是某个魔法串）：表在，规则就在
+    assert "这段话在说什么" in body
+    table = body[body.index("这段话在说什么") :]
+    for chapter, phrase in (
+        ("**s1**", "现状、痛点、不做的代价"),
+        ("**s2**", "要达成什么、成功标准"),
+        ("**s3**", "谁在用、什么角色"),
+        ("**s4**", "本期做什么、本期**不做**什么"),
+        ("**s10**", "假设、依赖、外部系统"),
+        ("**s12**", "什么时候上线、怎么验收"),
+        ("**s8**", "性能/可用性/安全/兼容/可观测/成本"),
+        ("**s5**", "section_id + feature_slug"),
+    ):
+        assert phrase in table, f"{chapter} 那一行没写"
+        assert chapter in table, f"{chapter} 没出现在归位表里"
+    assert "各切一条" in body  # 规则句在表前一句，表里只要六章都在
+
+
+async def test_analyzer_still_sends_the_section_table_to_the_model():
+    """归位规则改了，槽没变：`sections` 照旧要进上下文（防止改提示词时把槽删掉）。"""
+
+    prompts = RecordingPrompts()
+    analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": CLAIMS_REPLY}), prompts)
+
+    await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+
+    assert "s5 功能需求" in prompts.calls[0][1]["sections"]
