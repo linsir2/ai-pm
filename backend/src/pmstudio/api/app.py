@@ -27,6 +27,7 @@ from pmstudio.application.use_cases import (
     ListMaterials,
     ListProjects,
     ListRounds,
+    ReparseMaterial,
     RollbackVersion,
     SearchProject,
     UploadMaterial,
@@ -49,6 +50,7 @@ class ApiServices:
     upload_material: UploadMaterial
     list_materials: ListMaterials
     delete_material: DeleteMaterial
+    reparse_material: ReparseMaterial
     get_document: GetDocument
     get_readiness: GetReadiness
     export_markdown: ExportMarkdown

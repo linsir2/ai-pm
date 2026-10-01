@@ -153,6 +153,34 @@ async def test_search_endpoint_returns_hits_and_an_empty_query_returns_nothing()
     assert blank.json()["hits"] == []
 
 
+async def test_reparse_attachment_over_http():
+    """重解析：真上传一份 → 让后端拿原始字节重读一遍（同一份文本，验的是这条路通）。"""
+
+    app, _ = make_client()
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        saved = (
+            await client.post(
+                f"/api/projects/{project_id}/attachments",
+                files={"file": ("需求.md", "# 目标\n导出".encode(), "text/markdown")},
+            )
+        ).json()
+        reparsed = await client.post(
+            f"/api/projects/{project_id}/attachments/{saved['material_id']}/reparse"
+        )
+        missing = await client.post(
+            f"/api/projects/{project_id}/attachments/m-不存在/reparse"
+        )
+
+    assert reparsed.status_code == 200
+    assert [item["material_id"] for item in reparsed.json()] == [saved["material_id"]]
+    assert reparsed.json()[0]["stale"] is False
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "unknown_material"
+
+
 async def test_delete_attachment_over_http():
     """删一份没被用过的材料 → 200 + 刷新后的列表；再删一次 → 404。"""
 

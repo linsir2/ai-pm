@@ -120,6 +120,53 @@ class SqliteMaterialStore:
         )
         self._connection.execute("DELETE FROM materials WHERE material_id = ?", (material_id,))
 
+    def replace_chunks(self, material_id: str, parsed: ParsedMaterial) -> MaterialPacket:
+        """就地换块（重解析）：**id / 去重键 / 原始字节 / 标题都不动**，只换读法与解析器身份。
+
+        只给"没被任何一轮引用过"的材料用（用例那边判）——被引用的材料改块 = 改指编号。
+        """
+
+        stamped = _restamp(parsed, material_id)
+        self._connection.execute(
+            "DELETE FROM material_chunks WHERE material_id = ?", (material_id,)
+        )
+        self._connection.execute(
+            """
+            UPDATE materials
+            SET parser_id = ?, parser_version = ?, schema_version = ?,
+                truncated = ?, warnings = ?
+            WHERE material_id = ?
+            """,
+            (
+                stamped.parser_id,
+                stamped.parser_version,
+                MATERIAL_SCHEMA_VERSION,
+                int(stamped.truncated),
+                json.dumps(list(stamped.warnings), ensure_ascii=False),
+                material_id,
+            ),
+        )
+        for chunk in stamped.chunks:
+            self._connection.execute(
+                """
+                INSERT INTO material_chunks
+                    (chunk_id, material_id, ordinal, text, heading_path, anchor)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chunk.chunk_id,
+                    material_id,
+                    chunk.ordinal,
+                    chunk.text,
+                    json.dumps(list(chunk.heading_path), ensure_ascii=False),
+                    chunk.anchor,
+                ),
+            )
+        updated = self.get(material_id)
+        if updated is None:  # pragma: no cover - 上面刚 UPDATE 过，只有并发删才会到这里
+            raise KeyError(material_id)
+        return updated
+
     # ── 读 ────────────────────────────────────────────────────────────────
 
     def get(self, material_id: str) -> MaterialPacket | None:

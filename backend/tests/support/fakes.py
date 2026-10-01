@@ -146,6 +146,34 @@ class InMemoryMaterialStore:
         self._packets.pop(material_id, None)
         self._raw.pop(material_id, None)
 
+    def replace_chunks(self, material_id: str, parsed):  # type: ignore[no-untyped-def]
+        """就地换块（与 SQLite 实现同口径：id / 去重键 / 原始字节都不动）。"""
+
+        known = self._packets.get(material_id)
+        if known is None:
+            raise KeyError(material_id)
+        stamped = replace(
+            parsed,
+            chunks=tuple(
+                MaterialChunk(
+                    chunk_id=f"{material_id}#c{chunk.ordinal:02d}",
+                    ordinal=chunk.ordinal,
+                    text=chunk.text,
+                    heading_path=chunk.heading_path,
+                    anchor=chunk.anchor,
+                )
+                for chunk in parsed.chunks
+            ),
+        )
+        updated = MaterialPacket(
+            material_id=material_id,
+            project_id=known.project_id,
+            parsed=stamped,
+            created_at=known.created_at,
+        )
+        self._packets[material_id] = updated
+        return updated
+
 
 class InMemoryEvidenceRepository(_InMemoryRepository):
     def __init__(self) -> None:

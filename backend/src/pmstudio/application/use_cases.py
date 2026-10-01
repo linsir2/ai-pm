@@ -92,6 +92,7 @@ from pmstudio.application.errors import (
     ToolCallFailed,
     UnknownEvidenceId,
     UnknownMaterial,
+    UnsupportedMaterial,
 )
 from pmstudio.application.events import (
     DOC_CHANGED,
@@ -2138,6 +2139,92 @@ class DeleteMaterial:
             parser=self._parser,
             index=self._index,
         )
+
+
+class ReparseMaterial:
+    """用**当前解析器**把这份材料的原始字节重读一遍（`P19`）。
+
+    两条路，取决于"有没有发过编号"：
+
+    - **没被引用过**：就地重读（同一个 `material_id`、同一个去重键、原始字节不动）。
+      id 不变很要紧——前端"这一轮选了哪几份"是按 id 记的。
+    - **被引用过**：**不就地改**（那些块挂着 `E7`、`E12`，改形状 = 改指编号），
+      改为**另出一份**（变体键 `reparse:{旧id}|{parser}@{version}`），旧的留作冻结记录。
+      变体键让"连点两次"幂等——不会生出第三份。
+
+    联网搜回来的材料（`origin="web_search"`）不给重解析：它的"原始字节"是当时的网页快照，
+    要新的就重新搜。
+    """
+
+    def __init__(
+        self,
+        *,
+        materials: MaterialStore,
+        parser: MaterialParser,
+        index: WorkspaceIndex,
+        uow: UnitOfWork,
+        clock: Clock,
+    ) -> None:
+        self._materials = materials
+        self._parser = parser
+        self._index = index
+        self._uow = uow
+        self._clock = clock
+
+    async def __call__(
+        self, *, project_id: ProjectId, material_id: str
+    ) -> tuple[MaterialSummaryView, ...]:
+        packet = self._materials.get(material_id)
+        if packet is None or packet.project_id != str(project_id):
+            raise UnknownMaterial(material_id)
+        raw = self._materials.raw_bytes(material_id)
+        if raw is None:
+            raise UnsupportedMaterial(
+                "这份材料没有留下原始字节，没法重解析（重新上传一份吧）",
+                material_id=str(material_id),
+            )
+        if packet.parsed.origin == WEB_ORIGIN:
+            raise UnsupportedMaterial(
+                "联网检索回来的材料不重解析——它是当时的网页快照，要新的就重新搜一次",
+                material_id=str(material_id),
+                origin=packet.parsed.origin,
+            )
+        # 解析在**事务外**（可能很慢，别占着写事务）；抽不出字就照实报，不写垃圾
+        parsed = self._parser.parse(
+            filename=packet.parsed.title,
+            media_type=packet.parsed.media_type,
+            data=raw,
+        )
+        frozen = tuple(self._index.material_references(project_id).get(material_id, ()))
+        with self._uow:
+            if frozen:
+                self._materials.put(
+                    project_id=project_id,
+                    parsed=parsed,
+                    sha256=_reparse_key(material_id, parsed),
+                    content=raw,
+                    now=self._clock.now(),
+                )
+            else:
+                self._materials.replace_chunks(material_id, parsed)
+        return list_material_views(
+            project_id=project_id,
+            materials=self._materials,
+            parser=self._parser,
+            index=self._index,
+        )
+
+
+def _reparse_key(material_id: str, parsed: ParsedMaterial) -> str:
+    """重解析出来的那份的**去重键**：`reparse:{旧id}|{parser}@{version}`。
+
+    为什么要变体键：`materials` 上有 `UNIQUE (project_id, sha256)`，原始字节的键被**旧的那份**占着；
+    而变体键同时给了幂等（同一个旧材料 + 同一个解析器 → 同一个键 → 不会再存一份）。
+    """
+
+    return hashlib.sha256(
+        f"reparse:{material_id}|{parsed.parser_id}@{parsed.parser_version}".encode()
+    ).hexdigest()
 
 
 class SearchProject:

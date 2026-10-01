@@ -247,6 +247,23 @@ async def delete_attachment(  # type: ignore[no-untyped-def]
     )
 
 
+@router.post("/projects/{project_id}/attachments/{material_id}/reparse")
+async def reparse_attachment(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, material_id: str
+):
+    """用**当前解析器**把这份材料的原始字节重读一遍（不用重传文件）。
+
+    没被引用过 → 就地重读；被引用过 → 另出一份（旧的冻结留着）——见 `P19`。
+    返回刷新后的材料列表。
+    """
+
+    return as_json(
+        await services_of(request).reparse_material(
+            project_id=ProjectId(project_id), material_id=material_id
+        )
+    )
+
+
 @router.get("/projects/{project_id}/search")
 async def search(request: Request, project_id: str, q: str = ""):  # type: ignore[no-untyped-def]
     """在这个项目里搜（F6）：条目 / 功能 / 编号 / 席位发言。空查询回空，不回全量。"""

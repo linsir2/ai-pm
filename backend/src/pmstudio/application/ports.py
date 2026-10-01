@@ -190,6 +190,16 @@ class MaterialStore(Protocol):
 
         ...
 
+    def replace_chunks(self, material_id: str, parsed: "ParsedMaterial") -> "MaterialPacket":
+        """**就地**换掉这份材料的块与解析器身份（`P19` 的重解析）。
+
+        只用于"没被任何一轮引用过"的材料：`material_id`、去重键、原始字节、标题都不动，
+        只把块按新解析器重建，并更新 `parser_id / parser_version / schema_version /
+        truncated / warnings`。**别拿它改被引用过的材料**——那会让编号改指。
+        """
+
+        ...
+
 
 @runtime_checkable
 class MaterialRetriever(Protocol):

@@ -418,6 +418,17 @@ class Harness:
             uow=self.uow,
         )
 
+    def reparse_material(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import ReparseMaterial
+
+        return ReparseMaterial(
+            materials=self.materials,
+            parser=self.parser,
+            index=self.material_index,
+            uow=self.uow,
+            clock=self.clock,
+        )
+
     def get_document(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetDocument
 
@@ -502,6 +513,7 @@ class Harness:
             upload_material=self.upload_material(),
             list_materials=self.list_materials(),
             delete_material=self.delete_material(),
+            reparse_material=self.reparse_material(),
             get_document=self.get_document(),
             get_readiness=self.get_readiness(),
             export_markdown=self.export_markdown(),

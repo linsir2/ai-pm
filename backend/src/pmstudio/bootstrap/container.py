@@ -31,6 +31,7 @@ from pmstudio.application.use_cases import (
     ListMaterials,
     ListProjects,
     ListRounds,
+    ReparseMaterial,
     RetryRound,
     RollbackVersion,
     RunSeatRound,
@@ -289,6 +290,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         list_materials=ListMaterials(materials=materials, parser=parser, index=index),
         delete_material=DeleteMaterial(
             materials=materials, parser=parser, index=index, uow=uow
+        ),
+        reparse_material=ReparseMaterial(
+            materials=materials, parser=parser, index=index, uow=uow, clock=clock
         ),
         get_document=GetDocument(documents=documents),
         get_readiness=GetReadiness(documents=documents, checker=readiness),
