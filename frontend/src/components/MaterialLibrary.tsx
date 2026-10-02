@@ -9,6 +9,7 @@
    - **删掉**：只有"没被引用过"的才点得动；用过的那份写着是哪几个编号（编号不能回收）。 */
 
 import type { MaterialSummaryView } from "../api/types";
+import { summarizeEids } from "../api/payload";
 
 /** 材料是怎么来的（`origin` 由后端盖章时写死）。认不出的照实显示原值，不猜。 */
 const ORIGIN_TEXT: Record<string, string> = {
@@ -62,6 +63,9 @@ export function MaterialLibrary({
             {materials.map((item) => {
               const on = selected.includes(item.material_id);
               const frozen = item.eids.length > 0;
+              // 被引用过的材料可能挂着几十个编号（真跑里一份材料 31 个 E18…E48）：
+              // 原样铺开会把整行撑到几百像素高、把表头挤成竖条（P29 F5）。收几个，其余报数。
+              const refs = summarizeEids(item.eids);
               return (
                 <li className="materials__item" key={item.material_id}>
                   <span className="materials__title">{item.title}</span>
@@ -71,9 +75,11 @@ export function MaterialLibrary({
                     {item.truncated ? " · 已截断" : ""}
                     {item.stale ? " · 建议重解析" : ""}
                   </span>
-                  <span className="muted small">
+                  <span className="muted small" title={refs.title || undefined}>
                     {frozen
-                      ? `已被引用：${item.eids.join("、")}`
+                      ? `已被引用：${refs.shown.join("、")}${
+                          refs.rest > 0 ? ` 等 ${refs.rest} 个` : ""
+                        }`
                       : "还没被用过（可以删、可以重解析）"}
                   </span>
                   <span className="row">

@@ -20,6 +20,7 @@ export function TopBar({
   onSelectProject,
   onExport,
   onOpenVersions,
+  onOpenReadiness,
   theme,
   onToggleTheme,
   search = null,
@@ -33,6 +34,7 @@ export function TopBar({
   onSelectProject: (projectId: string) => void;
   onExport: () => void;
   onOpenVersions?: () => void;
+  onOpenReadiness?: () => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
   /** 搜索框（F6）：有项目才有；没项目时传 null，顶栏就不显示它。 */
@@ -84,6 +86,7 @@ export function TopBar({
             document={doc}
             readiness={readiness}
             onOpenVersions={onOpenVersions}
+            onOpenReadiness={onOpenReadiness}
           />
           {roundStep !== null && <span className="pill-step">{stepText(roundStep)}</span>}
           <button type="button" className="btn btn--sm" onClick={onExport}>
@@ -96,7 +99,9 @@ export function TopBar({
 
       <span className={`conn conn--${connection}`}>
         <span className="conn__dot" aria-hidden="true" />
-        <span className="muted small" role="status">
+        {/* 窄屏时这一行文字会被视觉隐藏（CSS），`role=status` 与文本都留着——
+            读屏用户照样听得到连接状态（P29 F7）。 */}
+        <span className="muted small conn__label" role="status">
           {connectionText}
         </span>
       </span>

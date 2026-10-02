@@ -10,11 +10,13 @@ import {
   buildStart,
   defaultAccepted,
   defaultSeats,
+  groupAdvisories,
   initialClaimEdits,
   integrationSummary,
   materialHitTarget,
   selectableLabels,
   seatNominationSummary,
+  summarizeEids,
   targetBody,
   targetOptions,
   unansweredCount,
@@ -434,5 +436,47 @@ describe("materialHitTarget", () => {
   it("命中块不在本轮材料里 → 说实话（还没进过任何一轮，所以没有编号）", () => {
     expect(materialHitTarget("m9#c00", materials)).toEqual({ found: false });
     expect(materialHitTarget("m1#c03", [])).toEqual({ found: false });
+  });
+});
+describe("groupAdvisories（P29 眼睛检查 F3）", () => {
+  it("相同的告警合成一条并带上条数（草案卡上三句一模一样的话，用户分不清是哪三条）", () => {
+    const grouped = groupAdvisories([
+      "s12：这条落在 s12，不在本轮去处里",
+      "s3：这条落在 s3，不在本轮去处里",
+      "s12：这条落在 s12，不在本轮去处里",
+      "s12：这条落在 s12，不在本轮去处里",
+    ]);
+
+    expect(grouped).toEqual([
+      { text: "s12：这条落在 s12，不在本轮去处里", count: 3 },
+      { text: "s3：这条落在 s3，不在本轮去处里", count: 1 },
+    ]);
+  });
+
+  it("顺序按**第一次出现**（先说的先说，不排序）", () => {
+    const grouped = groupAdvisories(["乙", "甲", "乙"]);
+
+    expect(grouped.map((item) => item.text)).toEqual(["乙", "甲"]);
+  });
+
+  it("空列表回空", () => {
+    expect(groupAdvisories([])).toEqual([]);
+  });
+});
+
+describe("summarizeEids（P29 眼睛检查 F5）", () => {
+  it("只显示前几个，其余报数——材料库那三十多个编号不再竖排铺开", () => {
+    const summary = summarizeEids(["E18", "E19", "E20", "E21", "E22"], 3);
+
+    expect(summary.shown).toEqual(["E18", "E19", "E20"]);
+    expect(summary.rest).toBe(2);
+    expect(summary.title).toBe("E18、E19、E20、E21、E22");   // 全量进 title，看得见
+  });
+
+  it("没超出就一个都不省", () => {
+    const summary = summarizeEids(["E1", "E2"], 3);
+
+    expect(summary.shown).toEqual(["E1", "E2"]);
+    expect(summary.rest).toBe(0);
   });
 });

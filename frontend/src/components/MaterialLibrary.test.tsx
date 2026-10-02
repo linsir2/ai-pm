@@ -105,4 +105,17 @@ describe("MaterialLibrary", () => {
 
     expect(screen.getByText(/还没有材料/)).toBeTruthy();
   });
+
+  it("被引用了几十个编号时收纳成「前几个 + 等 N 个」，全量留在 title 里（P29 F5）", () => {
+    const frozen = {
+      ...uploaded,
+      eids: Array.from({ length: 31 }, (_, index) => `E${18 + index}`),
+    };
+
+    draw({ materials: [frozen] });
+
+    const line = screen.getByText(/已被引用/);
+    expect(line.textContent).toBe("已被引用：E18、E19、E20 等 28 个");
+    expect(line.getAttribute("title")).toContain("E48");   // 省掉的也看得见
+  });
 });

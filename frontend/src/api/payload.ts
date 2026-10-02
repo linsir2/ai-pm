@@ -285,3 +285,45 @@ export function materialHitTarget(
   }
   return { found: false };
 }
+
+export interface AdvisoryGroup {
+  text: string;
+  count: number;
+}
+
+/**
+ * 把**相同文本**的告警合成一条并带上条数（`P29` 眼睛检查 F3）。
+ *
+ * 真跑现场（草案抽屉）：三条提案都落在 s12，后端按"每条提案一句"吐出三句一模一样的话，
+ * 界面上就是三个同样的黄条——用户分不清是哪三条，React 还会因为 `key` 重复报警告。
+ * 顺序按**第一次出现**（先说的先说，不排序），不合并不同文本的告警。
+ */
+export function groupAdvisories(advisories: readonly string[]): AdvisoryGroup[] {
+  const counts = new Map<string, number>();
+  for (const item of advisories) {
+    counts.set(item, (counts.get(item) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([text, count]) => ({ text, count }));
+}
+
+export interface EidSummary {
+  /** 界面上真正列出来的那几个编号。 */
+  shown: string[];
+  /** 被省略掉的数量（0 = 全列出来了）。 */
+  rest: number;
+  /** 全量编号（`title` 用——省掉的也能看见，只是要点一下/悬停）。 */
+  title: string;
+}
+
+/**
+ * 编号列的收纳（`P29` 眼睛检查 F5）：材料被引用过之后 `eids` 可以到几十个，
+ * 原样铺开会把整行撑到几百像素高、把表头挤成竖条。只列前 `limit` 个，其余报数。
+ */
+export function summarizeEids(eids: readonly string[], limit = 3): EidSummary {
+  const shown = eids.slice(0, Math.max(0, limit));
+  return {
+    shown: [...shown],
+    rest: Math.max(0, eids.length - shown.length),
+    title: eids.join("、"),
+  };
+}

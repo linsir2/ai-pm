@@ -2,7 +2,7 @@
    只有要 / 不要这一个动作；确认后冻结，写入产生新版本。 */
 
 import type { DocumentView, DraftView, ProposalView, RoundView } from "../api/types";
-import { allProposalIds, NO_PROPOSALS } from "../api/payload";
+import { allProposalIds, groupAdvisories, NO_PROPOSALS } from "../api/payload";
 import { OP_TEXT, ORIGIN_TEXT, targetText } from "../labels";
 import { Banner } from "./States";
 import { EvidenceChip } from "./EvidenceChip";
@@ -46,9 +46,10 @@ export function DraftDrawer({
       </header>
 
       <div className="drawer__body">
-        {round.advisories.map((advisory) => (
-          <Banner kind="warn" key={advisory}>
-            跑出本轮去处：{advisory}
+        {groupAdvisories(round.advisories).map((advisory) => (
+          <Banner kind="warn" key={advisory.text}>
+            {advisory.count > 1 && `${advisory.count} 条 · `}
+            跑出本轮去处：{advisory.text}
           </Banner>
         ))}
 

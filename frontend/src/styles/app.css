@@ -77,6 +77,10 @@ a {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  /* 抽屉只有 380px：动作按钮多了必须换行，否则最后一个（"确认写入 N 条"）
+     会被推到视口外面裁掉（P29 眼睛检查 F3 同族，实测 right 1540 > 1440）。 */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 /* ── 外壳 ─────────────────────────────────────────────────── */
@@ -227,6 +231,7 @@ a {
   align-items: center;
   gap: var(--space-2);
   width: 100%;
+  min-width: 0;
   padding: 5px 6px;
   border: 0;
   background: none;
@@ -258,6 +263,9 @@ a {
 
 .rail__label {
   flex: 1;
+  /* flex 子项默认 min-width:auto：不加这一句，长名字会顶破 200px 的栏，
+     下面那套 ellipsis 根本不生效（P29 F9 实测 scrollWidth 297 > 199） */
+  min-width: 0;
   font-size: var(--step-2);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -274,6 +282,22 @@ a {
   flex-direction: column;
   gap: 2px;
   padding-block: var(--space-2);
+}
+
+/* 功能在一个 200px 的栏里：slug 那一行长（`feature#warehouse-operations`），
+   不许把整栏撑出横向滚动（P29 F9，实拍 `rail.scrollWidth 297 > 199`）。 */
+.rail__item--feature .feature__slug {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 列向 flex + `align-items: flex-start` 的子项是按**内容宽度**撑开的（不是容器宽度），
+   所以还要让它 stretch —— 否则 `text-overflow: ellipsis` 永远不生效（P29 F9）。 */
+.rail__item--feature .rail__label,
+.rail__item--feature .feature__slug {
+  align-self: stretch;
 }
 
 /* 树：一层一层缩进，小三角只管展开收起 */
@@ -548,9 +572,18 @@ a {
 }
 
 .materials__item {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
+  /* 堆叠而不是一行五列：材料卡在 380px 的抽屉里，一行塞不下标题 + 来源 + 编号 + 三个动作，
+     挤到最后每个字都竖着排（P29 眼睛检查 F5 的同一族问题）。 */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  align-items: start;
+  padding: var(--space-2) 0;
+  border-bottom: var(--hairline);
+}
+
+.materials__item .row {
+  flex-wrap: wrap;
 }
 
 .materials__title {
@@ -1331,10 +1364,14 @@ a {
   align-items: center;
   gap: var(--space-2);
   margin-top: var(--space-2);
+  /* 按钮多了就换行——不换行时那行提示会被压到"一列一个字"（P29 眼睛检查实拍） */
+  flex-wrap: wrap;
 }
 
 .input__hint {
   flex: 1;
+  /* `flex:1` 的 flex-basis 是 0，窄屏会被压成一个字宽；给个下限，压不下就整体换行 */
+  min-width: 12ch;
   font-size: var(--step-1);
   color: var(--empty);
   line-height: 1.5;
@@ -1346,6 +1383,8 @@ a {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  /* 中文两字按钮被 flex 压窄会变成"一列一个字"（P29 F7 实拍：导出 / 暗色） */
+  white-space: nowrap;
   padding: 6px var(--space-3);
   border-radius: var(--radius-input);
   border: var(--hairline);
@@ -1411,6 +1450,9 @@ a {
   inset: 0;
   z-index: 5;
   display: grid;
+  /* 列**必须**写死成 minmax(0,1fr)：隐式的 auto 列会按 max-content 撑开，
+     长文本（草案卡那种长告警）会把抽屉撑得比栏还宽、右边被裁掉（P29 F3 同族坑）。 */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--surface);
   border-left: var(--hairline);
@@ -1975,6 +2017,18 @@ a {
   .shell {
     grid-template-columns: 176px minmax(0, 1fr) 340px;
   }
+
+  /* 顶栏在窄屏先"缩"再"折"（P29 F7）：这两处文字进视觉隐藏，**仍在无障碍树里**
+     （真删掉等于对读屏用户撒谎）。腾出来的宽度给按钮，保证它们不竖排。 */
+  .wordmark__sub,
+  .conn__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 @media (max-width: 980px) {
@@ -1996,6 +2050,22 @@ a {
     padding: var(--space-2) var(--space-3);
     border-right: 0;
     border-bottom: var(--hairline);
+  }
+
+  /* 更窄一档：轮次状态本来就在复述卡/闭环区写着，这里让位给"导出 / 推送 / 明暗" */
+  .pill-step {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* 按钮里的字**不许竖排**：中文两字按钮被压到 39px 宽就会一列一个字（P29 F7 实拍） */
+  .btn,
+  .conn__label {
+    white-space: nowrap;
   }
 
   .rail__head,

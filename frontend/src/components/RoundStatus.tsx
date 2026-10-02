@@ -1,5 +1,6 @@
 import type { RoundView } from "../api/types";
 import { stepText, waitingText } from "../labels";
+import { failureLine } from "../state/failure";
 
 export function RoundStatus({
   round,
@@ -24,6 +25,7 @@ export function RoundStatus({
     round.step === "seats_running" || round.step === "failed"
       ? null
       : waitingText(round.waiting_on);
+  const failure = failureLine(round);
 
   return (
     <div className="statusline">
@@ -50,11 +52,11 @@ export function RoundStatus({
           放弃这一轮
         </button>
       )}
-      {round.failure_reason !== null && (
-        <span className="statusline__fail">失败原因：{round.failure_reason}</span>
-      )}
-      {round.step === "abandoned" && (
-        <span className="statusline__fail">已放弃：{round.abandon_reason}</span>
+      {failure !== null && (
+        <span className="statusline__fail">
+          {failure.kind === "abandoned" ? "已放弃：" : "失败："}
+          {failure.text}
+        </span>
       )}
     </div>
   );

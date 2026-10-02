@@ -39,3 +39,33 @@ export function readinessHeadline(items: readonly ReadinessItemView[]): string {
   if (warns > 0) return `提示 ${warns} 项`;
   return "就绪";
 }
+
+export interface SectionReadiness {
+  sectionId: string;
+  title: string;
+  items: ReadinessItemView[];
+  blockers: number;
+}
+
+/**
+ * 「就差 N 项」点开之后那份清单：**按章分组**（`06-前端.md` §2.2 的承诺，P29 F6 补上）。
+ *
+ * 只保留真有项的章节，章节顺序跟传入的 sections 走（不重排，免得和左栏对不上）。
+ */
+export function readinessBySection(
+  items: readonly ReadinessItemView[],
+  sections: readonly { section_id: string; title: string }[],
+): SectionReadiness[] {
+  const { bySection } = readinessSummary(items);
+  return sections
+    .map((section) => {
+      const list = bySection.get(section.section_id) ?? [];
+      return {
+        sectionId: section.section_id,
+        title: section.title,
+        items: list,
+        blockers: list.filter((item) => item.severity === "blocker").length,
+      };
+    })
+    .filter((group) => group.items.length > 0);
+}

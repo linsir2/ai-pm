@@ -125,8 +125,9 @@ export function LoopPane({
                   （去处写错的、更早那趟的、或地址对不上号的）
                 </p>
                 <ul className="drops">
-                  {unplaced.map((item) => (
-                    <li className="drop" key={`${item.handle}-${item.reason}`}>
+                  {/* key 带序号：同一条留痕（handle + reason 都一样）会出现多次，拿它俩拼 key 会撞（P29 F2） */}
+                  {unplaced.map((item, index) => (
+                    <li className="drop" key={`${item.handle}-${item.reason}-${index}`}>
                       <span className="mono small">{item.handle}</span>
                       <span className="drop__reason">{item.reason}</span>
                     </li>
@@ -184,8 +185,9 @@ export function LoopPane({
         <div className="loop__group">
           <p className="loop__label">先记成清单（超过一批 5 题的）</p>
           <ul className="entries">
-            {round.list_items.map((item) => (
-              <li className="entry" key={item}>
+            {/* key 带序号：清单项文本会重复（真跑 39 条里 9 条重复），拿文本当 key 会撞（P29 F1） */}
+            {round.list_items.map((item, index) => (
+              <li className="entry" key={`${item}-${index}`}>
                 <span className="entry__text muted small">{item}</span>
               </li>
             ))}

@@ -54,8 +54,9 @@ export function QuestionnaireDrawer({
                 <span className="muted small">{answerBatchSummary(batch)}</span>
                 {batch.answers.length > 0 && (
                   <ul className="drawer__answers">
-                    {batch.answers.map((text) => (
-                      <li key={text}>{text}</li>
+                    {/* key 带序号：两道题的答案文本相同就会撞（P29 F4） */}
+                    {batch.answers.map((text, index) => (
+                      <li key={`${batch.form_id}-${index}`}>{text}</li>
                     ))}
                   </ul>
                 )}

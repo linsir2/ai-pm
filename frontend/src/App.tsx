@@ -22,6 +22,7 @@ import { sectionOfEntry } from "./document/structure";
 import { LoopColumn } from "./components/LoopColumn";
 import { MaterialLibrary } from "./components/MaterialLibrary";
 import { Onboarding } from "./components/Onboarding";
+import { ReadinessDrawer } from "./components/ReadinessDrawer";
 import { SideRail } from "./components/SideRail";
 import { Banner, Skeleton } from "./components/States";
 import { TopBar } from "./components/TopBar";
@@ -42,6 +43,7 @@ export default function App() {
   );
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [readinessOpen, setReadinessOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
 
@@ -221,6 +223,7 @@ export default function App() {
             onSelectProject={data.selectProject}
             onExport={() => void data.exportMarkdown()}
             onOpenVersions={() => setVersionsOpen(true)}
+            onOpenReadiness={() => setReadinessOpen(true)}
             theme={theme}
             onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
             search={
@@ -355,6 +358,16 @@ export default function App() {
                 }}
                 onReparse={(materialId) => void data.reparseMaterial(materialId)}
                 onCollapse={() => setLibraryOpen(false)}
+              />
+            </div>
+          )}
+
+          {readinessOpen && (
+            <div className="overlay-slot">
+              <ReadinessDrawer
+                items={state.readiness}
+                document={doc}
+                onCollapse={() => setReadinessOpen(false)}
               />
             </div>
           )}

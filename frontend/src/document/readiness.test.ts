@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { readinessHeadline, readinessItemsFor, readinessSummary } from "./readiness";
+import {
+  readinessBySection,
+  readinessHeadline,
+  readinessItemsFor,
+  readinessSummary,
+} from "./readiness";
 import type { ReadinessItemView } from "../api/types";
 
 const items: ReadinessItemView[] = [
@@ -68,5 +73,24 @@ describe("readinessHeadline", () => {
 
   it("没问题就明说就绪", () => {
     expect(readinessHeadline([])).toBe("就绪");
+  });
+
+  it("按章分组：只留有项的章，顺序跟着章节表走（P29 F6）", () => {
+    const sections = [
+      { section_id: "s1", title: "背景与问题" },
+      { section_id: "s2", title: "目标与非目标" },   // 这一章没有缺口：不该出现在清单里
+      { section_id: "s6", title: "业务流程与交互" },
+    ];
+
+    const groups = readinessBySection([items[0]!, items[2]!], sections);
+
+    expect(groups.map((group) => group.sectionId)).toEqual(["s1", "s6"]);
+    expect(groups[0]!.title).toBe("背景与问题");
+    expect(groups[0]!.blockers).toBe(1);
+    expect(groups[1]!.blockers).toBe(0);        // 提示不算阻塞
+  });
+
+  it("没有缺口就是空分组（抽屉里那句「没有缺口」由组件说）", () => {
+    expect(readinessBySection([], [{ section_id: "s1", title: "背景与问题" }])).toEqual([]);
   });
 });

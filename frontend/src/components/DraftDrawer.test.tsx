@@ -144,3 +144,38 @@ function roundWith(proposals: ProposalView[]): RoundView {
 function roundWithAllThreeOrigins(): RoundView {
   return roundWith([proposal, other("p02", "derived"), other("p03", "proposed")]);
 }
+
+// P29 眼睛检查 F3：真跑库里三条提案都落在 s12 → 后端吐出三句一模一样的告警。
+// 旧写法拿告警文本当 React key，会报"same key"警告（行可能被丢掉），而且三句一样的话
+// 用户分不清是哪几条。现在合并成一条 + 带条数。
+it("相同的告警合并成一条并带条数（不再三句一样的话摆三遍）", () => {
+  const base = roundWith([proposal]);
+  const round = {
+    ...base,
+    advisories: [
+      "s12：这条落在 s12，不在本轮去处里（席位替你判断的，确认前请看一眼）",
+      "s12：这条落在 s12，不在本轮去处里（席位替你判断的，确认前请看一眼）",
+      "s12：这条落在 s12，不在本轮去处里（席位替你判断的，确认前请看一眼）",
+    ],
+  } as RoundView;
+
+  render(
+    <EvidenceScope index={new Map()} onJump={() => undefined}>
+      <DraftDrawer
+        round={round}
+        doc={null}
+        accepted={[]}
+        pending={false}
+        onToggle={() => undefined}
+        onSetAccepted={() => undefined}
+        onSubmit={() => undefined}
+        onDig={() => undefined}
+        onCollapse={() => undefined}
+      />
+    </EvidenceScope>,
+  );
+
+  const banners = screen.getAllByText(/不在本轮去处里/);
+  expect(banners).toHaveLength(1);            // 一条，不是三条
+  expect(banners[0]!.textContent).toContain("3 条");   // 条数说清楚
+});

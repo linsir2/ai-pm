@@ -39,6 +39,38 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 把"非 2xx 的回包"变成 `ApiError`（`P29` 眼睛检查 F10）。
+ *
+ * 三种情况分得开：
+ * - 后端自己的错误：JSON 里有 `code`/`message` → 照原样用（界面直接显示那句话）；
+ * - **不是 JSON**：后端没起来 / 正在重启 / dev 代理回的 500 —— 以前只说"请求失败（HTTP 500）"，
+ *   用户会以为自己的项目丢了（真跑实拍：首页显示"先建一个项目"）。现在明说"后端没有正常回话"；
+ * - JSON 但没有 message：回落成带状态码的人话。
+ */
+export function apiErrorFrom(status: number, body: unknown, fallback: string): ApiError {
+  const payload = (body ?? {}) as Record<string, unknown>;
+  const hasCode = typeof payload.code === "string";
+  const hasMessage = typeof payload.message === "string";
+  if (hasCode && hasMessage) {
+    return new ApiError(
+      payload.code as string,
+      payload.message as string,
+      (payload.details as Record<string, unknown> | undefined) ?? {},
+    );
+  }
+  if (!hasCode && !hasMessage) {
+    return new ApiError(
+      "backend_unreachable",
+      `后端没有正常回话（HTTP ${status}）——它可能在重启，或者没起来；刷新一下试试。`,
+    );
+  }
+  return new ApiError(
+    hasCode ? (payload.code as string) : "http_error",
+    hasMessage ? (payload.message as string) : `${fallback}（HTTP ${status}）`,
+  );
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -60,11 +92,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new ApiError(
-      typeof body.code === "string" ? body.code : "http_error",
-      typeof body.message === "string" ? body.message : `请求失败（HTTP ${response.status}）`,
-      (body.details as Record<string, unknown> | undefined) ?? {},
-    );
+    throw apiErrorFrom(response.status, body, "请求失败");
   }
   return (await response.json()) as T;
 }
@@ -74,10 +102,7 @@ async function download(path: string, fallbackName: string): Promise<void> {
   const response = await fetch(`${BASE}${path}`);
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new ApiError(
-      typeof body.code === "string" ? body.code : "http_error",
-      typeof body.message === "string" ? body.message : `导出失败（HTTP ${response.status}）`,
-    );
+    throw apiErrorFrom(response.status, body, "导出失败");
   }
   const text = await response.text();
   const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
@@ -173,11 +198,7 @@ export const api = {
     });
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      throw new ApiError(
-        typeof body.code === "string" ? body.code : "http_error",
-        typeof body.message === "string" ? body.message : `上传失败（HTTP ${response.status}）`,
-        (body.details as Record<string, unknown> | undefined) ?? {},
-      );
+      throw apiErrorFrom(response.status, body, "上传失败");
     }
     return (await response.json()) as MaterialSummaryView;
   },
