@@ -4,6 +4,7 @@
 附录只带编号与摘要（`04` D5 的原话留在系统内）。
 """
 
+import re
 from datetime import datetime
 
 from pmstudio.application.deliverable import render_markdown
@@ -56,6 +57,15 @@ def export(document: Document, ledger: EvidenceLedger, readiness=()) -> str:  # 
         ledger=ledger,
         exported_at=EXPORTED_AT,
     ).markdown
+
+
+def visible_tokens(text: str) -> set[str]:
+    """正文里出现的编号。〔…〕里还有「未决·阻塞」这类标记与「去处：…」这类地址，只认 E<数字>。"""
+
+    found: set[str] = set()
+    for block in re.findall(r"〔([^〕]*)〕", text):
+        found.update(part for part in block.split() if re.fullmatch(r"E\d+", part))
+    return found
 
 
 def test_header_carries_title_version_time_and_readiness_stamp():
@@ -139,11 +149,104 @@ def test_preference_area_is_appendix_only():
 
 
 def test_appendix_has_no_raw_span():
-    text = export(make_document(), ledger_with_two_entries())
+    # 附录只列"本文引用过"的编号（P31），所以这条得用一份真的引用了 E1 的文档做夹具
+    text = export(document_with_feature(), ledger_with_two_entries())
 
     assert "- E1 ·" in text
     assert "要做一个订单导出功能" in text  # 摘要可以给
     assert RAW_SPAN not in text  # 原话（raw_span）留在系统内（D5）
+
+
+def test_appendix_lists_only_evidence_the_document_cites():
+    # 账本是项目级、跨轮、只增的：没进正文的那些（未采纳的提案、跳过的题、更早的轮次）
+    # 读者在正文里找不到落点，进交付物只会稀释真正的出处（P31）
+    text = export(document_with_feature(), ledger_with_two_entries())
+
+    assert "- E1 · 用户输入 · 要做一个订单导出功能" in text
+    assert "E2" not in text
+    assert "单次导出应在 60 秒内完成" not in text
+
+
+def test_appendix_says_how_many_are_left_out_of_the_document():
+    text = export(document_with_feature(), ledger_with_two_entries())
+
+    assert "另有 1 条出处没有被本文引用" in text
+
+
+def test_appendix_counts_the_preference_area_as_cited():
+    document = make_document()
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-pref",
+                entry_id=EntryId("en-pref"),
+                op=WriteOp.ADD,
+                target=Target.preference(),
+                text="登录页要暗色",
+                refs=(EvidenceId("E1"),),
+            )
+        ],
+        now=NOW,
+        summary="加一条偏好",
+    )
+    text = export(document, ledger_with_two_entries())
+
+    # 偏好区会带自己的〔E1〕（附录 B），所以它引用的编号同样要能查到
+    assert "- E1 · 用户输入 · 要做一个订单导出功能" in text
+    assert "另有 1 条出处没有被本文引用" in text
+
+
+def test_appendix_says_so_when_the_document_cites_nothing():
+    text = export(make_document(), ledger_with_two_entries())
+
+    assert "（本文没有引用任何出处）" in text
+    assert "- E1 ·" not in text
+    assert "- E2 ·" not in text
+
+
+def test_appendix_of_an_empty_ledger_still_says_there_is_none():
+    text = export(document_with_feature(), EvidenceLedger.empty(PROJECT))
+
+    assert "（还没有任何出处）" in text
+    assert "没有被本文引用" not in text
+
+
+def test_feature_name_carries_its_evidence_into_the_heading():
+    # 名称也是正文内容：界面在功能名旁边挂了出处胶囊（`FeatureBlock.tsx`），
+    # 导出也得挂——否则附录里会出现一个正文根本看不见的编号
+    # （P31 真跑对账抓到：L3 `p41 · s5/…name · 依据 E28`、L2 的 E170 都是这一条）
+    document = make_document()
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-name",
+                entry_id=EntryId("en-name"),
+                op=WriteOp.ADD,
+                target=Target.feature_field(FeatureSlug("order-export"), "name"),
+                text="订单导出",
+                refs=(EvidenceId("E1"),),
+            )
+        ],
+        now=NOW,
+        summary="写名称",
+        authorized_new_features=frozenset({FeatureSlug("order-export")}),
+    )
+    text = export(document, ledger_with_two_entries())
+
+    assert "### 5.1 订单导出（order-export）〔E1〕" in text
+
+
+def test_every_listed_evidence_is_visible_elsewhere_in_the_export():
+    """附录 A 的准入判据（本文引用过）与"正文里挂没挂编号"必须一致——
+    对不上就是导出把内容吞了（P31 真跑对账就是靠这条抓出名称那一处）。"""
+
+    text = export(document_with_feature(), ledger_with_two_entries())
+    head, rest = text.split("## 附录 A", 1)
+    appendix_a, _, tail = rest.partition("## 附录")
+    listed = re.findall(r"^- (\S+) · ", appendix_a, re.M)
+
+    assert listed, "夹具得真的引用过编号"
+    assert set(listed) <= visible_tokens(head + tail)
 
 
 def test_acceptance_entries_are_rendered_as_list_items():

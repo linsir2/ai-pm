@@ -7,7 +7,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
-from pmstudio.application.deliverable import KIND_LABELS, TRIGGER_LABELS, summarize_line
+from pmstudio.application.deliverable import (
+    KIND_LABELS,
+    TRIGGER_LABELS,
+    iter_document_entries,
+    summarize_line,
+)
 from pmstudio.application.ports import SeatCatalog, SeatDefinition
 from pmstudio.domain.authoring.diff import diff_snapshots
 from pmstudio.domain.authoring.readiness import ReadinessItem
@@ -1137,22 +1142,17 @@ def _chain_item_view(evidence) -> ChainItemView:  # type: ignore[no-untyped-def]
 
 
 def used_by_entries(view: DocumentView, eid: EvidenceId) -> tuple[str, ...]:
-    """文档里哪些条目引用了这个编号（界面据此滚到那条内容并闪一下）。"""
+    """文档里哪些条目引用了这个编号（界面据此滚到那条内容并闪一下）。
 
-    def walk(block: BlockView) -> list:
-        found = [entry for entry in block.entries if eid in entry.refs]
-        for child in block.children:
-            found += walk(child)
-        return found
+    与导出附录 A 的准入判据（`deliverable.cited_evidence_ids`）**共用同一份走法**——
+    两处各写一遍，迟早出现"界面说引用了、附录里查不到"。
+    """
 
-    entries = [
-        entry
-        for section in view.sections
-        for block in section.blocks
-        for entry in walk(block)
-    ]
-    entries += [entry for entry in view.preference_entries if eid in entry.refs]
-    return tuple(str(entry.entry_id) for entry in entries)
+    return tuple(
+        str(entry.entry_id)
+        for entry in iter_document_entries(view)
+        if eid in entry.refs
+    )
 
 
 def evidence_lookup_view(
