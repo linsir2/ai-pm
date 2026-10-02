@@ -1596,6 +1596,13 @@ monitor 把"还没起来的车道"当掉线并写 `STOP`（把 L4 的驱动当�
 `probe.json` / `导出-vN.md` / 全部 `*.jsonl` / `rounds/*.json` 都在 `.codex/runs/` 里）。
 **下一批必做**：真跑的库也放进 `.codex/runs/`（eval 已经这么改了，见 `eval/eval.db`）。
 
+**完整 eval（C 组，欠了自 P16）**：**7/8 通过**，日志 `eval/eval.log`。
+唯一一条红是 **`edge-contradiction` → `contradiction_is_labelled`**：真·逻辑互斥的输入
+（"任何人都不许改" vs "点错了要能改"）两道题**都标成 `gap`**，没有 `conflict` / `decision`——
+正是 P11 修过、P20 记 ✅ 的那条，**换模型之后退化**。**口径**：五条车道里 `conflict` 出现过 3 次
+（L1/L4/L5 各 1）、`decision` 8 次，所以**不是整体失效**，是**最典型那一例退化**；
+eval 属纯提示词通道，与五条车道结论不重叠。**修法另起方案**。
+
 **下一步（等拍板）**：① F28（确认重复 remove）——阻塞交付，建议下一个做；
 ② F30 的 180 秒墙要不要处理；③ 第 6 章「业务流程与交互」五条车道全空；
-④ 监控加 `code_drift`（看源码树，而不只是 `.env`）；⑤ eval 结果见 `.codex/runs/2026-10-02/全量真跑审计/eval/eval.log`。
+④ 监控加 `code_drift`（看源码树，而不只是 `.env`）；⑤ eval 那条红（矛盾判据）要不要跟 F28 一起做。
