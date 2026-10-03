@@ -41,6 +41,35 @@ TRANSIENT_HINTS = (
     # 闸门正是靠那个把"换模型忘了改参数"当场拦下来的。
     "response_format type is unavailable",
 )
+
+#: 结构化输出的两种写法。`json_schema`（默认）能帮模型守规；供应商不吃它时退到 `json_object`。
+JSON_SCHEMA = "json_schema"
+JSON_OBJECT = "json_object"
+
+#: 供应商自己那句"这个 response_format 类型**现在**不可用"。
+#: 同一个字符串在 `TRANSIENT_HINTS` 里还出现过一次，两处用途不同、**都要留**：
+#: 那边管"短暂拒收 → 重试"（qwen 实测抖过两分钟），这边管"**稳定**拒收 → 换写法"
+#: （`deepseek-v4.1-flash` 实测连续 400）。
+STRUCTURED_OUTPUT_REFUSAL_HINT = "response_format type is unavailable"
+
+
+def is_structured_output_refusal(error: BaseException) -> bool:
+    return STRUCTURED_OUTPUT_REFUSAL_HINT in f"{type(error).__name__} {error}".lower()
+
+
+def response_format_for(mode: str, *, schema_name: str, schema: Mapping[str, object]) -> dict:
+    """这一次请求的 `response_format` 怎么写。
+
+    **契约不在这里**：`LLM 契约`要的是"输出必须过 schema"，那由我们自己的解析与校验强制
+    （`_is_json` + 各 agent 的 pydantic 校验 + 失败重试）。这一层只决定"怎么开口要 JSON"。
+    """
+
+    if mode == JSON_SCHEMA:
+        return {
+            "type": "json_schema",
+            "json_schema": {"name": schema_name, "schema": dict(schema)},
+        }
+    return {"type": "json_object"}
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (1.0, 3.0)
 #: 默认每次调用的墙钟上限（秒）。真值由 `Settings.model_timeout` 传进来（默认 90）。
@@ -70,6 +99,9 @@ class LiteLLMGateway:
         self._recorder = recorder
         # 供应商特有参数（如 DashScope 关思考）：当**基底**用，我们自己的键永远覆盖它
         self._model_params = dict(model_params or {})
+        #: 这家供应商吃不吃 `json_schema`。被明确拒过一次就记住，后续调用直接用 `json_object`
+        #: ——省掉每次先撞一次 400（`deepseek-v4.1-flash` 实测稳定拒收）。
+        self._structured_output = JSON_SCHEMA
 
     async def complete(self, request: ModelRequest) -> ModelReply:
         started = time.monotonic()
@@ -80,13 +112,11 @@ class LiteLLMGateway:
                 {"role": message.role, "content": message.content}
                 for message in request.messages
             ],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": request.schema_name,
-                    "schema": dict(request.response_schema),
-                },
-            },
+            "response_format": response_format_for(
+                self._structured_output,
+                schema_name=request.schema_name,
+                schema=request.response_schema,
+            ),
             # 包一层墙钟。**必须同时关掉 SDK 自己的重试**（num_retries=0），
             # 否则只有 timeout 时墙钟会被放大数倍（实测 timeout=2 → 7.8 秒；
             # 加 num_retries=0 → 2.0 秒）。重试只由下面这一圈负责，时间才算得出来。
@@ -116,6 +146,35 @@ class LiteLLMGateway:
                     ok=False,
                     error=f"{type(error).__name__}: {error}",
                 )
+                # 供应商**稳定**不吃 `json_schema` → 换写法**立刻**重发一次
+                # （不退避、不占抖动次数）。
+                # 真跑：`deepseek-v4.1-flash` 对 json_schema 连续 400，而 json_object 正常；
+                # 产品原来每次都带 json_schema，于是那个模型上**一次都发不出去**（P34 · M2b）。
+                if (
+                    self._structured_output == JSON_SCHEMA
+                    and is_structured_output_refusal(error)
+                ):
+                    self._structured_output = JSON_OBJECT
+                    kwargs["response_format"] = response_format_for(
+                        JSON_OBJECT,
+                        schema_name=request.schema_name,
+                        schema=request.response_schema,
+                    )
+                    try:
+                        response = await acompletion(**kwargs)
+                        break
+                    except Exception as second:  # noqa: BLE001 —— 回落也不是万灵药
+                        self._record(
+                            request,
+                            reply_text="",
+                            usage={},
+                            duration_ms=int((time.monotonic() - attempt_started) * 1000),
+                            model=self._model,
+                            attempt=attempt,
+                            ok=False,
+                            error=f"{type(second).__name__}: {second}",
+                        )
+                        error = second
                 if is_transient(error) and attempt < self._max_attempts:
                     await asyncio.sleep(self._backoff[attempt - 1])
                     continue
