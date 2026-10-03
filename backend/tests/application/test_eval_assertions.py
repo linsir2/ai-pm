@@ -318,6 +318,60 @@ def test_web_nomination_is_required_when_the_input_needs_external_facts():
     assert check({"type": "web_queries_at_least", "count": 2}, view_of(round_)) is not None
 
 
+def round_with_one_proposal(*, target: Target, kind: BlockKind) -> Round:
+    """一张只带一条提案的草案卡（M4 的断言看的就是它）。"""
+
+    round_ = make_round()
+    round_.integrate(
+        draft=Draft(
+            draft_id=DraftId("d1"),
+            round_id=ROUND_ID,
+            proposals=(
+                Proposal(
+                    proposal_id=ProposalId("p01"),
+                    entry_id=EntryId("r1#01"),
+                    op=WriteOp.ADD,
+                    target=target,
+                    text="1. 点检员点检；2. 发现异常报修；3. 主管派单。",
+                    origin=Origin(OriginType.DERIVED, (EvidenceId("E1"),), "席位推导"),
+                    kind=kind,
+                ),
+            ),
+        )
+    )
+    return round_
+
+
+def test_draft_section_kind_reads_the_draft_card():
+    """M4：第 6 章那条判据看的是"草案里有没有落在 s6 的 steps"。
+
+    真跑背景（P30 五条车道 449 条提案）：`kind=steps` 13 条全落在 `s5/*.main_flow`，
+    落 `s6` 的只有 1 条且是 `text`——于是那一章永远空着。这条断言把"派活之后真写了没"钉住。
+    """
+
+    assertion = {"type": "draft_section_has_kind", "section": "s6", "kind": "steps"}
+
+    good = view_of(round_with_one_proposal(target=Target.body("s6"), kind=BlockKind.STEPS))
+    assert check(assertion, good) is None
+
+    # 落在别处（功能字段的主流程）不算数：那一章还是空的
+    wrong_place = view_of(
+        round_with_one_proposal(
+            target=Target.feature_field(FeatureSlug("order-export"), "main_flow"),
+            kind=BlockKind.STEPS,
+        )
+    )
+    failure = check(assertion, wrong_place)
+    assert failure is not None
+    assert "s6" in failure
+
+    # 落对了章节但块类型不对（普通正文）也不算
+    wrong_kind = view_of(
+        round_with_one_proposal(target=Target.body("s6"), kind=BlockKind.TEXT)
+    )
+    assert check(assertion, wrong_kind) is not None
+
+
 def test_dropped_items_must_have_a_reason():
     view = view_of(
         round_with(

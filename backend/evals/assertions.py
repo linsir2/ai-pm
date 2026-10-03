@@ -155,6 +155,21 @@ def check(assertion: dict, view: RoundView) -> str | None:
             f"实际 {count} 条"
         )
 
+    if kind == "draft_section_has_kind":
+        # 2026-10-03（P36 · M4）：草案里有没有一条**落在这一章、这个块类型**的提案。
+        # 用来看"该写的写了没"（第 6 章 `s6` + `kind=steps`：跨功能/端到端流程）。
+        # 只看**草案**：eval 一轮跑到草案卡为止，确认写入是另一条通道（`tests/api`、e2e）。
+        section = assertion["section"]
+        wanted = assertion["kind"]
+        proposals = view.draft.proposals if view.draft else ()
+        if any(p.target_label == section and p.kind == wanted for p in proposals):
+            return None
+        labels = sorted({p.target_label for p in proposals})
+        return (
+            f"草案里没有落在 {section} 的 {wanted} 条目"
+            f"（这一轮草案落到的去处：{'、'.join(labels[:8]) or '（一条都没有）'}）"
+        )
+
     if kind == "outside_scope_items_are_labeled":
         # 2026-09-28 拍板：跑出本轮去处**不拒绝**——`02` §3①（2026-09-22 定）写着
         # "静默拒绝会让席位的专业判断整批白干"，只在草案卡顶部与每条提案上标注。
