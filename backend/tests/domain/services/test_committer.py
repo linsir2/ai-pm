@@ -164,6 +164,136 @@ class Fixture:
         )
 
 
+def _commit_one_entry(fixture: "Fixture") -> None:
+    """先真的往文档里加一条（后面才好删它）。"""
+
+    fixture.add_draft()
+    fixture.committer().commit(round_id=ROUND_ID, accepted=(ProposalId("p1"),), now=NOW)
+
+
+def _round_with_proposals(fixture: "Fixture", round_id: str, proposals) -> None:
+    """第二个轮次：claims → 开场 → 直接出草案（没有问卷那一条路）。"""
+
+    round_ = Round.start(
+        round_id=RoundId(round_id),
+        project_id=PROJECT,
+        user_input="把这一轮答过的未决项撤下",
+        now=NOW,
+    )
+    round_.attach_claims(
+        (
+            Claim(
+                claim_id="c1",
+                text="撤下答过的未决项",
+                label=ClaimLabel.NEED,
+                target=Target.body("s11"),
+                raw_span="撤下未决项",
+                eid=EvidenceId("E1"),
+            ),
+        )
+    )
+    round_.submit_opening(seats=(SEAT,))
+    round_.integrate(
+        draft=Draft(
+            draft_id=DraftId(f"d-{round_id}"),
+            round_id=RoundId(round_id),
+            proposals=tuple(proposals),
+        )
+    )
+    fixture.rounds.seed(round_)
+
+
+def _remove(proposal_id: str, *, text: str = "撤下这条未决项", origin=OriginType.SYSTEM_DEFAULT):
+    return Proposal(
+        proposal_id=ProposalId(proposal_id),
+        entry_id=EntryId("en1"),
+        op=WriteOp.REMOVE,
+        target=Target.body("s5"),
+        text=text,
+        origin=Origin(origin, (EvidenceId("E2"),), None),
+    )
+
+
+def test_two_removes_on_the_same_entry_commit_once():
+    """P30 · F28 的领域形态：整批确认里两条 `remove` 指向同一条目。
+
+    今天它抛 `UnknownEntry`（真跑里就是那个 422）——修完之后只算一条、正常写入。
+    """
+
+    fixture = Fixture()
+    _commit_one_entry(fixture)
+    _round_with_proposals(
+        fixture,
+        "r2",
+        (
+            _remove("p1", text="〔未决〕受试者编号规则"),
+            _remove("p2", text="本轮已回答，撤下这条未决项"),
+        ),
+    )
+
+    result = fixture.committer().commit(
+        round_id=RoundId("r2"),
+        accepted=(ProposalId("p1"), ProposalId("p2")),
+        now=NOW,
+    )
+
+    assert result.version.version_no == 3
+    assert result.merged_removes == (ProposalId("p2"),)
+    document = fixture.documents.get(PROJECT)
+    assert not [
+        entry
+        for block in document.blocks
+        for entry in block.entries
+        if entry.entry_id == EntryId("en1")
+    ], "那条条目应该被撤下"
+
+
+def test_the_merged_remove_can_also_be_accepted_alone():
+    """只勾被合并的那一条也照样能写（它自己就是一条合法的 `remove`）。"""
+
+    fixture = Fixture()
+    _commit_one_entry(fixture)
+    _round_with_proposals(
+        fixture, "r2", (_remove("p1"), _remove("p2", text="本轮已回答，撤下这条未决项"))
+    )
+
+    result = fixture.committer().commit(
+        round_id=RoundId("r2"), accepted=(ProposalId("p2"),), now=NOW
+    )
+
+    assert result.version.version_no == 3
+    assert result.merged_removes == ()
+
+
+def test_proposed_accepted_does_not_undercount_when_a_remove_is_merged():
+    """被合并掉的那条若是 `proposed` 来源，C4 的"收了几条"不能少算。
+
+    `taken` 必须从**用户接受的 id** 算，不能从合并后的提案列表算——
+    否则 `proposal_accepted` 会凭空少一条，C4 那条"连续三轮全不勾"的提示会被带偏。
+    """
+
+    fixture = Fixture()
+    _commit_one_entry(fixture)
+    _round_with_proposals(
+        fixture,
+        "r2",
+        (
+            _remove("p1", text="〔未决〕编号规则", origin=OriginType.PROPOSED),
+            _remove("p2", text="本轮已回答，撤下这条未决项", origin=OriginType.PROPOSED),
+        ),
+    )
+
+    fixture.committer().commit(
+        round_id=RoundId("r2"),
+        accepted=(ProposalId("p1"), ProposalId("p2")),
+        now=NOW,
+    )
+
+    round_ = fixture.rounds.get(RoundId("r2"))
+    assert round_.proposed_offered == 2
+    assert round_.proposed_accepted == 2, "合并掉的那条也是用户勾的，不能少算"
+
+
 def test_commit_writes_entries_and_version_in_one_transaction():
     fixture = Fixture()
     fixture.add_draft()
