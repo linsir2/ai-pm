@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.context import NO_MATERIAL_TEXT
+from pmstudio.application.context import NO_MATERIAL_TEXT, NO_MEMORY_TEXT
 from pmstudio.application.errors import PacketParseError, unknown_ref_message
 from pmstudio.application.evidence_refs import candidates_for, normalize_ref
 from pmstudio.application.ports import (
@@ -49,6 +49,8 @@ class SeatReviewer:
         "claims",
         "opinions_so_far",
         "answered",
+        # 跨轮记忆（M6）：这一份是这个项目**确认过**的口径 / 教训 / 否掉的东西
+        "project_memory",
         "external_material",
         "schema_json",
         "validation_error",
@@ -66,6 +68,7 @@ class SeatReviewer:
         claims: str,
         opinions_so_far: str,
         answered: str,
+        project_memory: str = NO_MEMORY_TEXT,
         external_material: str = NO_MATERIAL_TEXT,
         known_eids: frozenset[EvidenceId],
         answer_eids: Mapping[str, str] | None = None,
@@ -81,6 +84,7 @@ class SeatReviewer:
             claims=claims,
             opinions_so_far=opinions_so_far,
             answered=answered,
+            project_memory=project_memory,
             external_material=external_material,
             schema_json=json.dumps(schema, ensure_ascii=False),
             validation_error=validation_error,

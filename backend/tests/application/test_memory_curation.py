@@ -349,3 +349,60 @@ async def test_a_memory_change_that_names_a_missing_entry_is_refused_at_confirm(
     round_ = harness.rounds.get(round_id)
     assert round_.memory_proposals == ()
     assert any("点名的记忆条目不存在" in item for item in round_.draft.gaps)
+
+
+# —— M6c：注入。已确认的记忆要真的出现在席位与整合者的提示词里 ——
+
+
+async def test_confirmed_memory_is_injected_into_the_seat_and_the_integrator():
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": draft_packet(),
+            "memory_curation": curator_reply(decision_change()),
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+    await harness.integrate_round()(round_id=round_id)
+    round_ = harness.rounds.get(round_id)
+    accepted = [str(item.proposal_id) for item in round_.draft.proposals]
+    await harness.confirm_draft()(
+        round_id=round_id, accepted=accepted, accepted_memory=["mem#1"]
+    )
+
+    # 第 2 轮：同一份记忆要出现在**席位**与**整合者**两处提示词里
+    second = await harness.start_round().create(
+        project_id=PROJECT, user_input="想做个订单导出的功能"
+    )
+    await harness.start_round().analyze(round_id=second)
+    await harness.submit_opening()(round_id=second, seats=(SEAT,))
+    await harness.run_seat_round()(round_id=second)
+    await harness.integrate_round()(round_id=second)
+
+    seat_memory = harness.prompts.last("seat_review")["project_memory"]
+    integrator_memory = harness.prompts.last("integrator")["project_memory"]
+    assert "导出保留期是 30 天" in seat_memory
+    assert "导出保留期是 30 天" in integrator_memory
+    assert "以正文为准" in seat_memory and "以正文为准" in integrator_memory
+
+
+async def test_a_project_without_memory_states_it_plainly_in_both_prompts():
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY, "integration": draft_packet()},
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    assert (
+        harness.prompts.last("seat_review")["project_memory"]
+        == "（这个项目还没有确认过的记忆）"
+    )
+    assert (
+        harness.prompts.last("integrator")["project_memory"]
+        == "（这个项目还没有确认过的记忆）"
+    )

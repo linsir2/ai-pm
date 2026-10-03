@@ -203,6 +203,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         clock=clock,
         events=bus,
         materials=materials,
+        memory=memory,
     )
     integrate_round = IntegrateRound(
         rounds=rounds,

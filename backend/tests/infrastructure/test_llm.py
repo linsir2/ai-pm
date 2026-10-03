@@ -122,6 +122,15 @@ def test_prompts_do_not_ask_for_chain_of_thought():
         assert "一步步思考" not in text
 
 
+def test_seat_and_integrator_prompts_carry_the_memory_rule():
+    """M6c：席位与整合者都要看得见记忆那一节，并且都写着"冲突以正文为准"。"""
+
+    for name in ("seat_review", "integrator"):
+        text = (PROMPTS / f"{name}.md").read_text(encoding="utf-8")
+        assert "$project_memory" in text, name
+        assert "以正文为准" in text, name
+
+
 def test_analyzer_prompt_pins_the_two_raw_span_pitfalls():
     """提示词要把真模型踩过的两个坑写进去（`analyzer.md` 是复述这条口径的第一入口）。
 

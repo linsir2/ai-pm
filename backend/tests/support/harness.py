@@ -237,6 +237,7 @@ class Harness:
             clock=self.clock,
             events=self.events,
             materials=self.materials,
+            memory=self.memory,
         )
 
     def integrate_round(self):  # type: ignore[no-untyped-def]

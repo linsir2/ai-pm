@@ -4,6 +4,7 @@ from pmstudio.application import context
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
+from pmstudio.domain.memory.memory import MemoryEntry
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
@@ -30,6 +31,7 @@ from pmstudio.domain.shared.ids import (
     RoundId,
 )
 from pmstudio.domain.shared.label import ClaimLabel
+from pmstudio.domain.shared.memory import MemoryKind
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import (
@@ -625,3 +627,47 @@ def test_render_citations_lists_exactly_what_the_accounting_reads():
     assert "seat.data_scale:O2" in text
     assert "E4" in text and "E9" in text
     assert "纸单子" not in text  # 不渲染正文：判据不看它，提示词也就不给
+
+
+# —— 跨轮记忆（M6c）：限量、空态、与正文冲突时的口径 ——
+
+
+def memory_entry(index: int, *, kind: MemoryKind = MemoryKind.DECISION):
+    return MemoryEntry(
+        memory_id=f"mem{index}",
+        kind=kind,
+        text=f"第 {index} 条已经定过的口径",
+        refs=(EvidenceId("E1"),),
+        round_id="r1",
+        created_at=datetime(2026, 10, 3, 20, 0, 0),
+        updated_at=datetime(2026, 10, 3, 20, 0, 0),
+    )
+
+
+def test_no_memory_renders_a_plain_sentence_and_no_empty_section():
+    """空记忆不留空节：一句实话，让模型知道"这里本来就没有"，而不是"被截掉了"。"""
+
+    assert context.render_memory(()) == context.NO_MEMORY_TEXT
+    assert context.NO_MEMORY_TEXT.strip()
+
+
+def test_memory_render_is_capped_and_says_it_was_capped():
+    """60 条只渲 20 行，并**写明**只带了前 20 条（静默截断会让模型以为剩下那些不存在）。"""
+
+    entries = tuple(memory_entry(index) for index in range(1, 41))
+
+    text = context.render_memory(entries)
+
+    assert text.count("- mem") == context.MEMORY_LINE_LIMIT == 20
+    assert "共 40 条，这里只带了前 20 条" in text
+    assert "mem21" not in text            # 第 21 条起不再出现
+
+
+def test_memory_section_carries_the_document_wins_rule():
+    """冲突口径写在渲染里（席位与整合者共用这一处实现）。"""
+
+    text = context.render_memory((memory_entry(1),))
+
+    assert "以正文为准" in text
+    assert "mem1" in text and "E1" in text
+    assert "已定口径" in text             # kind 用人话，不给模型看枚举值

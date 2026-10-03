@@ -10,6 +10,7 @@ from pmstudio.application.agents import schemas
 from pmstudio.application.context import (
     FEATURE_FIELDS_TEXT,
     NO_MATERIAL_TEXT,
+    NO_MEMORY_TEXT,
     SECTION_SLOTS_TEXT,
 )
 from pmstudio.application.errors import PacketParseError
@@ -134,6 +135,8 @@ class Integrator:
         "opinions",
         "answered",
         "skipped",
+        # 跨轮记忆（M6）：已确认的口径 / 教训 / 否掉的东西（只在有历史时出现，限量 20 行）
+        "project_memory",
         "entry_ids",
         "external_material",
         "limits",
@@ -174,6 +177,7 @@ class Integrator:
         open_items: str = "",
         previous_list_items: str = "",
         contradictions: str = "",
+        project_memory: str = NO_MEMORY_TEXT,
     ) -> IntegrationOutcome:
         schema = schemas.IntegrationPacket.model_json_schema()
         prompt = self._prompts.render(
@@ -183,6 +187,7 @@ class Integrator:
             opinions=opinions,
             answered=answered,
             skipped=skipped,
+            project_memory=project_memory,
             entry_ids=entry_ids,
             external_material=external_material,
             limits=LIMITS_TEXT,

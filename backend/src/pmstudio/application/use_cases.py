@@ -623,6 +623,7 @@ class RunSeatRound:
         clock: Clock,
         events: EventPublisher,
         materials: MaterialStore,
+        memory: MemoryReader,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -637,6 +638,7 @@ class RunSeatRound:
         self._clock = clock
         self._events = events
         self._materials = materials
+        self._memory = memory
 
     async def __call__(self, *, round_id: RoundId) -> None:
         # 读取阶段不开事务：模型调用绝不能包在事务里。
@@ -668,6 +670,10 @@ class RunSeatRound:
                     claims=claims_text,
                     opinions_so_far=previous,
                     answered=answered_text,
+                    # 跨轮记忆（M6）：**已确认**的那些，与整合者看同一份渲染
+                    project_memory=render_memory(
+                        self._memory.get(round_.project_id).entries
+                    ),
                     known_eids=known_eids,
                     answer_eids=answer_refs,
                     external_material=external_material,
@@ -729,6 +735,7 @@ class RunSeatRound:
         claims: str,
         opinions_so_far: str,
         answered: str,
+        project_memory: str,
         known_eids: frozenset[EvidenceId],
         answer_eids: dict[str, str] | None = None,
         external_material: str = "",
@@ -744,6 +751,7 @@ class RunSeatRound:
                     claims=claims,
                     opinions_so_far=opinions_so_far,
                     answered=answered,
+                    project_memory=project_memory,
                     external_material=external_material,
                     known_eids=known_eids,
                     answer_eids=answer_eids or {},
@@ -1598,9 +1606,11 @@ class IntegrateRound:
                         ledger=ledger,
                         round_id=round_id,
                     ),
-                    answered=answered,
-                    skipped=skipped,
-                    entry_ids=render_existing_entries(document),
+            answered=answered,
+            skipped=skipped,
+            # 跨轮记忆（M6）：**已确认**的那些（席位与整合者看同一份渲染）
+            project_memory=render_memory(self._memory.get(round_.project_id).entries),
+            entry_ids=render_existing_entries(document),
                     external_material=external_material_text(round_, store=self._materials),
                     validation_error=validation_error,
                     round_id=round_id,
