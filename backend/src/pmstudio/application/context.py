@@ -149,7 +149,8 @@ NO_MEMORY_TEXT = "（这个项目还没有确认过的记忆）"
 #: 记忆节的硬规矩：文档与记忆冲突时以文档为准（`02` §11.0.44）
 MEMORY_HARD_RULE = (
     "记忆里已经定过的不许换个说法再问；记忆与正文冲突时**以正文为准**，"
-    "并在 rationale 里说一句。"
+    "并在 rationale 里说一句。**括号里的 `E…` 才是出处编号**——记忆条目 id、"
+    "条目 id（`r-…#01`）、提案 id 都不许写进 `evidence_refs`。"
 )
 
 
@@ -158,19 +159,47 @@ def render_memory(entries: Sequence[MemoryEntry]) -> str:
 
     限量 20 行：超了要**写明**"只带了前 N 条"——静默截断会让模型以为剩下那些不存在，
     而"看不见的规则"比"看得见的规则"更危险。
+
+    **不渲记忆条目的 id**（M6f）：真跑（L2 第 2 轮）里席位把行首那串 `mem…` 当成了出处编号，
+    写进 `evidence_refs` → 整趟席位判失败。菜单里放什么，模型就点什么：id 不该出现在它面前。
+    需要 id 的是**记忆整理者**（它要写 `target_id`），那份走 `render_memory_state`。
     """
 
     if not entries:
         return NO_MEMORY_TEXT
     shown = list(entries[:MEMORY_LINE_LIMIT])
     lines = [
-        f"- {item.memory_id} · {kind_title(item.kind)}：{item.text}"
-        f"〔{' '.join(str(ref) for ref in item.refs)}〕"
+        f"- 〔{kind_title(item.kind)}〕{item.text}"
+        f"（出处：{'、'.join(str(ref) for ref in item.refs)}）"
         for item in shown
     ]
     if len(entries) > len(shown):
         lines.append(f"（共 {len(entries)} 条，这里只带了前 {len(shown)} 条）")
     lines.append(MEMORY_HARD_RULE)
+    return "\n".join(lines)
+
+
+def render_memory_state(entries: Sequence[MemoryEntry]) -> str:
+    """给**记忆整理者**看的那一份：带条目 id（`update` / `merge` / `delete` 要写 `target_id`）。
+
+    与 `render_memory` 分开的原因只有一个：**谁能看见 id，谁就可能把它当出处**（M6f 真跑现场）。
+    这一份额外写明"这些 id 只能填进 target_id"。
+    """
+
+    if not entries:
+        return NO_MEMORY_TEXT
+    shown = list(entries[:MEMORY_LINE_LIMIT])
+    lines = [
+        f"- {item.memory_id} · 〔{kind_title(item.kind)}〕{item.text}"
+        f"（出处：{'、'.join(str(ref) for ref in item.refs)}）"
+        for item in shown
+    ]
+    if len(entries) > len(shown):
+        lines.append(f"（共 {len(entries)} 条，这里只带了前 {len(shown)} 条）")
+    lines.append(
+        "上面每行开头的 id 是**记忆条目 id**：只用来填 `target_id`（改 / 合并 / 删的那一条），"
+        "**不许**写进 `refs`；`refs` 只收 `E` 开头的出处编号。"
+    )
     return "\n".join(lines)
 
 

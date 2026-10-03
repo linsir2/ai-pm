@@ -55,6 +55,7 @@ from pmstudio.application.context import (
     render_existing_entries,
     render_materials,
     render_memory,
+    render_memory_state,
     render_reviews,
     render_round_digest,
     render_selected_opinions,
@@ -1472,7 +1473,8 @@ class IntegrateRound:
         for attempt in range(1, MAX_CURATOR_ATTEMPTS + 1):
             try:
                 outcome = await self._curator.propose(
-                    memory_state=render_memory(memory.entries),
+                    # 给整理者的那一份**带条目 id**（它要写 target_id），席位的**不带**（M6f）
+                    memory_state=render_memory_state(memory.entries),
                     round_digest=render_round_digest(round_, ledger=ledger),
                     round_id=round_id,
                     validation_error=validation_error,

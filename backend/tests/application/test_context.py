@@ -658,9 +658,9 @@ def test_memory_render_is_capped_and_says_it_was_capped():
 
     text = context.render_memory(entries)
 
-    assert text.count("- mem") == context.MEMORY_LINE_LIMIT == 20
+    assert text.count("- 〔") == context.MEMORY_LINE_LIMIT == 20
     assert "共 40 条，这里只带了前 20 条" in text
-    assert "mem21" not in text            # 第 21 条起不再出现
+    assert "第 21 条已经定过的口径" not in text   # 第 21 条起不再出现
 
 
 def test_memory_section_carries_the_document_wins_rule():
@@ -669,5 +669,24 @@ def test_memory_section_carries_the_document_wins_rule():
     text = context.render_memory((memory_entry(1),))
 
     assert "以正文为准" in text
-    assert "mem1" in text and "E1" in text
+    assert "E1" in text
     assert "已定口径" in text             # kind 用人话，不给模型看枚举值
+
+
+def test_the_memory_we_show_the_agents_never_carries_a_memory_id():
+    """M6f（真跑 L2 第 2 轮的现场）：席位把行首的 `mem…` 当成了出处编号 →
+    `evidence_refs` 里写 `mem-12565550`，整趟席位判失败。
+
+    所以给席位/整合者的那一份**一个 id 都不许出现**；id 只给记忆整理者（它要写 target_id）。
+    """
+
+    entries = (memory_entry(1),)
+    injected = context.render_memory(entries)
+
+    assert "mem1" not in injected
+    assert "（出处：E1）" in injected
+    assert "才是出处编号" in injected
+
+    state = context.render_memory_state(entries)
+    assert "mem1" in state                     # 整理者要拿它写 target_id
+    assert "只用来填 `target_id`" in state
