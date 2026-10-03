@@ -155,7 +155,13 @@ export interface RoundView {
   seat_packets: SeatPacketView[];
   /** 这一轮没进卡片的意见（三个来源合成一条通道，`04` C5 后半）。 */
   dropped: DroppedView[];
+  /** **当前批**的题（界面用的就是这份：换一批就换一份）。 */
   questions: QuestionView[];
+  /**
+   * 本轮**问过的每一道题**（逐批追加，按出题顺序）——`answer_sets` 的问题侧。
+   * 界面不用它；"这一轮到底问过什么"是整轮的事实（换批不该丢），判据与复盘看这份。
+   */
+  asked_questions: QuestionView[];
   list_items: string[];
   draft: DraftView | null;
   advisories: string[];

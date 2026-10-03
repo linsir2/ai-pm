@@ -10,12 +10,14 @@ from evals.assertions import EVAL_ASSERTIONS, check
 from pmstudio.application import dto
 from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
 from pmstudio.domain.round.questionnaire import (
+    AnswerSet,
     Question,
     QuestionKind,
     Questionnaire,
     QuestionType,
 )
 from pmstudio.domain.round.round import DroppedItem, DropSource, Round
+from pmstudio.domain.round.web_query import WebQuery
 from pmstudio.domain.shared.ids import (
     DraftId,
     EntryId,
@@ -232,6 +234,88 @@ def test_a_contradiction_must_be_labelled_conflict_or_decision():
     assert check({"type": "contradiction_is_labelled"}, only_gap) is not None
     assert check({"type": "contradiction_is_labelled"}, view_of(round_with([as_conflict]))) is None
     assert check({"type": "contradiction_is_labelled"}, view_of(round_with([as_decision]))) is None
+
+
+def round_with_two_batches(*, first_kind: QuestionKind) -> Round:
+    """两批问卷：第 1 批一道题（kind 由调用方定），用户跳过；第 2 批一道 gap 题。
+
+    真跑现场（P30 那次完整 eval 的第 6 条用例，轮 `r-8889fcf0`）：
+    `q4 kind=conflict`（依据 E1+E3）出现在**第 1 批**，用户跳过之后第 2 批只剩
+    `q6`/`q7` 两道 gap 题。`RoundView.questions` 只有当前批（第 2 批）——
+    「互斥题有没有出」这件事因此从判据里消失了。
+    """
+
+    round_ = make_round()
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f-1"),
+            round_id=ROUND_ID,
+            questions=(replace(question("q1", target=Target.body("s5")), kind=first_kind),),
+        )
+    )
+    round_.submit_answers(
+        AnswerSet(
+            form_id=FormId("f-1"),
+            answers=(),
+            skipped=(QuestionId("q1"),),
+            answered_at=NOW,
+        )
+    )
+    round_.integrate(
+        questionnaire=Questionnaire(
+            form_id=FormId("f-2"),
+            round_id=ROUND_ID,
+            questions=(question("q2", target=Target.body("s7")),),
+        )
+    )
+    return round_
+
+
+def test_a_conflict_asked_in_an_earlier_batch_still_counts():
+    """判据要看**整轮问过的题**：互斥题在第 1 批出过，就不该因为第 2 批全是 gap 而判红。
+
+    P30 那次 `edge-contradiction` 的唯一一红就是这么来的：判据只读当前批。
+    """
+
+    view = view_of(round_with_two_batches(first_kind=QuestionKind.CONFLICT))
+
+    assert check({"type": "contradiction_is_labelled"}, view) is None
+
+
+def test_a_round_that_only_ever_asked_gaps_still_fails():
+    """反例：两批全是 gap —— 判据必须照旧红。
+
+    改的是取样面（当前批 → 整轮），**不是**把判据改松：真·没出互斥题时还得能抓住。
+    """
+
+    view = view_of(round_with_two_batches(first_kind=QuestionKind.GAP))
+
+    assert check({"type": "contradiction_is_labelled"}, view) is not None
+
+
+def test_web_nomination_is_required_when_the_input_needs_external_facts():
+    """M3b：输入要的是外部客观事实时，分析者至少要提名一条检索词。
+
+    判据本身是纯函数（`view.web_queries` 进），所以"该查的不查"能离线钉住；
+    真模型那侧由 `09-edge-external-facts` 那条用例负责。
+    """
+
+    assert (
+        check({"type": "web_queries_at_least", "count": 1}, view_of(make_round())) is not None
+    )
+
+    round_ = make_round()
+    round_.attach_web_queries(
+        (
+            WebQuery(
+                query="21 CFR Part 11 电子签名与审计追踪要求",
+                why="法规条款原文，文档里没有、用户也答不了",
+            ),
+        )
+    )
+    assert check({"type": "web_queries_at_least", "count": 1}, view_of(round_)) is None
+    # 提了一条但要求两条时照旧红（判据比的是数，不是"有没有非空"）
+    assert check({"type": "web_queries_at_least", "count": 2}, view_of(round_)) is not None
 
 
 def test_dropped_items_must_have_a_reason():

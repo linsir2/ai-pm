@@ -124,15 +124,35 @@ def check(assertion: dict, view: RoundView) -> str | None:
         # 所以两者都算标对了；真正要抓的是"把它当普通缺信息题、只出 gap"。
         # 这条只挂在"输入本来就自相矛盾"的用例上（`06-edge-contradiction`）——别的用例
         # 本来就该全是 gap，挂上去就是假红。
-        labelled = [
-            question for question in view.questions if question.kind in {"conflict", "decision"}
-        ]
+        #
+        # 2026-10-03（P35 · M3）：取样面从"**当前批**"改成"**整轮问过的题**"。
+        # 真跑现场（P30 完整 eval 的 `r-8889fcf0`）：`q4 kind=conflict`（依据 E1+E3）出现在
+        # **第 1 批**，用户跳过之后第 2 批只剩两道 gap 题；判据只读 `RoundView.questions`
+        # （当前批）→ 把"问过"读成"没问过"、报了一次假红。`asked_questions` 是整轮那份投影。
+        # 这不是把判据改松：`test_a_round_that_only_ever_asked_gaps_still_fails` 用两批全 gap
+        # 钉着"照旧红"。
+        asked = view.asked_questions or view.questions
+        labelled = [question for question in asked if question.kind in {"conflict", "decision"}]
         if labelled:
             return None
-        kinds = sorted({question.kind for question in view.questions})
+        kinds = sorted({question.kind for question in asked})
         return (
-            f"输入里两句互斥（量级与耗时），应该出一道要你拍板的题（kind=conflict 或 decision），"
-            f"实际 {len(view.questions)} 道题的类型是 {kinds or '（没出题）'}"
+            f"输入里两句互斥，应该出一道要你拍板的题（kind=conflict 或 decision），"
+            f"实际这一轮问过 {len(asked)} 道题、类型是 {kinds or '（没出题）'}"
+        )
+
+    if kind == "web_queries_at_least":
+        # 2026-10-03（P35 · M3b）：输入明确依赖**外部客观事实**（法规 / 标准 / 第三方接口的
+        # 既有做法）时，分析者至少要提名一条检索词——否就是"该查的不查"。
+        # 只挂在那一调用例上：提名是模型行为率，进默认集只会变成一盏人人学会忽略的红灯
+        # （与 `unaccounted_at_most` 同一处置）。
+        count = len(view.web_queries)
+        limit = assertion["count"]
+        if count >= limit:
+            return None
+        return (
+            f"输入要的是外部客观事实（文档里没有、用户也答不了），至少要提名 {limit} 条检索词，"
+            f"实际 {count} 条"
         )
 
     if kind == "outside_scope_items_are_labeled":
