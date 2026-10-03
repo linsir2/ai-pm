@@ -171,6 +171,27 @@ def test_missing_main_flow_is_a_warning_when_features_exist():
     assert items[("s6", "section_kind_present")].severity is Severity.WARN
 
 
+def test_a_section_level_steps_entry_in_s6_clears_that_warning():
+    """第 6 章**章节级**的 `steps` 条目是这条 warn 的解——落得进去，也认得出来。
+
+    这是**护栏**用例（能力本来就在：`document._apply_add` 对章节级目标走
+    `Block.section_content(kind=…)`），不是红用例；钉它是因为 P36 起归位表会
+    真的往这儿派活（真跑 449 条提案里落 s6 的只有 1 条、而且 kind 是 text）。
+    """
+
+    document = two_thin_features()
+    assert ("s6", "section_kind_present") in by_key(document)  # 先确认在告警状态
+
+    write(
+        document,
+        target=Target.body("s6"),
+        text="1. 点检员按班次点检；2. 发现异常点报修；3. 主管派单、维修工抢单到场。",
+        kind=BlockKind.STEPS,
+    )
+
+    assert ("s6", "section_kind_present") not in by_key(document)
+
+
 def test_acceptance_entry_clears_the_s12_item():
     document = empty_doc()
     write(
