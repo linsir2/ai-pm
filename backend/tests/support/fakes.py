@@ -11,6 +11,7 @@ from pmstudio.application.dto import (
 )
 from pmstudio.application.errors import UnknownProject, UnknownRound
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.memory.memory import ProjectMemory
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.ids import ProjectId, RoundId
@@ -222,6 +223,26 @@ class InMemoryEvidenceRepository(_InMemoryRepository):
     def save(self, ledger: EvidenceLedger) -> None:
         self.saves += 1
         self._items[ledger.project_id] = deepcopy(ledger)
+
+
+class InMemoryMemoryRepository(_InMemoryRepository):
+    """跨轮记忆替身（M6）：与 SQLite 实现同一口径——没写过 = 空记忆，覆写整份。"""
+
+    def __init__(self) -> None:
+        super().__init__("memory")
+
+    def seed(self, memory: ProjectMemory) -> None:
+        self._items[memory.project_id] = deepcopy(memory)
+
+    def get(self, project_id: ProjectId) -> ProjectMemory:
+        stored = self._items.get(project_id)
+        if stored is None:
+            return ProjectMemory.empty(project_id)
+        return deepcopy(stored)
+
+    def save(self, memory: ProjectMemory) -> None:
+        self.saves += 1
+        self._items[memory.project_id] = deepcopy(memory)
 
 
 class FakeTransaction:

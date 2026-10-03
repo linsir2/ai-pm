@@ -9,6 +9,7 @@ from datetime import datetime
 from pmstudio.domain.authoring.blocks import Block, Entry
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.version import Snapshot, Version, VersionTrigger
+from pmstudio.domain.memory.memory import MemoryEntry, MemoryRevision, ProjectMemory
 from pmstudio.domain.provenance.evidence import Evidence, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Assumption, Claim, Contradiction
@@ -34,6 +35,7 @@ from pmstudio.domain.round.round import (
 )
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.round.web_query import WebQuery
+from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
     BlockId,
@@ -50,6 +52,7 @@ from pmstudio.domain.shared.ids import (
     SectionId,
 )
 from pmstudio.domain.shared.label import ClaimLabel, Zone
+from pmstudio.domain.shared.memory import MemoryChange, MemoryKind, MemoryOp
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 
@@ -718,3 +721,121 @@ def _dropped_from_payload(payload: dict) -> tuple[DroppedItem, ...]:
         )
         for handle in questionnaire.get("dropped", ())
     )
+
+
+# —— 跨轮记忆（M6）——
+def memory_to_payload(memory: ProjectMemory) -> dict:
+    return {
+        "entries": [
+            {
+                "memory_id": item.memory_id,
+                "kind": item.kind.value,
+                "text": item.text,
+                "refs": _refs(item.refs),
+                "round_id": item.round_id,
+                "created_at": _when(item.created_at),
+                "updated_at": _when(item.updated_at),
+            }
+            for item in memory.entries
+        ],
+        "revisions": [
+            {
+                "revision_no": revision.revision_no,
+                "round_id": revision.round_id,
+                "changes": [_memory_change_to_json(change) for change in revision.changes],
+                "created_at": _when(revision.created_at),
+            }
+            for revision in memory.revisions
+        ],
+    }
+
+
+def memory_from_payload(payload: object, *, project_id: ProjectId) -> ProjectMemory:
+    """坏行**跳过不抛**：手工改坏的 payload 不该让整个项目打不开（与索引层同一条口径）。
+
+    条目的形状校验（必须有 id / 正文 / 出处）在 `MemoryEntry.__post_init__` 里，
+    这里只负责把认不出来的那些挑出去；`kind` 认不出来也算"认不出来"。
+    """
+
+    if not isinstance(payload, dict):
+        return ProjectMemory.empty(project_id)
+    entries = [
+        entry
+        for item in _memory_rows(payload.get("entries"))
+        if (entry := _memory_entry(item)) is not None
+    ]
+    revisions = [
+        revision
+        for item in _memory_rows(payload.get("revisions"))
+        if (revision := _memory_revision(item)) is not None
+    ]
+    return ProjectMemory(
+        project_id=project_id, entries=tuple(entries), revisions=tuple(revisions)
+    )
+
+
+def _memory_rows(value: object) -> list:
+    return list(value) if isinstance(value, list) else []
+
+
+def _memory_entry(item: object) -> MemoryEntry | None:
+    if not isinstance(item, dict):
+        return None
+    try:
+        return MemoryEntry(
+            memory_id=str(item["memory_id"]),
+            kind=MemoryKind(str(item["kind"])),
+            text=str(item["text"]),
+            refs=tuple(EvidenceId(str(ref)) for ref in item.get("refs") or ()),
+            round_id=str(item["round_id"]),
+            created_at=_unwhen(str(item["created_at"])),
+            updated_at=_unwhen(str(item["updated_at"])),
+        )
+    except (KeyError, TypeError, ValueError, DomainError):
+        return None
+
+
+def _memory_revision(item: object) -> MemoryRevision | None:
+    if not isinstance(item, dict):
+        return None
+    changes = [
+        change
+        for raw in _memory_rows(item.get("changes"))
+        if (change := _memory_change_from_json(raw)) is not None
+    ]
+    try:
+        return MemoryRevision(
+            revision_no=int(item["revision_no"]),
+            round_id=str(item["round_id"]),
+            changes=tuple(changes),
+            created_at=_unwhen(str(item["created_at"])),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _memory_change_from_json(item: object) -> MemoryChange | None:
+    if not isinstance(item, dict):
+        return None
+    try:
+        return MemoryChange(
+            op=MemoryOp(str(item["op"])),
+            kind=MemoryKind(str(item["kind"])),
+            text=str(item.get("text") or ""),
+            refs=tuple(str(ref) for ref in item.get("refs") or ()),
+            target_id=None if item.get("target_id") is None else str(item["target_id"]),
+            reason=str(item.get("reason") or ""),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _memory_change_to_json(change: MemoryChange) -> dict:
+    return {
+        "op": change.op.value,
+        "kind": change.kind.value,
+        "text": change.text,
+        "refs": list(change.refs),
+        "target_id": change.target_id,
+        "reason": change.reason,
+    }

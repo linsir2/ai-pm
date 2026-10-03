@@ -19,6 +19,7 @@ from pmstudio.domain.authoring.readiness import ReadinessItem
 from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.version import Version
 from pmstudio.domain.authoring.views import BlockView, DocumentView
+from pmstudio.domain.memory.memory import MemoryEntry
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Proposal
 from pmstudio.domain.round.opinion import OpinionForm, SeatReview
@@ -663,11 +664,25 @@ class ReadinessItemView:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryEntryView:
+    """记忆抽屉读的一行（M6）。只读投影：真相源是 `project_memory` 表。"""
+
+    memory_id: str
+    kind: str
+    text: str
+    refs: tuple[str, ...]
+    round_id: str
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceView:
     project: ProjectSummaryView
     document: DocumentView
     round: RoundView | None
     readiness: tuple[ReadinessItemView, ...] = ()
+    #: 已确认的跨轮记忆（`05` 的"席位必读那一份"的现行版）。老 payload 没有 → 空。
+    memory: tuple[MemoryEntryView, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1065,6 +1080,7 @@ def workspace_view(
     materials: Sequence[MaterialPacket] = (),
     web_search_available: bool = False,
     readiness: Sequence[ReadinessItem] = (),
+    memory: Sequence[MemoryEntry] = (),
 ) -> WorkspaceView:
     return WorkspaceView(
         project=project,
@@ -1082,6 +1098,18 @@ def workspace_view(
             )
         ),
         readiness=tuple(readiness_view(item) for item in readiness),
+        memory=tuple(memory_entry_view(item) for item in memory),
+    )
+
+
+def memory_entry_view(entry: MemoryEntry) -> MemoryEntryView:
+    return MemoryEntryView(
+        memory_id=entry.memory_id,
+        kind=entry.kind.value,
+        text=entry.text,
+        refs=tuple(str(ref) for ref in entry.refs),
+        round_id=entry.round_id,
+        updated_at=entry.updated_at,
     )
 
 

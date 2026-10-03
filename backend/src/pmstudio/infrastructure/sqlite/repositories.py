@@ -18,6 +18,7 @@ from pmstudio.application.dto import (
 )
 from pmstudio.application.errors import UnknownProject, UnknownRound
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.memory.memory import ProjectMemory
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
@@ -395,3 +396,44 @@ class SqliteWorkspaceIndex:
                     continue
                 found.setdefault(material_id, []).append(eid)
         return {material_id: tuple(eids) for material_id, eids in found.items()}
+
+
+class SqliteMemoryRepository:
+    """跨轮记忆（M6）：读端口 + 写端口，都在一个类上（与文档仓储同一个形状）。
+
+    两条口径：
+
+    ① **没有该项目的行 = 空记忆**（不是错误）——老项目、刚建的项目都是这个状态；
+    ② 坏 payload **跳过不抛**（`serialization.memory_from_payload` 的语义）：
+       手工改坏的记忆不该让整个工作台打不开。
+
+    写入是**整份覆写**（一个项目一行）：记忆 ≤60 条，payload 就是全部状态，
+    没有并发（单用户单进程），所以不需要增量更新。
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def get(self, project_id: ProjectId) -> ProjectMemory:
+        row = self._connection.execute(
+            "SELECT payload FROM project_memory WHERE project_id = ?", (str(project_id),)
+        ).fetchone()
+        if row is None:
+            return ProjectMemory.empty(project_id)
+        try:
+            payload = json.loads(row["payload"])
+        except (json.JSONDecodeError, TypeError):
+            return ProjectMemory.empty(project_id)
+        return ser.memory_from_payload(payload, project_id=project_id)
+
+    def save(self, memory: ProjectMemory) -> None:
+        self._connection.execute(
+            "INSERT INTO project_memory (project_id, payload, updated_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(project_id) DO UPDATE SET payload = excluded.payload,"
+            " updated_at = excluded.updated_at",
+            (
+                str(memory.project_id),
+                json.dumps(ser.memory_to_payload(memory), ensure_ascii=False),
+                _now(),
+            ),
+        )

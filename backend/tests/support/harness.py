@@ -33,6 +33,7 @@ from tests.support.fakes import (
     InMemoryDocumentRepository,
     InMemoryEvidenceRepository,
     InMemoryMaterialStore,
+    InMemoryMemoryRepository,
     InMemoryRoundRepository,
 )
 
@@ -128,11 +129,12 @@ class Harness:
         self.rounds = InMemoryRoundRepository()
         self.evidences = InMemoryEvidenceRepository()
         self.materials = InMemoryMaterialStore()
+        self.memory = InMemoryMemoryRepository()
         # 真解析器（不是替身）：上传路径在测试里也走真 pdfminer / bs4
         from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 
         self.parser = LocalMaterialParser()
-        self.uow = FakeTransaction(self.documents, self.rounds, self.evidences)
+        self.uow = FakeTransaction(self.documents, self.rounds, self.evidences, self.memory)
         # gateway 是给"要卡住/要乱来"的测试用的注入口；平时用脚本化网关
         self.gateway = gateway or ScriptedModelGateway(
             replies=replies or {}, seat_replies=seat_replies or {}
@@ -463,6 +465,7 @@ class Harness:
             available_tool_keys=self.available_tool_keys,
             checker=self.readiness,
             materials=self.materials,
+            memory=self.memory,
         )
 
     def list_projects(self):  # type: ignore[no-untyped-def]

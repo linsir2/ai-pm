@@ -328,3 +328,35 @@ class UntraceableContent(InvariantViolation):
             proposal_id=str(proposal_id),
             reason=reason,
         )
+
+
+# —— memory（跨轮记忆，M6）——
+class UntraceableMemory(InvariantViolation):
+    """记忆条目必须带至少一个**账本里存在**的出处编号（`02` §11.0.44）。
+
+    为什么是硬约束：记忆会注入之后每一轮的提示词，一条没有出处的"教训"
+    等于让模型凭一句话改变以后所有判断——那正是这条系统最不该有的东西。
+    """
+
+    def __init__(self, *, reason: str) -> None:
+        super().__init__(
+            f"记忆条目没有可追溯的出处：{reason}",
+            invariant=GlobalInvariant.GB1,
+            reason=reason,
+        )
+
+
+class UnknownMemoryEntry(ShapeError):
+    """`update` / `merge` / `delete` 点名的记忆条目不存在。"""
+
+    def __init__(self, *, memory_id: object) -> None:
+        super().__init__(f"点名的记忆条目不存在：{memory_id}", memory_id=str(memory_id))
+
+
+class MemoryCapacityExceeded(ShapeError):
+    """记忆满了（60 条）：这一批必须带 `merge` 或 `delete` 才放行。"""
+
+    def __init__(self, *, limit: int) -> None:
+        super().__init__(
+            f"记忆最多 {limit} 条，加不进去了：这一批必须带合并或删除", limit=str(limit)
+        )

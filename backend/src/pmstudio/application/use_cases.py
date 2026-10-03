@@ -137,6 +137,7 @@ from pmstudio.domain.ports import (
     DocumentReader,
     EvidenceReader,
     EvidenceWriter,
+    MemoryReader,
     RoundReader,
     RoundWriter,
     UnitOfWork,
@@ -2304,6 +2305,7 @@ class GetWorkspace:
         available_tool_keys: frozenset[str],
         checker: ReadinessChecker,
         materials: MaterialStore,
+        memory: MemoryReader,
     ) -> None:
         self._documents = documents
         self._rounds = rounds
@@ -2314,6 +2316,7 @@ class GetWorkspace:
         self._available_tool_keys = available_tool_keys
         self._checker = checker
         self._materials = materials
+        self._memory = memory
 
     async def __call__(self, *, project_id: ProjectId) -> WorkspaceView:
         document = self._documents.get(project_id)
@@ -2335,6 +2338,7 @@ class GetWorkspace:
             )
             is not None,
             readiness=self._checker.check(view),
+            memory=self._memory.get(project_id).entries,
         )
 
 

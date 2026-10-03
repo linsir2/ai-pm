@@ -61,6 +61,7 @@ from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
+    SqliteMemoryRepository,
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
@@ -129,6 +130,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     # 与解析器一样，换实现（无头浏览器 / 更强的正文抽取）只改这一行。
     fetcher: WebFetcher = HttpxWebFetcher()
     index = SqliteWorkspaceIndex(connection)
+    memory = SqliteMemoryRepository(connection)
     uow = SqliteUnitOfWork(connection)
 
     prompts = FilePromptLibrary(PROMPTS_DIR)
@@ -281,6 +283,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             available_tool_keys=available_tool_keys,
             checker=readiness,
             materials=materials,
+            memory=memory,
         ),
         list_projects=ListProjects(index=index),
         get_round=get_round,

@@ -35,7 +35,11 @@ def test_domain_contexts_do_not_import_each_other():
     offenders: dict[str, list[str]] = {}
     for path, source in iter_sources(DOMAIN):
         rel = path.relative_to(DOMAIN)
-        own = rel.parts[0] if rel.parts[0] in ("authoring", "provenance", "round") else None
+        own = (
+            rel.parts[0]
+            if rel.parts[0] in ("authoring", "memory", "provenance", "round")
+            else None
+        )
         if own is None:
             continue
         foreign = foreign_context_imports(source, own=own)

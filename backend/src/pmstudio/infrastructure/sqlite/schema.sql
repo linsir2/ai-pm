@@ -71,6 +71,18 @@ CREATE TABLE IF NOT EXISTS material_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_material_chunks_material ON material_chunks(material_id, ordinal);
 
+-- 跨轮记忆（M6，原设计里的 PROJECT.md）：一个项目一行。
+-- payload 里两段：`entries`（事实）与 `revisions`（它怎么变成现在这样的）。
+--
+-- 为什么只有这一块落库：章节状态表 / 阻塞项 / 铁律**机械可算**（就绪度、s11、提示词硬规矩），
+-- 存一份就是第二真相源（`02` §11.0.10）。这张表只装"模型判断 + 用户逐条确认"过的东西。
+-- 条目与版本只增不改：一次确认 = 一条 revision，删掉的条目**不出现在 entries 里但留在 revisions 里**。
+CREATE TABLE IF NOT EXISTS project_memory (
+  project_id TEXT PRIMARY KEY,
+  payload    TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- 模型留样（`02` §5.3）：默认不写，`PMSTUDIO_TRACE_MODEL=1` 时才记。
 -- 它不参与业务：写不进去也不影响这一轮；要清就直接 DELETE。
 -- 每次**尝试**一行（重试后成功也留：不然"刚才为什么慢"永远查不到）：

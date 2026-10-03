@@ -7,6 +7,7 @@ from pmstudio.domain.shared.ids import ProjectId, RoundId
 
 if TYPE_CHECKING:
     from pmstudio.domain.authoring.document import Document
+    from pmstudio.domain.memory.memory import ProjectMemory
     from pmstudio.domain.provenance.ledger import EvidenceLedger
     from pmstudio.domain.round.round import Round
 
@@ -41,6 +42,25 @@ class EvidenceReader(Protocol):
 @runtime_checkable
 class EvidenceWriter(Protocol):
     def save(self, ledger: "EvidenceLedger") -> None: ...
+
+
+@runtime_checkable
+class MemoryReader(Protocol):
+    def get(self, project_id: ProjectId) -> "ProjectMemory": ...
+
+
+@runtime_checkable
+class MemoryWriter(Protocol):
+    """写记忆的能力（M6）。与 `DocumentWriter` 同一个纪律：**只有确认路径能拿到它**。"""
+
+    def save(self, memory: "ProjectMemory") -> None: ...
+
+
+@runtime_checkable
+class IdSource(Protocol):
+    """造一个新 id（记忆条目用）。与 `application.ports.IdGenerator` 结构相同。"""
+
+    def new(self, prefix: str) -> str: ...
 
 
 @runtime_checkable
