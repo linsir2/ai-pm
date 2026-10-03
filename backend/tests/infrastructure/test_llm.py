@@ -131,6 +131,16 @@ def test_seat_and_integrator_prompts_carry_the_memory_rule():
         assert "以正文为准" in text, name
 
 
+def test_memory_curator_prompt_shows_a_complete_example_with_refs():
+    """M6d：真跑第一趟的失败形状（整批没写出处）要靠提示词顶住——
+    提示词里必须有一个**带 refs 的完整 JSON 例子**，且 `refs` 这个词是硬要求。"""
+
+    text = (PROMPTS / "memory_curator.md").read_text(encoding="utf-8")
+
+    assert '"refs": ["E7", "E9"]' in text      # 完整例子带出处
+    assert "`refs` 不许省" in text              # 而且写成硬话，不是"最好带上"
+
+
 def test_analyzer_prompt_pins_the_two_raw_span_pitfalls():
     """提示词要把真模型踩过的两个坑写进去（`analyzer.md` 是复述这条口径的第一入口）。
 

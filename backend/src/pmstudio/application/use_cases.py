@@ -866,6 +866,12 @@ MAX_ACCOUNTING_REPAIRS = 2
 #: 否则只是拿同一句提示词再撞一堵墙（`learnings.md` L13）。
 MAX_CLAIMS_ATTEMPTS = 2
 
+#: 记忆整理也允许"重装一次"（M6d）：真跑第一趟（L1 第 1 轮，`qwen-plus`）模型提了 4 条
+#: 内容全对、**一条都没写出处**，于是被机械筛整批丢掉——那是"照同一句提示词再问一遍就能修"
+#: 的形状错误，所以给它一次带错因的补问（与席位/整合者同一条规矩）。
+#: 上限 2 次，且**只在整批被筛掉时**才补问：正常一轮仍然只有 1 次调用。
+MAX_CURATOR_ATTEMPTS = 2
+
 #: 单份材料上限（20MB）：在**读 body 之前**用 `file.size` 判一次，用例里再兜一次
 MAX_MATERIAL_BYTES = 20 * 1024 * 1024
 #: 一个项目最多几份材料（防止材料列表与检索被塞爆）
@@ -1459,17 +1465,30 @@ class IntegrateRound:
             return (), ()          # 这一批只出问卷：还没到"出草案那一刻"
         ledger = self._evidence.get(round_.project_id)
         memory = self._memory.get(round_.project_id)
-        try:
-            outcome: CuratorOutcome = await self._curator.propose(
-                memory_state=render_memory(memory.entries),
-                round_digest=render_round_digest(round_, ledger=ledger),
-                round_id=round_id,
-            )
-        except (ModelCallFailed, PacketParseError, ShapeError) as failure:
-            return (), (f"这一轮没能整理记忆（{failure}），草案照出",)
-
         known_refs = frozenset(str(item.eid) for item in ledger.evidences())
-        screened = screen_changes(outcome.changes, memory=memory, known_refs=known_refs)
+        validation_error = ""
+        screened = None
+        outcome: CuratorOutcome | None = None
+        for attempt in range(1, MAX_CURATOR_ATTEMPTS + 1):
+            try:
+                outcome = await self._curator.propose(
+                    memory_state=render_memory(memory.entries),
+                    round_digest=render_round_digest(round_, ledger=ledger),
+                    round_id=round_id,
+                    validation_error=validation_error,
+                )
+            except (ModelCallFailed, PacketParseError, ShapeError) as failure:
+                return (), (f"这一轮没能整理记忆（{failure}），草案照出",)
+            screened = screen_changes(
+                outcome.changes, memory=memory, known_refs=known_refs
+            )
+            # 只有"整批被筛掉"才补问一次（正常一轮仍是 1 次调用）：
+            # 真跑第一趟就是这种形状——4 条内容全对、一条都没写 refs。
+            if screened.accepted or not outcome.changes or attempt == MAX_CURATOR_ATTEMPTS:
+                break
+            validation_error = "\n".join(
+                f"- {item.reason}" for item in screened.dropped
+            )
         proposals = tuple(
             MemoryProposal(proposal_id=f"mem#{index}", change=change)
             for index, change in enumerate(screened.accepted, start=1)

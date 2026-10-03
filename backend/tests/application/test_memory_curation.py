@@ -201,6 +201,83 @@ async def test_an_untraceable_memory_change_never_reaches_the_card():
     )
 
 
+# —— M6d：整批缺出处 = 形状错误 → 给一次带错因的补问（与席位/整合者同一条规矩） ——
+
+
+def change_without_refs(text: str = "点检记录提交后不可修改") -> dict:
+    """真跑第一趟的现场：内容全对、`refs` 整批省略。"""
+
+    item = decision_change(text)
+    item.pop("refs")
+    return item
+
+
+async def test_a_curator_reply_without_refs_is_retried_once():
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": draft_packet(),
+            # 第一次：整批没出处；第二次（带上错因之后）：补上了
+            "memory_curation": [
+                curator_reply(change_without_refs()),
+                curator_reply(decision_change()),
+            ],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    assert harness.gateway.purposes.count("memory_curation") == 2
+    # 补问那一次**带上了上一次错在哪**（`repair_note` 的同一口径）
+    assert "出处" in harness.prompts.last("memory_curator")["validation_error"]
+    round_ = harness.rounds.get(round_id)
+    assert [item.change.text for item in round_.memory_proposals] == ["导出保留期是 30 天"]
+
+
+async def test_a_clean_curator_reply_is_not_retried():
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": draft_packet(),
+            "memory_curation": curator_reply(decision_change()),
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    assert harness.gateway.purposes.count("memory_curation") == 1      # 正常一轮仍是一次
+
+
+async def test_a_second_bad_curator_reply_still_does_not_break_the_round():
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": draft_packet(),
+            "memory_curation": [
+                curator_reply(change_without_refs()),
+                curator_reply(change_without_refs("第二次还是没出处")),
+            ],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    assert harness.gateway.purposes.count("memory_curation") == 2      # 不会无限补问
+    round_ = harness.rounds.get(round_id)
+    assert round_.draft is not None                                    # 草案照出
+    assert round_.memory_proposals == ()
+    assert any("记忆 #1 没进卡片" in item for item in round_.draft.gaps)
+
+
 async def test_memory_is_curated_only_when_the_round_reaches_a_draft():
     """出问卷的那几批**不跑**记忆整理：一轮一次，别按批重复花钱。"""
 
