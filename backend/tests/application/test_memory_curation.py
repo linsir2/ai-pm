@@ -212,14 +212,50 @@ def change_without_refs(text: str = "点检记录提交后不可修改") -> dict
     return item
 
 
-async def test_a_curator_reply_without_refs_is_retried_once():
+async def test_a_curator_reply_without_refs_gets_the_round_refs_filled_in():
+    """M6e：模型连着两趟都不写 `refs` → 系统按**本轮账本**盖上（模型只决定记哪条）。
+
+    真跑现场（L1 第 1 轮，`qwen-plus`）：提示词里有 E 编号、补问也带了错因，
+    两次回包都把 `refs` 整栏省掉——那就别再赌它写，出处由装配层盖。
+    """
+
     harness = Harness(
         replies={
             "claims": CLAIMS_REPLY,
             "integration": draft_packet(),
-            # 第一次：整批没出处；第二次（带上错因之后）：补上了
             "memory_curation": [
                 curator_reply(change_without_refs()),
+                curator_reply(change_without_refs("第二次还是没出处")),
+            ],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await round_in_seat_pass(harness)
+    authorize_order_export(harness, round_id)
+
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    # 回填发生在**第一次**回包上（它已经合法了），所以没有补问、也没有丢
+    assert harness.gateway.purposes.count("memory_curation") == 1
+    assert [item.change.text for item in round_.memory_proposals] == ["点检记录提交后不可修改"]
+    # 出处是**本轮账本里的真编号**（E1 用户输入、E2 席位判断），不是编的
+    assert round_.memory_proposals[0].change.refs == ("E1", "E2")
+    assert not any("没进卡片" in item for item in round_.draft.gaps)
+
+
+async def test_a_curator_reply_with_bad_refs_is_retried_once_with_the_reason():
+    """回填只管"没写"；**写歪了**（编号不在账本里）仍然要补问一次，且带上错因。
+
+    一轮里 Curator 调用数因此要么 1、要么 2，不会更多。
+    """
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": draft_packet(),
+            "memory_curation": [
+                curator_reply(decision_change() | {"refs": ["E99"]}),
                 curator_reply(decision_change()),
             ],
         },
@@ -231,8 +267,7 @@ async def test_a_curator_reply_without_refs_is_retried_once():
     await harness.integrate_round()(round_id=round_id)
 
     assert harness.gateway.purposes.count("memory_curation") == 2
-    # 补问那一次**带上了上一次错在哪**（`repair_note` 的同一口径）
-    assert "出处" in harness.prompts.last("memory_curator")["validation_error"]
+    assert "出处编号不在账本里" in harness.prompts.last("memory_curator")["validation_error"]
     round_ = harness.rounds.get(round_id)
     assert [item.change.text for item in round_.memory_proposals] == ["导出保留期是 30 天"]
 
@@ -260,8 +295,8 @@ async def test_a_second_bad_curator_reply_still_does_not_break_the_round():
             "claims": CLAIMS_REPLY,
             "integration": draft_packet(),
             "memory_curation": [
-                curator_reply(change_without_refs()),
-                curator_reply(change_without_refs("第二次还是没出处")),
+                curator_reply(decision_change() | {"refs": ["E99"]}),
+                curator_reply(decision_change("第二次还是编的") | {"refs": ["E98"]}),
             ],
         },
         seat_replies={SEAT: SEAT_REPLY},

@@ -1480,7 +1480,15 @@ class IntegrateRound:
             except (ModelCallFailed, PacketParseError, ShapeError) as failure:
                 return (), (f"这一轮没能整理记忆（{failure}），草案照出",)
             screened = screen_changes(
-                outcome.changes, memory=memory, known_refs=known_refs
+                outcome.changes,
+                memory=memory,
+                known_refs=known_refs,
+                # 机械回填的候选：**这一轮账本里的编号**（模型只决定记哪条，出处系统盖）
+                fallback_refs=frozenset(
+                    str(item.eid)
+                    for item in ledger.evidences()
+                    if item.source.round_id == str(round_id)
+                ),
             )
             # 只有"整批被筛掉"才补问一次（正常一轮仍是 1 次调用）：
             # 真跑第一趟就是这种形状——4 条内容全对、一条都没写 refs。

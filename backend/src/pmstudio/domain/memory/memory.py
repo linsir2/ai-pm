@@ -48,6 +48,10 @@ MAX_ENTRY_LINES = 2
 
 MEMORY_ID_PREFIX = "mem"
 
+#: 机械回填出处时最多盖几个（本轮账本编号按字典序取前几个）：够"查得出是哪来的"就停，
+#: 不把整轮十几个编号都糊上去（提示词里每条记忆只带一行）。
+FALLBACK_REF_LIMIT = 3
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryEntry:
@@ -223,6 +227,7 @@ def screen_changes(
     *,
     memory: ProjectMemory,
     known_refs: frozenset[str],
+    fallback_refs: frozenset[str] = frozenset(),
 ) -> ScreenedChanges:
     """提议侧：把 Curator 交回的指令逐条机械核一遍（不合法就丢 + 留痕，不抛错）。
 
@@ -234,6 +239,13 @@ def screen_changes(
     accepted: list[MemoryChange] = []
     dropped: list[MemoryDrop] = []
     for change in changes:
+        # **机械回填出处**（M6e）：模型连着两趟都不肯写 `refs`（真跑 L1 第 1 轮，
+        # `qwen-plus` 两次回包都把这一栏省掉），而"出处"这件事**系统自己算得出来**——
+        # 就是这一轮的账本编号。所以模型只决定"记哪一条"，出处由装配层盖上
+        # （与矛盾题的 `kind=conflict` 机械盖章同一先例：判断做一次、结构机械落）。
+        # 回填**只用本轮真实存在的编号**，一条都没有就照旧丢掉——绝不编。
+        if change.op is not MemoryOp.DELETE and not change.refs and fallback_refs:
+            change = replace(change, refs=tuple(sorted(fallback_refs))[:FALLBACK_REF_LIMIT])
         rejected = _reject(change, known_entries=known, known_refs=known_refs)
         if rejected is None:
             accepted.append(change)
