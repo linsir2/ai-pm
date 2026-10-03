@@ -13,6 +13,24 @@ from pmstudio.application.ports import ModelMessage, ModelRequest
 from pmstudio.infrastructure.llm.litellm_gateway import LiteLLMGateway
 from pmstudio.infrastructure.llm.prompt_library import FilePromptLibrary
 
+
+class BadRequestError(Exception):
+    """名字与 litellm 那个一致：`is_transient()` 会看 `type(error).__name__`。"""
+
+
+#: 2026-10-03 供应商**原文**（DashScope 间歇性拒收 `json_schema`，见 `04` G10 M0）。
+STRUCTURED_OUTPUT_REFUSAL = (
+    "<400> InternalError.Algo.InvalidParameter: "
+    "This response_format type is unavailable now"
+)
+
+#: 2026-10-02 另一条**真的** 400：`glm-5.3` 与 `.env` 里的 `enable_thinking:false` 互斥。
+#: 它必须**继续**被判成不可重试——闸门正是靠这条把"换模型忘了改参数"当场拦下来的。
+MODEL_PARAM_MISMATCH = (
+    "<400> InternalError.Algo.InvalidParameter: "
+    "The value of the enable_thinking parameter is restricted to True."
+)
+
 PROMPTS = (
     Path(__file__).resolve().parents[2]
     / "src"
@@ -177,6 +195,74 @@ async def test_gateway_strips_markdown_fence_around_json(monkeypatch):
         )
     )
     assert reply.text == '{"ok": true}'
+
+
+def test_is_transient_covers_the_structured_output_refusal():
+    """供应商说"**现在**这个 response_format 类型不可用"——那是抖动，值得重试。
+
+    真实现场（2026-10-03 08:15–08:24）：DashScope 在两分钟窗口里对 `json_schema` 连回 400，
+    08:17 又全通、08:20 连打 8/8 过；08:24 打到一次真实 analyzer 调用 → **整轮失败**。
+    网关原来把 `invalid_parameter` 一律当不可重试，于是一次两分钟的抖动 = 一次调用判死。
+    """
+
+    from pmstudio.infrastructure.llm.litellm_gateway import is_transient
+
+    assert is_transient(BadRequestError(STRUCTURED_OUTPUT_REFUSAL))
+
+
+def test_is_transient_still_rejects_a_real_model_param_mismatch():
+    """**别放宽大类**：参数真的写错了要立刻失败（闸门就靠这条把"换模型忘了改参数"拦下来）。"""
+
+    from pmstudio.infrastructure.llm.litellm_gateway import is_transient
+
+    assert not is_transient(BadRequestError(MODEL_PARAM_MISMATCH))
+    assert not is_transient(BadRequestError("InvalidParameter: field foo not allowed"))
+    assert not is_transient(RuntimeError("invalid api key"))
+
+
+async def test_gateway_rides_out_one_structured_output_refusal(monkeypatch):
+    """端到端：第一次回那条 400，第二次正常——**不该把整轮判死**。"""
+
+    calls = {"count": 0}
+    slept: list[float] = []
+
+    async def flaky(**kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise BadRequestError(STRUCTURED_OUTPUT_REFUSAL)
+
+        class _Message:
+            content = '{"ok": true}'
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "m"
+            usage = {}
+
+        return _Response()
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", flaky)
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.asyncio.sleep", fake_sleep)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+
+    reply = await gateway.complete(
+        ModelRequest(
+            purpose="claims",
+            messages=(ModelMessage(role="user", content="x"),),
+            schema_name="ClaimsPacket",
+            response_schema={"type": "object"},
+        )
+    )
+
+    assert reply.text == '{"ok": true}'
+    assert calls["count"] == 2
+    assert slept == [1.0]
 
 
 async def test_gateway_turns_provider_errors_into_model_call_failed(monkeypatch):
