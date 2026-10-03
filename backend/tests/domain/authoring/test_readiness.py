@@ -171,6 +171,21 @@ def test_missing_main_flow_is_a_warning_when_features_exist():
     assert items[("s6", "section_kind_present")].severity is Severity.WARN
 
 
+def test_missing_main_flow_is_still_not_a_blocker():
+    """**护栏**：`main_flow` 缺了不挡交付——P37 的决定，P38 也没动它。
+
+    P38 只往字段表与归位表加"每个功能都要写主流程"的**提示词压力**；
+    判据一个字没改。这条钉住"日后别顺手把它升成必填"
+    （升上去 = 每个缺主流程的功能加一条阻塞，P30 里到 0 阻塞的车道会立刻破）。
+    """
+
+    items = ReadinessChecker().check(two_thin_features().view())
+
+    assert not any(
+        item.severity is Severity.BLOCKER and "主流程" in item.title for item in items
+    )
+
+
 def test_a_section_level_steps_entry_in_s6_clears_that_warning():
     """第 6 章**章节级**的 `steps` 条目是这条 warn 的解——落得进去，也认得出来。
 
