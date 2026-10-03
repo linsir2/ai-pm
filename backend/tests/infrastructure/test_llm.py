@@ -187,6 +187,43 @@ def test_integrator_limits_tell_how_to_write_the_end_to_end_flow():
     assert "串起来不算编造" in LIMITS_TEXT
 
 
+def test_integrator_limits_bound_the_output_per_call_and_keep_the_reasoning_out_of_the_text():
+    """输出侧口径两件事（P37 · 量出来的）。
+
+    ① **60 条是"一次整合"的上限，不是"一轮"**。真跑一轮会整合 2–3 次，累计 93–103 条提案
+       （M4 两轮真跑实测），所以原来那句"一轮最多 60 条"跟实际执行对不上。
+    ② 超限的**后果**要说清：真跑 201 次成功整合里 **17% 的调用写了 >60 条**（最多 90），
+       系统先让模型精简一次（约 59% 能修好），其余**真截断**——真跑里最多一次丢掉 16 条提案
+       （有留痕，但用户拿不到）。
+    ③ **解释别写进正文**：回包体量≈内容体量（中位 17.9K 字符 ≈ 44 秒一次），
+       而每条提案的解释在草案卡上本来就有落点（`rationale` → "它为什么这么判断：…"）。
+    """
+
+    from pmstudio.application.agents.integrator import LIMITS_TEXT
+
+    assert "一次整合最多 60 条" in LIMITS_TEXT
+    assert "一轮最多 60 条" not in LIMITS_TEXT
+    assert "截断" in LIMITS_TEXT  # 超了会发生什么，得让模型知道
+    assert "rationale" in LIMITS_TEXT  # 解释去哪儿
+
+
+def test_integrator_limits_ask_for_a_main_flow_per_feature():
+    """每个功能的正常路径要有一条 `main_flow`——**看不出来就出题，别硬编**。
+
+    真跑实测（当前模型 + 当前提示词，三条车道各两轮）：L1 **4/4**、L2 **4/8**、L5 **0/1**
+    （合计 8/13 ≈ 62%）；历史 45 份导出合计 48%。而 `main_flow` 在实现里是**非必填**
+    （`产品设计说明书` §2.6 写的是必填），所以这些缺口既不挡交付、也没人说。
+
+    处置：**不升必填**——那会把"模型没写"变成"交不出去"（P30 里好不容易到 0 阻塞的车道会立刻破），
+    而正确的杠杆是**派活**（与 s6 同一个套路）。
+    """
+
+    from pmstudio.application.agents.integrator import LIMITS_TEXT
+
+    assert "每个功能的正常路径要有一条" in LIMITS_TEXT
+    assert "main_flow" in LIMITS_TEXT
+
+
 async def test_gateway_passes_model_key_base_and_schema(monkeypatch):
     captured: dict = {}
 
