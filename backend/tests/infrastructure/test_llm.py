@@ -31,6 +31,31 @@ MODEL_PARAM_MISMATCH = (
     "The value of the enable_thinking parameter is restricted to True."
 )
 
+
+def _ok_response():
+    """一次正常回包（只用来让调用成功，内容不重要）。"""
+
+    class _Message:
+        content = '{"ok": true}'
+
+    class _Choice:
+        message = _Message()
+
+    class _Response:
+        choices = [_Choice()]
+        model = "m"
+        usage = {}
+
+    return _Response()
+
+
+def _response_formats(seen: list[dict]) -> list[str]:
+    """把每次请求带上去的 `response_format.type` 摘出来（None = 没带）。"""
+
+    return [
+        (item.get("response_format") or {}).get("type") for item in seen
+    ]
+
 PROMPTS = (
     Path(__file__).resolve().parents[2]
     / "src"
@@ -221,34 +246,26 @@ def test_is_transient_still_rejects_a_real_model_param_mismatch():
 
 
 async def test_gateway_rides_out_one_structured_output_refusal(monkeypatch):
-    """端到端：第一次回那条 400，第二次正常——**不该把整轮判死**。"""
+    """端到端：第一次回那条 400，第二次正常——**不该把整轮判死**。
 
-    calls = {"count": 0}
-    slept: list[float] = []
+    **2026-10-03 改过一处断言（说清错在哪）**：原来断言 `slept == [1.0]`，
+    那是在钉**机制**（"走抖动重试 + 退避"），不是钉**行为**。P34 · M2b 之后，
+    这条 400 先由**回落**接住（立刻换 `json_object` 重发，不退避）——行为比原来更好，
+    所以那一行不成立了。行为本身（"一次拒收不判死、第二次要成功"）**一个字没放松**：
+    改动是加了一条更精确的断言——第二次请求真的换成了 `json_object`。
+    抖动退避那条路**没有被删掉**，它的覆盖挪到了下面那条用例
+    （`test_gateway_backs_off_when_the_refusal_keeps_coming`）。
+    """
+
+    seen: list[dict] = []
 
     async def flaky(**kwargs):
-        calls["count"] += 1
-        if calls["count"] == 1:
+        seen.append(dict(kwargs))
+        if len(seen) == 1:
             raise BadRequestError(STRUCTURED_OUTPUT_REFUSAL)
-
-        class _Message:
-            content = '{"ok": true}'
-
-        class _Choice:
-            message = _Message()
-
-        class _Response:
-            choices = [_Choice()]
-            model = "m"
-            usage = {}
-
-        return _Response()
-
-    async def fake_sleep(seconds: float) -> None:
-        slept.append(seconds)
+        return _ok_response()
 
     monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", flaky)
-    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.asyncio.sleep", fake_sleep)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
 
     reply = await gateway.complete(
@@ -261,8 +278,156 @@ async def test_gateway_rides_out_one_structured_output_refusal(monkeypatch):
     )
 
     assert reply.text == '{"ok": true}'
-    assert calls["count"] == 2
-    assert slept == [1.0]
+    assert _response_formats(seen) == ["json_schema", "json_object"]
+
+
+async def test_gateway_backs_off_when_the_refusal_keeps_coming(monkeypatch):
+    """回落之后**还**被拒 → 回到抖动那条路：退避 1s / 3s，三次都不行才失败。
+
+    这条把 M0 那条用例的"退避"覆盖接过来——**两次机会都要在**：
+    先试换写法（回落），换完还不行再按抖动重试。
+    """
+
+    calls = {"count": 0}
+    slept: list[float] = []
+
+    async def always_refused(**kwargs):
+        calls["count"] += 1
+        raise BadRequestError(STRUCTURED_OUTPUT_REFUSAL)
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(
+        "pmstudio.infrastructure.llm.litellm_gateway.acompletion", always_refused
+    )
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.asyncio.sleep", fake_sleep)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+
+    with pytest.raises(ModelCallFailed):
+        await gateway.complete(
+            ModelRequest(
+                purpose="claims",
+                messages=(ModelMessage(role="user", content="x"),),
+                schema_name="ClaimsPacket",
+                response_schema={"type": "object"},
+            )
+        )
+
+    # 第 1 次 json_schema → 回落那次 json_object → 第 2、3 次都是 json_object
+    assert calls["count"] == 4
+    assert slept == [1.0, 3.0]
+
+
+async def test_gateway_falls_back_to_json_object_when_json_schema_is_refused(monkeypatch):
+    """供应商**稳定**不吃 `json_schema` 时回落 `json_object`（P34 · M2b）。
+
+    真实现场：`openai/deepseek-v4.1-flash` 对 `json_schema` 连续 400
+    （`This response_format type is unavailable now`），同模型 `json_object` 正常。
+    产品每次调用都带 `json_schema` → 那个模型上**一次都发不出去**。
+
+    契约不变：回包照样过我们自己的 schema 校验，回落只是"请求怎么写"这一层的事。
+    """
+
+    seen: list[dict] = []
+
+    async def provider(**kwargs):
+        seen.append(dict(kwargs))
+        if (kwargs.get("response_format") or {}).get("type") == "json_schema":
+            raise BadRequestError(STRUCTURED_OUTPUT_REFUSAL)
+        return _ok_response()
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", provider)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+
+    reply = await gateway.complete(
+        ModelRequest(
+            purpose="claims",
+            messages=(ModelMessage(role="user", content="x"),),
+            schema_name="ClaimsPacket",
+            response_schema={"type": "object"},
+        )
+    )
+
+    assert reply.text == '{"ok": true}'
+    assert _response_formats(seen) == ["json_schema", "json_object"]
+
+
+async def test_gateway_remembers_the_fallback_for_later_calls(monkeypatch):
+    """拒过一次之后，**后续调用直接**用 `json_object`——别再每次先撞一次 400。"""
+
+    seen: list[dict] = []
+
+    async def provider(**kwargs):
+        seen.append(dict(kwargs))
+        if (kwargs.get("response_format") or {}).get("type") == "json_schema":
+            raise BadRequestError(STRUCTURED_OUTPUT_REFUSAL)
+        return _ok_response()
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", provider)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+    request = ModelRequest(
+        purpose="claims",
+        messages=(ModelMessage(role="user", content="x"),),
+        schema_name="ClaimsPacket",
+        response_schema={"type": "object"},
+    )
+
+    await gateway.complete(request)
+    seen.clear()
+    await gateway.complete(request)
+
+    assert _response_formats(seen) == ["json_object"], "第二次调用不该再先试 json_schema"
+
+
+async def test_gateway_does_not_fall_back_for_other_bad_requests(monkeypatch):
+    """**别的** 400 不许被回落吞掉（参数真写错了就要立刻失败）。"""
+
+    seen: list[dict] = []
+
+    async def provider(**kwargs):
+        seen.append(dict(kwargs))
+        raise BadRequestError(MODEL_PARAM_MISMATCH)
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", provider)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+
+    with pytest.raises(ModelCallFailed):
+        await gateway.complete(
+            ModelRequest(
+                purpose="claims",
+                messages=(ModelMessage(role="user", content="x"),),
+                schema_name="ClaimsPacket",
+                response_schema={"type": "object"},
+            )
+        )
+
+    assert _response_formats(seen) == ["json_schema"], "只该请求一次，且不该换成 json_object"
+
+
+async def test_gateway_records_both_the_refusal_and_the_fallback(monkeypatch):
+    """留样口径不变：那条 400 记一行（ok=0），回落成功再记一行（ok=1）。"""
+
+    async def provider(**kwargs):
+        if (kwargs.get("response_format") or {}).get("type") == "json_schema":
+            raise BadRequestError(STRUCTURED_OUTPUT_REFUSAL)
+        return _ok_response()
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", provider)
+    recorder = _RecordingRecorder()
+    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
+
+    await gateway.complete(
+        ModelRequest(
+            purpose="integration",
+            messages=(ModelMessage(role="user", content="x"),),
+            schema_name="IntegrationPacket",
+            response_schema={"type": "object"},
+        )
+    )
+
+    assert [row["ok"] for row in recorder.rows] == [False, True]
+    assert "response_format type is unavailable" in recorder.rows[0]["error"]
 
 
 async def test_gateway_turns_provider_errors_into_model_call_failed(monkeypatch):
