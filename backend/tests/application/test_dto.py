@@ -797,6 +797,26 @@ def test_answer_sets_projection_counts_each_batch_and_keeps_the_text():
     assert second.answers == ()
 
 
+def test_asked_questions_span_every_batch_while_questions_stay_current():
+    """`questions` 仍是当前批（界面用），`asked_questions` 是整轮（判据用）——两份语义钉死。
+
+    真跑教训（P30 完整 eval 的 `edge-contradiction`，轮 `r-8889fcf0`）：
+    `q4 kind=conflict` 在第 1 批，用户跳过之后当前批只剩两道 gap 题；
+    只看 `questions` 会把"问过互斥题"读成"没问过"。
+    """
+
+    view = dto.round_view(round_with_two_answer_batches())
+
+    assert [item.question_id for item in view.questions] == ["q4"]
+    assert [item.question_id for item in view.asked_questions] == ["q1", "q2", "q3", "q4"]
+    # 当前批是整轮的最后一批：同一道题在两份投影里是同一个视图对象
+    assert view.asked_questions[-1] == view.questions[0]
+
+
+def test_a_round_that_never_asked_has_no_asked_questions():
+    assert dto.round_view(make_round()).asked_questions == ()
+
+
 def test_a_round_that_never_asked_has_no_answer_sets():
     assert dto.round_view(make_round()).answer_sets == ()
 

@@ -207,7 +207,13 @@ class RoundView:
     claims: tuple[ClaimView, ...]
     seat_packets: tuple[SeatPacketView, ...]
     dropped: tuple[DroppedView, ...]
+    #: **当前批**的题（界面用的就是这份：换一批就换一份）
     questions: tuple[QuestionView, ...]
+    #: 本轮**问过的每一道题**（逐批追加，按出题顺序）——`answer_sets` 的问题侧。
+    #: 为什么要有它：`questions` 换批就没了，而"这一轮问没问过那道要你拍板的题"
+    #: 是**整轮**的事实（真跑 `r-8889fcf0`：互斥题在第 1 批、当前批只剩 gap）。
+    #: 界面不用它，判据（eval）与复盘用它。
+    asked_questions: tuple[QuestionView, ...]
     list_items: tuple[str, ...]
     draft: DraftView | None
     advisories: tuple[str, ...]
@@ -967,6 +973,7 @@ def round_view(
             for item in round_.dropped
         ),
         questions=_question_views(round_),
+        asked_questions=_asked_question_views(round_),
         # 清单项的真相源是**轮次**（历次累积）：挂在当轮问卷上的那份换一批就没了（F8）
         list_items=tuple(item.text for item in round_.list_items),
         draft=draft_view,
@@ -1343,25 +1350,45 @@ def _eid_for(
     return None if evidence is None else str(evidence.eid)
 
 
+def _question_view(question: Question) -> QuestionView:
+    """一道题的投影——**唯一出处**：当前批与整轮两份投影都走这里，免得两处漂移。"""
+
+    return QuestionView(
+        question_id=str(question.question_id),
+        kind=question.kind.value,
+        type=question.type.value,
+        title=question.title,
+        why=question.why,
+        target_label=question.target.label(),
+        options=tuple((option.option_id, option.text) for option in question.options),
+        consequence_if_skipped=question.consequence_if_skipped,
+        eids=tuple(str(eid) for eid in question.evidence_refs),
+        asked_by=tuple(question.asked_by),
+        blocking=question.blocking,
+    )
+
+
 def _question_views(round_: Round) -> tuple[QuestionView, ...]:
+    """**当前批**的题：还没答的那一批（界面只认这份）。"""
+
     questionnaire = round_.questionnaire
     if questionnaire is None:
         return ()
+    return tuple(_question_view(question) for question in questionnaire.questions)
+
+
+def _asked_question_views(round_: Round) -> tuple[QuestionView, ...]:
+    """本轮**问过的每一道题**：按 `questionnaire_history` 逐批展开。
+
+    与 `answer_sets`（每批答了什么）对称：这份是"每批问了什么"。
+    不按题号去重——题号轮内唯一是 D4（2026-09-29）之后的事，老库真出现过同轮两个 `q1`
+    （`02` §11.0.12 记过），投影如实展开：重复本身就是事实，不该在这里被抹掉。
+    """
+
     return tuple(
-        QuestionView(
-            question_id=str(question.question_id),
-            kind=question.kind.value,
-            type=question.type.value,
-            title=question.title,
-            why=question.why,
-            target_label=question.target.label(),
-            options=tuple((option.option_id, option.text) for option in question.options),
-            consequence_if_skipped=question.consequence_if_skipped,
-            eids=tuple(str(eid) for eid in question.evidence_refs),
-            asked_by=tuple(question.asked_by),
-            blocking=question.blocking,
-        )
-        for question in questionnaire.questions
+        _question_view(question)
+        for form in round_.questionnaire_history
+        for question in form.questions
     )
 
 
