@@ -9,6 +9,8 @@ CODE_STATUS = {
     # 读一个不存在的版本 / 编号是"资源不在"，不是形状错误
     "unknown_version": 404,
     "unknown_evidence": 404,
+    # 记忆：删一条不在记忆里的东西 = "资源不在"（M6）
+    "unknown_memory": 404,
     # 材料层的"资源不在"与"状态不允许"（P19）
     "unknown_material": 404,
     "material_frozen": 409,

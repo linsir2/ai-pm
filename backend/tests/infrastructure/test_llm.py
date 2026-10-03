@@ -7,6 +7,7 @@ import pytest
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import Integrator
+from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.errors import ModelCallFailed
 from pmstudio.application.ports import ModelMessage, ModelRequest
@@ -104,6 +105,7 @@ def test_every_prompt_placeholder_is_declared_by_its_agent():
         "seat_review": SeatReviewer.PROMPT_SLOTS,
         "integrator": Integrator.PROMPT_SLOTS,
         "opinion_dispositions": Integrator.DISPOSITIONS_SLOTS,
+        "memory_curator": MemoryCurator.PROMPT_SLOTS,
     }
     for name, slots in expected.items():
         text = (PROMPTS / f"{name}.md").read_text(encoding="utf-8")

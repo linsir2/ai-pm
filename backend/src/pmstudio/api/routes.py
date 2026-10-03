@@ -345,7 +345,12 @@ async def submit_answers(request: Request, round_id: str, body: AnswersRequest):
 @router.post("/rounds/{round_id}/confirm")
 async def confirm(request: Request, round_id: str, body: ConfirmRequest):  # type: ignore[no-untyped-def]
     view = await services_of(request).runner.run(
-        RoundCommand(kind="confirm", round_id=round_id, accepted=tuple(body.accepted))
+        RoundCommand(
+            kind="confirm",
+            round_id=round_id,
+            accepted=tuple(body.accepted),
+            accepted_memory=tuple(body.accepted_memory),
+        )
     )
     return as_json({"version_no": view.confirmed_version_no, "round": view})
 
@@ -388,3 +393,16 @@ async def events(request: Request) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.delete("/projects/{project_id}/memory/{memory_id}", status_code=204)
+async def forget_memory(request: Request, project_id: str, memory_id: str) -> Response:
+    """忘掉一条记忆（M6）。**唯一一条不走确认卡**的记忆写入：用户要能立刻收回一条。
+
+    删不掉（这条不在记忆里）→ 404（`UnknownMemoryEntry` 由错误处理器翻译）。
+    """
+
+    await services_of(request).forget_memory(
+        project_id=ProjectId(project_id), memory_id=memory_id
+    )
+    return Response(status_code=204)

@@ -17,6 +17,7 @@ from pmstudio.application.use_cases import (
     EditEntry,
     ExportMarkdown,
     FetchMaterial,
+    ForgetMemory,
     GetDocument,
     GetEvidence,
     GetReadiness,
@@ -61,6 +62,7 @@ class ApiServices:
     get_version_diff: GetVersionDiff
     rollback_version: RollbackVersion
     get_evidence: GetEvidence
+    forget_memory: ForgetMemory
     stream: EventStream
     model_name: str
 

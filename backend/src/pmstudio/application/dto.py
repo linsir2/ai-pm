@@ -143,6 +143,23 @@ class DraftView:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryProposalView:
+    """草案卡上"这一轮攒下的记忆"的一行（M6）。
+
+    它是**提议**：界面默认**不勾**，勾了才会随 `/confirm` 生效（`02` §11.0.44）——
+    记忆写错的代价是污染以后每一轮的判断，所以比正文提案更保守。
+    """
+
+    proposal_id: str
+    op: str
+    kind: str
+    text: str
+    refs: tuple[str, ...]
+    reason: str
+    target_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AnswerBatchView:
     """一批问卷的答题情况（`04-未决.md` F3）：答了几条、跳了几条、答了什么。
 
@@ -234,6 +251,8 @@ class RoundView:
     web_queries: tuple[WebQueryView, ...] = ()
     #: 联网工具现在能不能用（没配密钥就是 False）——复述卡据此决定要不要出现那一栏
     web_search_available: bool = False
+    #: 这一轮攒下的记忆提议（M6）：**提议**，默认不勾；勾了随 `/confirm` 一起生效
+    memory_proposals: tuple[MemoryProposalView, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1007,6 +1026,18 @@ def round_view(
         materials=round_material_views(round_, materials=materials),
         web_queries=_web_query_views(round_),
         web_search_available=web_search_available,
+        memory_proposals=tuple(
+            MemoryProposalView(
+                proposal_id=item.proposal_id,
+                op=item.change.op.value,
+                kind=item.change.kind.value,
+                text=item.change.text,
+                refs=tuple(str(ref) for ref in item.change.refs),
+                reason=item.change.reason,
+                target_id=item.change.target_id,
+            )
+            for item in round_.memory_proposals
+        ),
     )
 
 

@@ -175,3 +175,28 @@ def test_memory_payload_keeps_ids_and_timestamps_verbatim():
     again = serialization.memory_from_payload(payload, project_id=PROJECT)
 
     assert again == memory
+
+
+def test_an_old_round_payload_reads_back_without_memory_keys():
+    """老行（M6 之前存下来的轮次）没有这两把键 → 空，不是 None、也不许炸。"""
+
+    from pmstudio.domain.round.step import Step, WaitingOn
+    from pmstudio.domain.shared.ids import RoundId
+    from tests.support.builders import make_round
+
+    round_ = make_round()
+    payload = serialization.round_to_payload(round_)
+    payload.pop("memory_proposals")
+    payload.pop("accepted_memory_ids")
+
+    loaded = serialization.round_from_payload(
+        payload,
+        round_id=RoundId(str(round_.round_id)),
+        project_id=PROJECT,
+        created_at=NOW,
+        step=Step.SEATS_RUNNING,
+        waiting_on=WaitingOn.NONE,
+    )
+
+    assert loaded.memory_proposals == ()
+    assert loaded.accepted_memory_ids == ()

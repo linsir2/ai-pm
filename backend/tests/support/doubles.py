@@ -100,6 +100,15 @@ class RecordingPrompts:
         body = "\n".join(f"{key}={value}" for key, value in sorted(slots.items()))
         return f"{name}\n{body}"
 
+    def last(self, name: str) -> dict[str, str]:
+        """最近一次**这个名字**的渲染（M6 起一轮里不止一个智能体在渲染：
+        `calls[-1]` 不再等于"整合者那次"）。找不到就直接报错，不返回空字典。"""
+
+        for called, slots in reversed(self.calls):
+            if called == name:
+                return slots
+        raise AssertionError(f"这一轮没渲染过 {name} 的提示词")
+
 
 class FixedClock:
     def __init__(self, moment: datetime | None = None) -> None:

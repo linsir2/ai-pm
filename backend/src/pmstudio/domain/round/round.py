@@ -25,6 +25,7 @@ from pmstudio.domain.shared.errors import (
     WaitingOnHuman,
 )
 from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, FormId, ProjectId, RoundId
+from pmstudio.domain.shared.memory import MemoryChange
 from pmstudio.domain.shared.target import Target
 
 
@@ -128,6 +129,24 @@ class DroppedItem:
             raise ShapeError("留痕必须说明属于哪一趟席位轮", handle=self.handle)
 
 
+@dataclass(frozen=True, slots=True)
+class MemoryProposal:
+    """草案卡上那一档"这一轮攒下的记忆"的一行（M6）。
+
+    它是**提议**：`change` 是给记忆聚合的指令（词汇表在 `domain/shared/memory.py`），
+    只有用户在草案卡上勾了、并在同一次确认里带上 `proposal_id`，它才会生效。
+    为什么带 `proposal_id`：界面与 `POST /confirm` 需要一个稳定的句柄
+    （`mem#1`），而不是靠数组下标——下标会随渲染顺序漂移。
+    """
+
+    proposal_id: str
+    change: MemoryChange
+
+    def __post_init__(self) -> None:
+        if not self.proposal_id.strip():
+            raise ShapeError("记忆提议必须有 id")
+
+
 class Round:
     def __init__(
         self,
@@ -166,6 +185,8 @@ class Round:
         materials: tuple[MaterialRef, ...] = (),
         web_queries: tuple[WebQuery, ...] = (),
         web_queries_chosen: tuple[str, ...] = (),
+        memory_proposals: tuple[MemoryProposal, ...] = (),
+        accepted_memory_ids: tuple[str, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -204,6 +225,10 @@ class Round:
         self._web_queries = tuple(web_queries)
         #: 用户在复述卡上勾中的那几条（没勾就是空 = 一次网络调用都没有）
         self._web_queries_chosen = tuple(web_queries_chosen)
+        #: 这一轮攒下的记忆提议（草案卡上那一档）；确认时才可能生效（M6）
+        self._memory_proposals = tuple(memory_proposals)
+        #: 确认时用户勾了哪几条记忆提议（身份，不只是数量）
+        self._accepted_memory_ids = tuple(accepted_memory_ids)
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -702,6 +727,7 @@ class Round:
         *,
         proposed_offered: int = 0,
         proposed_accepted: int = 0,
+        accepted_memory_ids: Sequence[str] = (),
     ) -> None:
         """确认写入：记版本号，也记下"它提议的"**给了几条、用户收了几条**（C4 的判据）。
 
@@ -714,6 +740,7 @@ class Round:
         self._confirmed_version_no = version_no
         self._proposed_offered = proposed_offered
         self._proposed_accepted = proposed_accepted
+        self._accepted_memory_ids = tuple(accepted_memory_ids)
         self._advance_to(Step.DONE)
 
     @property
@@ -727,6 +754,23 @@ class Round:
         """"它提议的"这一组用户收了几条。"""
 
         return self._proposed_accepted
+
+    @property
+    def memory_proposals(self) -> tuple[MemoryProposal, ...]:
+        """这一轮攒下的记忆提议（草案卡上那一档）。**提议就是提议**：没确认就不生效。"""
+
+        return self._memory_proposals
+
+    @property
+    def accepted_memory_ids(self) -> tuple[str, ...]:
+        """用户勾了哪几条记忆提议（没确认过就是空——**不编**）。"""
+
+        return self._accepted_memory_ids
+
+    def remember_memory_proposals(self, items: Sequence[MemoryProposal]) -> None:
+        """出草案那一刻记下这一档（与 `remember_list_items` 同一个写法）。"""
+
+        self._memory_proposals = tuple(items)
 
     @property
     def proposal_ignore_streak(self) -> int:

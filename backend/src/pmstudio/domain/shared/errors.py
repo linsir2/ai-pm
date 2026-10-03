@@ -346,11 +346,19 @@ class UntraceableMemory(InvariantViolation):
         )
 
 
-class UnknownMemoryEntry(ShapeError):
-    """`update` / `merge` / `delete` 点名的记忆条目不存在。"""
+class UnknownMemoryEntry(DomainError):
+    """`update` / `merge` / `delete` 点名的记忆条目不存在。
+
+    单独一个 code（不走 `ShapeError`）：HTTP 层据此翻成 **404**——"资源不在"，
+    不是"请求形状不对"（那种是 422）。`delete` 端点靠这一条给出正确的状态码。
+    """
 
     def __init__(self, *, memory_id: object) -> None:
-        super().__init__(f"点名的记忆条目不存在：{memory_id}", memory_id=str(memory_id))
+        super().__init__(
+            f"点名的记忆条目不存在：{memory_id}",
+            code="unknown_memory",
+            memory_id=str(memory_id),
+        )
 
 
 class MemoryCapacityExceeded(ShapeError):
@@ -359,4 +367,13 @@ class MemoryCapacityExceeded(ShapeError):
     def __init__(self, *, limit: int) -> None:
         super().__init__(
             f"记忆最多 {limit} 条，加不进去了：这一批必须带合并或删除", limit=str(limit)
+        )
+
+
+class UnknownMemoryProposal(ShapeError):
+    """确认时点名的记忆提议不在这一轮里（老页面、手改过的请求、或者串轮了）。"""
+
+    def __init__(self, *, proposal_id: object) -> None:
+        super().__init__(
+            f"这一轮没有记忆提议 {proposal_id}", proposal_id=str(proposal_id)
         )

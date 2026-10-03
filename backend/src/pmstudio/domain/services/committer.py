@@ -11,23 +11,28 @@ from pmstudio.domain.ports import (
     DocumentReader,
     DocumentWriter,
     EvidenceReader,
+    IdSource,
+    MemoryReader,
+    MemoryWriter,
     RoundReader,
     RoundWriter,
     UnitOfWork,
 )
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import OriginType, Proposal, merge_duplicate_removes
-from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.round import MemoryProposal, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.services.scope_guard import ScopeGuard, ScopeViolation
 from pmstudio.domain.services.traceability import TraceabilityChecker
 from pmstudio.domain.shared.errors import (
     IllegalStepTransition,
     NothingToCommit,
+    UnknownMemoryProposal,
     UnknownProposal,
     UntraceableContent,
 )
 from pmstudio.domain.shared.ids import BlockId, ProjectId, ProposalId, RoundId
+from pmstudio.domain.shared.memory import MemoryChange
 
 TRACEABLE_ORIGINS = (OriginType.USER, OriginType.DERIVED)
 
@@ -55,6 +60,9 @@ class ProposalCommitter:
         scope: ScopeGuard,
         traceability: TraceabilityChecker,
         uow: UnitOfWork,
+        memory: MemoryReader | None = None,
+        memory_writer: MemoryWriter | None = None,
+        ids: IdSource | None = None,
     ) -> None:
         self._documents = documents
         self._writer = writer
@@ -64,9 +72,19 @@ class ProposalCommitter:
         self._scope = scope
         self._traceability = traceability
         self._uow = uow
+        #: 跨轮记忆（M6）：与文档**同一个事务**写。三个都可以缺省（老测试只测文档那一支），
+        #: 缺了就是"这一轮没有记忆要写"。
+        self._memory = memory
+        self._memory_writer = memory_writer
+        self._ids = ids
 
     def commit(
-        self, *, round_id: RoundId, accepted: Sequence[ProposalId], now: datetime
+        self,
+        *,
+        round_id: RoundId,
+        accepted: Sequence[ProposalId],
+        now: datetime,
+        accepted_memory: Sequence[str] = (),
     ) -> CommitResult:
         with self._uow:
             round_ = self._rounds.get(round_id)
@@ -86,6 +104,12 @@ class ProposalCommitter:
                 authorized_new_features=round_.authorized_new_features,
             )
             self._writer.save(document)
+            # 记忆与文档**同一个事务**（M6）：要么一起成，要么一起回滚。
+            # 顺序上先写文档再写记忆只是可读性——`MemoryWriter` 不可用/`ids` 缺失时
+            # 直接跳过（老测试只测文档那一支，不给记忆注入）。
+            accepted_memory = tuple(accepted_memory)
+            if accepted_memory:
+                self._save_memory(round_, accepted_memory, ledger=ledger, now=now)
             # 记下"它提议的"给了几条、用户收了几条（C4）：给的是**整个草案**里的 proposed，
             # 收的是**勾了的那部分**里的 proposed——两个数都能从这一轮自己推出来，不用建表。
             offered = [
@@ -100,6 +124,7 @@ class ProposalCommitter:
                 version.version_no,
                 proposed_offered=len(offered),
                 proposed_accepted=sum(1 for item in offered if item.proposal_id in taken),
+                accepted_memory_ids=accepted_memory,
             )
             self._round_writer.save(round_)
         return CommitResult(
@@ -189,6 +214,47 @@ class ProposalCommitter:
 
     def _to_instruction(self, proposal: Proposal) -> WriteInstruction:
         return to_write_instruction(proposal)
+
+    def _save_memory(
+        self,
+        round_: Round,
+        accepted: Sequence[str],
+        *,
+        ledger: EvidenceLedger,
+        now: datetime,
+    ) -> None:
+        """把用户勾的那些记忆提议落库（M6）——与文档写入**同一个事务**。
+
+        三件事：
+
+        ① 勾的 id 必须是这一轮真的出过的那几条（点名不存在 → `UnknownMemoryProposal`，
+           整批回滚：文档也不写。宁可一条都不写，也不写半份）；
+        ② 指令的判据仍然只有**一处**（`ProjectMemory.apply`）：缺出处 / 点名不存在 /
+           超容量——任何一条不合法都抛，事务照样回滚；
+        ③ 记忆没接（`memory`/`memory_writer`/`ids` 缺省）时**什么都不做**：
+           老调用方式（只写文档）行为逐字节不变。
+        """
+
+        if self._memory is None or self._memory_writer is None or self._ids is None:
+            return
+        by_id: dict[str, MemoryProposal] = {
+            item.proposal_id: item for item in round_.memory_proposals
+        }
+        changes: list[MemoryChange] = []
+        for proposal_id in accepted:
+            item = by_id.get(proposal_id)
+            if item is None:
+                raise UnknownMemoryProposal(proposal_id=str(proposal_id))
+            changes.append(item.change)
+        memory = self._memory.get(round_.project_id)
+        updated = memory.apply(
+            changes,
+            round_id=str(round_.round_id),
+            known_refs=frozenset(str(item.eid) for item in ledger.evidences()),
+            now=now,
+            ids=self._ids,
+        )
+        self._memory_writer.save(updated)
 
 
 def to_write_instruction(proposal: Proposal) -> WriteInstruction:

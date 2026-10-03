@@ -13,6 +13,7 @@ from datetime import datetime
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import IntegrationOutcome, Integrator
+from pmstudio.application.agents.memory_curator import CuratorOutcome, MemoryCurator
 from pmstudio.application.agents.schemas import (
     Discarded,
     DispositionsPacket,
@@ -53,7 +54,9 @@ from pmstudio.application.context import (
     render_document_state,
     render_existing_entries,
     render_materials,
+    render_memory,
     render_reviews,
+    render_round_digest,
     render_selected_opinions,
     render_web_results,
     seat_entry_handle,
@@ -133,11 +136,13 @@ from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS
 from pmstudio.domain.authoring.views import DocumentView
+from pmstudio.domain.memory.memory import screen_changes
 from pmstudio.domain.ports import (
     DocumentReader,
     EvidenceReader,
     EvidenceWriter,
     MemoryReader,
+    MemoryWriter,
     RoundReader,
     RoundWriter,
     UnitOfWork,
@@ -156,7 +161,7 @@ from pmstudio.domain.round.questionnaire import (
     Question,
     QuestionKind,
 )
-from pmstudio.domain.round.round import DroppedItem, DropSource, MaterialRef, Round
+from pmstudio.domain.round.round import DroppedItem, DropSource, MaterialRef, MemoryProposal, Round
 from pmstudio.domain.round.step import Step
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import (
@@ -1190,6 +1195,8 @@ class IntegrateRound:
         ids: IdGenerator,
         events: EventPublisher,
         materials: MaterialStore,
+        curator: MemoryCurator,
+        memory: MemoryReader,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -1205,10 +1212,15 @@ class IntegrateRound:
         self._ids = ids
         self._events = events
         self._materials = materials
+        self._curator = curator
+        self._memory = memory
 
     async def __call__(self, *, round_id: RoundId) -> None:
         result = await self._integrate_with_repair(round_id=round_id)
         assembled, gaps = result.assembled, result.gaps
+        # 记忆整理（M6）：**出草案那一刻**跑一次小调用。它必须在这一行——
+        # `with self._uow` 之前，因为"模型调用一律在事务外"（架构守卫钉着）。
+        memory_proposals, memory_notes = await self._curate(round_id=round_id, result=result)
 
         with self._uow:
             round_ = self._rounds.get(round_id)
@@ -1405,6 +1417,9 @@ class IntegrateRound:
                 round_.remember_proposal_ignore_streak(
                     proposal_ignore_streak(self._index.recent_rounds(round_.project_id))
                 )
+                # 这一轮攒下的记忆提议（草案卡上那一档）：**提议**，默认不勾
+                round_.remember_memory_proposals(memory_proposals)
+                gaps = gaps + list(memory_notes)
                 draft = draft_of(round_id, DraftId(self._ids.new("d")), proposals, gaps)
                 if draft is None:
                     raise ShapeError("整合既没有给出题目也没有给出提案")
@@ -1412,6 +1427,58 @@ class IntegrateRound:
             self._evidence_writer.save(ledger)
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
+
+    async def _curate(
+        self, *, round_id: RoundId, result: IntegrationResult
+    ) -> tuple[tuple[MemoryProposal, ...], tuple[str, ...]]:
+        """出草案那一刻的**一次小调用**：这一轮有什么值得记进跨轮记忆（M6）。
+
+        三条口径（`02` §11.0.44）：
+
+        ① **只在这一轮真的出草案时跑**——出问卷的那几批不跑（记忆整理是"这一轮的收获"，
+           一轮跑一次就够，别按批重复花钱）；
+        ② 机械筛（`screen_changes`）在**模型之后、落库之前**：缺出处 / 点名不存在 /
+           装不下 / 超两行的那些**丢 + 留痕**，绝不进卡片让用户勾；
+        ③ **挂了不打崩这一轮**：草案照出，留一行（与工具层、P24 小调用同一条纪律）。
+
+        留痕走**草案卡上的缺口行**（`Draft.gaps`），**不走 `Round.dropped`**——
+        那条通道的语义被文档与用例钉成"席位意见的交代账"（`unaccounted` 指标的分子），
+        把记忆的事混进去会污染那条指标。用户两边都看得见，指标只有一个意思。
+        """
+
+        round_ = self._rounds.get(round_id)
+        if result.assembled.questions and _stop_asking_reason(round_) is None:
+            return (), ()          # 这一批只出问卷：还没到"出草案那一刻"
+        ledger = self._evidence.get(round_.project_id)
+        memory = self._memory.get(round_.project_id)
+        try:
+            outcome: CuratorOutcome = await self._curator.propose(
+                memory_state=render_memory(memory.entries),
+                round_digest=render_round_digest(round_, ledger=ledger),
+                round_id=round_id,
+            )
+        except (ModelCallFailed, PacketParseError, ShapeError) as failure:
+            return (), (f"这一轮没能整理记忆（{failure}），草案照出",)
+
+        known_refs = frozenset(str(item.eid) for item in ledger.evidences())
+        screened = screen_changes(outcome.changes, memory=memory, known_refs=known_refs)
+        proposals = tuple(
+            MemoryProposal(proposal_id=f"mem#{index}", change=change)
+            for index, change in enumerate(screened.accepted, start=1)
+        )
+        notes = [
+            f"记忆 #{index} 没进卡片：{item.reason}"
+            for index, item in enumerate(screened.dropped, start=1)
+        ]
+        notes += [
+            f"记忆报文 {item.container} 超出上限：保留了前 {item.kept} 条，溢出 {item.dropped} 条"
+            for item in outcome.overflow
+        ]
+        notes += [
+            f"记忆报文 {item.container} 第 {item.index} 条没收：{item.reason}"
+            for item in outcome.discarded
+        ]
+        return proposals, tuple(notes)
 
     def _assemble_and_gaps(
         self,
@@ -1962,11 +2029,19 @@ class ConfirmDraft:
         self._clock = clock
         self._events = events
 
-    async def __call__(self, *, round_id: RoundId, accepted: Sequence[str]) -> CommitResult:
+    async def __call__(
+        self,
+        *,
+        round_id: RoundId,
+        accepted: Sequence[str],
+        accepted_memory: Sequence[str] = (),
+    ) -> CommitResult:
         result = self._committer.commit(
             round_id=round_id,
             accepted=tuple(ProposalId(item) for item in accepted),
             now=self._clock.now(),
+            # 记忆与文档同一次确认、同一个事务（M6）：勾了才写，没勾就什么都不发生
+            accepted_memory=tuple(accepted_memory),
         )
         round_ = self._rounds.get(round_id)
         self._events.publish(
@@ -1986,6 +2061,36 @@ class ConfirmDraft:
         )
         _publish(self._events, self._clock, round_)
         return result
+
+
+class ForgetMemory:
+    """忘掉一条记忆（记忆抽屉上的删除按钮，M6）。
+
+    这是**唯一一条不走确认卡**的记忆写入：用户要能立刻收回一条自己后悔记下的东西，
+    而"等下一轮 Curator 提议删它"要等到下次出草案。代价与边界都写清楚：
+
+    - 只删**一条**（批量删改仍然只走 Curator 提议 + 确认）；
+    - 删不掉（id 不存在）→ `UnknownMemoryEntry`（404），不假装删掉了；
+    - 走**同一个 `MemoryWriter`**（守卫 `test_write_path.py` 钉着），照样一个事务。
+    """
+
+    def __init__(
+        self,
+        *,
+        memory: MemoryReader,
+        memory_writer: MemoryWriter,
+        uow: UnitOfWork,
+        clock: Clock,
+    ) -> None:
+        self._memory = memory
+        self._memory_writer = memory_writer
+        self._uow = uow
+        self._clock = clock
+
+    async def __call__(self, *, project_id: ProjectId, memory_id: str) -> None:
+        with self._uow:
+            memory = self._memory.get(project_id)
+            self._memory_writer.save(memory.delete(memory_id, now=self._clock.now()))
 
 
 class RetryRound:

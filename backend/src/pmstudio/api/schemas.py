@@ -55,6 +55,8 @@ class AnswersRequest(BaseModel):
 
 class ConfirmRequest(BaseModel):
     accepted: list[str] = Field(default_factory=list)
+    #: 草案卡上勾中的记忆提议 id（`mem#1`…）。不传 = 这一轮不写记忆（老客户端行为不变）
+    accepted_memory: list[str] = Field(default_factory=list)
 
 
 class EditEntryRequest(BaseModel):

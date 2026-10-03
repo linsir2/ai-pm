@@ -272,7 +272,7 @@ async def test_an_unaccounted_opinion_triggers_exactly_one_targeted_repair():
     assert integration_calls(harness) == 1  # 整包只发一次
     assert dispositions_calls(harness) == 1  # 补交代走小调用
     assert [item.source for item in round_.dropped] == [DropSource.INTEGRATOR] * 2
-    named = harness.prompts.calls[-1][1]["opinions"]
+    named = harness.prompts.last("opinion_dispositions")["opinions"]
     assert f"{SEAT}:O1" in named and f"{SEAT}:O2" in named
 
 
@@ -415,7 +415,7 @@ async def test_a_judgment_cited_only_by_a_deferred_question_is_not_a_repair_trig
 
     assert integration_calls(harness) == 1
     assert dispositions_calls(harness) == 1
-    named = harness.prompts.calls[-1][1]["opinions"]
+    named = harness.prompts.last("opinion_dispositions")["opinions"]
     assert f"{SEAT}:O1" in named
     assert f"{SEAT}:O2" not in named
     assert {item.handle for item in harness.rounds.get(round_id).dropped} == {f"{SEAT}:O1"}
@@ -492,7 +492,8 @@ async def test_integration_repacks_when_the_packet_is_an_array():
         request for request in harness.gateway.requests if request.purpose == "integration"
     ]
     assert len(integrations) == 2
-    assert "数组" in harness.prompts.calls[-1][1]["validation_error"]  # 重装带上了形状指引
+    # 重装带上了形状指引（取**整合者**那次渲染：一轮里记忆整理者也会渲染一次）
+    assert "数组" in harness.prompts.last("integrator")["validation_error"]
 
 
 async def test_integration_still_takes_the_graceful_exit_after_two_bad_shapes():

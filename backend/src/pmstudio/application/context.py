@@ -17,6 +17,7 @@ from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
 from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.views import BlockView, DocumentView
+from pmstudio.domain.memory.memory import MemoryEntry, kind_title
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.draft import Proposal
@@ -138,6 +139,67 @@ def render_document(view: DocumentView) -> str:
 
 
 READINESS_HARD_RULE = "补缺口不等于填满——拿不准就出题，不许为凑判据编内容。"
+
+#: 记忆注入上限：**20 行**（P10 的现场：20 行提示词已经超过 20000 字符，见 P28 §8·4）
+MEMORY_LINE_LIMIT = 20
+
+#: 没有记忆时的那一句实话。**不留空节**——空节会让模型以为"这里本来就没东西"。
+NO_MEMORY_TEXT = "（这个项目还没有确认过的记忆）"
+
+#: 记忆节的硬规矩：文档与记忆冲突时以文档为准（`02` §11.0.44）
+MEMORY_HARD_RULE = (
+    "记忆里已经定过的不许换个说法再问；记忆与正文冲突时**以正文为准**，"
+    "并在 rationale 里说一句。"
+)
+
+
+def render_memory(entries: Sequence[MemoryEntry]) -> str:
+    """把**已确认**的记忆渲成提示词里的一节（席位与整合者共用这一处实现）。
+
+    限量 20 行：超了要**写明**"只带了前 N 条"——静默截断会让模型以为剩下那些不存在，
+    而"看不见的规则"比"看得见的规则"更危险。
+    """
+
+    if not entries:
+        return NO_MEMORY_TEXT
+    shown = list(entries[:MEMORY_LINE_LIMIT])
+    lines = [
+        f"- {item.memory_id} · {kind_title(item.kind)}：{item.text}"
+        f"〔{' '.join(str(ref) for ref in item.refs)}〕"
+        for item in shown
+    ]
+    if len(entries) > len(shown):
+        lines.append(f"（共 {len(entries)} 条，这里只带了前 {len(shown)} 条）")
+    lines.append(MEMORY_HARD_RULE)
+    return "\n".join(lines)
+
+
+def render_round_digest(
+    round_: Round, *, ledger: EvidenceLedger | None = None
+) -> str:
+    """这一轮发生了什么——给记忆整理者看的**只读摘要**（它不是第二真相源，只是渲染）。
+
+    只放"判断记忆值不值得记"用得上的一圈：用户原话、主张、问答、这一轮的提案文本、
+    以及没人交代的那些。**不放整份文档**：那是整合者的事，放进来只会把这一趟拖慢。
+    """
+
+    lines = [f"用户原话：{round_.user_input}"]
+    claims = render_claims(round_.claims)
+    if claims:
+        lines += ["", "本轮主张：", claims]
+    answers = render_answers(round_, ledger=ledger)
+    if answers:
+        lines += ["", "问与答：", answers]
+    if round_.draft is not None:
+        lines += ["", "这一轮出的草案（正文句子）："]
+        lines += [f"- {item.text}" for item in round_.draft.proposals if item.text.strip()]
+        if round_.draft.gaps:
+            lines += ["", "草案上标出的缺口："]
+            lines += [f"- {item}" for item in round_.draft.gaps]
+    if round_.dropped:
+        lines += ["", "没被交代 / 被丢掉的："]
+        lines += [f"- {item.handle}：{item.reason}" for item in round_.dropped]
+    return "\n".join(lines)
 
 
 def render_readiness(items: Sequence[ReadinessItem]) -> str:

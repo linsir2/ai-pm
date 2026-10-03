@@ -184,14 +184,37 @@ class ProjectMemory:
     def entry(self, memory_id: str) -> MemoryEntry | None:
         return next((item for item in self.entries if item.memory_id == memory_id), None)
 
-    def delete(self, memory_id: str) -> "ProjectMemory":
-        """用户手动删一条（记忆抽屉上的那个按钮）。删不掉就抛 `UnknownMemoryEntry`。"""
+    def delete(self, memory_id: str, *, now: datetime | None = None) -> "ProjectMemory":
+        """用户手动删一条（记忆抽屉上那个按钮）。删不掉就抛 `UnknownMemoryEntry`。
 
-        if self.entry(memory_id) is None:
+        给了 `now` 就**追加一条版本**（留痕："谁在什么时候抹掉了它"）——
+        记忆是"只增"的东西，删也要看得见。不给 `now` 就是纯函数式的删除（测试夹具用）。
+        """
+
+        entry = self.entry(memory_id)
+        if entry is None:
             raise UnknownMemoryEntry(memory_id=memory_id)
         kept = tuple(item for item in self.entries if item.memory_id != memory_id)
+        revisions = self.revisions
+        if now is not None:
+            revisions = revisions + (
+                MemoryRevision(
+                    revision_no=len(self.revisions) + 1,
+                    round_id="",
+                    changes=(
+                        MemoryChange(
+                            op=MemoryOp.DELETE,
+                            kind=entry.kind,
+                            text="",
+                            target_id=memory_id,
+                            reason="用户手动删除",
+                        ),
+                    ),
+                    created_at=now,
+                ),
+            )
         return ProjectMemory(
-            project_id=self.project_id, entries=kept, revisions=self.revisions
+            project_id=self.project_id, entries=kept, revisions=revisions
         )
 
 

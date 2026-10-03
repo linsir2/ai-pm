@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from pmstudio.api.app import ApiServices, create_app
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import Integrator
+from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.ports import ModelGateway, WebFetcher
 from pmstudio.application.use_cases import (
@@ -20,6 +21,7 @@ from pmstudio.application.use_cases import (
     EditEntry,
     ExportMarkdown,
     FetchMaterial,
+    ForgetMemory,
     GetDocument,
     GetEvidence,
     GetReadiness,
@@ -155,6 +157,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     analyzer = ClaimAnalyzer(model=gateway, prompts=prompts, catalog=catalog)
     reviewer = SeatReviewer(model=gateway, prompts=prompts)
     integrator = Integrator(model=gateway, prompts=prompts)
+    curator = MemoryCurator(model=gateway, prompts=prompts)
     factory = SqliteProjectFactory(connection, ids=ids)
 
     start_round = StartRound(
@@ -216,6 +219,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         ids=ids,
         events=bus,
         materials=materials,
+        curator=curator,
+        memory=memory,
     )
     submit_answers = SubmitAnswers(
         rounds=rounds,
@@ -236,6 +241,10 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         scope=ScopeGuard(),
         traceability=TraceabilityChecker(),
         uow=uow,
+        # 跨轮记忆（M6）：与文档**同一个事务**写；`ids` 只用来给新条目发 id
+        memory=memory,
+        memory_writer=memory,
+        ids=ids,
     )
     confirm_draft = ConfirmDraft(committer=committer, rounds=rounds, clock=clock, events=bus)
     retry_round = RetryRound(
@@ -332,6 +341,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             committer=committer, documents=documents, clock=clock, events=bus
         ),
         get_evidence=GetEvidence(documents=documents, evidence=evidences),
+        forget_memory=ForgetMemory(
+            memory=memory, memory_writer=memory, uow=uow, clock=clock
+        ),
         stream=bus,
         model_name=settings.model,
     )

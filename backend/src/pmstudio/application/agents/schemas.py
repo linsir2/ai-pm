@@ -234,6 +234,37 @@ class IntegrationPacket(BaseModel):
     )
 
 
+class MemoryChangeDraft(BaseModel):
+    """记忆变更指令（M6）。**提议，不是事实**——只有用户在草案卡上勾了才生效。
+
+    形状故意宽松（与 `DroppedOpinionDraft` 同一个理由）：模型写歪的东西正是要留痕的东西。
+    真正的判据在领域层（`domain/memory/memory.py::screen_changes`）：缺出处 / 账本里没有 /
+    点名不存在 / 超两行 / 装不下——一处实现，这里不重复判。
+    """
+
+    op: Literal["add", "update", "merge", "delete"]
+    kind: Literal["decision", "rejected", "lesson"]
+    text: str = ""
+    refs: list[str] = Field(
+        default_factory=list,
+        description="出处编号（E 开头，上面清单里出现过的）；add/update/merge 必填至少一个",
+    )
+    target_id: str | None = Field(
+        default=None, description="update/merge/delete 必填：上面记忆清单里那条的 id"
+    )
+    reason: str = Field(default="", description="一句话：为什么这一条值得记")
+
+
+class MemoryPacket(BaseModel):
+    """记忆整理者的唯一回答形状。`changes` 上限 5 条：一轮能攒下的"值得记住的事"没那么多。"""
+
+    changes: list[MemoryChangeDraft] = Field(
+        default_factory=list,
+        max_length=5,
+        description="这一批的变更指令（最多 5 条）；没东西可记就返回空数组",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Overflow:
     """一处容器超限：保留了前 `kept` 条，溢出 `dropped` 条。
@@ -275,6 +306,7 @@ _SIGNATURES: dict[type[BaseModel], tuple[tuple[str, tuple[frozenset[str], ...]],
         ("list_items", (frozenset({"text", "target", "reason"}),)),
         ("proposals", (frozenset({"evidence_refs"}), frozenset({"op"}))),
     ),
+    MemoryPacket: (("changes", (frozenset({"op", "kind"}),)),),
 }
 
 

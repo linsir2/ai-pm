@@ -21,6 +21,8 @@ EXPECTED_PATHS = {
     "/api/projects/{project_id}/versions/{version_no}/diff",
     "/api/projects/{project_id}/versions/{version_no}/rollback",
     "/api/projects/{project_id}/evidence/{eid}",
+    # M6：忘掉一条记忆（记忆抽屉上的删除按钮）——唯一一条不走确认卡的记忆写入
+    "/api/projects/{project_id}/memory/{memory_id}",
     "/api/rounds/{round_id}",
     "/api/rounds/{round_id}/opening",
     "/api/rounds/{round_id}/answers",

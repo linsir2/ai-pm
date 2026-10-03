@@ -30,6 +30,7 @@ from pmstudio.domain.round.round import (
     DropSource,
     Failure,
     MaterialRef,
+    MemoryProposal,
     Round,
     SeatNomination,
 )
@@ -599,6 +600,16 @@ def round_to_payload(round_: Round) -> dict:
         ],
         # 用户在复述卡上勾中的（老行没有这把键 → 空 = 不联网）
         "web_queries_chosen": list(round_.web_queries_chosen),
+        # 这一轮攒下的记忆提议（老行没有这把键 → 空：那时候还没有记忆这回事）
+        "memory_proposals": [
+            {
+                "proposal_id": item.proposal_id,
+                "change": _memory_change_to_json(item.change),
+            }
+            for item in round_.memory_proposals
+        ],
+        # 确认时用户勾了哪几条记忆提议（老行 → 空，不是 None）
+        "accepted_memory_ids": list(round_.accepted_memory_ids),
     }
 
 
@@ -688,6 +699,19 @@ def round_from_payload(
             _question_from_json(item) for item in payload.get("deferred_questions", ())
         ),
         carried_sources=dict(payload.get("carried_sources") or {}),
+        # 老行没有这两把键（记忆是后加的）：空——不编"它攒过记忆"
+        memory_proposals=tuple(
+            MemoryProposal(
+                proposal_id=str(item["proposal_id"]),
+                change=change,
+            )
+            for item in payload.get("memory_proposals") or ()
+            if isinstance(item, dict)
+            and (change := _memory_change_from_json(item.get("change"))) is not None
+        ),
+        accepted_memory_ids=tuple(
+            str(item) for item in payload.get("accepted_memory_ids") or ()
+        ),
     )
 
 

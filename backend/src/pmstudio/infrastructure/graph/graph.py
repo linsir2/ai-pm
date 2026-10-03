@@ -194,7 +194,11 @@ class RoundRunner:
     async def node_commit(self, state: RoundState) -> dict[str, Any]:
         command = state["command"]
         round_id = RoundId(_round_id(state))
-        await self._confirm_draft(round_id=round_id, accepted=command.accepted)
+        await self._confirm_draft(
+            round_id=round_id,
+            accepted=command.accepted,
+            accepted_memory=command.accepted_memory,
+        )
         return {"view": await self._get_round(round_id=round_id)}
 
     async def node_resume(self, state: RoundState) -> dict[str, Any]:

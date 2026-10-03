@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import Integrator
+from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.dto import ProjectSummaryView
 from pmstudio.application.ports import ModelGateway, SeatDefinition
@@ -161,6 +162,7 @@ class Harness:
         )
         self.reviewer = SeatReviewer(model=self.gateway, prompts=self.prompts)
         self.integrator = Integrator(model=self.gateway, prompts=self.prompts)
+        self.curator = MemoryCurator(model=self.gateway, prompts=self.prompts)
         self.assigner = EvidenceAssigner()
         self.readiness = ReadinessChecker()
         self.factory = InMemoryProjectFactory(
@@ -255,6 +257,8 @@ class Harness:
             ids=self.ids,
             events=self.events,
             materials=self.materials,
+            curator=self.curator,
+            memory=self.memory,
         )
 
     def submit_answers(self):  # type: ignore[no-untyped-def]
@@ -292,6 +296,9 @@ class Harness:
             scope=ScopeGuard(),
             traceability=TraceabilityChecker(),
             uow=self.uow,
+            memory=self.memory,
+            memory_writer=self.memory,
+            ids=self.ids,
         )
 
     def retry_round(self):  # type: ignore[no-untyped-def]
@@ -542,8 +549,19 @@ class Harness:
             get_version_diff=self.get_version_diff(),
             rollback_version=self.rollback_version(),
             get_evidence=self.get_evidence(),
+            forget_memory=self.forget_memory(),
             stream=self.events,
             model_name=model_name,
+        )
+
+    def forget_memory(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import ForgetMemory
+
+        return ForgetMemory(
+            memory=self.memory,
+            memory_writer=self.memory,
+            uow=self.uow,
+            clock=self.clock,
         )
 
     def edit_entry(self):  # type: ignore[no-untyped-def]
