@@ -106,6 +106,57 @@ def test_assemble_assigns_ids_and_field_kind():
     assert proposal.origin.refs == (EvidenceId("E1"), EvidenceId("E2"))
 
 
+def test_a_section_level_proposal_for_s6_lands_as_steps_whatever_the_model_wrote():
+    """第 6 章的章节级内容**只有一种形态**：`steps`——模型写 `text`（或干脆不写）都按 steps 落。
+
+    为什么由**系统**盖章，而不是继续改提示词（P36 真跑实测）：同一个用例跑了 6 次，
+    2 次把流程写成 `kind=text`、1 次一条 s6 提案都没出；写成 text 的后果是
+    `01` §4 那条判据不认（"有功能却没有任何 steps 条目 → warn"照旧挂）、前端也不按步骤排。
+    这与矛盾题的 `conflict` 由 `_covers_a_contradiction` **机械盖章**是同一个先例：
+    `kind` 是**结构事实**，不该赌模型记得写。
+    """
+
+    def s6_draft(kind: str | None) -> dict:
+        draft: dict = {
+            "op": "add",
+            "target": {"zone": "body", "section_id": "s6"},
+            "text": "1. 点检员点检；2. 不合格转报修；3. 主管派单。",
+            "origin_type": "derived",
+            "evidence_refs": ["E1"],
+        }
+        if kind is not None:
+            draft["kind"] = kind
+        return draft
+
+    for written in ("text", None):
+        result = assembly.assemble(
+            packet(proposals=[s6_draft(written)]),
+            round_=make_round(),
+            document=document_with_feature(),
+            ledger=ledger_with_two_entries(),
+        )
+        assert result.proposals[0].kind is BlockKind.STEPS, f"模型写的是 {written!r}"
+
+    # 别的章不跟着变：章节级没写 kind 仍然是普通正文
+    result = assembly.assemble(
+        packet(
+            proposals=[
+                {
+                    "op": "add",
+                    "target": {"zone": "body", "section_id": "s1"},
+                    "text": "现状是纸单子。",
+                    "origin_type": "derived",
+                    "evidence_refs": ["E1"],
+                }
+            ]
+        ),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+    assert result.proposals[0].kind is BlockKind.TEXT
+
+
 def round_with_two_seats_attested() -> Round:
     """两个席位都交回了意见的那一轮：归因要能落到"哪条意见"这一层。"""
 

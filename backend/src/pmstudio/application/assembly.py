@@ -74,6 +74,13 @@ REQUIRED_FEATURE_FIELD_NAMES = frozenset(spec.name for spec in REQUIRED_FEATURE_
 #: 骨架章节：不写就没有交付物、而真跑里最常被整章漏掉的那六章（报告 F18）
 BACKBONE_SECTIONS = ("s1", "s2", "s3", "s4", "s10", "s12")
 
+#: 章节级内容的**唯一形态**：这一章写出来的东西只有一种块类型——模型写成 `text`（或压根没写）
+#: 都按它落。与 `_covers_a_contradiction` 的机械盖章同一个先例（P10/P11）：`kind` 是**结构事实**，
+#: 不该赌模型记得写；真跑 P36 实测同一个用例 6 次里 2 次写成 `text`、1 次什么都没出。
+#: 只收"整章只有一种形态"的章：s6「业务流程与交互」的内容全是流程
+#: （`01` §4 的判据就是"有没有 `steps` 条目"）。别的章不跟着变。
+SECTION_ONLY_KIND: dict[str, BlockKind] = {"s6": BlockKind.STEPS}
+
 #: 骨架六章的中文名（与 `01-规格.md` §4 的章名一致；只给人看，不当判据）
 BACKBONE_TITLES = {
     "s1": "背景与问题",
@@ -1162,6 +1169,10 @@ def _kind_for(target: Target, name: str | None) -> BlockKind:
             slot = section_slot(target.section_id, target.field)
             assert slot is not None  # Target 已经校验过
             return slot.kind
+        # 章节级内容：这一章只有一种形态时按它落（模型写歪了或没写都算）——见 SECTION_ONLY_KIND
+        section = None if target.section_id is None else str(target.section_id)
+        if section is not None and section in SECTION_ONLY_KIND:
+            return SECTION_ONLY_KIND[section]
         return BlockKind(name) if name else BlockKind.TEXT
     except (DomainError, ValueError) as error:
         raise PacketParseError(
