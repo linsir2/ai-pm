@@ -182,6 +182,9 @@ def test_integrator_limits_tell_how_to_write_the_end_to_end_flow():
     assert "不许编" in LIMITS_TEXT  # 依据里看不出来的一步不写，写不全就空着 / 出题
     # P36 真跑：模型把 s6 的流程**写成 text** 过 4/7 —— 这一句钉住"kind 必须是 steps"
     assert "kind 必须写 steps" in LIMITS_TEXT
+    # P36 二次真跑：分析者把端到端流程派给了 s6，整合者却**一条 s6 提案都没出**（各功能已覆盖）
+    assert "必须出一条 s6 的 steps 提案" in LIMITS_TEXT
+    assert "串起来不算编造" in LIMITS_TEXT
 
 
 async def test_gateway_passes_model_key_base_and_schema(monkeypatch):
