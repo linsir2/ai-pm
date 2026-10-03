@@ -67,10 +67,22 @@ SECTION_SLOTS_TEXT = "\n".join(
     for slot in slots
 ) or "（没有章节槽）"
 
+#: 字段表里"**设计说必填、但代码没标必填**"的那几个：给一句**提示词压力**——它不是判据，
+#: 只是让模型看得见"这一轮该写"。
+#:
+#: 为什么不直接把 `required` 改成 True：`readiness` 数的是**必填**字段，改它等于给每个缺这个字段的
+#: 功能加一条**阻塞**（P30 里好不容易 0 阻塞的车道会立刻破）。P37 拍板**不升必填**。
+#: 真跑证据（P37/P38）：分析者切出来的字段**正好是代码里那 6 个必填**，`main_flow` 在 29 个功能里
+#: 只有 18 条；而主张里标了 `field: main_flow` 时整合者 **16/18 = 89%** 会写出主流程，没标只有 23%。
+FIELD_PRESSING = {
+    "main_flow": "每个功能都要写：这个功能怎么走一遍（1. …；2. …；3. …）",
+}
+
 # 功能字段表：从 `authoring/schema.py` 生成（结构的唯一真相源），不许手抄。
 FEATURE_FIELDS_TEXT = "\n".join(
     f"- {spec.name}（{spec.title}，{spec.kind.value}"
     f"{'，可多条' if spec.multiple else ''}{'，必填' if spec.required else ''}）"
+    + (f"——{FIELD_PRESSING[spec.name]}" if spec.name in FIELD_PRESSING else "")
     for spec in FEATURE_FIELDS
 )
 

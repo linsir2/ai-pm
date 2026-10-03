@@ -374,6 +374,27 @@ def test_render_contradictions_says_none_when_there_are_none():
     assert context.render_contradictions(make_round()) == "（这一轮没有判出互斥的主张）"
 
 
+def test_the_feature_field_table_says_main_flow_is_expected():
+    """字段表是模型能看到的"该写什么"信号：`必填` 是**就绪度**的标记，不是"这一轮要写"的标记。
+
+    真跑实测（P37）：分析者切出来的字段**正好是代码里那 6 个"必填"**
+    （name / one_liner / goal / audience / exceptions / acceptance），
+    而设计说明书 §2.6 说必填的 `main_flow` / `user_story` / `io` / `priority` 被饿死
+    （两轮真跑 29 个功能里分别只有 18 / 3 / 3 / 4 条）。主流程覆盖率因此长期停在 48–62%。
+
+    P38 的口径：**不升必填**（那会给每个缺主流程的功能加一条阻塞），
+    改在字段表里把它标成"每个功能都要写"——只加**提示词压力**，不动判据。
+    """
+
+    lines = context.FEATURE_FIELDS_TEXT.splitlines()
+    main_flow = next(line for line in lines if line.startswith("- main_flow"))
+
+    assert "每个功能都要写" in main_flow
+    assert "怎么走一遍" in main_flow
+    # 只有它带这句：别的字段不许被同一句话污染
+    assert [line for line in lines if "每个功能都要写" in line] == [main_flow]
+
+
 # ── 材料信息包的选块与渲染（工具层 C-2）────────────────────────────────
 
 

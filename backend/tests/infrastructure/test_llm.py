@@ -170,6 +170,21 @@ def test_analyzer_prompt_gives_the_end_to_end_flow_a_home():
     assert "main_flow" in text
 
 
+def test_analyzer_prompt_marks_the_walkthrough_as_main_flow():
+    """归位表要把"功能怎么走一遍"指到 **s5 + feature_slug + `field: main_flow`**。
+
+    真跑相关性（跨全部真跑库、按轮统计）：主张里标了 `field: main_flow` 时，
+    整合者 **16/18 = 89%** 会写出主流程；没标时只有 **16/71 = 23%**。
+    L5（社区食堂）两轮 40 条主张里一条都没标 → 62 条提案里 0 条主流程。
+    P38 就是把这条信号补上（只加提示词，不动 `readiness`）。
+    """
+
+    text = (PROMPTS / "analyzer.md").read_text(encoding="utf-8")
+
+    assert "field: main_flow" in text
+    assert "怎么走一遍" in text
+
+
 def test_integrator_limits_tell_how_to_write_the_end_to_end_flow():
     """整合者要知道 s6 怎么写：章节级 + `kind=steps` + 一条提案写完整条流程。"""
 
