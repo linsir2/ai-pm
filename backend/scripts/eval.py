@@ -32,13 +32,23 @@ sys.path.insert(0, str(BACKEND_ROOT))
 from evals.assertions import EVAL_ASSERTIONS, check  # noqa: E402
 
 from pmstudio.application.commands import RoundCommand  # noqa: E402
+from pmstudio.application.errors import ApplicationError  # noqa: E402
 from pmstudio.bootstrap.container import build_container  # noqa: E402
 from pmstudio.bootstrap.settings import Settings  # noqa: E402
+from pmstudio.domain.shared.ids import ProjectId, RoundId  # noqa: E402
 
 CASES_DIR = BACKEND_ROOT / "evals" / "cases"
 #: eval 默认跑在这个库上：**永远不碰工作库**（`Settings.from_env()` 里 PMSTUDIO_DB 优先级更高，
 #: 所以这里必须显式覆盖，不能只靠 default_db）。
 DEFAULT_EVAL_DB = Path("/tmp/pmstudio-eval.db")
+
+#: 一轮失败时最多再点几次「继续」。
+#:
+#: 为什么驱动要会点：**产品本来就支持续跑**（`Round.resume()` + `POST /retry`，用户在界面上
+#: 就是这么做的），而驱动原来一次都不点——模型偶发"回包不是 JSON"就把整条用例判死
+#: （P35 真踩到两次：整合、席位各一次，同输入重跑就过）。点几次不是放宽判据：
+#: 断言照旧跑在最终视图上，日志里每一次重试都打出来（`[重试] …`），要查得到。
+MAX_RETRIES = 2
 
 
 def load_cases(only: str | None) -> list[dict]:
@@ -53,6 +63,29 @@ def load_cases(only: str | None) -> list[dict]:
 
 def show(stage: str, detail: str = "") -> None:
     print(f"  [{stage}] {detail}".rstrip(), flush=True)
+
+
+async def run_step(  # type: ignore[no-untyped-def]
+    services, command: RoundCommand, *, project_id: str | None = None
+):  # type: ignore[no-untyped-def]
+    """跑一个动作；**网关类失败不往外抛**——把这一轮现在的样子读回来。
+
+    为什么：超时 / "回包不是 JSON"这类失败会**先把这一轮标成 `failed` 再抛异常**
+    （`fail_round(...)` + `raise`）。异常冒出去，驱动就既看不到 `failure_reason`、
+    也拿不到 `round_id`，只能把整条用例报成"崩溃"——而产品侧本来就是"失败 → 用户点继续"。
+    所以这里接住，再从轮次表把视图读回来（`get_round`；`start` 那次从 `list_rounds` 找最新一轮）。
+    """
+
+    try:
+        return await services.runner.run(command)
+    except ApplicationError:
+        round_id = command.round_id
+        if round_id is None and project_id is not None:
+            heads = await services.list_rounds(project_id=ProjectId(project_id))
+            round_id = heads[0].round_id if heads else None  # 最新在前
+        if round_id is None:
+            raise
+        return await services.get_round(round_id=RoundId(round_id))
 
 
 def resolve_eval_db(chosen: str | None, *, working_db: Path) -> Path:
@@ -73,34 +106,52 @@ async def run_case(services, case: dict) -> bool:  # type: ignore[no-untyped-def
     project = await services.create_project(title=f"eval · {case['name']}")
     project_id = project.project_id
 
-    view = await services.runner.run(
-        RoundCommand(kind="start", project_id=str(project_id), user_input=case["input"])
+    view = await run_step(
+        services,
+        RoundCommand(kind="start", project_id=str(project_id), user_input=case["input"]),
+        project_id=str(project_id),
     )
     show("主张", f"{len(view.claims)} 条 · 提名 {len(view.nominated_seats)} 个席位")
 
-    view = await services.runner.run(
-        RoundCommand(
-            kind="submit_opening",
-            round_id=view.round_id,
-            seats=tuple(seat.seat_id for seat in view.nominated_seats),
-        )
-    )
-    show("席位", f"{len(view.seat_packets)} 个 · 留痕 {len(view.dropped)} 条")
-
-    while view.waiting_on == "questionnaire":
-        show("问卷", f"{len(view.questions)} 题（全部按跳过走）")
-        view = await services.runner.run(
+    if view.step != "failed":
+        view = await run_step(
+            services,
             RoundCommand(
-                kind="submit_answers",
+                kind="submit_opening",
                 round_id=view.round_id,
-                form_id=view.form_id or "",
-                answers=(),
-                skipped=tuple(question.question_id for question in view.questions),
+                seats=tuple(seat.seat_id for seat in view.nominated_seats),
+            ),
+        )
+        show("席位", f"{len(view.seat_packets)} 个 · 留痕 {len(view.dropped)} 条")
+
+    retries = 0
+    while True:
+        while view.waiting_on == "questionnaire":
+            show("问卷", f"{len(view.questions)} 题（全部按跳过走）")
+            view = await run_step(
+                services,
+                RoundCommand(
+                    kind="submit_answers",
+                    round_id=view.round_id,
+                    form_id=view.form_id or "",
+                    answers=(),
+                    skipped=tuple(question.question_id for question in view.questions),
+                ),
             )
+        if view.step != "failed" or retries >= MAX_RETRIES:
+            break
+        retries += 1
+        show(
+            "重试",
+            f"第 {retries} 次：{view.failure_reason or '（没说原因）'}"
+            f"（从 {view.retry_from or '?'} 接着跑）",
+        )
+        view = await run_step(
+            services, RoundCommand(kind="retry", round_id=view.round_id)
         )
 
     if view.step == "failed":
-        print(f"  [失败] {view.failure_reason}", flush=True)
+        print(f"  [失败] 点了 {retries} 次继续仍然失败：{view.failure_reason}", flush=True)
         return False
 
     passed = True
