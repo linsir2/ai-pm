@@ -273,6 +273,29 @@ def test_acceptance_entries_are_rendered_as_list_items():
     assert "5 万条内 60 秒可下载〔E1〕" in text
 
 
+def test_the_empty_section_note_does_not_talk_to_the_model():
+    """空章那句"差什么"是给**读者**看的，不是给模型的操作提示。
+
+    真跑现场（P30 五条车道）：第 6 章那行写的是
+    「（本章为空：这类内容用 steps 块写；拿不准就出题问用户）」——后面半句是
+    `readiness.KIND_PRESENCE` 的 detail（写给模型看的），漏进了交付物。
+    空章提示只许拿**结构性**缺口（`section_min_entries`）的 detail；
+    结构上没缺口时就是干净的「（本章为空）」。
+    """
+
+    document = document_with_feature()
+    text = export(
+        document,
+        ledger_with_two_entries(),
+        ReadinessChecker().check(document.view()),
+    )
+    s6 = text.split("## 6 业务流程与交互", 1)[1].split("## 7 ", 1)[0]
+
+    assert "（本章为空）" in s6
+    assert "出题问用户" not in s6
+    assert "steps 块写" not in s6
+
+
 def test_rendering_is_deterministic():
     document, ledger = document_with_feature(), ledger_with_two_entries()
     assert export(document, ledger) == export(document, ledger)

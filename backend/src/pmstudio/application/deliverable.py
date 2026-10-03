@@ -167,11 +167,19 @@ def _entry_line(entry) -> str:  # type: ignore[no-untyped-def]
 
 
 def _empty_note(section_id: object, readiness: Sequence[ReadinessItem]) -> str:
+    """空章那行只拿**结构性**缺口（`section_min_entries`）的 detail。
+
+    `section_kind_present` 那类 detail 是写给模型看的方法提示（"这类内容用 steps 块写；
+    拿不准就出题问用户"），**不许进交付物**——交付物是给人读的。真跑现场（P30 五条车道）
+    第 6 章那行就是这一句。结构上没缺口就退回干净的「（本章为空）」（P36 · M4）。
+    """
+
     item = next(
         (
             candidate
             for candidate in readiness
             if candidate.section_id == str(section_id)
+            and candidate.code == "section_min_entries"
         ),
         None,
     )
