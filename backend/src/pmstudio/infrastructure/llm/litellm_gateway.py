@@ -190,6 +190,18 @@ class LiteLLMGateway:
         assert response is not None
         raw = (response.choices[0].message.content or "").strip()
         if not raw:
+            # 空回包也留痕（P35）：原来这两条"回包本身有问题"的路**一行都不落库**，
+            # 于是复盘时只剩一句"模型返回了空内容"，原文永远补不回来（真踩到过两次）。
+            self._record(
+                request,
+                reply_text="",
+                usage={},
+                duration_ms=int((time.monotonic() - attempt_started) * 1000),
+                model=getattr(response, "model", self._model),
+                attempt=attempt,
+                ok=False,
+                error="EmptyReply: 模型返回了空内容",
+            )
             raise ModelCallFailed(
                 "模型返回了空内容",
                 purpose=request.purpose,
@@ -198,6 +210,23 @@ class LiteLLMGateway:
             )
         text = strip_fence(raw)
         if request.response_schema and not _is_json(text):
+            # `usage` 与 `finish_reason` 一起记：回包是**截断的 JSON**时（P35 真踩到：
+            # 21.7K 字符断在半句上），只有 finish_reason=length 能一眼说明"是输出被截断"，
+            # 而不是"模型没按格式答"。
+            finish = getattr(response.choices[0], "finish_reason", None)
+            self._record(
+                request,
+                reply_text=text,
+                usage=dict(getattr(response, "usage", {}) or {}),
+                duration_ms=int((time.monotonic() - attempt_started) * 1000),
+                model=getattr(response, "model", self._model),
+                attempt=attempt,
+                ok=False,
+                error=(
+                    f"NonJsonReply: 回包不是合法 JSON（finish_reason={finish}，"
+                    f"开头：{text[:120]}）"
+                ),
+            )
             raise ModelCallFailed(
                 "模型没有按约定返回 JSON（结构化输出契约被破坏）",
                 purpose=request.purpose,

@@ -550,6 +550,89 @@ async def test_gateway_records_every_attempt_including_the_failed_one(monkeypatc
     assert recorder.rows[1]["reply_text"] == '{"ok": true}'
 
 
+async def test_gateway_records_a_reply_that_is_not_json(monkeypatch):
+    """回包不是 JSON 这条路原来**一行留痕都没有**：错误只剩"契约被破坏"，原文查不到。
+
+    P35 真踩到两次（同一个模型、两条不同用例，各死在一次调用上：整合 / 席位），
+    当时留样是关的，连"模型到底回了什么"都补不回来。留样开着就得看得见原文（取头部）。
+    还要看得见 `usage` 与 `finish_reason`：真跑那次回包**是截断的 JSON**（尾部断在半句上），
+    没有 `finish_reason=length` 就只能猜。
+    """
+
+    async def prose(**kwargs):
+        class _Message:
+            content = "好的，我来分析一下这个需求：\n1. 点检记录提交后不许改……"
+
+        class _Choice:
+            message = _Message()
+            finish_reason = "length"
+
+        class _Response:
+            choices = [_Choice()]
+            model = "m"
+            usage = {"completion_tokens": 8192}
+
+        return _Response()
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", prose)
+    recorder = _RecordingRecorder()
+    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
+
+    with pytest.raises(ModelCallFailed):
+        await gateway.complete(
+            ModelRequest(
+                purpose="integration",
+                messages=(ModelMessage(role="user", content="x"),),
+                schema_name="IntegrationPacket",
+                response_schema={"type": "object"},
+            )
+        )
+
+    assert len(recorder.rows) == 1
+    row = recorder.rows[0]
+    assert row["ok"] is False
+    assert row["purpose"] == "integration"
+    assert row["reply_text"].startswith("好的，我来分析")
+    assert "不是合法 JSON" in row["error"]
+    assert "finish_reason=length" in row["error"]
+    assert row["usage"] == {"completion_tokens": 8192}
+
+
+async def test_gateway_records_an_empty_reply(monkeypatch):
+    """空回包同理：原来也是不落库的（"模型返回了空内容"只有一句话）。"""
+
+    async def blank(**kwargs):
+        class _Message:
+            content = "   "
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "m"
+            usage = {}
+
+        return _Response()
+
+    monkeypatch.setattr("pmstudio.infrastructure.llm.litellm_gateway.acompletion", blank)
+    recorder = _RecordingRecorder()
+    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
+
+    with pytest.raises(ModelCallFailed):
+        await gateway.complete(
+            ModelRequest(
+                purpose="seat_review",
+                messages=(ModelMessage(role="user", content="x"),),
+                schema_name="SeatPacket",
+                response_schema={"type": "object"},
+            )
+        )
+
+    assert [(row["ok"], row["reply_text"]) for row in recorder.rows] == [(False, "")]
+    assert "空内容" in recorder.rows[0]["error"]
+
+
 async def test_gateway_gives_up_after_max_attempts_on_transient_errors(monkeypatch):
     calls = {"count": 0}
 
