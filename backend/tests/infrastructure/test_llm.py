@@ -153,6 +153,37 @@ def test_the_conflict_rule_covers_contradictions_inside_the_round():
     assert "两侧" in LIMITS_TEXT  # 矛盾题要说清是哪两侧，选项才写得出来
 
 
+def test_analyzer_prompt_gives_the_end_to_end_flow_a_home():
+    """跨功能/端到端的流程与异常路径归 **s6**——归位表里要有这一行。
+
+    真跑现场（P30 五条车道 14 个轮次、449 条提案）：`kind=steps` 有 13 条，
+    **13 条全落在 `s5/*.main_flow`**；落 `s6` 的只有 1 条、而且还是 `text`。
+    归位表原来把"功能做法（主流程…）"整行推给 s5，**没有任何一行提到 s6**，
+    于是第 6 章在五条车道上永远是空的（`readiness` 挂着 warn、导出写"（本章为空）"）。
+    """
+
+    text = (PROMPTS / "analyzer.md").read_text(encoding="utf-8")
+
+    assert "s6" in text
+    assert "端到端" in text
+    # 与功能内主流程的分工要写清，否则模型会把每个功能的流程抄进 s6
+    assert "main_flow" in text
+
+
+def test_integrator_limits_tell_how_to_write_the_end_to_end_flow():
+    """整合者要知道 s6 怎么写：章节级 + `kind=steps` + 一条提案写完整条流程。"""
+
+    from pmstudio.application.agents.integrator import LIMITS_TEXT
+
+    assert "s6" in LIMITS_TEXT
+    assert "steps" in LIMITS_TEXT
+    assert "端到端" in LIMITS_TEXT
+    assert "main_flow" in LIMITS_TEXT  # 功能内部流程仍写 s5
+    assert "不许编" in LIMITS_TEXT  # 依据里看不出来的一步不写，写不全就空着 / 出题
+    # P36 真跑：模型把 s6 的流程**写成 text** 过 4/7 —— 这一句钉住"kind 必须是 steps"
+    assert "kind 必须写 steps" in LIMITS_TEXT
+
+
 async def test_gateway_passes_model_key_base_and_schema(monkeypatch):
     captured: dict = {}
 
