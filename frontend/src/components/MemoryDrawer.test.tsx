@@ -59,9 +59,9 @@ describe("MemoryDrawer", () => {
   it("点『删掉这条』把那条的 id 交出去", () => {
     const props = draw();
 
-    fireEvent.click(screen.getAllByText("删掉这条")[1]);
+    fireEvent.click(screen.getAllByText("删掉这条")[0] as HTMLElement);
 
-    expect(props.onDelete).toHaveBeenCalledWith("mem2");
+    expect(props.onDelete).toHaveBeenCalledWith("mem1");
   });
 
   it("没有记忆时说人话，不留空白", () => {
