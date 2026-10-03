@@ -123,8 +123,10 @@ export function LoopColumn({
           round={round}
           doc={doc}
           accepted={drafts.accepted}
+          memoryAccepted={drafts.memoryAccepted}
           pending={pending === "confirm"}
           onToggle={drafts.toggleAccepted}
+          onToggleMemory={drafts.toggleMemory}
           onSetAccepted={drafts.setAccepted}
           onSubmit={onConfirm}
           onDig={onDig}

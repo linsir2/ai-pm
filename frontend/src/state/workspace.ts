@@ -4,6 +4,7 @@
 
 import type {
   DocumentView,
+  MemoryEntryView,
   ProjectSummaryView,
   ReadinessItemView,
   RoundView,
@@ -22,6 +23,8 @@ export interface State {
   document: DocumentView | null;
   round: RoundView | null;
   readiness: ReadinessItemView[];
+  /** 已确认的跨轮记忆（M6）：记忆抽屉读它；老工作台 payload 没有 → 空数组。 */
+  memory: MemoryEntryView[];
   documentStale: boolean;
   roundStale: boolean;
   lastSeq: number;
@@ -46,6 +49,7 @@ export const initialState: State = {
   document: null,
   round: null,
   readiness: [],
+  memory: [],
   documentStale: false,
   roundStale: false,
   lastSeq: 0,
@@ -64,6 +68,7 @@ export function reduce(state: State, action: Action): State {
         document: action.workspace.document,
         round: action.workspace.round,
         readiness: action.workspace.readiness,
+        memory: action.workspace.memory ?? [],
         documentStale: false,
         roundStale: false,
         error: null,

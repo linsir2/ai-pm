@@ -30,7 +30,9 @@ export type PendingAction =
   | "dig"
   | "edit"
   /** 材料库上的动作（删 / 重解析）：与"这一轮"无关，但仍然串行，不并发点。 */
-  | "material";
+  | "material"
+  /** 记忆抽屉上的动作（M6）：删一条记忆——同样串行，不与"这一轮"的动作并发。 */
+  | "memory";
 
 const PROJECT_PARAM = "project";
 
@@ -289,6 +291,18 @@ export function useWorkspaceData() {
   );
 
   /** 删一份材料：接口回"刷新后的列表"，**整体替换**（不猜、不做乐观更新）。 */
+  /** 忘掉一条记忆（M6）：删完刷一次工作台，抽屉与提示词同时更新。 */
+  const forgetMemory = useCallback(
+    (memoryId: string) =>
+      run("memory", async () => {
+        const projectId = selected.current;
+        if (projectId === null) return;
+        await api.forgetMemory(projectId, memoryId);
+        await refreshDocument(projectId);
+      }),
+    [run, refreshDocument],
+  );
+
   const deleteMaterial = useCallback(
     (materialId: string) =>
       run("material", async () => {
@@ -331,9 +345,9 @@ export function useWorkspaceData() {
   );
 
   const confirm = useCallback(
-    (roundId: string, accepted: string[]) =>
+    (roundId: string, accepted: string[], acceptedMemory: string[] = []) =>
       run("confirm", async () => {
-        const result = await api.confirm(roundId, accepted);
+        const result = await api.confirm(roundId, accepted, acceptedMemory);
         setHistoryRound(null);
         dispatch({ type: "round", round: result.round });
         const projectId = selected.current;
@@ -472,6 +486,7 @@ export function useWorkspaceData() {
     toggleMaterial,
     deleteMaterial,
     reparseMaterial,
+    forgetMemory,
     historyRound,
     projects,
     booting,

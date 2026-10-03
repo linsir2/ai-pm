@@ -124,6 +124,27 @@ export interface DraftView {
   gaps: string[];
 }
 
+/** 草案卡上"这一轮攒下的记忆"的一行（M6）。**提议**：默认不勾，勾了才随确认生效。 */
+export interface MemoryProposalView {
+  proposal_id: string;
+  op: "add" | "update" | "merge" | "delete" | string;
+  kind: "lesson" | "decision" | "rejected" | string;
+  text: string;
+  refs: string[];
+  reason: string;
+  target_id: string | null;
+}
+
+/** 已确认的一条记忆（记忆抽屉读它，M6）。 */
+export interface MemoryEntryView {
+  memory_id: string;
+  kind: "lesson" | "decision" | "rejected" | string;
+  text: string;
+  refs: string[];
+  round_id: string;
+  updated_at: string;
+}
+
 export interface SeatSuggestionView {
   seat_id: string;
   title: string;
@@ -185,6 +206,8 @@ export interface RoundView {
   web_queries: WebQueryView[];
   /** 服务端现在有没有可用的联网工具（没配密钥就是 false）——据此决定出不出现那一栏。 */
   web_search_available: boolean;
+  /** 这一轮攒下的记忆提议（M6）：**提议**，界面上默认不勾。老轮次为 undefined。 */
+  memory_proposals?: MemoryProposalView[];
 }
 
 export interface WebQueryView {
@@ -221,6 +244,8 @@ export interface WorkspaceView {
   round: RoundView | null;
   /** 这份文档按合格标准还差什么（只读判据，不是模型判断）。 */
   readiness: ReadinessItemView[];
+  /** 已确认的跨轮记忆（M6）：老工作台 payload 没有这个键时为 undefined。 */
+  memory?: MemoryEntryView[];
 }
 
 export interface WorkspaceEvent {

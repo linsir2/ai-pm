@@ -19,6 +19,8 @@ export interface RoundDrafts {
   webQueries: string[];
   edits: Record<string, ClaimEdit>;
   accepted: string[];
+  /** 草案卡上勾中的**记忆提议**（M6）：**默认一条都不勾**——记忆写错会污染以后每一轮。 */
+  memoryAccepted: string[];
   collapsed: boolean;
   setCollapsed: (collapsed: boolean) => void;
   changeAnswer: (questionId: string, draft: AnswerDraft) => void;
@@ -27,6 +29,7 @@ export interface RoundDrafts {
   changeClaim: (claimId: string, edit: ClaimEdit) => void;
   toggleAccepted: (proposalId: string) => void;
   setAccepted: (proposalIds: string[]) => void;
+  toggleMemory: (proposalId: string) => void;
 }
 
 export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): RoundDrafts {
@@ -35,6 +38,7 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
   const [webQueries, setWebQueries] = useState<string[]>([]);
   const [edits, setEdits] = useState<Record<string, ClaimEdit>>({});
   const [accepted, setAccepted] = useState<string[]>([]);
+  const [memoryAccepted, setMemoryAccepted] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState(false);
 
   const roundId = round?.round_id ?? null;
@@ -46,6 +50,7 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
   useEffect(() => {
     setAnswers({});
     setAccepted([]);
+    setMemoryAccepted([]);
     setSeats(round === null ? [] : defaultSeats(round));
     // 默认一条都不勾：勾了才会真联网（后端也拿这个当唯一判据）
     setWebQueries([]);
@@ -91,6 +96,14 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     );
   }, []);
 
+  const toggleMemory = useCallback((proposalId: string) => {
+    setMemoryAccepted((current) =>
+      current.includes(proposalId)
+        ? current.filter((item) => item !== proposalId)
+        : [...current, proposalId],
+    );
+  }, []);
+
   /** 本批全接受 / 全不勾：一次替换整批，不走逐条 toggle。 */
   const setAcceptedIds = useCallback((proposalIds: string[]) => {
     setAccepted([...proposalIds]);
@@ -102,6 +115,7 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     webQueries,
     edits,
     accepted,
+    memoryAccepted,
     collapsed,
     setCollapsed,
     changeAnswer,
@@ -110,5 +124,6 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     changeClaim,
     toggleAccepted,
     setAccepted: setAcceptedIds,
+    toggleMemory,
   };
 }

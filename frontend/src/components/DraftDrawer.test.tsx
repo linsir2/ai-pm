@@ -58,8 +58,10 @@ function draw(over: Partial<Parameters<typeof DraftDrawer>[0]> = {}) {
     round: round(),
     doc: null as DocumentView | null,
     accepted: ["p01"],
+    memoryAccepted: [],
     pending: false,
     onToggle: vi.fn(),
+    onToggleMemory: vi.fn(),
     onSetAccepted: vi.fn(),
     onSubmit: vi.fn(),
     onDig: vi.fn(),
@@ -76,6 +78,36 @@ function draw(over: Partial<Parameters<typeof DraftDrawer>[0]> = {}) {
 }
 
 describe("DraftDrawer", () => {
+  it("M6：记忆那一档默认不勾，勾了才调 onToggleMemory", () => {
+    const onToggleMemory = vi.fn();
+    const base = round();
+    const props = draw({
+      round: {
+        ...base,
+        memory_proposals: [
+          {
+            proposal_id: "mem#1",
+            op: "add",
+            kind: "decision",
+            text: "导出保留期是 30 天",
+            refs: ["E1"],
+            reason: "用户这一轮定下来的口径",
+            target_id: null,
+          },
+        ],
+      } as RoundView,
+      onToggleMemory,
+    });
+
+    expect(screen.getByText(/这一轮攒下的记忆/)).toBeTruthy();
+    expect(screen.getByText("导出保留期是 30 天")).toBeTruthy();
+    // 默认不勾：按钮上是"不记"，而不是"记"
+    expect(screen.getByText("不记")).toBeTruthy();
+    fireEvent.click(screen.getByText("不记"));
+    expect(onToggleMemory).toHaveBeenCalledWith("mem#1");
+    expect(props.memoryAccepted).toEqual([]);
+  });
+
   it("点『继续深挖』调到 onDig", () => {
     const props = draw();
 
@@ -165,8 +197,10 @@ it("相同的告警合并成一条并带条数（不再三句一样的话摆三�
         round={round}
         doc={null}
         accepted={[]}
+        memoryAccepted={[]}
         pending={false}
         onToggle={() => undefined}
+        onToggleMemory={() => undefined}
         onSetAccepted={() => undefined}
         onSubmit={() => undefined}
         onDig={() => undefined}

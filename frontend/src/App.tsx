@@ -21,6 +21,7 @@ import { jumpToChunk, jumpToEntry, jumpToEvidence } from "./components/jump";
 import { sectionOfEntry } from "./document/structure";
 import { LoopColumn } from "./components/LoopColumn";
 import { MaterialLibrary } from "./components/MaterialLibrary";
+import { MemoryDrawer } from "./components/MemoryDrawer";
 import { Onboarding } from "./components/Onboarding";
 import { ReadinessDrawer } from "./components/ReadinessDrawer";
 import { SideRail } from "./components/SideRail";
@@ -44,6 +45,7 @@ export default function App() {
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [readinessOpen, setReadinessOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
 
@@ -224,6 +226,8 @@ export default function App() {
             onExport={() => void data.exportMarkdown()}
             onOpenVersions={() => setVersionsOpen(true)}
             onOpenReadiness={() => setReadinessOpen(true)}
+            memoryCount={(state.memory ?? []).length}
+            onOpenMemory={() => setMemoryOpen(true)}
             theme={theme}
             onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
             search={
@@ -299,7 +303,7 @@ export default function App() {
             }
             onConfirm={() =>
               round !== null &&
-              void data.confirm(round.round_id, drafts.accepted)
+              void data.confirm(round.round_id, drafts.accepted, drafts.memoryAccepted)
             }
             onDig={() => {
               if (round !== null) void data.dig(round.round_id);
@@ -368,6 +372,17 @@ export default function App() {
                 items={state.readiness}
                 document={doc}
                 onCollapse={() => setReadinessOpen(false)}
+              />
+            </div>
+          )}
+
+          {memoryOpen && (
+            <div className="overlay-slot">
+              <MemoryDrawer
+                memory={state.memory ?? []}
+                pending={data.pending === "memory"}
+                onDelete={(memoryId) => void data.forgetMemory(memoryId)}
+                onCollapse={() => setMemoryOpen(false)}
               />
             </div>
           )}

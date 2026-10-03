@@ -21,6 +21,8 @@ export function TopBar({
   onExport,
   onOpenVersions,
   onOpenReadiness,
+  memoryCount,
+  onOpenMemory,
   theme,
   onToggleTheme,
   search = null,
@@ -35,6 +37,9 @@ export function TopBar({
   onExport: () => void;
   onOpenVersions?: () => void;
   onOpenReadiness?: () => void;
+  /** 已确认的记忆条数 + 打开记忆抽屉（M6）：0 条时不显示入口。 */
+  memoryCount?: number;
+  onOpenMemory?: () => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
   /** 搜索框（F6）：有项目才有；没项目时传 null，顶栏就不显示它。 */
@@ -87,6 +92,8 @@ export function TopBar({
             readiness={readiness}
             onOpenVersions={onOpenVersions}
             onOpenReadiness={onOpenReadiness}
+            memoryCount={memoryCount}
+            onOpenMemory={onOpenMemory}
           />
           {roundStep !== null && <span className="pill-step">{stepText(roundStep)}</span>}
           <button type="button" className="btn btn--sm" onClick={onExport}>

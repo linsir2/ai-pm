@@ -250,11 +250,16 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  confirm: (roundId: string, accepted: string[]) =>
+  /** 确认写入：`acceptedMemory` 是草案卡上勾中的**记忆提议**（M6，默认不勾 → 空）。 */
+  confirm: (roundId: string, accepted: string[], acceptedMemory: string[] = []) =>
     request<ConfirmResponse>(`/rounds/${roundId}/confirm`, {
       method: "POST",
-      body: JSON.stringify({ accepted }),
+      body: JSON.stringify({ accepted, accepted_memory: acceptedMemory }),
     }),
+
+  /** 忘掉一条记忆（M6）：记忆抽屉上的按钮，删了以后下一轮提示词立刻不带它。 */
+  forgetMemory: (projectId: string, memoryId: string) =>
+    request<void>(`/projects/${projectId}/memory/${memoryId}`, { method: "DELETE" }),
 
   retry: (roundId: string) =>
     request<RoundView>(`/rounds/${roundId}/retry`, { method: "POST", body: "{}" }),
