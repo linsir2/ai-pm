@@ -16,7 +16,7 @@ from pmstudio.domain.ports import (
     UnitOfWork,
 )
 from pmstudio.domain.provenance.ledger import EvidenceLedger
-from pmstudio.domain.round.draft import OriginType, Proposal
+from pmstudio.domain.round.draft import OriginType, Proposal, merge_duplicate_removes
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.services.scope_guard import ScopeGuard, ScopeViolation
@@ -37,6 +37,10 @@ class CommitResult:
     version: Version
     written_block_ids: tuple[BlockId, ...]
     advisories: tuple[ScopeViolation, ...]
+    #: 同一批里被合并掉的重复 `remove`（同一 `entry_id` 只该撤一次）。
+    #: 它们**不是内容**——条目照样被撤下，所以不进 `unaccounted` / `dropped` 那两条通道；
+    #: 留在这里是为了可断言（真跑里就是它把整批确认打成 422 的，P30 · F28）。
+    merged_removes: tuple[ProposalId, ...] = ()
 
 
 class ProposalCommitter:
@@ -69,7 +73,7 @@ class ProposalCommitter:
             # 写入端先自查前置条件：不要在写完文档之后才发现状态不对
             if round_.waiting_on is not WaitingOn.DRAFT:
                 raise IllegalStepTransition(current=round_.step, target=Step.AWAITING_CONFIRM)
-            proposals = self._resolve(round_, accepted)
+            proposals, merged = self._resolve(round_, accepted)
             ledger = self._evidence.get(round_.project_id)
             for proposal in proposals:
                 self._assert_traceable(proposal, ledger=ledger)
@@ -89,7 +93,9 @@ class ProposalCommitter:
                 for item in round_.draft.proposals
                 if item.origin.type is OriginType.PROPOSED
             ]
-            taken = {proposal.proposal_id for proposal in proposals}
+            # **用用户接受的 id**，不是合并后的提案列表：被合并掉的那条也是用户勾的，
+            # 从 `proposals` 算会把 `proposed_accepted` 少算一条（C4 那条提示因此被带偏）。
+            taken = set(accepted)
             round_.confirm(
                 version.version_no,
                 proposed_offered=len(offered),
@@ -100,6 +106,7 @@ class ProposalCommitter:
             version=version,
             written_block_ids=version.changed_block_ids,
             advisories=advisories,
+            merged_removes=merged,
         )
 
     def apply_manual(
@@ -151,7 +158,16 @@ class ProposalCommitter:
             advisories=(),
         )
 
-    def _resolve(self, round_: Round, accepted: Sequence[ProposalId]) -> tuple[Proposal, ...]:
+    def _resolve(
+        self, round_: Round, accepted: Sequence[ProposalId]
+    ) -> tuple[tuple[Proposal, ...], tuple[ProposalId, ...]]:
+        """用户勾的那些提案 → 真正要执行的（+ 被合并掉的重复 `remove`）。
+
+        合并这一步是**保底**：装配层已经不让重复的 `remove` 进卡片了，但**修好之前存下来的
+        老草案**（`serialization.py` 原样读回来的那种）里还带着两条——不在这里合，
+        用户点"确认写入"就会撞 `UnknownEntry`（422），而且**一条都写不进去**（P30 · F28）。
+        """
+
         draft = round_.draft
         if draft is None:
             raise NothingToCommit()
@@ -162,7 +178,7 @@ class ProposalCommitter:
         for proposal_id in accepted:
             if proposal_id not in by_id:
                 raise UnknownProposal(proposal_id=proposal_id)
-        return tuple(by_id[proposal_id] for proposal_id in accepted)
+        return merge_duplicate_removes(tuple(by_id[proposal_id] for proposal_id in accepted))
 
     def _assert_traceable(self, proposal: Proposal, *, ledger: EvidenceLedger) -> None:
         if proposal.origin.type not in TRACEABLE_ORIGINS:

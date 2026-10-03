@@ -1,5 +1,6 @@
 """草案：提案数组，按来源分三组展示。整合者产出，用户逐条要/不要。"""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -79,3 +80,40 @@ class Draft:
             if items:
                 groups.append((title, items))
         return tuple(groups)
+
+
+def merge_duplicate_removes(
+    proposals: Sequence[Proposal],
+) -> tuple[tuple[Proposal, ...], tuple[ProposalId, ...]]:
+    """同一 `entry_id` 的多条 `remove` 是**同一条指令**：留第一条，其余合并。
+
+    为什么要合并：`remove` 撤下哪一条**只由 `entry_id` 决定**（`02` §11.0.2a），
+    文本只是卡片上的展示、不入库（快照记的是结果文档）。所以两条 `remove` 指向同一条目时，
+    第二条执行时那条目已经没了——真跑里它直接把整批确认打成 422（P30 · F28：
+    整轮接受的 45 条一条都没写进文档）。
+
+    为什么只合并 `remove`：
+
+    - `replace` 两条是**顺序语义**（后一条覆盖前一条），合并会把用户勾的第二条改法吃掉；
+    - `add` 每条都有新编号（`{round_id}#{index:02d}`），天然不会撞。
+
+    保留哪一条 = 参数序列里**最先出现**的那条。两个调用点各按自己的顺序传：
+    装配层传草案顺序（整合者那批在前，它的文本是"被撤下那条的正文"，卡片上更好看）；
+    写入端传**用户接受的顺序**。
+
+    **被合并掉的那条不进任何留痕通道**：它不是内容，是同一件事的第二次陈述——条目照样
+    会被撤下，`unaccounted` / `dropped` 说的都是"内容没进文档"，塞进来只会污染它们。
+    要可断言的地方在写入端（`CommitResult.merged_removes`）。
+    """
+
+    kept: list[Proposal] = []
+    merged: list[ProposalId] = []
+    removed_entries: set[EntryId] = set()
+    for proposal in proposals:
+        if proposal.op is WriteOp.REMOVE:
+            if proposal.entry_id in removed_entries:
+                merged.append(proposal.proposal_id)
+                continue
+            removed_entries.add(proposal.entry_id)
+        kept.append(proposal)
+    return tuple(kept), tuple(merged)

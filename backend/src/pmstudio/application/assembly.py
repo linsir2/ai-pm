@@ -24,7 +24,13 @@ from pmstudio.domain.authoring.readiness import (
 from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS, field_spec
 from pmstudio.domain.provenance.evidence import EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
-from pmstudio.domain.round.draft import Draft, Origin, OriginType, Proposal
+from pmstudio.domain.round.draft import (
+    Draft,
+    Origin,
+    OriginType,
+    Proposal,
+    merge_duplicate_removes,
+)
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
     MAX_QUESTIONS_PER_BATCH,
@@ -664,8 +670,19 @@ def draft_of(
     proposals: Sequence[Proposal],
     gaps: Sequence[str],
 ) -> Draft | None:
+    """新草案的**唯一构造点**（`use_cases.py` 那条路只走这里）。
+
+    收口在这里：同一条目被两族提案各撤一次时（整合者那条路 vs 机械清理那条路），
+    卡片上只该留一行"删除"——真跑里两行都被勾了，确认写入时第二条撞 `UnknownEntry`，
+    **整批一条都没写**（P30 · F28）。规则本身在 `domain/round/draft.py`，这里只调用。
+
+    合并掉的那条**不算丢东西**：条目照样被撤下，它只是同一件事的第二次陈述——
+    所以不进 `DroppedItem`，也不进 `gaps`。
+    """
+
     if not proposals:
         return None
+    proposals, _merged = merge_duplicate_removes(proposals)
     return Draft(
         draft_id=draft_id, round_id=round_id, proposals=tuple(proposals), gaps=tuple(gaps)
     )
