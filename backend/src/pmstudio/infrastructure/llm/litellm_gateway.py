@@ -34,6 +34,12 @@ TRANSIENT_HINTS = (
     "502",
     "503",
     "504",
+    # 供应商间歇性拒收结构化输出（2026-10-03 08:15–08:24 实测：两分钟窗口里连回 400，
+    # 08:17 又全通、08:20 连打 8/8 过；08:24 打到一次真实调用 → 整轮失败）。
+    # **只认它自己这句话**——`invalid_parameter` 这个大类**不放宽**：
+    # 参数真的写错（如 glm 那条 `enable_thinking` 互斥）必须立刻失败，
+    # 闸门正是靠那个把"换模型忘了改参数"当场拦下来的。
+    "response_format type is unavailable",
 )
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (1.0, 3.0)
