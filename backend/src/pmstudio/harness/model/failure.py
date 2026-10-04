@@ -67,11 +67,17 @@ class FailureKind(StrEnum):
     def retryable(self) -> bool:
         """该不该退避后重试。
 
-        **这张属性表是"什么算抖动"的第二个入口，所以它必须和 `is_transient` 一致**——
-        `tests/harness/test_failure.py` 有一条语料级断言把两者钉在一起。
-        原因：网关现在用的是 `is_transient`（有真跑证据），而 `classify` 更细；
-        两张表一旦漂移，后面接线的人会以为"超时该重试"却实际不重试，而测试全绿。
-        `TIMEOUT` 在重试侧算抖动——`TRANSIENT_HINTS` 里本来就有 `"timeout"`。
+        **这张属性表与 `is_transient` 在纯语料上完全一致**（`tests/harness/test_failure.py`
+        的 `CORPUS` 级断言），但**在交叉语料上不一致**——实测 5 条交叉消息全部相反
+        （`CROSS_CORPUS`）。根因：`TRANSIENT_HINTS` 里有五个**裸数字**
+        （429/500/502/503/504），`is_transient()` 只做子串匹配，于是 `maxItems: 500`
+        这类消息也算抖动；而 `classify()` 先判校验词。
+
+        **网关今天用的是 `is_transient`**（`providers/litellm.py`，有真跑证据），
+        所以这个分歧目前不影响生产行为。但它意味着一件事，别记错：
+        **"把网关的退避判据换成 `classify()`" 不是一次搬迁，是一次有意的行为变更**——
+        上游若真的抖了而消息里恰好带 schema 字样，换过去就从"重试"变成"整轮失败"。
+        要换，先修裸数字提示词（改成认异常类型或状态码上下文，别认裸子串），并单独立项。
         """
 
         return self in _RETRYABLE

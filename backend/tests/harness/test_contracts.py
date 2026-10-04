@@ -75,7 +75,7 @@ def test_call_recorder_protocol_keeps_failure_fields():
 
     params = inspect.signature(ModelCallRecorder.record).parameters
     assert set(params) >= {
-        "round_id",
+        "trace_id",
         "purpose",
         "model",
         "prompt_sha",

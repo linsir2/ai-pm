@@ -6,11 +6,9 @@
 
 import sqlite3
 
+from pmstudio.harness.model.prompt_log import PROMPT_LIMIT
 from pmstudio.infrastructure.sqlite import database
-from pmstudio.infrastructure.sqlite.model_calls import (
-    PROMPT_LIMIT,
-    SqliteModelCallRecorder,
-)
+from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
 from tests.support.builders import NOW
 
 #: 加 attempt/ok/error 之前的建表语句（用来验迁移）
@@ -35,7 +33,7 @@ def test_recorder_writes_and_reads_back(tmp_path):
     recorder = SqliteModelCallRecorder(connection)
 
     recorder.record(
-        round_id="r1",
+        trace_id="r1",
         purpose="seat_review",
         model="m",
         prompt_sha="abc",
@@ -57,9 +55,9 @@ def test_recorder_writes_and_reads_back(tmp_path):
 def test_recorder_filters_by_round_and_keeps_the_newest_first(tmp_path):
     connection = database.connect(tmp_path / "pm.db")
     recorder = SqliteModelCallRecorder(connection)
-    for index, round_id in enumerate(("r1", "r2", "r1"), start=1):
+    for index, trace_id in enumerate(("r1", "r2", "r1"), start=1):
         recorder.record(
-            round_id=round_id,
+            trace_id=trace_id,
             purpose="claims",
             model="m",
             prompt_sha=str(index),
@@ -79,7 +77,7 @@ def test_recorder_truncates_a_huge_prompt(tmp_path):
     recorder = SqliteModelCallRecorder(connection)
 
     recorder.record(
-        round_id="r1",
+        trace_id="r1",
         purpose="claims",
         model="m",
         prompt_sha="x",
@@ -107,7 +105,7 @@ def test_recorder_survives_a_broken_write(tmp_path):
     recorder = SqliteModelCallRecorder(connection)
 
     recorder.record(
-        round_id="r1",
+        trace_id="r1",
         purpose="claims",
         model="m",
         prompt_sha="x",
@@ -129,7 +127,7 @@ def test_recorder_survives_usage_that_cannot_be_serialized(tmp_path):
         pass
 
     recorder.record(
-        round_id="r1",
+        trace_id="r1",
         purpose="claims",
         model="m",
         prompt_sha="x",
@@ -163,7 +161,7 @@ def test_the_new_attempt_columns_roundtrip(tmp_path):
     recorder = SqliteModelCallRecorder(connection)
 
     recorder.record(
-        round_id="r1",
+        trace_id="r1",
         purpose="integration",
         model="m",
         prompt_sha="x",

@@ -18,10 +18,14 @@ from tests.architecture.guards import (
 
 HARNESS = SRC / PACKAGE / "harness"
 
-#: 允许出现在 harness 里的第三方。只有 pydantic 一个，理由：
-#: 输出归一化引擎的对象就是 pydantic 模型（model_fields / annotation / model_validate /
-#: errors()），把它抽象掉是为不存在的需求建抽象。
-ALLOWED_THIRD_PARTY = frozenset({"pydantic"})
+#: 允许出现在 harness 里的第三方。两个，理由：
+#: - `pydantic`：输出归一化引擎的对象就是 pydantic 模型（model_fields / annotation /
+#:   model_validate / errors()），把它抽象掉是为不存在的需求建抽象。
+#: - `litellm`：**供应商调用本身就是模型层的职责**（`model/providers/litellm.py`）。
+#:   不把它搬进来，`ModelGateway` 就只是个协议，实现仍在仓外——"模型层可独立抽出"
+#:   这个目标等于没达成。换 provider 要改 harness 是真的，但控制平面知道
+#:   "调谁"跟知道"产品有哪些章节"完全是两回事。
+ALLOWED_THIRD_PARTY = frozenset({"pydantic", "litellm"})
 
 #: 标准库全集由解释器给出，不手抄一份（手抄必然漏，然后漏的那条就成了免检通道）。
 _STDLIB = frozenset(sys.stdlib_module_names)
@@ -55,7 +59,6 @@ PRODUCT_VOCABULARY = frozenset(
 
 #: 显式欠账：{文件 : 词汇} → 为什么还在、什么时候消。见下面那条"只许减"的测试。
 ALLOWED_PRODUCT_WORDS: dict[tuple[str, str], str] = {
-    ("model/contracts.py", "round_id"): "M4 把它改名 trace_id：它是关联键，不是产品知识",
     # `Event` 的关联键：这封通知属于哪一轮。信封**不按它分支、不组装它**，
     # 它只是随通知带出去的定位信息。改名会动 SSE 契约（前端 `workspace.ts` 按
     # `event.round_id` 过滤），而事件名与 payload 键这一层是不许改的——所以先登记。
@@ -147,12 +150,13 @@ def test_harness_code_identifiers_carry_no_product_vocabulary():
 def test_the_allowlist_has_not_grown():
     """白名单只许减，不许增——新增一条等于给"产品词汇进控制平面"开口子。
 
-    两条都是**关联键**（随通知/留样带出去的定位信息），不是"harness 按产品词分支"。
+    M4 消掉了一条：留样协议（`ModelCallRecorder.record`）的关联键从 `round_id`
+    改名 `trace_id`。剩下的**只有一条**，它是关联键（随通知带出去的定位信息），
+    不是"harness 按产品词分支"。
     真要新增一条，先问：它是定位信息，还是控制逻辑？后者一律不许进。
     """
 
     assert set(ALLOWED_PRODUCT_WORDS) == {
-        ("model/contracts.py", "round_id"),
         ("events/schemas.py", "round_id"),
     }
     for (where, word), why in ALLOWED_PRODUCT_WORDS.items():

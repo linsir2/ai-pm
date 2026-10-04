@@ -53,8 +53,8 @@ from pmstudio.domain.services.scope_guard import ScopeGuard
 from pmstudio.domain.services.traceability import TraceabilityChecker
 from pmstudio.harness.events import InProcessEventBus
 from pmstudio.harness.model.contracts import ModelGateway
+from pmstudio.harness.model.providers.litellm import LiteLLMGateway
 from pmstudio.infrastructure.graph.graph import RoundRunner
-from pmstudio.infrastructure.llm.litellm_gateway import LiteLLMGateway
 from pmstudio.infrastructure.llm.prompt_library import FilePromptLibrary
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.sqlite import database

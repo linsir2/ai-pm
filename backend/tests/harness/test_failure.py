@@ -182,3 +182,45 @@ def test_only_transient_and_timeout_are_retryable():
         FailureKind.UNKNOWN,
     ):
         assert kind.retryable is False, kind
+
+
+#: **交叉语料基线**（M4 加，2026-10-04）：一条消息**同时**含"校验词"与"抖动词"时，
+#: 两套口径给出**相反**的答案。这不是 bug 记录，是**行为基线**——
+#: 将来谁要动 `classify()` 的判定顺序或给 `TRANSIENT_HINTS` 增删词，这几条会红，
+#: 提醒他"你正在改网关的重试行为，那是热路径"。
+#:
+#: 为什么原来没抓到：上面的 `CORPUS` 每条只含一类词，交叉情形一条都没有。
+#: 根因在 `TRANSIENT_HINTS` 里有五个**裸数字**（429/500/502/503/504）——
+#: 任何提到这些数字的消息都算抖动，包括 `maxItems: 500`、`context_length: 500`。
+#: 而 `classify()` 先判校验词，`is_transient()` 只做子串匹配，于是：
+#: `classify` 说不重试，`is_transient` 说重试。
+#:
+#: **网关今天用的是 `is_transient`**（`providers/litellm.py:145`），有真跑证据。
+#: 所以这些分歧目前不影响生产行为；但它意味着"把网关换成 `classify()`"
+#: **不是一次搬迁，是一次有意的行为变更**（M4b 单独立项，前置条件是先修裸数字提示词）。
+CROSS_CORPUS = [
+    "1 validation error: expected at most 500 items",
+    "ValidationError: schema mismatch, upstream said 503",
+    "invariant violated: connection reset by peer",
+    "insufficient quota, 500 retry later",
+    "PacketParseError: invalid schema, 502 Bad Gateway",
+]
+
+
+@pytest.mark.parametrize("message", CROSS_CORPUS)
+def test_cross_words_are_where_the_two_disagree(message: str):
+    """交叉语料上 `classify` 与 `is_transient` **不一致**——把现状钉住。
+
+    这条断言的是**分歧本身存在**。它哪天不红了，只有两种可能：
+    有人修好了其中一套（好，那是 M4b 的成果，届时删掉这条），或者有人改坏了（更糟）。
+    """
+
+    assert classify(Exception(message)).retryable is False, message
+    assert is_transient(message) is True, message
+
+
+def test_pure_validation_and_pure_transient_still_agree():
+    """对照组：**不交叉**的时候两套口径必须一致（现有语料已覆盖，这里只钉住边界）。"""
+
+    for message in ("1 validation error for SeatPacket", "503 Service Unavailable"):
+        assert classify(Exception(message)).retryable is is_transient(message), message

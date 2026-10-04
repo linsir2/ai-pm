@@ -51,13 +51,16 @@ class ModelCallRecorder(Protocol):
     实现是 `infrastructure/sqlite/model_calls.py`；网关默认不接（`recorder=None` 时什么都不记）。
     提示词给的是**原文**——只存哈希复现不了，而复现是这张表唯一的目的。
 
-    `round_id` 是关联键不是产品知识（M4 会改名 `trace_id`）。
+    关联键叫 `trace_id`（M4 从 `round_id` 改名）：它只是"这次调用挂在哪个上下文下"的
+    定位信息，模型层不该知道产品有"轮次"这个东西。
+    **但存储侧的列名仍是 `round_id`**——那列里装的就是 `r-xxxx`，改名叫 `trace_id`
+    等于让列名撒谎。改名只发生在协议边界上：harness 说中性名，产品自己的仓库说产品名。
     """
 
     def record(
         self,
         *,
-        round_id: str | None,
+        trace_id: str | None,
         purpose: str,
         model: str,
         prompt_sha: str,
