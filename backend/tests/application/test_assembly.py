@@ -1656,7 +1656,10 @@ def test_entry_addresses_never_reach_the_document():
 def test_seat_inclination_sentence_is_not_stripped():
     """**反例**：席位倾向是给用户的决策依据，不许被当台账话剥掉。"""
 
-    title = "菜单能否在锁单后调整（open61）？席位判断 E157 给出默认「要留痕」的倾向，但用户尚未拍板。"
+    title = (
+        "菜单能否在锁单后调整（open61）？"
+        "席位判断 E157 给出默认「要留痕」的倾向，但用户尚未拍板。"
+    )
     proposal = assembly.open_question_proposal(
         _question(title),
         eid=EvidenceId("E9"),

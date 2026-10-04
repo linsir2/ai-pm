@@ -1353,6 +1353,31 @@ def test_the_open_items_checklist_shows_where_each_item_belongs():
     assert "导出的兼容性口径" in text
 
 
+def test_the_open_items_checklist_names_the_entry_address():
+    """地址要**有名字**、并说清它只用来撤条目（learnings L13 / M6f 对记忆 id 的同一手法）：
+    真跑里模型把裸 id 当引用抄进了标题 —— 变成正文里一句 `（open61/open67/open112）`。"""
+
+    from pmstudio.application.use_cases import _render_open_items
+
+    carried = (
+        Question(
+            question_id=QuestionId("q1"),
+            target=Target.body("s7"),
+            type=QuestionType.TEXT,
+            title="菜单增删改价与订单改撤是否保留历史",
+            why="前几轮留下的未决项",
+            consequence_if_skipped="先搁着",
+            from_entry="r1#open61",
+        ),
+    )
+
+    text = _render_open_items(carried)
+
+    assert "条目地址" in text
+    assert "r1#open61" in text
+    assert "不许写进" in text
+
+
 def test_skipped_question_defaults_use_its_own_batchs_title():
     """跳过的题补 system_default 出处时，文本要写**它自己那一批**的题面（计划 §0.1 第 4 处）。"""
 

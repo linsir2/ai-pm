@@ -1101,19 +1101,29 @@ def _render_authorized_features(round_: Round, *, document: Document) -> str:
 
 
 def _render_open_items(carried: Sequence[Question]) -> str:
-    """给整合者看的"前几轮留下的未决项"清单（带 entry id，它才撤得对）。
+    """给整合者看的"前几轮留下的未决项"清单（带**条目地址**，它才撤得对）。
 
     也写上**去处**（P11）：让它在同一批里看得见"这个去处已经有老问题在等"，
     少做一份"把同一件事重新问一遍"的活。
+
+    **地址要有名字，并说清它只填 `entry_id`**（M7 A′ / learnings L13 / M6f 对记忆 id
+    的同一手法）：以前裸写成 `[r-… #open61]`，真跑里模型把它当"引用"抄进了标题 →
+    正文里出现 `（open61/open67/open112）` 这种读者看不懂的内部地址。
     """
 
     lines = [
-        f"- [{item.from_entry}] 〔去处：{item.target.label()}〕{item.title}"
+        f"- 条目地址 {item.from_entry} · 〔去处：{item.target.label()}〕{item.title}"
         f"（跳过后果：{item.consequence_if_skipped}）"
         for item in carried
         if item.from_entry is not None
     ]
-    return "\n".join(lines) or "（没有未决项）"
+    if not lines:
+        return "（没有未决项）"
+    lines.append(
+        "上面每行的**条目地址**只用来出 `remove` 撤下那条未决项（填进 `entry_id`）——"
+        "**不许写进任何标题或正文**；出处编号只有 `E…` 这一种。"
+    )
+    return "\n".join(lines)
 
 
 def _render_list_items(round_: Round) -> str:

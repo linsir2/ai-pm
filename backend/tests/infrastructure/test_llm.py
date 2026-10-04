@@ -1095,3 +1095,28 @@ async def test_gateway_records_the_call_when_a_recorder_is_given(monkeypatch):
     assert row["prompt_text"] == "提示词"
     assert row["usage"] == {"total_tokens": 7}
     assert row["duration_ms"] >= 0
+
+
+def test_integrator_prompt_forbids_ledger_talk_in_open_item_titles():
+    """未决清单那节要说清两件事（M7 A′ / learnings L13）。
+
+    真跑现场：给整合者看的未决清单原来是裸的 `[r-… #open61]`，它把这串当"引用"抄进标题 →
+    正文里出现 `（open61/open67/open112）`；它还会交代"本轮已出题（见题『…』）"这类处置说明，
+    而**判重用的正是标题**——于是同一件事每轮换一个说法，判重抓不住。
+    """
+
+    text = (PROMPTS / "integrator.md").read_text(encoding="utf-8")
+
+    assert "只写问题本身" in text
+    assert "处置说明" in text
+    assert "条目地址" in text
+
+
+def test_integrator_limits_forbid_ledger_talk_in_open_item_titles():
+    """s11 标题只写"问题本身"：不许交代"这件事这一轮怎么处置的"（M7 A′）。"""
+
+    from pmstudio.application.agents.integrator import LIMITS_TEXT
+
+    assert "只写问题本身" in LIMITS_TEXT
+    assert "本轮已出题" in LIMITS_TEXT
+    assert "E…" in LIMITS_TEXT
