@@ -12,7 +12,7 @@ from dataclasses import asdict
 import httpx
 import pytest
 
-from pmstudio.application.errors import ToolCallFailed
+from pmstudio.harness.errors import ToolCallFailed
 from pmstudio.infrastructure.tools.tavily import TavilySearchGateway
 
 

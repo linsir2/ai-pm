@@ -18,8 +18,9 @@ from collections.abc import Callable
 import httpx
 
 from pmstudio.application.dto import ParsedMaterial
-from pmstudio.application.errors import FetchRefused, ToolCallFailed, UnsupportedMaterial
+from pmstudio.application.errors import UnsupportedMaterial
 from pmstudio.application.ports import FetchedPage
+from pmstudio.harness.errors import FetchRefused, ToolCallFailed
 from pmstudio.infrastructure.tools.extract import (
     HTML_PARSER_ID,
     TRUNCATED_WARNING,

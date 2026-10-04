@@ -3,7 +3,7 @@
 - 事件在事务提交后发布（用例负责）；
 - 总线给事件盖 `seq`（投递侧的事）；
 - 订阅者队列满了丢最旧的并记 warning——绝不阻塞发布方，
-  因为"摘掉所有订阅者流程照样跑完"是设计里的硬规矩（`05` §12.2）。
+  因为"摘掉所有订阅者流程照样跑完"是设计里的硬规矩（`05-DDD架构.md §12.2`）。
 """
 
 import asyncio
@@ -11,7 +11,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import replace
 
-from pmstudio.application.events import Event
+from pmstudio.harness.events.schemas import Event
 
 logger = logging.getLogger(__name__)
 

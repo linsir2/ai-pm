@@ -32,10 +32,10 @@ sys.path.insert(0, str(BACKEND_ROOT))
 from evals.assertions import EVAL_ASSERTIONS, check  # noqa: E402
 
 from pmstudio.application.commands import RoundCommand  # noqa: E402
-from pmstudio.application.errors import ApplicationError  # noqa: E402
 from pmstudio.bootstrap.container import build_container  # noqa: E402
 from pmstudio.bootstrap.settings import Settings  # noqa: E402
 from pmstudio.domain.shared.ids import ProjectId, RoundId  # noqa: E402
+from pmstudio.harness.errors import ApplicationError  # noqa: E402
 
 CASES_DIR = BACKEND_ROOT / "evals" / "cases"
 #: eval 默认跑在这个库上：**永远不碰工作库**（`Settings.from_env()` 里 PMSTUDIO_DB 优先级更高，

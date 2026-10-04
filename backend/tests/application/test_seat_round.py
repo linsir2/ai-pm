@@ -2,13 +2,13 @@ import json
 
 import pytest
 
-from pmstudio.application.errors import ModelCallFailed, PacketParseError
 from pmstudio.application.events import GENERATION_FAILED, PACKET_EMITTED
 from pmstudio.application.use_cases import ClaimEdit
 from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import EvidenceId
 from pmstudio.domain.shared.target import Target
+from pmstudio.harness.errors import ModelCallFailed, PacketParseError
 from tests.support.builders import PROJECT, SEAT, make_seat
 from tests.support.harness import Harness
 

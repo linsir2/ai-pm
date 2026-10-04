@@ -4,7 +4,6 @@ import pytest
 
 from pmstudio.application.commands import RoundCommand
 from pmstudio.application.dto import RoundOutcomeView
-from pmstudio.application.errors import PacketParseError
 from pmstudio.application.use_cases import AnswerInput
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceSource
@@ -33,6 +32,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from pmstudio.harness.errors import PacketParseError
 from tests.support.builders import (
     NOW,
     PROJECT,

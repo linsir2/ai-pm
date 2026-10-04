@@ -1,6 +1,20 @@
-"""应用层错误。领域错误在 pmstudio.domain.shared.errors，两者不许互相继承。"""
+"""应用层错误。领域错误在 pmstudio.domain.shared.errors，两者不许互相继承。
+
+**运行时错误不在这里**：`ApplicationError` 基类与 `PacketParseError` / `ToolCallFailed` /
+`FetchRefused` / `ModelCallFailed` 已搬进 `pmstudio.harness.errors`（2026-10-04）——
+它们只因为"模型会胡说八道"或"外部调用会失败"而存在。搬走之后
+`litellm_gateway.py` 与 `tools/*.py` 才不必反向依赖 application。
+
+留在这里的都是**有业务含义**的：`UnknownProject` / `UnknownRound` / `UnknownEvidenceId` /
+`UnknownMaterial` / `MaterialFrozen` / `RoundBusy` / `UnsupportedMaterial` /
+`MaterialTooLarge`，以及 `unknown_ref_message`（席位条目地址 vs 提案编号 vs E 编号）。
+
+`code` 字符串与搬移前逐字一致——`api/errors.py` 的 CODE_STATUS 表靠它映射 HTTP 状态码。
+"""
 
 from collections.abc import Sequence
+
+from pmstudio.harness.errors import ApplicationError
 
 
 def unknown_ref_message(
@@ -27,22 +41,6 @@ def unknown_ref_message(
     return f"{what}：{listed}"
 
 
-class ApplicationError(Exception):
-    def __init__(self, message: str, *, code: str = "application_error", **details: object) -> None:
-        super().__init__(message)
-        self.message = message
-        self.code = code
-        self.details = details
-
-
-class PacketParseError(ApplicationError):
-    """模型返回的报文过不了 schema 或语义校验——失败必须是失败，不许静默降级。"""
-
-    def __init__(self, message: str, *, purpose: str, **details: object) -> None:
-        super().__init__(message, code="model_packet_unparsable", purpose=purpose, **details)
-        self.purpose = purpose
-
-
 class UnsupportedMaterial(ApplicationError):
     """这份材料读不了（类型不支持，或者里面抽不出文字）。
 
@@ -59,48 +57,6 @@ class MaterialTooLarge(ApplicationError):
 
     def __init__(self, message: str, **details: object) -> None:
         super().__init__(message, code="material_too_large", **details)
-
-
-class ToolCallFailed(ApplicationError):
-    """工具（联网检索等）调用失败：超时 / 鉴权 / 供应商错误 / 回包不是 JSON。
-
-    与 `ModelCallFailed` 分开：工具失败**不判死整轮**（留痕继续跑），模型失败才走重试那条路。
-    """
-
-    def __init__(
-        self, message: str, *, tool_id: str, status: int | None = None, **details: object
-    ) -> None:
-        super().__init__(
-            message, code="tool_call_failed", tool_id=tool_id, status=status, **details
-        )
-        self.tool_id = tool_id
-        self.status = status
-
-
-class FetchRefused(ApplicationError):
-    """这个地址**不能用**：不是 http/https、带账号密码、内网地址、返回的不是网页、页面太大。
-
-    与 `ToolCallFailed` 分开：那是"抓的时候出了问题"（超时 / 上游 5xx，502），
-    这是"你给的东西本身不行"（422）——界面照样只显示 message，但码不同，复盘时一眼分得清。
-    """
-
-    def __init__(self, message: str, *, tool_id: str = "tool.web_fetch", **details: object) -> None:
-        super().__init__(message, code="fetch_refused", tool_id=tool_id, **details)
-
-
-class ModelCallFailed(ApplicationError):
-    """网关调用本身失败（超时 / 鉴权 / 供应商错误）。
-
-    `hint` 只给**模型自己能修**的那两种失败（空回复 / 不是 JSON）：重试时它会被递成
-    `validation_error`，省掉一次盲调。供应商那类（超时 / 5xx / 鉴权）不给——递了没用。
-    """
-
-    def __init__(
-        self, message: str, *, purpose: str, hint: str | None = None, **details: object
-    ) -> None:
-        super().__init__(message, code="model_call_failed", purpose=purpose, **details)
-        self.purpose = purpose
-        self.hint = hint
 
 
 class UnknownProject(ApplicationError):

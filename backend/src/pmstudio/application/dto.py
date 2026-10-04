@@ -96,13 +96,18 @@ class SeatPacketView:
 
 @dataclass(frozen=True, slots=True)
 class DroppedView:
-    """一条"没进卡片"的留痕：地址、席位、第几趟、原因、来源（`04` C5 后半）。"""
+    """一条"没进卡片"的留痕：地址、席位、第几趟、原因、来源（`04` C5 后半）。
+
+    `packet_id` 是**可选**的：`None` = 不来自模型回包（assembly 归因 / tool 失败），
+    或老数据。前端 `dropsFor` 有它才按 id 精确挂载，没有就回退 `(seat_id, pass_index)`。
+    """
 
     handle: str
     seat_id: str | None
     pass_index: int
     reason: str
     source: str
+    packet_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1003,6 +1008,7 @@ def round_view(
                 pass_index=item.pass_index,
                 reason=item.reason,
                 source=item.source.value,
+                packet_id=item.packet_id,
             )
             for item in round_.dropped
         ),

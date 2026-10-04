@@ -96,12 +96,8 @@ from pmstudio.application.dto import (
     workspace_view,
 )
 from pmstudio.application.errors import (
-    ApplicationError,
     MaterialFrozen,
     MaterialTooLarge,
-    ModelCallFailed,
-    PacketParseError,
-    ToolCallFailed,
     UnknownEvidenceId,
     UnknownMaterial,
     UnsupportedMaterial,
@@ -111,12 +107,10 @@ from pmstudio.application.events import (
     GENERATION_FAILED,
     PACKET_EMITTED,
     ROUND_UPDATED,
-    Event,
 )
 from pmstudio.application.narrowing import narrow_seats
 from pmstudio.application.ports import (
     Clock,
-    EventPublisher,
     IdGenerator,
     MaterialParser,
     MaterialRetriever,
@@ -186,6 +180,13 @@ from pmstudio.domain.shared.label import ClaimLabel, Zone
 from pmstudio.domain.shared.sections import FEATURE_HOME, SECTION_IDS
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from pmstudio.harness.errors import (
+    ApplicationError,
+    ModelCallFailed,
+    PacketParseError,
+    ToolCallFailed,
+)
+from pmstudio.harness.events import Event, EventPublisher
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,6 +329,7 @@ class StartRound:
                     external_material=external_material_text(round_, store=self._materials),
                     round_id=round_id,
                     validation_error=repair,
+                    packet_slot=f"a{attempt}",
                 )
                 break
             except PacketParseError as error:
@@ -661,6 +663,8 @@ class RunSeatRound:
         )
         known_eids = frozenset(evidence.eid for evidence in ledger.evidences())
         external_material = external_material_text(round_, store=self._materials)
+        #: 这一趟是第几趟（问卷回来后会 +1 再跑）。信封槽位的一部分，见 `_review_one`。
+        pass_index = round_.seat_round_count
 
         results = await asyncio.gather(
             *(
@@ -678,6 +682,7 @@ class RunSeatRound:
                     known_eids=known_eids,
                     answer_eids=answer_refs,
                     external_material=external_material,
+                    pass_index=pass_index,
                 )
                 for seat in pending
             ),
@@ -740,8 +745,14 @@ class RunSeatRound:
         known_eids: frozenset[EvidenceId],
         answer_eids: dict[str, str] | None = None,
         external_material: str = "",
+        pass_index: int = 1,
     ) -> None:
-        """一个席位：调模型（事务外）→ 交回就落库。`with uow` 里没有 await（守卫会拦）。"""
+        """一个席位：调模型（事务外）→ 交回就落库。`with uow` 里没有 await（守卫会拦）。
+
+        `pass_index` 是"这一轮里的第几趟席位轮"（问卷回来后会再跑一趟）。它和 `attempt`
+        一起构成信封的**槽位**：身份由协调者（这里）分配，因为 agent 只知道自己是谁产出的，
+        不知道这是第几趟第几次——不传就会撞车（同一席位两趟拿到同一个 packet_id）。
+        """
 
         validation_error = ""
         for attempt in range(1, MAX_SEAT_ATTEMPTS + 1):
@@ -758,6 +769,7 @@ class RunSeatRound:
                     answer_eids=answer_eids or {},
                     round_id=round_id,
                     validation_error=validation_error,
+                    packet_slot=f"p{pass_index}a{attempt}",
                 )
             except PacketParseError as error:
                 # 解析错也是**可修复的错**：只重跑这个席位（其余席位不动）。
@@ -805,6 +817,7 @@ class RunSeatRound:
                     review.seat_id,
                     outcome.overflow,
                     pass_index=round_.seat_round_count,
+                    packet_id=outcome.envelope.packet_id,
                 )
             )
             # 非对象元素被摘掉的那些条也要留痕（`02` §11.0.35）：一个占位符换一行留痕，
@@ -814,6 +827,7 @@ class RunSeatRound:
                     review.seat_id,
                     outcome.discarded,
                     pass_index=round_.seat_round_count,
+                    packet_id=outcome.envelope.packet_id,
                 )
             )
             self._round_writer.save(round_)
@@ -826,9 +840,18 @@ class RunSeatRound:
                 project_id=str(project_id),
                 round_id=str(round_id),
                 payload={
+                    # §4.4 信封的身份四件套 + 依据：**事件是信封的第一个消费者**。
+                    # 有了 packet_id，"这一趟交回的东西后来哪些没进卡片"按 id 一查即可
+                    # （以前要翻日志，且日志按席位分、跨趟混在一起）。
+                    "packet_id": outcome.envelope.packet_id,
+                    "run_id": outcome.envelope.run_id,
+                    "kind": outcome.envelope.kind,
+                    "produced_by": outcome.envelope.produced_by,
+                    "basis": outcome.envelope.basis,
+                    # 下面两行是前端已在用的字段，**保持原名原义**
+                    # （前端按 key 取，缺了会静默不更新）
                     "seat_id": review.seat_id,
                     "pass_index": pass_index,
-                    "basis": review.basis,
                     "opinions": [
                         {
                             "local_id": opinion.local_id,
@@ -984,6 +1007,7 @@ def _truncation_items(
     overflow: tuple[Overflow, ...],
     *,
     pass_index: int,
+    packet_id: str | None = None,
 ) -> list[DroppedItem]:
     """席位交回超上限被截断的那几条：留痕说清"第几条起没进卡片"。"""
 
@@ -994,6 +1018,7 @@ def _truncation_items(
             source=DropSource.ASSEMBLY,
             seat_id=seat_id,
             pass_index=pass_index,
+            packet_id=packet_id,
         )
         for item in overflow
     ]
@@ -1004,6 +1029,7 @@ def _discarded_items(
     discarded: tuple[Discarded, ...],
     *,
     pass_index: int,
+    packet_id: str | None = None,
 ) -> list[DroppedItem]:
     """席位交回的**非对象元素**被摘掉的那几条：留痕带上位置（`02` §11.0.35）。
 
@@ -1019,6 +1045,7 @@ def _discarded_items(
             source=DropSource.ASSEMBLY,
             seat_id=seat_id,
             pass_index=pass_index,
+            packet_id=packet_id,
         )
         for item in discarded
     ]
@@ -1037,6 +1064,7 @@ def _packet_discard_items(
     discarded: tuple[Discarded, ...],
     *,
     pass_index: int,
+    packet_id: str | None = None,
 ) -> tuple[DroppedItem, ...]:
     """整合报文里被摘掉的**非对象元素**：丢那一条 + 留痕（P23）。
 
@@ -1054,6 +1082,7 @@ def _packet_discard_items(
             source=DropSource.ASSEMBLY,
             seat_id=None,
             pass_index=pass_index,
+            packet_id=packet_id,
         )
         for item in discarded
     )
@@ -1063,6 +1092,7 @@ def _overflow_items(
     overflow: tuple[Overflow, ...],
     *,
     pass_index: int,
+    packet_id: str | None = None,
 ) -> tuple[DroppedItem, ...]:
     """整合这一趟被截断掉的那几条：留痕说清是"超出单轮上限"。"""
 
@@ -1073,6 +1103,7 @@ def _overflow_items(
             source=DropSource.ASSEMBLY,
             seat_id=None,
             pass_index=pass_index,
+            packet_id=packet_id,
         )
         for item in overflow
     )
@@ -1488,6 +1519,7 @@ class IntegrateRound:
                     round_digest=render_round_digest(round_, ledger=ledger),
                     round_id=round_id,
                     validation_error=validation_error,
+                    packet_slot=f"a{attempt}",
                 )
             except (ModelCallFailed, PacketParseError, ShapeError) as failure:
                 return (), (f"这一轮没能整理记忆（{failure}），草案照出",)
@@ -1544,7 +1576,7 @@ class IntegrateRound:
         """
 
         assembled = assemble(
-            outcome.packet,
+            outcome.envelope.packet,
             round_=round_,
             document=document,
             ledger=ledger,
@@ -1555,8 +1587,16 @@ class IntegrateRound:
         assembled = replace(
             assembled,
             dropped=assembled.dropped
-            + _packet_discard_items(outcome.discarded, pass_index=round_.seat_round_count)
-            + _overflow_items(outcome.overflow, pass_index=round_.seat_round_count),
+            + _packet_discard_items(
+                outcome.discarded,
+                pass_index=round_.seat_round_count,
+                packet_id=outcome.envelope.packet_id,
+            )
+            + _overflow_items(
+                outcome.overflow,
+                pass_index=round_.seat_round_count,
+                packet_id=outcome.envelope.packet_id,
+            ),
         )
         gaps = dry_run(
             document, assembled.proposals, round_=round_, now=self._clock.now()
@@ -1657,6 +1697,10 @@ class IntegrateRound:
                     open_items=open_items,
                     previous_list_items=previous_list_items,
                     contradictions=contradictions,
+                    packet_slot=(
+                        f"i{round_.integration_seq}"
+                        f"a{MAX_INTEGRATION_ATTEMPTS - validate_left + 1}"
+                    ),
                 )
                 if outcome.discarded and validate_left > 1:
                     # 容器里混进了**根本不是对象**的元素（P23）：与席位、主张同一套——
@@ -1825,6 +1869,10 @@ class IntegrateRound:
                         proposals=assembled.proposals,
                     ),
                     round_id=round_id,
+                    packet_slot=(
+                        f"i{round_.integration_seq}"
+                        f"d{MAX_ACCOUNTING_REPAIRS - accounting_left + 1}"
+                    ),
                 )
             except ApplicationError:
                 # 补交代是**锦上添花**：这一步挂了不该把一整轮判死（报文本身是好的）。
@@ -1832,9 +1880,16 @@ class IntegrateRound:
                 break
             accounting_left -= 1
             missing_before = len(unaccounted)
+            # 合并进**信封**而不是 Outcome：报文只有信封一处（这是这轮刚消掉的两条路径），
+            # `replace(outcome, packet=...)` 会造出"Outcome 是新的、信封是旧的"那种漂移。
             outcome = replace(
                 outcome,
-                packet=_merge_dispositions(outcome.packet, answer.packet, named=named),
+                envelope=replace(
+                    outcome.envelope,
+                    packet=_merge_dispositions(
+                        outcome.envelope.packet, answer.envelope.packet, named=named
+                    ),
+                ),
             )
             assembled, gaps = self._assemble_and_gaps(
                 round_=round_,

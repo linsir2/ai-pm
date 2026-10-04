@@ -4,9 +4,9 @@ import pytest
 
 from pmstudio.application.agents import schemas
 from pmstudio.application.agents.seat import SeatReviewer
-from pmstudio.application.errors import PacketParseError
 from pmstudio.domain.round.opinion import OpinionForm
 from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.harness.errors import PacketParseError
 from tests.support.builders import make_seat
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway
 

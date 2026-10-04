@@ -10,12 +10,13 @@
 import pytest
 
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
-from pmstudio.application.errors import MaterialTooLarge, ToolCallFailed
+from pmstudio.application.errors import MaterialTooLarge
 from pmstudio.application.ports import FetchedPage
 from pmstudio.application.use_cases import MAX_MATERIALS_PER_PROJECT
 from pmstudio.domain.round.round import MaterialRef, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
+from pmstudio.harness.errors import ToolCallFailed
 from pmstudio.infrastructure.tools.extract import html_parser_version
 from tests.support.builders import PROJECT
 from tests.support.doubles import RecordingWebFetch

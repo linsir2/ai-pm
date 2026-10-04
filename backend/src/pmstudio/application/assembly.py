@@ -11,7 +11,7 @@ from datetime import datetime
 
 from pmstudio.application.agents import schemas
 from pmstudio.application.context import seat_entry_handle
-from pmstudio.application.errors import PacketParseError, unknown_ref_message
+from pmstudio.application.errors import unknown_ref_message
 from pmstudio.application.evidence_refs import candidates_for, normalize_ref
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.readiness import (
@@ -63,6 +63,7 @@ from pmstudio.domain.shared.sections import (
 )
 from pmstudio.domain.shared.target import Target, target_from_label
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from pmstudio.harness.errors import PacketParseError
 
 PURPOSE = "integration"
 

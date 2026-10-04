@@ -12,6 +12,7 @@ const packet = {
   opinions: [{ local_id: "O1" }, { local_id: "O2" }, { local_id: "O3" }],
   judgment_count: 2,
   question_count: 1,
+  packet_id: "pkt-r1-seat_review-seat.data_scale-p2a1",
 } as unknown as SeatPacketView;
 
 const dropped: DroppedView[] = [
@@ -21,6 +22,7 @@ const dropped: DroppedView[] = [
     pass_index: 2,
     reason: "与文档已有内容重复",
     source: "integrator",
+    packet_id: "pkt-r1-seat_review-seat.data_scale-p2a1",
   },
   {
     handle: "seat.data_scale:O1",
@@ -28,6 +30,7 @@ const dropped: DroppedView[] = [
     pass_index: 1,
     reason: "上一趟的事",
     source: "integrator",
+    packet_id: "pkt-r1-seat_review-seat.data_scale-p1a1",
   },
   {
     handle: "查不到:O9",
@@ -74,5 +77,79 @@ describe("dropsFor", () => {
 
   it("一条都没丢就不出这行", () => {
     expect(dropHeadline(packet, [])).toBe("");
+  });
+});
+
+
+describe("dropsFor 按 packet_id 精确匹配", () => {
+  const withId = {
+    ...packet,
+    packet_id: "pkt-r1-seat_review-seat.data_scale-p2a1",
+  } as unknown as SeatPacketView;
+
+  it("有 packet_id 就按 id 匹配，即使 pass_index 不同", () => {
+    // 同一包的另一趟（pass_index 不同）——按 id 仍然匹配
+    const otherPass = {
+      handle: "seat.data_scale:O9",
+      seat_id: "seat.data_scale",
+      pass_index: 9,
+      reason: "同一包里的另一条",
+      source: "integrator",
+      packet_id: "pkt-r1-seat_review-seat.data_scale-p2a1",
+    };
+    expect(dropsFor(withId, [...dropped, otherPass]).map((item) => item.handle)).toContain(
+      "seat.data_scale:O9",
+    );
+  });
+
+  it("不同 packet_id 的留痕不匹配（即使 seat_id 与 pass_index 相同）", () => {
+    const differentPacket = {
+      handle: "seat.data_scale:O7",
+      seat_id: "seat.data_scale",
+      pass_index: 2,
+      reason: "另一包里的",
+      source: "integrator",
+      packet_id: "pkt-r1-seat_review-seat.data_scale-p1a1",
+    };
+    expect(dropsFor(withId, [...dropped, differentPacket])).not.toContainEqual(
+      expect.objectContaining({ handle: "seat.data_scale:O7" }),
+    );
+  });
+
+  it("packet_id 缺失时回退 (seat_id, pass_index) 启发式", () => {
+    const legacyPacket = { ...packet, packet_id: "" } as unknown as SeatPacketView;
+    const legacyDrop: DroppedView = {
+      handle: "seat.data_scale:O3",
+      seat_id: "seat.data_scale",
+      pass_index: 2,
+      reason: "老数据没有 packet_id",
+      source: "integrator",
+    };
+    expect(dropsFor(legacyPacket, [...dropped, legacyDrop]).map((item) => item.handle)).toContain(
+      "seat.data_scale:O3",
+    );
+  });
+
+  it("assembly 与 tool 来源（无 packet_id）不会被误挂到席位包下", () => {
+    const onlyTool = dropped.filter((item) => item.source === "tool");
+    expect(dropsFor(withId, onlyTool)).toEqual([]);
+  });
+});
+
+describe("unplacedDrops 与 dropsFor 用同一套匹配", () => {
+  it("有 packet_id 的留痕挂得上，不会落进 unplaced", () => {
+    const placed = dropped.filter((item) => item.packet_id === packet.packet_id);
+    expect(unplacedDrops(placed, [packet])).toEqual([]);
+  });
+
+  it("无 packet_id 的老数据按启发式判断", () => {
+    const legacy: DroppedView = {
+      handle: "seat.data_scale:O5",
+      seat_id: "seat.data_scale",
+      pass_index: 2,
+      reason: "老数据",
+      source: "integrator",
+    };
+    expect(unplacedDrops([legacy], [packet])).toEqual([]);
   });
 });

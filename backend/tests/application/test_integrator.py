@@ -4,7 +4,7 @@ import pytest
 
 from pmstudio.application.agents import schemas
 from pmstudio.application.agents.integrator import LIMITS_TEXT, Integrator
-from pmstudio.application.errors import PacketParseError
+from pmstudio.harness.errors import PacketParseError
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway
 
 
@@ -136,7 +136,7 @@ async def test_integrator_returns_parsed_packet_and_all_slots():
         skipped="（没有跳过的题）",
         entry_ids="（文档现在没有任何条目）",
     )
-    packet = outcome.packet
+    packet = outcome.envelope.packet
 
     assert packet.questions[0].kind == "gap"
     assert packet.proposals[0].target.field == "acceptance"
@@ -237,7 +237,7 @@ async def test_integrator_reports_overflow_instead_of_raising():
         entry_ids="…",
     )
 
-    assert len(outcome.packet.proposals) == 60
+    assert len(outcome.envelope.packet.proposals) == 60
     assert outcome.overflow == (schemas.Overflow(container="proposals", kept=60, dropped=10),)
 
 
@@ -274,7 +274,7 @@ async def test_integrator_reports_a_non_object_item_instead_of_raising():
         entry_ids="…",
     )
 
-    assert [item.text for item in outcome.packet.proposals] == ["正常的一条"]
+    assert [item.text for item in outcome.envelope.packet.proposals] == ["正常的一条"]
     assert [(item.container, item.index) for item in outcome.discarded] == [("proposals", 2)]
 
 
@@ -325,7 +325,7 @@ async def test_dispositions_returns_the_declaration_packet():
         opinions="上述几条意见", produced="题目 #1：evidence_refs=[E1]"
     )
 
-    assert [item.handle for item in outcome.packet.dropped_opinions] == ["seat.x:O2"]
+    assert [item.handle for item in outcome.envelope.packet.dropped_opinions] == ["seat.x:O2"]
     assert gateway.requests[-1].purpose == "opinion_dispositions"
     assert prompts.calls[-1][0] == "opinion_dispositions"
 
@@ -347,7 +347,7 @@ async def test_dispositions_drops_a_non_object_entry_without_raising():
 
     outcome = await integrator.dispositions(opinions="…", produced="…")
 
-    assert [item.handle for item in outcome.packet.dropped_opinions] == ["seat.x:O2"]
+    assert [item.handle for item in outcome.envelope.packet.dropped_opinions] == ["seat.x:O2"]
     assert [(item.container, item.index) for item in outcome.discarded] == [
         ("dropped_opinions", 2)
     ]

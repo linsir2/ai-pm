@@ -3,24 +3,22 @@
 它不决定这些意见最后写进哪个字段、也不决定要不要问用户；那是 Integrator 的活。
 """
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
+from pmstudio.application.agents.schemas import RULES
 from pmstudio.application.context import NO_MATERIAL_TEXT, NO_MEMORY_TEXT
-from pmstudio.application.errors import PacketParseError, unknown_ref_message
+from pmstudio.application.errors import unknown_ref_message
 from pmstudio.application.evidence_refs import candidates_for, normalize_ref
-from pmstudio.application.ports import (
-    ModelGateway,
-    ModelMessage,
-    ModelRequest,
-    PromptLibrary,
-    SeatDefinition,
-)
+from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
+from pmstudio.harness.errors import PacketParseError
+from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
+from pmstudio.harness.model.envelope import Envelope, make_packet_id
+from pmstudio.harness.model.structured import StructuredCall, call_structured
 
 PURPOSE = "seat_review"
 
@@ -35,13 +33,34 @@ class SeatOutcome:
     """
 
     review: SeatReview
-    overflow: tuple[schemas.Overflow, ...] = ()
-    discarded: tuple[schemas.Discarded, ...] = ()
+    #: §4.4 的信封。**这一趟的全部事实都在它身上**：报文、依据、没进卡片的那些条、原文。
+    envelope: Envelope
+
+    @property
+    def overflow(self) -> tuple[schemas.Overflow, ...]:
+        """转发到信封——**只有信封一处存储**。
+
+        以前这里是独立字段、信封是另一份载体，两份会漂移。现在这里是读信封的窗口，
+        调用点读起来还是 `outcome.overflow`，但存的地方只有一个。
+        """
+
+        return self.envelope.overflow
+
+    @property
+    def discarded(self) -> tuple[schemas.Discarded, ...]:
+        return self.envelope.discarded
 
 
 class SeatReviewer:
     PURPOSE = PURPOSE
     PROMPT = "seat_review"
+    CALL = StructuredCall(
+        purpose=PURPOSE,
+        kind="seat_review",
+        prompt=PROMPT,
+        packet=schemas.SeatPacket,
+        rules=RULES,
+    )
     PROMPT_SLOTS = (
         "seat_title",
         "seat_focus",
@@ -74,45 +93,41 @@ class SeatReviewer:
         answer_eids: Mapping[str, str] | None = None,
         round_id: RoundId | None = None,
         validation_error: str = "",
+        packet_slot: str = "",
     ) -> SeatOutcome:
-        schema = schemas.SeatPacket.model_json_schema()
-        prompt = self._prompts.render(
-            self.PROMPT,
-            seat_title=seat.title,
-            seat_focus=seat.focus,
-            document_state=document_state,
-            claims=claims,
-            opinions_so_far=opinions_so_far,
-            answered=answered,
-            project_memory=project_memory,
-            external_material=external_material,
-            schema_json=json.dumps(schema, ensure_ascii=False),
-            validation_error=validation_error,
-        )
-        reply = await self._model.complete(
-            ModelRequest(
-                purpose=self.PURPOSE,
-                messages=(ModelMessage(role="user", content=prompt),),
-                schema_name="SeatPacket",
-                response_schema=schema,
-                metadata={
-                    "seat_id": seat.seat_id,
-                    **({} if round_id is None else {"round_id": str(round_id)}),
-                },
-            )
-        )
-        packet, overflow, discarded = schemas.parse_packet_lenient(
-            reply.text, schemas.SeatPacket, purpose=self.PURPOSE
+        outcome = await call_structured(
+            self.CALL,
+            gateway=self._model,
+            prompts=self._prompts,
+            slots={
+                "seat_title": seat.title,
+                "seat_focus": seat.focus,
+                "document_state": document_state,
+                "claims": claims,
+                "opinions_so_far": opinions_so_far,
+                "answered": answered,
+                "project_memory": project_memory,
+                "external_material": external_material,
+                "validation_error": validation_error,
+            },
+            metadata={
+                "seat_id": seat.seat_id,
+                **({} if round_id is None else {"round_id": str(round_id)}),
+            },
+            packet_id=make_packet_id(
+                str(round_id or "new"), self.CALL.kind, seat.seat_id, slot=packet_slot
+            ),
+            run_id=str(round_id or "new"),
+            produced_by=seat.seat_id,
         )
         return SeatOutcome(
             review=review_from_packet(
-                packet,
+                outcome.packet,
                 seat_id=seat.seat_id,
                 known_eids=known_eids,
                 answer_eids=answer_eids or {},
             ),
-            overflow=overflow,
-            discarded=discarded,
+            envelope=outcome,
         )
 
 

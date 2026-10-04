@@ -15,7 +15,7 @@ import httpx
 
 from pmstudio.application.context import WEB_SNIPPET_CHARS
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
-from pmstudio.application.errors import ToolCallFailed
+from pmstudio.harness.errors import ToolCallFailed
 
 TOOL_ID = "tool.web_search"
 PARSER_ID = "tavily"

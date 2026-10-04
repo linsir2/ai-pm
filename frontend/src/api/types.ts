@@ -78,6 +78,8 @@ export interface SeatPacketView {
   opinions: OpinionView[];
   judgment_count: number;
   question_count: number;
+  /** 这一包是谁交回的（§4.4 信封的 `packet_id`）。留痕行按它精确挂载。 */
+  packet_id: string;
 }
 
 /** 一条"没进卡片"的留痕：地址、席位、第几趟、原因、来源（`04` C5 后半）。 */
@@ -87,6 +89,8 @@ export interface DroppedView {
   pass_index: number;
   reason: string;
   source: "integrator" | "assembly" | "unaccounted" | string;
+  /** 来自哪一包。`undefined` = 不来自模型回包（assembly 归因 / tool 失败），或老数据。 */
+  packet_id?: string;
 }
 
 export interface QuestionView {

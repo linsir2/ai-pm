@@ -3,9 +3,10 @@ import json
 
 import pytest
 
-from pmstudio.application.errors import ModelCallFailed, RoundBusy
+from pmstudio.application.errors import RoundBusy
 from pmstudio.application.use_cases import AnswerInput
 from pmstudio.domain.round.step import Step
+from pmstudio.harness.errors import ModelCallFailed
 from pmstudio.infrastructure.graph.graph import RESUME_ROUTES, RoundCommand
 from tests.support.builders import make_round
 from tests.support.harness import Harness

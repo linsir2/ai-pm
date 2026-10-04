@@ -5,7 +5,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[2] / "src"
-DOMAIN = SRC / "pmstudio" / "domain"
+PACKAGE = "pmstudio"
+DOMAIN = SRC / PACKAGE / "domain"
 CONTEXTS = ("authoring", "memory", "provenance", "round")
 FORBIDDEN_STEMS = ("fake", "mock", "stub", "dummy")
 
@@ -107,31 +108,63 @@ def forbidden_names(source: str) -> set[str]:
 # —— 分层与事务边界（P2） ——
 
 LAYER_ROOTS: dict[str, str] = {
-    "domain": "pmstudio.domain",
-    "application": "pmstudio.application",
-    "infrastructure": "pmstudio.infrastructure",
-    "api": "pmstudio.api",
-    "bootstrap": "pmstudio.bootstrap",
+    "harness": PACKAGE + ".harness",
+    "domain": PACKAGE + ".domain",
+    "application": PACKAGE + ".application",
+    "infrastructure": PACKAGE + ".infrastructure",
+    "api": PACKAGE + ".api",
+    "bootstrap": PACKAGE + ".bootstrap",
 }
 
 # 依赖只许朝内指。api 运行期不 import bootstrap（Container 只在 TYPE_CHECKING 里出现，
 # 否则 app.py 与 container.py 会成环）。bootstrap 是组装点，谁都可以调。
+# harness 是最内层：它只许依赖自己（外加白名单里的 pydantic，见 test_harness_imports.py），
+# 因此**没有** domain → harness 这条边——domain 不许碰运行时控制平面。
 ALLOWED_LAYER_IMPORTS: dict[str, frozenset[str]] = {
+    "harness": frozenset({"harness"}),
     "domain": frozenset({"domain"}),
-    "application": frozenset({"application", "domain"}),
-    "infrastructure": frozenset({"infrastructure", "application", "domain"}),
-    "api": frozenset({"api", "application", "domain"}),
-    "bootstrap": frozenset({"bootstrap", "api", "application", "infrastructure", "domain"}),
+    "application": frozenset({"application", "domain", "harness"}),
+    "infrastructure": frozenset({"infrastructure", "application", "domain", "harness"}),
+    "api": frozenset({"api", "application", "domain", "harness"}),
+    "bootstrap": frozenset(
+        {"bootstrap", "api", "application", "infrastructure", "domain", "harness"}
+    ),
 }
 
 
 def layer_of(path: Path, *, root: Path = SRC) -> str | None:
-    """这份源码属于哪一层；不在五个层里就返回 None（比如 tests/ 或根目录文件）。"""
+    """这份源码属于哪一层；不在已登记的层里就返回 None（比如 `__init__.py`）。
+
+    注意：返回 None 不代表"检查过了"，只代表"没归任何层"。`unregistered_packages`
+    负责把"没归类"这件事变成一次显式失败——否则新加一层就会从这里静默溜过去。
+    """
 
     parts = path.relative_to(root).parts
-    if len(parts) < 3 or parts[0] != "pmstudio":
+    if len(parts) < 3 or parts[0] != PACKAGE:
         return None
     return parts[1] if parts[1] in LAYER_ROOTS else None
+
+
+def unregistered_packages(root: Path = SRC) -> frozenset[str]:
+    """`pmstudio/` 下不在 `LAYER_ROOTS` 里的顶层包。
+
+    为什么要有这条：`layer_of()` 认不出的包返回 `None`，而
+    `test_layers_only_depend_inward` 见 `None` 就 `continue`——于是新加一层
+    如果忘了登记，它 import 任何层都不会被拦，而且**不报错**（2026-10-04 挖出的洞）。
+    有了这条，"多一层"必须同时回答"它属于哪层、许不许依赖谁"。
+    """
+
+    package = root / PACKAGE
+    if not package.is_dir():
+        return frozenset()
+    return frozenset(
+        child.name
+        for child in package.iterdir()
+        if child.name not in LAYER_ROOTS
+        and not child.name.startswith("__")
+        and (child.is_dir() or child.suffix == ".py")
+    )
+
 
 
 def _type_checking_spans(tree: ast.AST) -> list[tuple[int, int]]:
@@ -200,3 +233,13 @@ def await_inside_uow(source: str) -> list[int]:
             if isinstance(inner, (ast.Await, ast.AsyncWith, ast.AsyncFor)):
                 found.append(inner.lineno)
     return sorted(found)
+
+
+def await_inside_uow_offenders(root: Path = SRC) -> dict[str, list[int]]:
+    """扫**整个 src**（不是只有 `application/`）："模型调用一律在事务外"对每一层都成立。"""
+
+    return {
+        path.relative_to(root).as_posix(): lines
+        for path, source in iter_sources(root)
+        if (lines := await_inside_uow(source))
+    }

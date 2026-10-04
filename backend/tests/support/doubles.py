@@ -5,10 +5,11 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from pmstudio.application.errors import ModelCallFailed
-from pmstudio.application.events import Event
-from pmstudio.application.ports import ModelReply, ModelRequest, SeatDefinition
+from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.shared.ids import ProjectId, RoundId
+from pmstudio.harness.errors import ModelCallFailed
+from pmstudio.harness.events import Event
+from pmstudio.harness.model.contracts import ModelReply, ModelRequest
 
 if TYPE_CHECKING:
     from pmstudio.application.dto import MaterialHit, ParsedMaterial

@@ -8,7 +8,7 @@
    `（隐含于上下文…）` 这类说明被填进 `raw_span` 过两次（L20）。
 """
 
-from pmstudio.application.errors import PacketParseError
+from pmstudio.harness.errors import PacketParseError
 
 #: 说不上具体是哪一种时的兜底话术
 GENERIC = "请按上面的硬规矩重新切一遍，只输出 JSON Schema 要求的那个对象。"

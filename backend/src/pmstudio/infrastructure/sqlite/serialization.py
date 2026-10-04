@@ -557,6 +557,7 @@ def round_to_payload(round_: Round) -> dict:
                 "source": item.source.value,
                 "seat_id": item.seat_id,
                 "pass_index": item.pass_index,
+                "packet_id": item.packet_id,
             }
             for item in round_.dropped
         ],
@@ -580,6 +581,7 @@ def round_to_payload(round_: Round) -> dict:
         "proposal_ignore_streak": round_.proposal_ignore_streak,
         # 用户"继续深挖"多出来的批次额度（老行没有这个键 → 0）
         "extra_batches": round_.extra_batches,
+        "integration_seq": round_.integration_seq,
         # 以及随之放宽的席位轮额度（"批后那一趟"，老行 → 0）
         "extra_seat_rounds": round_.extra_seat_rounds,
         "failure": _failure_to_json(round_.failure),
@@ -667,6 +669,7 @@ def round_from_payload(
         proposal_ignore_streak=payload.get("proposal_ignore_streak") or 0,
         # 老行里没有这个键（dig 的额度是后加的）：0
         extra_batches=payload.get("extra_batches") or 0,
+        integration_seq=payload.get("integration_seq") or 0,
         extra_seat_rounds=payload.get("extra_seat_rounds") or 0,
         materials=tuple(
             MaterialRef(
@@ -730,6 +733,7 @@ def _dropped_from_payload(payload: dict) -> tuple[DroppedItem, ...]:
                 source=DropSource(item["source"]),
                 seat_id=item.get("seat_id"),
                 pass_index=int(item.get("pass_index", 1)),
+                packet_id=item.get("packet_id"),
             )
             for item in items
         )

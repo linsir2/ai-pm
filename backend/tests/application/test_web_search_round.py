@@ -10,12 +10,12 @@
 import json
 import re
 
-from pmstudio.application.errors import ToolCallFailed
 from pmstudio.application.use_cases import external_material_text
 from pmstudio.domain.provenance.evidence import EvidenceKind
 from pmstudio.domain.round.round import DropSource
 from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.ids import RoundId
+from pmstudio.harness.errors import ToolCallFailed
 from tests.support.builders import PROJECT, SEAT, make_web_packet
 from tests.support.doubles import RecordingWebSearch
 from tests.support.harness import Harness

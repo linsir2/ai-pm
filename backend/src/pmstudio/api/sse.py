@@ -7,7 +7,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from enum import Enum
 
-from pmstudio.application.ports import EventStream
+from pmstudio.harness.events import EventStream
 
 DEFAULT_HEARTBEAT_SECONDS = 15.0
 

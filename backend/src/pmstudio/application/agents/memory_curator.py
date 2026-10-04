@@ -7,13 +7,15 @@
 记忆是旁路能力，不是交付的一部分。
 """
 
-import json
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.ports import ModelGateway, ModelMessage, ModelRequest, PromptLibrary
+from pmstudio.application.agents.schemas import RULES
 from pmstudio.domain.shared.ids import RoundId
 from pmstudio.domain.shared.memory import MemoryChange, MemoryKind, MemoryOp
+from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
+from pmstudio.harness.model.envelope import Envelope, make_packet_id
+from pmstudio.harness.model.structured import StructuredCall, call_structured
 
 PURPOSE = "memory_curation"
 
@@ -27,13 +29,29 @@ class CuratorOutcome:
     """
 
     changes: tuple[MemoryChange, ...]
-    overflow: tuple[schemas.Overflow, ...] = ()
-    discarded: tuple[schemas.Discarded, ...] = ()
+    envelope: Envelope
+
+    @property
+    def overflow(self) -> tuple[schemas.Overflow, ...]:
+        """转发到信封——只有信封一处存储。"""
+
+        return self.envelope.overflow
+
+    @property
+    def discarded(self) -> tuple[schemas.Discarded, ...]:
+        return self.envelope.discarded
 
 
 class MemoryCurator:
     PURPOSE = PURPOSE
     PROMPT = "memory_curator"
+    CALL = StructuredCall(
+        purpose=PURPOSE,
+        kind="memory_curation",
+        prompt=PROMPT,
+        packet=schemas.MemoryPacket,
+        rules=RULES,
+    )
     #: 槽位顺序就是提示词里的节顺序；少给一个都会炸（`FilePromptLibrary` 的既定行为）
     PROMPT_SLOTS = ("memory_state", "round_digest", "schema_json", "validation_error")
 
@@ -48,31 +66,27 @@ class MemoryCurator:
         round_digest: str,
         round_id: RoundId | None = None,
         validation_error: str = "",
+        packet_slot: str = "",
     ) -> CuratorOutcome:
-        schema = schemas.MemoryPacket.model_json_schema()
-        prompt = self._prompts.render(
-            self.PROMPT,
-            memory_state=memory_state,
-            round_digest=round_digest,
-            schema_json=json.dumps(schema, ensure_ascii=False),
-            validation_error=validation_error,
-        )
-        reply = await self._model.complete(
-            ModelRequest(
-                purpose=self.PURPOSE,
-                messages=(ModelMessage(role="user", content=prompt),),
-                schema_name="MemoryPacket",
-                response_schema=schema,
-                metadata={} if round_id is None else {"round_id": str(round_id)},
-            )
-        )
-        packet, overflow, discarded = schemas.parse_packet_lenient(
-            reply.text, schemas.MemoryPacket, purpose=self.PURPOSE
+        outcome = await call_structured(
+            self.CALL,
+            gateway=self._model,
+            prompts=self._prompts,
+            slots={
+                "memory_state": memory_state,
+                "round_digest": round_digest,
+                "validation_error": validation_error,
+            },
+            metadata={} if round_id is None else {"round_id": str(round_id)},
+            packet_id=make_packet_id(
+                str(round_id or "new"), self.CALL.kind, "memory_curator", slot=packet_slot
+            ),
+            run_id=str(round_id or "new"),
+            produced_by="memory_curator",
         )
         return CuratorOutcome(
-            changes=tuple(_change_of(item) for item in packet.changes),
-            overflow=overflow,
-            discarded=discarded,
+            changes=tuple(_change_of(item) for item in outcome.packet.changes),
+            envelope=outcome,
         )
 
 

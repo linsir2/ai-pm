@@ -3,19 +3,21 @@
 它不产生新的专业判断——只决定一件事：这条意见是问，还是写；以及写成什么形状。
 """
 
-import json
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
+from pmstudio.application.agents.schemas import RULES
 from pmstudio.application.context import (
     FEATURE_FIELDS_TEXT,
     NO_MATERIAL_TEXT,
     NO_MEMORY_TEXT,
     SECTION_SLOTS_TEXT,
 )
-from pmstudio.application.errors import PacketParseError
-from pmstudio.application.ports import ModelGateway, ModelMessage, ModelRequest, PromptLibrary
 from pmstudio.domain.shared.ids import RoundId
+from pmstudio.harness.errors import PacketParseError
+from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
+from pmstudio.harness.model.envelope import Envelope, make_packet_id
+from pmstudio.harness.model.structured import StructuredCall, call_structured
 
 PURPOSE = "integration"
 
@@ -32,17 +34,33 @@ class IntegrationOutcome:
     现在用例层有出口了（`Round.dropped` + `Draft.gaps`），所以一起开。
     """
 
-    packet: schemas.IntegrationPacket
-    overflow: tuple[schemas.Overflow, ...] = ()
-    discarded: tuple[schemas.Discarded, ...] = ()
+    #: 这一趟的全部事实都在信封上（报文 / 依据 / 没进卡片的那些条 / 原文）。见 `seat.py`。
+    #:
+    #: **这里不再有 `packet` 字段**——它与 `envelope.packet` 是同一个对象，
+    #: 而两条访问路径已经漂移过一次：归因补交代那步用 `replace(outcome, packet=merged)`
+    #: 只换了前者，信封里那份还是补交代之前的报文。按新约定读 `outcome.envelope.packet`。
+    envelope: Envelope
+
+    @property
+    def overflow(self) -> tuple[schemas.Overflow, ...]:
+        """转发到信封——只有信封一处存储。"""
+
+        return self.envelope.overflow
+
+    @property
+    def discarded(self) -> tuple[schemas.Discarded, ...]:
+        return self.envelope.discarded
 
 
 @dataclass(frozen=True, slots=True)
 class DispositionOutcome:
     """小调用交回的东西：只有"没采用"的申报（+ 被摘掉的那几条）。"""
 
-    packet: schemas.DispositionsPacket
-    discarded: tuple[schemas.Discarded, ...] = ()
+    envelope: Envelope
+
+    @property
+    def discarded(self) -> tuple[schemas.Discarded, ...]:
+        return self.envelope.discarded
 
 
 LIMITS_TEXT = "\n".join(
@@ -133,6 +151,13 @@ LIMITS_TEXT = "\n".join(
 class Integrator:
     PURPOSE = PURPOSE
     PROMPT = "integrator"
+    CALL = StructuredCall(
+        purpose=PURPOSE,
+        kind="integration",
+        prompt=PROMPT,
+        packet=schemas.IntegrationPacket,
+        rules=RULES,
+    )
     PROMPT_SLOTS = (
         "document_state",
         "claims",
@@ -159,6 +184,13 @@ class Integrator:
     #: 真跑证明"重写整包"会补一批又漏一批（P23：点名 3/4/3 条补了 2/4/3，总量没降）。
     DISPOSITIONS_PURPOSE = "opinion_dispositions"
     DISPOSITIONS_PROMPT = "opinion_dispositions"
+    DISPOSITIONS_CALL = StructuredCall(
+        purpose=DISPOSITIONS_PURPOSE,
+        kind="opinion_dispositions",
+        prompt=DISPOSITIONS_PROMPT,
+        packet=schemas.DispositionsPacket,
+        rules=RULES,
+    )
     DISPOSITIONS_SLOTS = ("opinions", "produced", "schema_json")
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
@@ -182,40 +214,39 @@ class Integrator:
         previous_list_items: str = "",
         contradictions: str = "",
         project_memory: str = NO_MEMORY_TEXT,
+        packet_slot: str = "",
     ) -> IntegrationOutcome:
-        schema = schemas.IntegrationPacket.model_json_schema()
-        prompt = self._prompts.render(
-            self.PROMPT,
-            document_state=document_state,
-            claims=claims,
-            opinions=opinions,
-            answered=answered,
-            skipped=skipped,
-            project_memory=project_memory,
-            entry_ids=entry_ids,
-            external_material=external_material,
-            limits=LIMITS_TEXT,
-            feature_fields=FEATURE_FIELDS_TEXT,
-            section_slots=SECTION_SLOTS_TEXT,
-            schema_json=json.dumps(schema, ensure_ascii=False),
-            validation_error=validation_error,
-            authorized_features=authorized_features,
-            open_items=open_items,
-            previous_list_items=previous_list_items,
-            contradictions=contradictions,
+        outcome = await call_structured(
+            self.CALL,
+            gateway=self._model,
+            prompts=self._prompts,
+            slots={
+                "document_state": document_state,
+                "claims": claims,
+                "opinions": opinions,
+                "answered": answered,
+                "skipped": skipped,
+                "project_memory": project_memory,
+                "entry_ids": entry_ids,
+                "external_material": external_material,
+                "limits": LIMITS_TEXT,
+                "feature_fields": FEATURE_FIELDS_TEXT,
+                "section_slots": SECTION_SLOTS_TEXT,
+                "validation_error": validation_error,
+                "authorized_features": authorized_features,
+                "open_items": open_items,
+                "previous_list_items": previous_list_items,
+                "contradictions": contradictions,
+            },
+            metadata={} if round_id is None else {"round_id": str(round_id)},
+            packet_id=make_packet_id(
+                str(round_id or "new"), self.CALL.kind, "integrator", slot=packet_slot
+            ),
+            run_id=str(round_id or "new"),
+            produced_by="integrator",
         )
-        reply = await self._model.complete(
-            ModelRequest(
-                purpose=self.PURPOSE,
-                messages=(ModelMessage(role="user", content=prompt),),
-                schema_name="IntegrationPacket",
-                response_schema=schema,
-                metadata={} if round_id is None else {"round_id": str(round_id)},
-            )
-        )
-        packet, overflow, discarded = schemas.parse_packet_lenient(
-            reply.text, schemas.IntegrationPacket, purpose=self.PURPOSE
-        )
+        packet = outcome.packet
+        discarded = outcome.discarded
         if discarded and not (
             packet.questions
             or packet.list_items
@@ -230,7 +261,7 @@ class Integrator:
                 purpose=self.PURPOSE,
                 discarded=(discarded[0].container, discarded[0].index),
             )
-        return IntegrationOutcome(packet=packet, overflow=overflow, discarded=discarded)
+        return IntegrationOutcome(envelope=outcome)
 
     async def dispositions(
         self,
@@ -238,6 +269,7 @@ class Integrator:
         opinions: str,
         produced: str,
         round_id: RoundId | None = None,
+        packet_slot: str = "",
     ) -> DispositionOutcome:
         """归因补交代：只问"我点名的那些里，哪些是你没采用的"。
 
@@ -246,23 +278,19 @@ class Integrator:
         又漏一批"，总量降不下来。
         """
 
-        schema = schemas.DispositionsPacket.model_json_schema()
-        prompt = self._prompts.render(
-            self.DISPOSITIONS_PROMPT,
-            opinions=opinions,
-            produced=produced,
-            schema_json=json.dumps(schema, ensure_ascii=False),
+        outcome = await call_structured(
+            self.DISPOSITIONS_CALL,
+            gateway=self._model,
+            prompts=self._prompts,
+            slots={"opinions": opinions, "produced": produced},
+            metadata={} if round_id is None else {"round_id": str(round_id)},
+            packet_id=make_packet_id(
+                str(round_id or "new"),
+                self.DISPOSITIONS_CALL.kind,
+                "integrator",
+                slot=packet_slot,
+            ),
+            run_id=str(round_id or "new"),
+            produced_by="integrator",
         )
-        reply = await self._model.complete(
-            ModelRequest(
-                purpose=self.DISPOSITIONS_PURPOSE,
-                messages=(ModelMessage(role="user", content=prompt),),
-                schema_name="DispositionsPacket",
-                response_schema=schema,
-                metadata={} if round_id is None else {"round_id": str(round_id)},
-            )
-        )
-        packet, _, discarded = schemas.parse_packet_lenient(
-            reply.text, schemas.DispositionsPacket, purpose=self.DISPOSITIONS_PURPOSE
-        )
-        return DispositionOutcome(packet=packet, discarded=discarded)
+        return DispositionOutcome(envelope=outcome)

@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.errors import PacketParseError
+from pmstudio.harness.errors import PacketParseError
 
 
 def test_claims_packet_schema_is_generated_with_required_fields():
@@ -57,26 +57,28 @@ def test_parse_packet_returns_model_instance():
         },
         ensure_ascii=False,
     )
-    packet = schemas.parse_packet(text, schemas.ClaimsPacket, purpose="claims")
+    packet, _, _ = schemas.parse_packet_lenient(
+        text, schemas.ClaimsPacket, purpose="claims"
+    )
     assert packet.claims[0].label == "need"
 
 
 def test_parse_packet_bad_not_json_is_a_packet_error():
     with pytest.raises(PacketParseError) as exc:
-        schemas.parse_packet("这不是 JSON", schemas.ClaimsPacket, purpose="claims")
+        schemas.parse_packet_lenient("这不是 JSON", schemas.ClaimsPacket, purpose="claims")
     assert exc.value.code == "model_packet_unparsable"
     assert exc.value.details["purpose"] == "claims"
 
 
 def test_parse_packet_bad_missing_field_is_a_packet_error():
     with pytest.raises(PacketParseError):
-        schemas.parse_packet('{"claims": []}', schemas.ClaimsPacket, purpose="claims")
+        schemas.parse_packet_lenient('{"claims": []}', schemas.ClaimsPacket, purpose="claims")
 
 
 def test_integration_packet_accepts_dropped_opinions():
     """报文要能装"我丢了哪条、为什么"（`04` C5 后半）。"""
 
-    packet = schemas.parse_packet(
+    packet, _, _ = schemas.parse_packet_lenient(
         json.dumps(
             {
                 "questions": [],
@@ -100,7 +102,7 @@ def test_dropped_opinion_without_reason_is_rejected():
     """丢弃必须给原因——没有原因的留痕等于没留。"""
 
     with pytest.raises(PacketParseError):
-        schemas.parse_packet(
+        schemas.parse_packet_lenient(
             json.dumps(
                 {
                     "questions": [],

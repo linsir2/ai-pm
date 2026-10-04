@@ -2,7 +2,8 @@ import asyncio
 from datetime import UTC, datetime
 
 from pmstudio.api.sse import event_stream
-from pmstudio.application.events import PACKET_EMITTED, Event
+from pmstudio.application.events import PACKET_EMITTED
+from pmstudio.harness.events import Event
 
 NOW = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
 

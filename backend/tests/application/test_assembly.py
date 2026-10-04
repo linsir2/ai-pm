@@ -4,7 +4,6 @@ import pytest
 
 from pmstudio.application import assembly
 from pmstudio.application.agents import schemas
-from pmstudio.application.errors import PacketParseError
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
@@ -33,6 +32,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from pmstudio.harness.errors import PacketParseError
 from tests.support.builders import (
     NOW,
     ROUND_ID,

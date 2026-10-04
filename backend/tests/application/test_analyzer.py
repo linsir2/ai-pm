@@ -6,11 +6,11 @@ from pydantic import ValidationError
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer, grounded_span
 from pmstudio.application.agents.schemas import ClaimsPacket
-from pmstudio.application.errors import PacketParseError
 from pmstudio.domain.round.round import DropSource, SeatNomination
 from pmstudio.domain.round.web_query import WebQuery
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
+from pmstudio.harness.errors import PacketParseError
 from tests.support.builders import SEAT, make_seat
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway, StaticSeatCatalog
 

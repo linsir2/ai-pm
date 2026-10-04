@@ -1,8 +1,15 @@
-"""四个 v1 事件。事件只做通知与投影：摘掉全部订阅者，流程照样跑完。"""
+"""四个 v1 事件**的名字**。事件本身（信封 + 协议 + 总线）已搬进 `pmstudio.harness.events`。
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
-from datetime import datetime
+为什么名字留在这儿：事件名是业务词汇，而且它是**跨边界的契约**——
+前端 `useEvents.ts:10-15` 硬编码这四个名字订阅，`workspace.ts:113-190` 硬编码它们的
+payload 键。改名的代价是"SSE 静默死亡但界面看起来健康"，所以
+
+1. 这四个常量**一个都不许改**（`tests/application/test_ports_events_errors.py` 钉住集合）；
+2. 载荷形状由 `tests/harness/test_events.py` 与前端契约测试钉住。
+
+原来 `Event.__post_init__` 会拿这份清单做校验（不在清单里就抛"未定义的事件名"）——
+那是通用信封反向依赖业务词汇，已随事件类一起搬走并删除。
+"""
 
 ROUND_UPDATED = "round.updated"
 PACKET_EMITTED = "packet.emitted"
@@ -10,19 +17,3 @@ DOC_CHANGED = "doc.changed"
 GENERATION_FAILED = "generation.failed"
 
 EVENT_NAMES = frozenset({ROUND_UPDATED, PACKET_EMITTED, DOC_CHANGED, GENERATION_FAILED})
-
-
-@dataclass(frozen=True, slots=True)
-class Event:
-    name: str
-    project_id: str
-    occurred_at: datetime
-    seq: int = 0  # 由事件总线在 publish 时盖真序号；业务侧一律用默认值
-    round_id: str | None = None
-    payload: Mapping[str, object] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if self.name not in EVENT_NAMES:
-            raise ValueError(f"未定义的事件名：{self.name}")
-        if self.seq < 0:
-            raise ValueError(f"事件序号不能是负数：{self.seq}")

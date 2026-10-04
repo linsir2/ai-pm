@@ -119,6 +119,16 @@ class DroppedItem:
     source: DropSource
     seat_id: str | None
     pass_index: int
+    #: 这一条来自哪一包（§4.4 信封的 `packet_id`）。
+    #:
+    #: **可选，默认 `None`**：留痕有四个来源（integrator / assembly / unaccounted / tool），
+    #: 其中 tool 来源本来就没有 agent 包（是联网检索失败，不是模型回包），
+    #: assembly 的"归因对不上号"也挂不到席位包下。所以 `None` 的含义是
+    #: **"不来自模型回包"**，不是"没填"——这个区别必须写清，否则半年后没人分得清。
+    #:
+    #: `__post_init__` **不校验**它：那三条（handle / reason / pass_index）是
+    #: "这条留痕有意义"的必要条件，而 packet_id 是**可选溯源**，None 是合法值。
+    packet_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.handle.strip():
@@ -182,6 +192,7 @@ class Round:
         proposal_ignore_streak: int = 0,
         extra_batches: int = 0,
         extra_seat_rounds: int = 0,
+        integration_seq: int = 0,
         materials: tuple[MaterialRef, ...] = (),
         web_queries: tuple[WebQuery, ...] = (),
         web_queries_chosen: tuple[str, ...] = (),
@@ -220,6 +231,7 @@ class Round:
         self._proposal_ignore_streak = proposal_ignore_streak
         self._extra_batches = extra_batches
         self._extra_seat_rounds = extra_seat_rounds
+        self._integration_seq = integration_seq
         self._materials = tuple(materials)
         #: 分析者提名的检索词（它只提名，查不查由用户在复述卡上定）
         self._web_queries = tuple(web_queries)
@@ -670,6 +682,7 @@ class Round:
         self._require_step(Step.SEATS_RUNNING)
         if (questionnaire is None) == (draft is None):
             raise ShapeError("整合必须给出问卷或草案其中之一（问卷不是必然环节）")
+        self._integration_seq += 1
         self._dropped = self._dropped + tuple(dropped)
         if questionnaire is not None:
             if questionnaire.round_id != self._round_id:
@@ -780,6 +793,18 @@ class Round:
 
     def remember_proposal_ignore_streak(self, count: int) -> None:
         self._proposal_ignore_streak = max(0, count)
+
+    @property
+    def integration_seq(self) -> int:
+        """本轮已经**整合成功**过几次。
+
+        它是信封 `packet_id` 的槽位来源（`i{seq}`）：一轮里整合者会跑多次——问卷一批、
+        补交代后再整合、答案回来后第二趟席位再整合（`02` §13 第 6/7/8 步）。
+        那个次数**必须落在聚合上**：用例层的重试计数是局部变量，每次进入整合都重置，
+        用它当槽位会让第二次整合拿到与第一次一样的 id（实测撞过）。
+        """
+
+        return self._integration_seq
 
     @property
     def extra_batches(self) -> int:

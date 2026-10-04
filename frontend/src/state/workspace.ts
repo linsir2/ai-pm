@@ -162,6 +162,8 @@ function mergePacket(state: State, event: WorkspaceEvent): State {
     opinions,
     judgment_count: opinions.filter((opinion) => opinion.form === "judgment").length,
     question_count: opinions.filter((opinion) => opinion.form === "question").length,
+    // §4.4 信封的身份：留痕行按它精确挂载到这一包下面（见 document/dropped.ts）
+    packet_id: String(event.payload.packet_id ?? ""),
   };
 
   const packets = round.seat_packets.map((item) => (item.seat_id === seatId ? packet : item));

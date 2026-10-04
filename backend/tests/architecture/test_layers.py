@@ -5,6 +5,7 @@ from tests.architecture.guards import (
     iter_sources,
     layer_of,
     runtime_modules,
+    unregistered_packages,
 )
 
 
@@ -37,6 +38,29 @@ def test_layers_only_depend_inward():
         if bad:
             offenders[path.relative_to(SRC).as_posix()] = bad
     assert offenders == {}
+
+
+def test_guard_flags_unregistered_top_level_package(tmp_path):
+    """没在 `LAYER_ROOTS` 登记的顶层包 = 那条分层守卫对它**静默跳过**。
+
+    这是 2026-10-04 挖出的真洞：`layer_of()` 认不出的包返回 `None`，
+    `test_layers_only_depend_inward` 见 `None` 就 `continue`——
+    新加一层如果不登记，它 import `pmstudio.application` 也没人拦，而且**不报错**。
+    """
+
+    rogue = tmp_path / "pmstudio" / "rogue"
+    rogue.mkdir(parents=True)
+    (rogue / "mod.py").write_text(
+        "from pmstudio.application.use_cases import StartRound\n", encoding="utf-8"
+    )
+    assert unregistered_packages(tmp_path) == {"rogue"}
+
+
+def test_src_has_no_unregistered_package():
+    """每加一层都要登记，否则上面那条静默跳过就会生效。"""
+
+    assert unregistered_packages() == frozenset()
+
 
 
 def test_agents_never_read_the_document_directly():

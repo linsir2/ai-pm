@@ -7,8 +7,7 @@ from fastapi.responses import JSONResponse
 
 from pmstudio.api import routes
 from pmstudio.api.errors import body_for, status_for
-from pmstudio.application.errors import ApplicationError
-from pmstudio.application.ports import EventStream, RoundOrchestrator
+from pmstudio.application.ports import RoundOrchestrator
 from pmstudio.application.use_cases import (
     AbandonRound,
     CreateProject,
@@ -35,6 +34,8 @@ from pmstudio.application.use_cases import (
     UploadMaterial,
 )
 from pmstudio.domain.shared.errors import DomainError
+from pmstudio.harness.errors import ApplicationError
+from pmstudio.harness.events import EventStream
 
 
 @dataclass(frozen=True, slots=True)

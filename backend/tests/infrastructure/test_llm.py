@@ -9,8 +9,8 @@ from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
-from pmstudio.application.errors import ModelCallFailed
-from pmstudio.application.ports import ModelMessage, ModelRequest
+from pmstudio.harness.errors import ModelCallFailed
+from pmstudio.harness.model.contracts import ModelMessage, ModelRequest
 from pmstudio.infrastructure.llm.litellm_gateway import LiteLLMGateway
 from pmstudio.infrastructure.llm.prompt_library import FilePromptLibrary
 

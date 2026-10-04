@@ -2,11 +2,11 @@ import json
 
 import pytest
 
-from pmstudio.application.errors import ModelCallFailed
 from pmstudio.application.events import DOC_CHANGED, ROUND_UPDATED
 from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.errors import IllegalStepTransition
 from pmstudio.domain.shared.ids import FeatureSlug
+from pmstudio.harness.errors import ModelCallFailed
 from tests.support.builders import PROJECT, SEAT
 from tests.support.harness import Harness
 

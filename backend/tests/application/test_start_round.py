@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from pmstudio.application.errors import ModelCallFailed, PacketParseError
 from pmstudio.application.events import GENERATION_FAILED, ROUND_UPDATED
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import FeatureSlug
+from pmstudio.harness.errors import ModelCallFailed, PacketParseError
 from tests.support.builders import PROJECT
 from tests.support.harness import Harness
 

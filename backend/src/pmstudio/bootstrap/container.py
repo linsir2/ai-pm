@@ -11,7 +11,7 @@ from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
-from pmstudio.application.ports import ModelGateway, WebFetcher
+from pmstudio.application.ports import WebFetcher
 from pmstudio.application.use_cases import (
     AbandonRound,
     ConfirmDraft,
@@ -51,7 +51,8 @@ from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import ProposalCommitter
 from pmstudio.domain.services.scope_guard import ScopeGuard
 from pmstudio.domain.services.traceability import TraceabilityChecker
-from pmstudio.infrastructure.events.in_process import InProcessEventBus
+from pmstudio.harness.events import InProcessEventBus
+from pmstudio.harness.model.contracts import ModelGateway
 from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.llm.litellm_gateway import LiteLLMGateway
 from pmstudio.infrastructure.llm.prompt_library import FilePromptLibrary

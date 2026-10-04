@@ -1,7 +1,7 @@
 """领域/应用错误 → HTTP 状态码。只有这一处做这个映射。"""
 
-from pmstudio.application.errors import ApplicationError, ModelCallFailed, PacketParseError
 from pmstudio.domain.shared.errors import DomainError, ShapeError
+from pmstudio.harness.errors import ApplicationError, ModelCallFailed, PacketParseError
 
 CODE_STATUS = {
     "unknown_project": 404,

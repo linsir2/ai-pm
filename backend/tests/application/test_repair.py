@@ -1,7 +1,7 @@
 """纠错指引（重装时喂给模型的第二段话）：只给要求，不回喂模型写错的那串内容。"""
 
-from pmstudio.application.errors import PacketParseError
 from pmstudio.application.repair import repair_note
+from pmstudio.harness.errors import PacketParseError
 
 #: 真模型在 `edge-long` 上写进去过的那串说明（连括号一起抄进 raw_span）
 SPAN = "（隐含于上下文，仅提及订单导出）"

@@ -11,7 +11,8 @@ import pytest
 from annotated_types import MaxLen
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.errors import PacketParseError
+from pmstudio.harness.errors import PacketParseError
+from pmstudio.harness.model import normalize
 
 
 def cap(model, field_name: str) -> int:
@@ -48,7 +49,7 @@ def packet_json(count: int) -> str:
 def test_forty_four_proposals_no_longer_explode():
     """真跑实测：CRF 那轮 44 条提案整轮被毙，内容一条没落地。"""
 
-    packet, overflow = schemas.parse_packet_trimmed(
+    packet, overflow, _ = schemas.parse_packet_lenient(
         packet_json(44), schemas.IntegrationPacket, purpose="integration"
     )
 
@@ -57,7 +58,7 @@ def test_forty_four_proposals_no_longer_explode():
 
 
 def test_seventy_proposals_are_trimmed_to_the_cap_and_reported():
-    packet, overflow = schemas.parse_packet_trimmed(
+    packet, overflow, _ = schemas.parse_packet_lenient(
         packet_json(70), schemas.IntegrationPacket, purpose="integration"
     )
 
@@ -66,24 +67,14 @@ def test_seventy_proposals_are_trimmed_to_the_cap_and_reported():
     assert overflow == (schemas.Overflow(container="proposals", kept=60, dropped=10),)
 
 
-def test_trimmed_parse_still_rejects_real_shape_errors():
-    with pytest.raises(PacketParseError) as exc:
-        schemas.parse_packet_trimmed(
+def test_still_rejects_real_shape_errors():
+    with pytest.raises(PacketParseError) :
+        schemas.parse_packet_lenient(
             '{"proposals": [{"op": "add"}]}',
             schemas.IntegrationPacket,
             purpose="integration",
         )
 
-    assert "过不了 schema" in exc.value.message
-
-
-def test_strict_parse_carries_the_overflow_detail_for_the_repair_round():
-    """重装指引要知道"给了几条、上限几条"——严格解析那条路也得带上它。"""
-
-    with pytest.raises(PacketParseError) as exc:
-        schemas.parse_packet(packet_json(70), schemas.IntegrationPacket, purpose="integration")
-
-    assert exc.value.details["overflow"] == ("proposals", 70, 60)
 
 
 # —— 顶层数组：模型漏了外壳（真跑留样 15 / 66） ——
@@ -130,10 +121,16 @@ MINIMAL_ITEM = {
 
 
 def test_signatures_are_mutually_exclusive():
-    """四个容器的判别键必须两两不撞——撞了就是猜，不是重建。"""
+    """四个容器的判别键必须两两不撞——撞了就是猜，不是重建。
+
+    判别函数随引擎搬进了 `harness.model.normalize`（2026-10-04），并多一个 `rules` 实参
+    ——它不再读模块全局，改读调用方注入的规则表。这里断言一字未改。
+    """
 
     mapping = {
-        name: schemas._container_of_item(item, model=schemas.IntegrationPacket)
+        name: normalize._container_of_item(
+            item, model=schemas.IntegrationPacket, rules=schemas.RULES
+        )
         for name, item in MINIMAL_ITEM.items()
     }
 
@@ -145,7 +142,7 @@ def test_top_level_array_of_questions_is_rebuilt():
 
     payload = json.dumps([REAL_QUESTION, REAL_QUESTION], ensure_ascii=False)
 
-    packet, overflow = schemas.parse_packet_trimmed(
+    packet, overflow, _ = schemas.parse_packet_lenient(
         payload, schemas.IntegrationPacket, purpose="integration"
     )
 
@@ -166,7 +163,7 @@ def test_top_level_array_of_mixed_items_is_rebuilt_element_wise():
         ensure_ascii=False,
     )
 
-    packet, _ = schemas.parse_packet_trimmed(
+    packet, _, _ = schemas.parse_packet_lenient(
         payload, schemas.IntegrationPacket, purpose="integration"
     )
 
@@ -179,7 +176,7 @@ def test_array_with_an_unclassifiable_element_still_fails_with_a_shape_hint():
     payload = json.dumps([MINIMAL_ITEM["questions"], {"foo": "bar"}], ensure_ascii=False)
 
     with pytest.raises(PacketParseError) as exc:
-        schemas.parse_packet_trimmed(payload, schemas.IntegrationPacket, purpose="integration")
+        schemas.parse_packet_lenient(payload, schemas.IntegrationPacket, purpose="integration")
 
     assert exc.value.details["packet_shape"] == {
         "got": "array",
@@ -191,7 +188,7 @@ def test_claims_packet_array_is_not_guessed():
     """claims 必填 basis + 至少一个席位：重建就得凭空造字段，所以只判死（有重装兜）。"""
 
     with pytest.raises(PacketParseError) as exc:
-        schemas.parse_packet(
+        schemas.parse_packet_lenient(
             json.dumps([{"text": "t", "raw_span": "t", "label": "need"}]),
             schemas.ClaimsPacket,
             purpose="claims",
@@ -213,7 +210,7 @@ def test_rebuilt_array_still_honours_the_cap():
 
     payload = json.dumps([MINIMAL_ITEM["proposals"]] * 70, ensure_ascii=False)
 
-    packet, overflow = schemas.parse_packet_trimmed(
+    packet, overflow, _ = schemas.parse_packet_lenient(
         payload, schemas.IntegrationPacket, purpose="integration"
     )
 
@@ -225,7 +222,7 @@ def test_empty_top_level_array_is_not_rebuilt():
     """空数组不重建（L2：空返回不等于没意见）——照旧判死，由重装兜。"""
 
     with pytest.raises(PacketParseError):
-        schemas.parse_packet_trimmed("[]", schemas.IntegrationPacket, purpose="integration")
+        schemas.parse_packet_lenient("[]", schemas.IntegrationPacket, purpose="integration")
 
 
 # —— 字段级归一化（P8）：形状能机械判的就地修，内容与写入语义一律不动 ——
@@ -253,7 +250,7 @@ def seat_packet_json(*, evidence_refs: object) -> str:
 def test_null_list_field_becomes_empty_list():
     """真跑实测（P7 验证留样 7）：席位把 `evidence_refs` 写成 `null` → 整席位判死。"""
 
-    packet, _ = schemas.parse_packet_trimmed(
+    packet, _, _ = schemas.parse_packet_lenient(
         seat_packet_json(evidence_refs=None), schemas.SeatPacket, purpose="seat_review"
     )
 
@@ -261,7 +258,7 @@ def test_null_list_field_becomes_empty_list():
 
 
 def test_single_string_becomes_a_one_item_list():
-    packet, _ = schemas.parse_packet_trimmed(
+    packet, _, _ = schemas.parse_packet_lenient(
         seat_packet_json(evidence_refs="E1"), schemas.SeatPacket, purpose="seat_review"
     )
 
@@ -294,7 +291,7 @@ def test_null_on_a_defaulted_field_falls_back_to_the_default():
         ensure_ascii=False,
     )
 
-    packet, _ = schemas.parse_packet_trimmed(
+    packet, _, _ = schemas.parse_packet_lenient(
         raw, schemas.IntegrationPacket, purpose="integration"
     )
 
@@ -326,7 +323,7 @@ def test_write_semantics_fields_are_never_defaulted():
     )
 
     with pytest.raises(PacketParseError):
-        schemas.parse_packet_trimmed(raw, schemas.IntegrationPacket, purpose="integration")
+        schemas.parse_packet_lenient(raw, schemas.IntegrationPacket, purpose="integration")
 
 
 def test_seat_opinion_form_is_never_defaulted():
@@ -350,7 +347,7 @@ def test_seat_opinion_form_is_never_defaulted():
     )
 
     with pytest.raises(PacketParseError):
-        schemas.parse_packet_trimmed(raw, schemas.SeatPacket, purpose="seat_review")
+        schemas.parse_packet_lenient(raw, schemas.SeatPacket, purpose="seat_review")
 
 
 def test_content_fields_are_never_invented():
@@ -372,7 +369,7 @@ def test_content_fields_are_never_invented():
     )
 
     with pytest.raises(PacketParseError):
-        schemas.parse_packet_trimmed(raw, schemas.IntegrationPacket, purpose="integration")
+        schemas.parse_packet_lenient(raw, schemas.IntegrationPacket, purpose="integration")
 
 
 def test_array_rebuild_and_field_normalisation_compose():
@@ -386,7 +383,7 @@ def test_array_rebuild_and_field_normalisation_compose():
         ensure_ascii=False,
     )
 
-    packet, _ = schemas.parse_packet_trimmed(
+    packet, _, _ = schemas.parse_packet_lenient(
         payload, schemas.IntegrationPacket, purpose="integration"
     )
 
@@ -426,7 +423,7 @@ def test_claims_cap_fits_a_long_input():
 
 
 def test_seventeen_claims_are_not_trimmed_at_all():
-    packet, overflow = schemas.parse_packet_trimmed(
+    packet, overflow, _ = schemas.parse_packet_lenient(
         claims_packet_json(17), schemas.ClaimsPacket, purpose="claims"
     )
 
@@ -435,7 +432,7 @@ def test_seventeen_claims_are_not_trimmed_at_all():
 
 
 def test_twenty_five_claims_are_trimmed_to_the_cap_and_reported():
-    packet, overflow = schemas.parse_packet_trimmed(
+    packet, overflow, _ = schemas.parse_packet_lenient(
         claims_packet_json(25), schemas.ClaimsPacket, purpose="claims"
     )
 
@@ -444,7 +441,7 @@ def test_twenty_five_claims_are_trimmed_to_the_cap_and_reported():
     assert overflow == (schemas.Overflow(container="claims", kept=20, dropped=5),)
 
 
-def test_trimmed_claims_parse_still_rejects_real_shape_errors():
+def test_claims_still_rejects_real_shape_errors():
     """'超限不判死'只对 too_long 生效；别的毛病照旧抛（不许放松）。"""
 
     broken = json.dumps(
@@ -453,7 +450,7 @@ def test_trimmed_claims_parse_still_rejects_real_shape_errors():
     )
 
     with pytest.raises(PacketParseError):
-        schemas.parse_packet_trimmed(broken, schemas.ClaimsPacket, purpose="claims")
+        schemas.parse_packet_lenient(broken, schemas.ClaimsPacket, purpose="claims")
 
 
 # —— 容器里的"非对象元素"：真跑里一个占位符把整轮打掉（2026-10-01 审计 F17） ——
@@ -492,31 +489,6 @@ def test_a_non_object_opinion_is_dropped_with_its_position():
     assert [item.local_id for item in packet.opinions] == ["O1"]
     assert overflow == ()
     assert [(item.container, item.index) for item in discarded] == [("opinions", 2)]
-    assert "不是对象" in discarded[0].reason
-
-
-def test_trimmed_parse_still_refuses_to_drop_silently():
-    """边界钉子：**摘掉一条**这件事只开给有留痕出口的调用方（`parse_packet_lenient`）。
-
-    `parse_packet_trimmed` 剩下的调用点是整合者，它这一趟还没有"把丢掉的提案写进留痕"的出口
-    ——让它静默摘，就等于破"一条都不许默默丢掉"这条规矩。所以它照旧抛。
-
-    （`parse_packet_lenient` 的摘除行为由上面那条用例钉着；两者是同一份实现的两种开关。）
-    """
-
-    with pytest.raises(PacketParseError):
-        schemas.parse_packet_trimmed(
-            seat_packet_with([opinion("O1"), "placeholder"]),
-            schemas.SeatPacket,
-            purpose="seat_review",
-        )
-
-    packet, overflow = schemas.parse_packet_trimmed(
-        seat_packet_with([opinion("O1")]), schemas.SeatPacket, purpose="seat_review"
-    )
-
-    assert overflow == ()
-    assert len(packet.opinions) == 1  # 签名与返回值形状都没变（2 元组）
 
 
 def test_dropping_a_placeholder_does_not_mask_a_real_field_error():

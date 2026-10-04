@@ -5,12 +5,12 @@
 用户拿到的是建议，可以删也可以从目录里补（`02-编排与数据.md` §4.6）。
 """
 
-import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pmstudio.application.agents import schemas
+from pmstudio.application.agents.schemas import RULES
 from pmstudio.application.context import (
     FEATURE_FIELDS_TEXT,
     LABELS_TEXT,
@@ -19,20 +19,17 @@ from pmstudio.application.context import (
     SECTIONS_TEXT,
     render_seat_catalog,
 )
-from pmstudio.application.errors import PacketParseError
-from pmstudio.application.ports import (
-    ModelGateway,
-    ModelMessage,
-    ModelRequest,
-    PromptLibrary,
-    SeatCatalog,
-)
+from pmstudio.application.ports import SeatCatalog
 from pmstudio.domain.round.claim import Assumption, Claim, Contradiction
 from pmstudio.domain.round.round import DroppedItem, DropSource, SeatNomination
 from pmstudio.domain.round.web_query import MAX_WEB_QUERIES, WebQuery
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import RoundId
 from pmstudio.domain.shared.label import ClaimLabel
+from pmstudio.harness.errors import PacketParseError
+from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
+from pmstudio.harness.model.envelope import Envelope, make_packet_id
+from pmstudio.harness.model.structured import StructuredCall, call_structured
 
 PURPOSE = "claims"
 
@@ -43,11 +40,16 @@ class Analysis:
 
     claims: tuple[Claim, ...]
     seats: tuple[SeatNomination, ...]
+    #: §4.4 的信封。与另外四个 agent 一样：这一趟的全部事实都在它身上。
+    #: **必填**：可选的话就成了"分析者可以没有信封"——那正是这轮要消掉的不对称，
+    #: 只是换了个更隐蔽的形式（`use_cases` 目前不读它，填漏了没人会发现）。
+    envelope: Envelope
     dropped: tuple[DroppedItem, ...] = ()
     #: 本轮输入内部**立场互斥**的主张对子（没判出来就是空）
     contradictions: tuple[Contradiction, ...] = ()
     #: 这一轮建议联网查什么（**只是提名**；用户在复述卡上勾了才真去查）
     web_queries: tuple[WebQuery, ...] = ()
+
 
 
 def normalize(text: str) -> str:
@@ -147,6 +149,13 @@ def grounded_span(raw_span: str, source: str) -> str | None:
 class ClaimAnalyzer:
     PURPOSE = PURPOSE
     PROMPT = "analyzer"
+    CALL = StructuredCall(
+        purpose=PURPOSE,
+        kind="claims",
+        prompt=PROMPT,
+        packet=schemas.ClaimsPacket,
+        rules=RULES,
+    )
     PROMPT_SLOTS = (
         "document_state",
         "user_input",
@@ -175,37 +184,35 @@ class ClaimAnalyzer:
         external_material: str = NO_MATERIAL_TEXT,
         round_id: RoundId | None = None,
         validation_error: str = "",
+        packet_slot: str = "",
     ) -> Analysis:
-        schema = schemas.ClaimsPacket.model_json_schema()
-        prompt = self._prompts.render(
-            self.PROMPT,
-            document_state=document_state,
-            user_input=user_input,
-            labels=LABELS_TEXT,
-            sections=SECTIONS_TEXT,
-            feature_fields=FEATURE_FIELDS_TEXT,
-            section_slots=SECTION_SLOTS_TEXT,
-            seat_catalog=render_seat_catalog(self._catalog.all()),
-            external_material=external_material,
-            schema_json=json.dumps(schema, ensure_ascii=False),
-            validation_error=validation_error,
-        )
-        reply = await self._model.complete(
-            ModelRequest(
-                purpose=self.PURPOSE,
-                messages=(ModelMessage(role="user", content=prompt),),
-                schema_name="ClaimsPacket",
-                response_schema=schema,
-                # 留样按 round_id 归堆（`02` §5.3）：排查时要能一次捞出一整轮
-                metadata={} if round_id is None else {"round_id": str(round_id)},
-            )
+        outcome = await call_structured(
+            self.CALL,
+            gateway=self._model,
+            prompts=self._prompts,
+            slots={
+                "document_state": document_state,
+                "user_input": user_input,
+                "labels": LABELS_TEXT,
+                "sections": SECTIONS_TEXT,
+                "feature_fields": FEATURE_FIELDS_TEXT,
+                "section_slots": SECTION_SLOTS_TEXT,
+                "seat_catalog": render_seat_catalog(self._catalog.all()),
+                "external_material": external_material,
+                "validation_error": validation_error,
+            },
+            # 留样按 round_id 归堆（`02` §5.3）：排查时要能一次捞出一整轮
+            metadata={} if round_id is None else {"round_id": str(round_id)},
+            packet_id=make_packet_id(
+                str(round_id or "new"), self.CALL.kind, "analyzer", slot=packet_slot
+            ),
+            run_id=str(round_id or "new"),
+            produced_by="analyzer",
         )
         # 主张这一包**超限不判死**（P21 F16-a）：席位（`use_cases`）与整合者早就走这条路，
         # 只有分析者还在严格解析——而它是**唯一一条没有 `/retry` 可点**的失败路
         # （轮次都还没建出来）。截断保留它自己排的前 N 条，溢出写成留痕。
-        packet, overflow, discarded = schemas.parse_packet_lenient(
-            reply.text, schemas.ClaimsPacket, purpose=self.PURPOSE
-        )
+        packet, overflow, discarded = outcome.packet, outcome.overflow, outcome.discarded
         seats, dropped = nominations_from_packet(packet, catalog=self._catalog)
         claims, claim_drops = claims_from_packet(packet, user_input=user_input)
         # 被摘掉的那些条（根本不是对象）会让后面主张的序号整体前移，而互斥对子是按
@@ -217,19 +224,27 @@ class ClaimAnalyzer:
             packet, claims=claims, positions=positions
         )
         web_queries, query_drops = web_queries_from_packet(packet)
+        # 留痕统一在**出口**补 `packet_id`：9 处构造点散在 6+ 个函数里，穿参数要改
+        # 6+ 个签名；而这里 envelope 就在手边，一处 `replace()` 覆盖全部。
+        # 不区分 source——它们都来自这一包（analyzer 的留痕全是"模型交回的东西没被采纳"）。
+        packet_id = outcome.packet_id
         return Analysis(
             claims=claims,
             seats=seats,
-            dropped=(
-                dropped
-                + claims_overflow_drops(overflow)
-                + discarded_claim_drops(claims_discarded)
-                + claim_drops
-                + contradiction_drops
-                + query_drops
+            dropped=tuple(
+                replace(item, packet_id=packet_id)
+                for item in (
+                    dropped
+                    + claims_overflow_drops(overflow)
+                    + discarded_claim_drops(claims_discarded)
+                    + claim_drops
+                    + contradiction_drops
+                    + query_drops
+                )
             ),
             contradictions=contradictions,
             web_queries=web_queries,
+            envelope=outcome,
         )
 
 

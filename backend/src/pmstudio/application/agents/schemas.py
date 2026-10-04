@@ -1,20 +1,32 @@
-"""智能体之间唯一的通信形状。它同时做三件事：生成喂给模型的 `response_schema`、
-在提示词里内联展示、解析模型回复——所以它是 JSON Schema 的唯一真相源。"""
+"""这个产品的报文长什么样：5 个信息包 + 它们的 JSON Schema + 两个去处工具。
 
-import copy
-import json
-from collections.abc import Mapping
-from dataclasses import dataclass
-from types import UnionType
-from typing import Literal, Union, get_args, get_origin
+**这里只回答"报文与去处"，不回答"怎么解析"**（2026-10-04 拆出）：
+归一化引擎（补壳 / 收 null / 摘非对象 / 超限截断）与三档 `parse_packet*` 已搬进
+`pmstudio.harness.model.normalize`。搬的时候把两样对产品的知识抽成入参
+`NormalizeRules(signatures, write_semantics_fields)`——引擎只认它，不认产品。
 
-from pydantic import BaseModel, Field, ValidationError
+**下面的三个 `parse_packet*` 是薄封装，不是兼容层**：签名与搬移前逐字一致，
+因为它们是"三档口径"这一文档级 API（`02` §11.0.9）的落地处——严格档、截断档在测试里
+逐条钉着口径，宽松档在四个 agent 手里。直接删掉这一层，等于让每个调用方自己传签名表。
 
-from pmstudio.application.errors import PacketParseError
+`Overflow` / `Discarded` 在这里被 import 是**真实使用**（下面两个 wrapper 的返回类型），
+顺带让既有断言 `schemas.Overflow(...)` 继续成立——它们是同一个类对象，按值相等。
+"""
+
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import FeatureSlug, SectionId
 from pmstudio.domain.shared.sections import FEATURE_HOME, section_slot
 from pmstudio.domain.shared.target import Target
+from pmstudio.harness.model.normalize import (
+    Discarded,
+    NormalizeRules,
+    Overflow,
+    parse_lenient,
+)
 
 Label = Literal["fact", "need", "goal", "constraint", "preference", "guess", "decision"]
 Zone = Literal["body", "preference"]
@@ -265,40 +277,11 @@ class MemoryPacket(BaseModel):
     )
 
 
-@dataclass(frozen=True, slots=True)
-class Overflow:
-    """一处容器超限：保留了前 `kept` 条，溢出 `dropped` 条。
-
-    它只是"这一包太大了"的事实，不是错误——由调用方决定重装还是截断（`parse_packet_trimmed`）。
-    """
-
-    container: str
-    kept: int
-    dropped: int
-
-
-#: 非对象元素的统一说法。**不复制模型写的那串**（占位符本身不进留痕）——
-#: 留痕要的是"这里少了一条、为什么少"，不是把模型写的垃圾再抄一遍（learnings L20）。
-NOT_AN_OBJECT = "这一条不是对象（模型写了占位符），没有内容可收"
-
-
-@dataclass(frozen=True, slots=True)
-class Discarded:
-    """容器里被摘掉的一条：**它根本不是对象**，没有内容可判。
-
-    与 `Overflow` 分开：超限是"太多了"，这个是"这一条不成形状"。
-    两者都不是内容错——真跑里一个占位符字符串 `"O2_placeholder"` 曾把整轮打掉
-    （`.codex/runs/2026-10-01/报告.md` F17）。
-    """
-
-    container: str
-    index: int
-    reason: str = NOT_AN_OBJECT
-
-
 #: 顶层数组的元素 → 容器。**顺序本身是判据的一部分**：命中即停，先查特征最强的键。
 #: 题面特征（`title` / `consequence_if_skipped`）必须排在 `evidence_refs` 前面——
 #: 题目也可能带依据编号，先看题面才能把它和提案分开。
+#: 只有"容器都有默认值"的包才进这张表：补壳不必凭空造必填字段。
+#: 主张包 / 席位包必填 `basis`，所以**不给**签名表——那会让补壳变成编内容。
 _SIGNATURES: dict[type[BaseModel], tuple[tuple[str, tuple[frozenset[str], ...]], ...]] = {
     IntegrationPacket: (
         ("dropped_opinions", (frozenset({"handle"}),)),
@@ -309,297 +292,24 @@ _SIGNATURES: dict[type[BaseModel], tuple[tuple[str, tuple[frozenset[str], ...]],
     MemoryPacket: (("changes", (frozenset({"op", "kind"}),)),),
 }
 
-
-def _top_level_keys(model: type[BaseModel]) -> tuple[str, ...]:
-    """这个报文顶层允许的键（形状指引要照着它说话）。"""
-
-    return tuple(model.model_fields)
-
-
-def _container_of_item(item: Mapping[str, object], *, model: type[BaseModel]) -> str | None:
-    """一个元素该归到哪个容器？命中不了任何签名就返回 None——调用方判死，**不猜**。"""
-
-    keys = set(item)
-    for container, signatures in _SIGNATURES.get(model, ()):
-        if any(signature <= keys for signature in signatures):
-            return container
-    return None
-
-
-def _normalize_payload(payload: object, *, model: type[BaseModel], purpose: str) -> object:
-    """顶层是数组时补上外层对象壳；补不了就抛"形状错"（带指引）。
-
-    真跑实测（留样 15 / 66）：模型把整包回成**一个数组**（元素是 QuestionDraft），
-    旧写法直接 `model_type` 判死整轮。数组是**漏了外壳**，不是内容错——
-    只要每个元素能用签名唯一归位，就机械补壳；有元素归不了位（或这个报文没有签名表）照旧判死。
-
-    为什么只给 `IntegrationPacket` 开这个口子：它的四个容器都有默认值，补壳不需要造任何字段；
-    `ClaimsPacket`（必填 `basis` + 至少一个席位）与 `SeatPacket`（必填 `basis`）一补就得
-    **凭空造必填字段**——那是编内容，不是修形状。
-    """
-
-    if not isinstance(payload, list) or not payload:
-        return payload  # 空数组不重建：空返回不等于没意见（L2），交给原路判死
-    if model in _SIGNATURES:
-        buckets: dict[str, list[object]] = {}
-        for item in payload:
-            if not isinstance(item, dict):
-                break
-            container = _container_of_item(item, model=model)
-            if container is None:
-                break
-            buckets.setdefault(container, []).append(item)
-        else:
-            return buckets
-    raise PacketParseError(
-        "模型把整包返回成了数组，无法唯一归位到任何一类内容",
-        purpose=purpose,
-        packet_shape={"got": "array", "expected_keys": _top_level_keys(model)},
-    )
-
-
 #: 这几个字段**不适用**"null → 用默认值"：
 #: `op` / `entry_id` 决定写/改/删哪一条；`form` 决定这条意见进不进账本（有没有编号）。
 _WRITE_SEMANTICS_FIELDS = frozenset({"op", "entry_id", "form"})
 
-
-def _is_model(annotation: object) -> bool:
-    return isinstance(annotation, type) and issubclass(annotation, BaseModel)
-
-
-def _allows_none(annotation: object) -> bool:
-    return annotation is type(None) or type(None) in get_args(annotation)  # noqa: E721
-
-
-def _normalize_value(
-    value: object,
-    *,
-    annotation: object,
-    container: str | None = None,
-    discarded: list[Discarded] | None = None,
-) -> object:
-    """按注解归一化一个值：列表字段收 `null` / 单个字符串；嵌套报文递归进去。
-
-    `discarded` 非空时才开启**摘非对象元素**（`parse_packet_lenient`）：
-    那一支只在"元素根本不是对象"时丢，元素是对象但字段写错照旧原样交给 pydantic 报错。
-    """
-
-    origin = get_origin(annotation)
-    if origin in (Union, UnionType):
-        inner = [item for item in get_args(annotation) if item is not type(None)]
-        if value is None or len(inner) != 1:
-            return value
-        return _normalize_value(
-            value, annotation=inner[0], container=container, discarded=discarded
-        )
-    if origin is list:
-        args = get_args(annotation)
-        item_type = args[0] if args else object
-        if value is None:
-            return []
-        if isinstance(value, str) and item_type is str:
-            return [value]
-        if isinstance(value, list) and _is_model(item_type):
-            kept: list[object] = []
-            for position, item in enumerate(value, start=1):
-                if isinstance(item, dict):
-                    kept.append(
-                        _normalize_model(item, model=item_type, discarded=discarded)
-                    )
-                elif discarded is not None:
-                    discarded.append(
-                        Discarded(container=container or "?", index=position)
-                    )
-                else:
-                    kept.append(item)  # 严格路径：原样留着，让 pydantic 报 `model_type`
-            return kept
-        return value
-    if _is_model(annotation) and isinstance(value, dict):
-        return _normalize_model(value, model=annotation, discarded=discarded)
-    return value
-
-
-def _normalize_model(
-    payload: object, *, model: type[BaseModel], discarded: list[Discarded] | None = None
-) -> object:
-    """按字段表过一遍：先按注解修形状，再让"非 Optional + 有默认值"的 `null` 用默认值。"""
-
-    if not isinstance(payload, dict):
-        return payload
-    fixed: dict[str, object] = {}
-    for name, value in payload.items():
-        spec = model.model_fields.get(name)
-        if spec is None:
-            fixed[name] = value  # 多余的键交给 pydantic（默认忽略）
-            continue
-        normalized = _normalize_value(
-            value, annotation=spec.annotation, container=name, discarded=discarded
-        )
-        if (
-            normalized is None
-            and name not in _WRITE_SEMANTICS_FIELDS
-            and not spec.is_required()
-            and spec.default is not None
-            and not _allows_none(spec.annotation)
-        ):
-            continue  # 用 schema 的默认值
-        fixed[name] = normalized
-    return fixed
-
-
-def _normalize_fields(
-    payload: object, *, model: type[BaseModel], discarded: list[Discarded] | None = None
-) -> object:
-    """字段级归一化：机械可判的就地修，**内容字段与写入语义一律不动**。
-
-    真跑实测（P7 验证留样 7）：席位把 `evidence_refs` 写成 `null` → 整席位判死。
-    三档规则（`02` §11.0.9）：
-    ① 列表字段收到 `null` → `[]`（空列表在本仓库有明确定义：没依据就按"它提议的"处理）；
-    ② `list[str]` 收到字符串 → 单元素列表（"E4" 就是一个编号）；
-    ③ 非 Optional + 有默认值的字段收到 `null` → 用默认值（"没给值"用分类默认，不猜内容）；
-    黑名单（`op` / `entry_id` / `form`）例外——那三个用默认值会**悄悄改语义**。
-    """
-
-    return _normalize_model(payload, model=model, discarded=discarded)
-
-
-def parse_packet[T: BaseModel](text: str, model: type[T], *, purpose: str) -> T:
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as error:
-        raise PacketParseError(
-            f"模型返回的不是合法 JSON：{error.msg}", purpose=purpose, offset=error.pos
-        ) from error
-    payload = _normalize_payload(payload, model=model, purpose=purpose)
-    payload = _normalize_fields(payload, model=model)
-    try:
-        return model.model_validate(payload)
-    except ValidationError as error:
-        details: dict[str, object] = {"errors": error.errors()}
-        overflows = _overflows_of(error)
-        if overflows and _only_too_long(error):
-            # 严格解析也要把"给了几条、上限几条"带出去：重装指引靠它说人话（`repair_note`）。
-            first = overflows[0]
-            details["overflow"] = (
-                first.container,
-                first.kept + first.dropped,
-                first.kept,
-            )
-        raise PacketParseError(
-            "模型返回的报文过不了 schema", purpose=purpose, **details
-        ) from error
-
-
-def parse_packet_trimmed[T: BaseModel](
-    text: str, model: type[T], *, purpose: str
-) -> tuple[T, tuple[Overflow, ...]]:
-    """与 `parse_packet` 同口径，**只多一条**：容器超限不再判死整包。
-
-    规矩（真跑实测出来的，见 `.codex/runs/2026-09-28/报告.md` F2/F4/F11）：
-    - 只有当**所有**报错都是 `too_long` 时才截断；出现别的错照旧抛——"错就是错"不许放松；
-    - 截断保留**模型给出的前 N 条**：顺序就是它自己排的优先级，我们不替它重排；
-    - 溢出条数报回调用方，由用例层写成留痕（不静默丢）。
-    """
-
-    return _validate_trimming(
-        _load_normalized(text, model, purpose=purpose, discarded=None),
-        model,
-        purpose=purpose,
-    )
+#: 递给引擎的规则——全仓唯一一份，装配点只有这里。
+#: **不带下划线**：它被四个 agent 当契约用（下划线私有被跨模块 import 是一种骗人的约定），
+#: 由 `tests/application/test_agent_calls.py` 钉住"所有报文共用这一份"。
+RULES = NormalizeRules(
+    signatures=_SIGNATURES, write_semantics_fields=_WRITE_SEMANTICS_FIELDS
+)
 
 
 def parse_packet_lenient[T: BaseModel](
     text: str, model: type[T], *, purpose: str
 ) -> tuple[T, tuple[Overflow, ...], tuple[Discarded, ...]]:
-    """`parse_packet_trimmed` + **摘掉容器里根本不是对象的元素**（2026-10-01 审计 F17）。
+    """宽松档：截断档 + 摘掉容器里根本不是对象的元素（真跑 F17 的占位符字符串）。"""
 
-    真跑现场：某个席位的 `opinions[1]` 是模型自己写的占位符字符串 `"O2_placeholder"`，
-    pydantic 报 `model_type` → 不是 `too_long` → 整轮判死（用户只能点一次 `/retry` 重跑那个席位）。
-
-    它不是内容错（那一"条"根本没有内容可判），是**形状错**——与超限同一套语义：
-    丢掉那一条、把位置报回调用方写成留痕，整轮照跑。三条边界：
-
-    1. **只摘非对象**。元素是对象、字段写错（`claim: null`）→ 照旧抛，不许被"丢那一条"掩盖；
-    2. 摘空之后的校验照旧生效（主张一条都不剩 ⇒ `min_length` 拦下，整轮判死——主张是地基）；
-    3. 摘掉的每一条都上报（`Discarded`），**一条都不许默默丢**。
-
-    为什么单独开一个函数、不让 `parse_packet_trimmed` 一起变：整合者那条路还没有"把丢掉的东西
-    写进留痕"的出口，让它静默摘就等于破"一条都不许默默丢掉"的规矩。整合者单独一轮再开。
-    """
-
-    discarded: list[Discarded] = []
-    packet, overflow = _validate_trimming(
-        _load_normalized(text, model, purpose=purpose, discarded=discarded),
-        model,
-        purpose=purpose,
-    )
-    return packet, overflow, tuple(discarded)
-
-
-def _load_normalized(
-    text: str, model: type[BaseModel], *, purpose: str, discarded: list[Discarded] | None
-) -> object:
-    """JSON → 顶层数组重建 → 字段归一化（`discarded` 非空时才摘非对象元素）。"""
-
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as error:
-        raise PacketParseError(
-            f"模型返回的不是合法 JSON：{error.msg}", purpose=purpose, offset=error.pos
-        ) from error
-    payload = _normalize_payload(payload, model=model, purpose=purpose)
-    return _normalize_fields(payload, model=model, discarded=discarded)
-
-
-def _validate_trimming[T: BaseModel](
-    payload: object, model: type[T], *, purpose: str
-) -> tuple[T, tuple[Overflow, ...]]:
-    """先严格校验；**只有当所有报错都是 `too_long` 时**才截断重试（别的错照旧抛）。"""
-
-    try:
-        return model.model_validate(payload), ()
-    except ValidationError as error:
-        overflows = _overflows_of(error)
-        if not overflows or not _only_too_long(error):
-            raise PacketParseError(
-                "模型返回的报文过不了 schema", purpose=purpose, errors=error.errors()
-            ) from error
-        trimmed = copy.deepcopy(payload)
-        for item in overflows:
-            trimmed[item.container] = trimmed[item.container][: item.kept]
-        try:
-            return model.model_validate(trimmed), tuple(overflows)
-        except ValidationError as second:
-            raise PacketParseError(
-                "模型返回的报文过不了 schema", purpose=purpose, errors=second.errors()
-            ) from second
-
-
-def _only_too_long(error: ValidationError) -> bool:
-    """这一包是不是**只有**容器超限这一种毛病？其它的错不许被截断掩盖。"""
-
-    return all(item.get("type") == "too_long" for item in error.errors())
-
-
-def _overflows_of(error: ValidationError) -> list[Overflow]:
-    """`too_long` 错误 → 每处"保留了前几条、溢出几条"（pydantic 的 ctx 里带着数字）。"""
-
-    found: list[Overflow] = []
-    for item in error.errors():
-        if item.get("type") != "too_long":
-            continue
-        location = item.get("loc", ())
-        context = item.get("ctx", {})
-        limit = int(context.get("max_length") or 0)
-        actual = int(context.get("actual_length") or len(item.get("input") or ()))
-        found.append(
-            Overflow(
-                container=str(location[0]) if location else "?",
-                kept=limit,
-                dropped=max(actual - limit, 0),
-            )
-        )
-    return found
+    return parse_lenient(text, model, purpose=purpose, rules=RULES)
 
 
 def target_of(draft: TargetDraft) -> Target:

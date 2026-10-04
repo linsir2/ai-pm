@@ -6,7 +6,6 @@
 
 import asyncio
 import hashlib
-import json
 import os
 import time
 from collections.abc import Mapping
@@ -16,46 +15,14 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")  # 别在导入时
 
 from litellm import acompletion  # noqa: E402
 
-from pmstudio.application.errors import ModelCallFailed
-from pmstudio.application.ports import ModelCallRecorder, ModelReply, ModelRequest
-
-# 只重试"明显是抖动"的错误：连接失败、超时、限流、5xx。认证/参数类错误立刻失败。
-# 失败语义不变：重试到上限仍然失败 → ModelCallFailed → 整轮失败、可重试。
-TRANSIENT_HINTS = (
-    "connection",
-    "timeout",
-    "timed out",
-    "internalservererror",
-    "service unavailable",
-    "server error",
-    "rate limit",
-    "429",
-    "500",
-    "502",
-    "503",
-    "504",
-    # 供应商间歇性拒收结构化输出（2026-10-03 08:15–08:24 实测：两分钟窗口里连回 400，
-    # 08:17 又全通、08:20 连打 8/8 过；08:24 打到一次真实调用 → 整轮失败）。
-    # **只认它自己这句话**——`invalid_parameter` 这个大类**不放宽**：
-    # 参数真的写错（如 glm 那条 `enable_thinking` 互斥）必须立刻失败，
-    # 闸门正是靠那个把"换模型忘了改参数"当场拦下来的。
-    "response_format type is unavailable",
-)
+from pmstudio.harness.errors import ModelCallFailed
+from pmstudio.harness.model import failure
+from pmstudio.harness.model.contracts import ModelCallRecorder, ModelReply, ModelRequest
+from pmstudio.harness.model.jsonio import is_json, strip_fence
 
 #: 结构化输出的两种写法。`json_schema`（默认）能帮模型守规；供应商不吃它时退到 `json_object`。
 JSON_SCHEMA = "json_schema"
 JSON_OBJECT = "json_object"
-
-#: 供应商自己那句"这个 response_format 类型**现在**不可用"。
-#: 同一个字符串在 `TRANSIENT_HINTS` 里还出现过一次，两处用途不同、**都要留**：
-#: 那边管"短暂拒收 → 重试"（qwen 实测抖过两分钟），这边管"**稳定**拒收 → 换写法"
-#: （`deepseek-v4.1-flash` 实测连续 400）。
-STRUCTURED_OUTPUT_REFUSAL_HINT = "response_format type is unavailable"
-
-
-def is_structured_output_refusal(error: BaseException) -> bool:
-    return STRUCTURED_OUTPUT_REFUSAL_HINT in f"{type(error).__name__} {error}".lower()
-
 
 def response_format_for(mode: str, *, schema_name: str, schema: Mapping[str, object]) -> dict:
     """这一次请求的 `response_format` 怎么写。
@@ -209,7 +176,7 @@ class LiteLLMGateway:
                 hint="上一次你什么都没返回。请只输出那个 JSON 对象，不要空回复。",
             )
         text = strip_fence(raw)
-        if request.response_schema and not _is_json(text):
+        if request.response_schema and not is_json(text):
             # `usage` 与 `finish_reason` 一起记：回包是**截断的 JSON**时（P35 真踩到：
             # 21.7K 字符断在半句上），只有 finish_reason=length 能一眼说明"是输出被截断"，
             # 而不是"模型没按格式答"。
@@ -304,26 +271,22 @@ def _jsonable(value: object) -> object:
     return str(value)
 
 
-def strip_fence(text: str) -> str:
-    """模型经常把 JSON 包在 ```json 围栏里——围栏剥掉，别让下游在围栏上炸。"""
-
-    body = text.strip()
-    if body.startswith("```"):
-        body = body.split("\n", 1)[1] if "\n" in body else ""
-        body = body.rsplit("```", 1)[0]
-    return body.strip()
-
-
-def _is_json(text: str) -> bool:
-    try:
-        json.loads(text)
-    except json.JSONDecodeError:
-        return False
-    return True
-
-
 def is_transient(error: BaseException) -> bool:
-    """这次失败值不值得重试：连接抖动、超时、限流、5xx 值得；认证与参数错误不值得。"""
+    """这次失败值不值得重试：连接抖动、超时、限流、5xx 值得；认证与参数错误不值得。
 
-    text = f"{type(error).__name__} {error}".lower()
-    return any(hint in text for hint in TRANSIENT_HINTS)
+    **判据只有一份**，在 `harness.model.failure`（全仓唯一的"什么算抖动"口径）；
+    这里只做"异常 → 文本"这一下接缝，函数名与语义搬移前逐字一致。
+    """
+
+    return failure.is_transient(f"{type(error).__name__} {error}")
+
+
+def is_structured_output_refusal(error: BaseException) -> bool:
+    """供应商**稳定**拒收 `json_schema` → 换写法（`04-未决.md` M2b 已拍板）。
+
+    与 `is_transient` 分开：那边管"短暂拒收 → 重试"（qwen 实测抖过两分钟），
+    这边管"**稳定**拒收 → 换写法"（`deepseek-v4.1-flash` 实测连续 400）。
+    稳不稳由**重试次数**判断，不靠分类判断。
+    """
+
+    return failure.is_structured_output_refusal(f"{type(error).__name__} {error}")

@@ -10,12 +10,13 @@ from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.dto import ProjectSummaryView
-from pmstudio.application.ports import ModelGateway, SeatDefinition
+from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.ids import DocumentId, ProjectId
+from pmstudio.harness.model.contracts import ModelGateway
 from tests.support.builders import PROJECT, make_document, make_seat
 from tests.support.doubles import (
     FixedClock,

@@ -1,11 +1,18 @@
-"""应用端口：只声明能力，实现在 infrastructure，由 bootstrap 注入。"""
+"""应用端口：只声明能力，实现在 infrastructure，由 bootstrap 注入。
 
-from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass, field
+**模型调用契约不在这里**：请求 / 回复 / 网关协议 / 留样协议 / 提示词库协议已经搬进
+`pmstudio.harness.model.contracts`（2026-10-04）——它们只讲"怎么跟模型说话"，
+和 `SeatDefinition` / `MaterialStore` 这些业务端口不是一类东西，混在一个文件里
+会让"模型能力"没有住处，`litellm_gateway.py` 也只好反向依赖 application。
+
+留在这里的都是**产品侧**能力：席位编制、材料库、全局检索投影、项目工厂、轮的编排与取消。
+"""
+
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from pmstudio.application.events import Event
 from pmstudio.domain.shared.ids import DocumentId, ProjectId, RoundId
 
 if TYPE_CHECKING:
@@ -21,28 +28,6 @@ if TYPE_CHECKING:
         RoundOutcomeView,
         RoundView,
     )
-
-
-@dataclass(frozen=True, slots=True)
-class ModelMessage:
-    role: str
-    content: str
-
-
-@dataclass(frozen=True, slots=True)
-class ModelRequest:
-    purpose: str
-    messages: tuple[ModelMessage, ...]
-    schema_name: str
-    response_schema: Mapping[str, object]
-    metadata: Mapping[str, str] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class ModelReply:
-    text: str
-    model: str
-    usage: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,56 +53,10 @@ class IdGenerator(Protocol):
 
 
 @runtime_checkable
-class ModelGateway(Protocol):
-    async def complete(self, request: ModelRequest) -> ModelReply: ...
-
-
-@runtime_checkable
-class ModelCallRecorder(Protocol):
-    """留样的旁路出口（`02` §5.3）：记下每一次模型调用，给排查用，不参与业务。
-
-    实现是 `infrastructure/sqlite/model_calls.py`；网关默认不接（`recorder=None` 时什么都不记）。
-    提示词给的是**原文**——只存哈希复现不了，而复现是这张表唯一的目的。
-    """
-
-    def record(
-        self,
-        *,
-        round_id: str | None,
-        purpose: str,
-        model: str,
-        prompt_sha: str,
-        prompt_text: str,
-        reply_text: str,
-        usage: Mapping[str, object],
-        duration_ms: int,
-        created_at: datetime,
-        attempt: int = 1,
-        ok: bool = True,
-        error: str | None = None,
-    ) -> None: ...
-
-
-@runtime_checkable
-class PromptLibrary(Protocol):
-    def render(self, name: str, **slots: str) -> str: ...
-
-
-@runtime_checkable
 class SeatCatalog(Protocol):
     def all(self) -> tuple[SeatDefinition, ...]: ...
     def nominate(self, *, user_input: str) -> tuple[SeatDefinition, ...]: ...
     def by_id(self, seat_id: str) -> SeatDefinition: ...
-
-
-@runtime_checkable
-class EventPublisher(Protocol):
-    def publish(self, event: Event) -> None: ...
-
-
-@runtime_checkable
-class EventStream(Protocol):
-    def subscribe(self) -> AsyncIterator[Event]: ...
 
 
 @runtime_checkable

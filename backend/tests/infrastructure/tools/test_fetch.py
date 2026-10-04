@@ -9,7 +9,8 @@ import socket
 import httpx
 import pytest
 
-from pmstudio.application.errors import FetchRefused, ToolCallFailed, UnsupportedMaterial
+from pmstudio.application.errors import UnsupportedMaterial
+from pmstudio.harness.errors import FetchRefused, ToolCallFailed
 from pmstudio.infrastructure.tools.fetch import MAX_FETCH_BYTES, HttpxWebFetcher
 
 PAGE = (

@@ -1,8 +1,8 @@
 import asyncio
 from datetime import UTC, datetime
 
-from pmstudio.application.events import ROUND_UPDATED, Event
-from pmstudio.infrastructure.events.in_process import InProcessEventBus
+from pmstudio.application.events import ROUND_UPDATED
+from pmstudio.harness.events import Event, InProcessEventBus
 
 NOW = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
 
