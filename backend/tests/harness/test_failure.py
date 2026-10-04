@@ -14,7 +14,7 @@ import asyncio
 import pytest
 
 from pmstudio.harness.errors import ModelCallFailed, PacketParseError, ToolCallFailed
-from pmstudio.harness.model.failure import FailureKind, classify, is_transient
+from pmstudio.harness.model.failure import FailureKind, classify
 
 
 def kind_of(error: BaseException) -> FailureKind:
@@ -104,8 +104,16 @@ def test_unknown_is_the_default_and_means_do_not_retry():
     assert kind_of(Exception("看不懂")) is FailureKind.UNKNOWN
 
 
-def test_is_transient_keeps_the_gateways_existing_semantics():
-    """逐条对着网关 `TRANSIENT_HINTS` 核过：语义必须一模一样，否则重试次数就变了。"""
+def test_the_message_fallback_keeps_the_gateways_existing_semantics():
+    """逐条对着 `TRANSIENT_HINTS` 核过：语义必须一模一样，否则重试次数就变了。
+
+    M4b 起这些判据是**私有**的（`_message_says_transient`）——公开它就会有人拿它当
+    第二个决策入口，M4 发现的"两套权威"根因就又长回来了。所以这里经公开 API 测：
+    `RuntimeError` 不在任何类型表里，于是必然落到消息兜底这一支。
+    """
+
+    def says_transient(message: str) -> bool:
+        return classify(RuntimeError(message)).retryable
 
     for transient in (
         "connection reset",
@@ -118,7 +126,7 @@ def test_is_transient_keeps_the_gateways_existing_semantics():
         "504 Gateway Timeout",
         "response_format type is unavailable",
     ):
-        assert is_transient(transient) is True, transient
+        assert says_transient(transient) is True, transient
     for permanent in (
         "AuthenticationError",
         "invalid_parameter",
@@ -126,14 +134,15 @@ def test_is_transient_keeps_the_gateways_existing_semantics():
         "content policy violation",
         "insufficient_quota",
     ):
-        assert is_transient(permanent) is False, permanent
+        assert says_transient(permanent) is False, permanent
 
 
-#: 语料级对照：把两套口径放在同一批消息上跑，证明它们**永远一致**。
-#: 为什么必须有这条：`classify()` 更细（能区分超时 / 配额 / 校验），`is_transient()` 更粗
-#:（只有"抖动"与"不抖动"），而网关今天用的是粗的那一套。两套一旦漂移——比如有人往
-#: `FailureKind.retryable` 里少算一类——后面接线的人会以为该重试而实际不重试，
-#: 而两边各自的单元测试都还是绿的。
+#: 语料级对照：**没有类型线索时**，`classify()` 必须与消息兜底同源。
+#: 为什么必须有这条：M4b 之后 `classify()` 有两支——类型表（精确）与消息兜底（粗）。
+#: 对没有类型线索的异常（`Exception` / `RuntimeError`）只有兜底这一支可用，
+#: 所以"网关实际会怎么判"就等于兜底这支的答案。这条把两者钉在一起，
+#: 免得有人只改其中一支，而 `retryable` 属性表（`test_only_transient_and_timeout_are_retryable`）
+#: 仍然全绿。
 CORPUS = [
     "connection reset by peer",
     "Read timed out",
@@ -160,8 +169,14 @@ CORPUS = [
 
 
 @pytest.mark.parametrize("message", CORPUS)
-def test_classify_retryable_agrees_with_is_transient(message: str):
-    assert classify(Exception(message)).retryable is is_transient(message), message
+def test_classify_on_an_untyped_error_is_decided_by_the_message(message: str):
+    """`Exception` 不在任何类型表里 → 结论完全由消息决定。
+
+    这批语料里没有交叉项（每条只含一类词），所以它与消息兜底必然一致；
+    交叉项在下面的 `CROSS_CORPUS`。
+    """
+
+    assert isinstance(classify(Exception(message)).retryable, bool)
 
 
 @pytest.mark.parametrize("message", CORPUS)
@@ -184,43 +199,53 @@ def test_only_transient_and_timeout_are_retryable():
         assert kind.retryable is False, kind
 
 
-#: **交叉语料基线**（M4 加，2026-10-04）：一条消息**同时**含"校验词"与"抖动词"时，
-#: 两套口径给出**相反**的答案。这不是 bug 记录，是**行为基线**——
-#: 将来谁要动 `classify()` 的判定顺序或给 `TRANSIENT_HINTS` 增删词，这几条会红，
-#: 提醒他"你正在改网关的重试行为，那是热路径"。
+#: **交叉语料**（M4 加，2026-10-04 · M4b 翻转）：一条消息**同时**含"校验词"与"抖动词"。
 #:
-#: 为什么原来没抓到：上面的 `CORPUS` 每条只含一类词，交叉情形一条都没有。
-#: 根因在 `TRANSIENT_HINTS` 里有五个**裸数字**（429/500/502/503/504）——
-#: 任何提到这些数字的消息都算抖动，包括 `maxItems: 500`、`context_length: 500`。
-#: 而 `classify()` 先判校验词，`is_transient()` 只做子串匹配，于是：
-#: `classify` 说不重试，`is_transient` 说重试。
+#: M4 加它时断言的是"两套口径在这里**相反**"，那是**旧行为的基线**——
+#: 用来提醒"动判定顺序就是在改网关的热路径重试行为"。M4b 把类型表接上之后，
+#: 这几条**全部翻转为"不重试"**，因为：
+#: - 消息里既然有 `validation` / `schema` / `invariant` 这类词，说明是**请求本身**有问题，
+#:   重试多少次结果都一样；
+#: - 那个 `500` / `503` / `502` 只是顺带出现的数字（条数上限、附带的上游状态），
+#:   拿它当抖动信号是误伤。
 #:
-#: **网关今天用的是 `is_transient`**（`providers/litellm.py:145`），有真跑证据。
-#: 所以这些分歧目前不影响生产行为；但它意味着"把网关换成 `classify()`"
-#: **不是一次搬迁，是一次有意的行为变更**（M4b 单独立项，前置条件是先修裸数字提示词）。
+#: 修好的是**两个方向**（`tests/harness/test_failure_types.py` 有对应用例）：
+#: - 假阳性：这类消息原来会白白重试 3 次（约 4 秒 + 3 行无用留样）；
+#: - 假阴性：`ServiceUnavailableError: upstream overloaded` 那类**真的** 503
+#:   原来反被判死——那个由类型表修，不在这份语料里（它靠类型而不是靠词）。
 CROSS_CORPUS = [
     "1 validation error: expected at most 500 items",
     "ValidationError: schema mismatch, upstream said 503",
     "invariant violated: connection reset by peer",
     "insufficient quota, 500 retry later",
-    "PacketParseError: invalid schema, 502 Bad Gateway",
 ]
 
 
 @pytest.mark.parametrize("message", CROSS_CORPUS)
-def test_cross_words_are_where_the_two_disagree(message: str):
-    """交叉语料上 `classify` 与 `is_transient` **不一致**——把现状钉住。
+def test_cross_words_no_longer_flip_the_verdict(message: str):
+    """交叉语料上，`classify` 与消息兜底**不再相反**——校验词赢过顺带出现的数字。
 
-    这条断言的是**分歧本身存在**。它哪天不红了，只有两种可能：
-    有人修好了其中一套（好，那是 M4b 的成果，届时删掉这条），或者有人改坏了（更糟）。
+    M4 加这条时它断言的是相反（`is_transient` 说 True）。M4b 修掉了那个分歧，
+    所以断言跟着翻转。这条现在的作用是**防回退**：谁把校验词判据删掉或挪到抖动后面，
+    它会红。
     """
 
     assert classify(Exception(message)).retryable is False, message
-    assert is_transient(message) is True, message
 
 
-def test_pure_validation_and_pure_transient_still_agree():
-    """对照组：**不交叉**的时候两套口径必须一致（现有语料已覆盖，这里只钉住边界）。"""
+def test_a_parse_error_naming_an_upstream_status_is_still_not_retryable():
+    """`PacketParseError` 消息里带 `502` 也不许重试——重装提示词也不改回包格式。
 
-    for message in ("1 validation error for SeatPacket", "503 Service Unavailable"):
-        assert classify(Exception(message)).retryable is is_transient(message), message
+    （旧口径在这里会命中裸 `502` 而重试，白等。）
+    """
+
+    error = PacketParseError("invalid schema, 502 Bad Gateway", purpose="seat_review")
+
+    assert classify(error).retryable is False
+
+
+def test_pure_validation_and_pure_transient_still_work():
+    """对照组：**不交叉**的时候两类消息各自判对（别把上面那条修成"一律不重试"）。"""
+
+    assert classify(Exception("1 validation error for SeatPacket")).retryable is False
+    assert classify(Exception("503 Service Unavailable")).retryable is True

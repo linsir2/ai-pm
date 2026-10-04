@@ -11,12 +11,13 @@ from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.harness.errors import ModelCallFailed
 from pmstudio.harness.model.contracts import ModelMessage, ModelRequest
+from pmstudio.harness.model.providers import litellm as provider_module
 from pmstudio.harness.model.providers.litellm import LiteLLMGateway
 from pmstudio.infrastructure.llm.prompt_library import FilePromptLibrary
 
 
 class BadRequestError(Exception):
-    """名字与 litellm 那个一致：`is_transient()` 会看 `type(error).__name__`。"""
+    """名字与 litellm 那个一致：`classify()` 会看 `type(error).__name__`。"""
 
 
 #: 2026-10-03 供应商**原文**（DashScope 间歇性拒收 `json_schema`，见 `04` G10 M0）。
@@ -279,9 +280,7 @@ async def test_gateway_passes_model_key_base_and_schema(monkeypatch):
 
         return _Response()
 
-    monkeypatch.setattr(
-        "pmstudio.harness.model.providers.litellm.acompletion", scripted_acompletion
-    )
+    monkeypatch.setattr(provider_module, "acompletion", scripted_acompletion)
     gateway = LiteLLMGateway(model="openai/gpt-4o-mini", api_key="k", api_base="http://x")
     reply = await gateway.complete(
         ModelRequest(
@@ -316,7 +315,7 @@ async def test_gateway_strips_markdown_fence_around_json(monkeypatch):
 
         return _Response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", fenced)
+    monkeypatch.setattr(provider_module, "acompletion", fenced)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
     reply = await gateway.complete(
         ModelRequest(
@@ -329,7 +328,7 @@ async def test_gateway_strips_markdown_fence_around_json(monkeypatch):
     assert reply.text == '{"ok": true}'
 
 
-def test_is_transient_covers_the_structured_output_refusal():
+def test_the_retry_verdict_covers_the_structured_output_refusal():
     """供应商说"**现在**这个 response_format 类型不可用"——那是抖动，值得重试。
 
     真实现场（2026-10-03 08:15–08:24）：DashScope 在两分钟窗口里对 `json_schema` 连回 400，
@@ -337,19 +336,19 @@ def test_is_transient_covers_the_structured_output_refusal():
     网关原来把 `invalid_parameter` 一律当不可重试，于是一次两分钟的抖动 = 一次调用判死。
     """
 
-    from pmstudio.harness.model.providers.litellm import is_transient
+    from pmstudio.harness.model.failure import classify
 
-    assert is_transient(BadRequestError(STRUCTURED_OUTPUT_REFUSAL))
+    assert classify(BadRequestError(STRUCTURED_OUTPUT_REFUSAL)).retryable
 
 
-def test_is_transient_still_rejects_a_real_model_param_mismatch():
+def test_the_retry_verdict_still_rejects_a_real_model_param_mismatch():
     """**别放宽大类**：参数真的写错了要立刻失败（闸门就靠这条把"换模型忘了改参数"拦下来）。"""
 
-    from pmstudio.harness.model.providers.litellm import is_transient
+    from pmstudio.harness.model.failure import classify
 
-    assert not is_transient(BadRequestError(MODEL_PARAM_MISMATCH))
-    assert not is_transient(BadRequestError("InvalidParameter: field foo not allowed"))
-    assert not is_transient(RuntimeError("invalid api key"))
+    assert not classify(BadRequestError(MODEL_PARAM_MISMATCH)).retryable
+    assert not classify(BadRequestError("InvalidParameter: field foo not allowed")).retryable
+    assert not classify(RuntimeError("invalid api key")).retryable
 
 
 async def test_gateway_rides_out_one_structured_output_refusal(monkeypatch):
@@ -372,7 +371,7 @@ async def test_gateway_rides_out_one_structured_output_refusal(monkeypatch):
             raise BadRequestError(STRUCTURED_OUTPUT_REFUSAL)
         return _ok_response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", flaky)
+    monkeypatch.setattr(provider_module, "acompletion", flaky)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
 
     reply = await gateway.complete(
@@ -405,11 +404,8 @@ async def test_gateway_backs_off_when_the_refusal_keeps_coming(monkeypatch):
     async def fake_sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    monkeypatch.setattr(
-        "pmstudio.harness.model.providers.litellm.acompletion", always_refused
-    )
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.asyncio.sleep", fake_sleep)
-    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+    monkeypatch.setattr(provider_module, "acompletion", always_refused)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None, sleeper=fake_sleep)
 
     with pytest.raises(ModelCallFailed):
         await gateway.complete(
@@ -444,7 +440,7 @@ async def test_gateway_falls_back_to_json_object_when_json_schema_is_refused(mon
             raise BadRequestError(STRUCTURED_OUTPUT_REFUSAL)
         return _ok_response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", provider)
+    monkeypatch.setattr(provider_module, "acompletion", provider)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
 
     reply = await gateway.complete(
@@ -471,7 +467,7 @@ async def test_gateway_remembers_the_fallback_for_later_calls(monkeypatch):
             raise BadRequestError(STRUCTURED_OUTPUT_REFUSAL)
         return _ok_response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", provider)
+    monkeypatch.setattr(provider_module, "acompletion", provider)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
     request = ModelRequest(
         purpose="claims",
@@ -496,7 +492,7 @@ async def test_gateway_does_not_fall_back_for_other_bad_requests(monkeypatch):
         seen.append(dict(kwargs))
         raise BadRequestError(MODEL_PARAM_MISMATCH)
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", provider)
+    monkeypatch.setattr(provider_module, "acompletion", provider)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
 
     with pytest.raises(ModelCallFailed):
@@ -520,7 +516,7 @@ async def test_gateway_records_both_the_refusal_and_the_fallback(monkeypatch):
             raise BadRequestError(STRUCTURED_OUTPUT_REFUSAL)
         return _ok_response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", provider)
+    monkeypatch.setattr(provider_module, "acompletion", provider)
     recorder = _RecordingRecorder()
     gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
 
@@ -541,7 +537,7 @@ async def test_gateway_turns_provider_errors_into_model_call_failed(monkeypatch)
     async def boom(**kwargs):
         raise RuntimeError("invalid api key")  # 非抖动错误：立刻失败，不许重试
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", boom)
+    monkeypatch.setattr(provider_module, "acompletion", boom)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
 
     with pytest.raises(ModelCallFailed) as exc:
@@ -585,11 +581,8 @@ async def test_gateway_retries_transient_errors_then_succeeds(monkeypatch):
     async def fake_sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    monkeypatch.setattr(
-        "pmstudio.harness.model.providers.litellm.acompletion", flaky
-    )
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.asyncio.sleep", fake_sleep)
-    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+    monkeypatch.setattr(provider_module, "acompletion", flaky)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None, sleeper=fake_sleep)
 
     reply = await gateway.complete(
         ModelRequest(
@@ -635,10 +628,9 @@ async def test_gateway_records_every_attempt_including_the_failed_one(monkeypatc
     async def fake_sleep(seconds: float) -> None:
         return None
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", flaky)
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(provider_module, "acompletion", flaky)
     recorder = _RecordingRecorder()
-    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
+    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder, sleeper=fake_sleep)
 
     await gateway.complete(
         ModelRequest(
@@ -681,7 +673,7 @@ async def test_gateway_records_a_reply_that_is_not_json(monkeypatch):
 
         return _Response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", prose)
+    monkeypatch.setattr(provider_module, "acompletion", prose)
     recorder = _RecordingRecorder()
     gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
 
@@ -722,7 +714,7 @@ async def test_gateway_records_an_empty_reply(monkeypatch):
 
         return _Response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", blank)
+    monkeypatch.setattr(provider_module, "acompletion", blank)
     recorder = _RecordingRecorder()
     gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
 
@@ -750,11 +742,8 @@ async def test_gateway_gives_up_after_max_attempts_on_transient_errors(monkeypat
     async def fake_sleep(seconds: float) -> None:
         return None
 
-    monkeypatch.setattr(
-        "pmstudio.harness.model.providers.litellm.acompletion", always_flaky
-    )
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.asyncio.sleep", fake_sleep)
-    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+    monkeypatch.setattr(provider_module, "acompletion", always_flaky)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None, sleeper=fake_sleep)
 
     with pytest.raises(ModelCallFailed) as exc:
         await gateway.complete(
@@ -785,7 +774,7 @@ async def test_gateway_rejects_content_that_is_not_json(monkeypatch):
 
         return _Response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", prose)
+    monkeypatch.setattr(provider_module, "acompletion", prose)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
 
     with pytest.raises(ModelCallFailed) as exc:
@@ -820,7 +809,7 @@ async def test_gateway_hands_the_model_a_hint_when_the_reply_is_not_json(monkeyp
 
         return _Response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", prose)
+    monkeypatch.setattr(provider_module, "acompletion", prose)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
 
     with pytest.raises(ModelCallFailed) as exc:
@@ -844,7 +833,7 @@ async def test_gateway_hands_no_hint_when_the_provider_itself_failed(monkeypatch
     async def boom(**kwargs):
         raise RuntimeError("connection reset")
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", boom)
+    monkeypatch.setattr(provider_module, "acompletion", boom)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None, max_attempts=1)
 
     with pytest.raises(ModelCallFailed) as exc:
@@ -884,7 +873,7 @@ async def test_gateway_passes_timeout_and_disables_sdk_retries(monkeypatch):
 
         return _Response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", scripted)
+    monkeypatch.setattr(provider_module, "acompletion", scripted)
     gateway = LiteLLMGateway(model="m", api_key="k", api_base=None, timeout=7.5)
 
     await gateway.complete(
@@ -922,7 +911,7 @@ async def test_gateway_passes_model_params_but_never_lets_them_win(monkeypatch):
 
         return _Response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", scripted)
+    monkeypatch.setattr(provider_module, "acompletion", scripted)
     gateway = LiteLLMGateway(
         model="m",
         api_key="k",
@@ -1033,7 +1022,7 @@ async def test_gateway_records_usage_that_is_not_json_serializable(monkeypatch):
 
         return _Response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", scripted)
+    monkeypatch.setattr(provider_module, "acompletion", scripted)
     recorder = _RecordingRecorder()
     gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
 
@@ -1070,7 +1059,7 @@ async def test_gateway_records_the_call_when_a_recorder_is_given(monkeypatch):
 
         return _Response()
 
-    monkeypatch.setattr("pmstudio.harness.model.providers.litellm.acompletion", scripted)
+    monkeypatch.setattr(provider_module, "acompletion", scripted)
     recorder = _RecordingRecorder()
     gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
 

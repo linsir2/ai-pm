@@ -6,12 +6,9 @@
 
 import asyncio
 import hashlib
-import os
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
-
-os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")  # 别在导入时去网上拉价目表
 
 from litellm import acompletion  # noqa: E402
 
@@ -55,6 +52,7 @@ class LiteLLMGateway:
         backoff: tuple[float, ...] = BACKOFF_SECONDS,
         recorder: ModelCallRecorder | None = None,
         model_params: Mapping[str, object] | None = None,
+        sleeper: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._model = model
         self._api_key = api_key
@@ -69,6 +67,12 @@ class LiteLLMGateway:
         #: 这家供应商吃不吃 `json_schema`。被明确拒过一次就记住，后续调用直接用 `json_object`
         #: ——省掉每次先撞一次 400（`deepseek-v4.1-flash` 实测稳定拒收）。
         self._structured_output = JSON_SCHEMA
+        #: 退避的睡眠。**注入口，不是配置项**：生产就是 `asyncio.sleep`。
+        #: 为什么要有这个口——退避时刻（1 秒 / 3 秒）是**要被断言的行为**，而直接打桩
+        #: `asyncio.sleep` 会改掉**全进程**的那个函数（`litellm.asyncio` 就是 asyncio 本身），
+        #: 于是测试期间任何 await 都受影响。改成注入后，睡眠从"全局副作用"变成
+        #: "这个网关对象的依赖"，测试能直接读到它睡了几秒，生产路径一字不变。
+        self._sleep = sleeper or asyncio.sleep
 
     async def complete(self, request: ModelRequest) -> ModelReply:
         started = time.monotonic()
@@ -142,8 +146,8 @@ class LiteLLMGateway:
                             error=f"{type(second).__name__}: {second}",
                         )
                         error = second
-                if is_transient(error) and attempt < self._max_attempts:
-                    await asyncio.sleep(self._backoff[attempt - 1])
+                if failure.classify(error).retryable and attempt < self._max_attempts:
+                    await self._sleep(self._backoff[attempt - 1])
                     continue
                 raise ModelCallFailed(
                     f"模型调用失败：{type(error).__name__}"
@@ -271,21 +275,11 @@ def _jsonable(value: object) -> object:
     return str(value)
 
 
-def is_transient(error: BaseException) -> bool:
-    """这次失败值不值得重试：连接抖动、超时、限流、5xx 值得；认证与参数错误不值得。
-
-    **判据只有一份**，在 `harness.model.failure`（全仓唯一的"什么算抖动"口径）；
-    这里只做"异常 → 文本"这一下接缝，函数名与语义搬移前逐字一致。
-    """
-
-    return failure.is_transient(f"{type(error).__name__} {error}")
-
-
 def is_structured_output_refusal(error: BaseException) -> bool:
     """供应商**稳定**拒收 `json_schema` → 换写法（`04-未决.md` M2b 已拍板）。
 
-    与 `is_transient` 分开：那边管"短暂拒收 → 重试"（qwen 实测抖过两分钟），
-    这边管"**稳定**拒收 → 换写法"（`deepseek-v4.1-flash` 实测连续 400）。
+    与重试判据分开：那边管"短暂拒收 → 退避重试"（qwen 实测抖过两分钟），
+    这边管"换写法"（`deepseek-v4.1-flash` 实测连续 400，换 `json_object` 就通）。
     稳不稳由**重试次数**判断，不靠分类判断。
     """
 

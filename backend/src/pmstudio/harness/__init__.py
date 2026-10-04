@@ -11,8 +11,9 @@
 |------|--------|
 | `errors` | 全项目错误表（api 的 HTTP 映射、四个 agent、网关、工具） |
 | `model/contracts` | 四个 agent + 网关 + container |
-| `model/failure` | 网关退避判定（`is_transient`；`classify` 的接线在计划 M4） |
+| `model/failure` | 网关退避判定（**唯一判据** `classify`：类型优先、消息兜底） |
 | `model/jsonio` | 网关回包出口 |
+| `model/prompt_log` | 留样的提示词预算与截断策略 |
 | `model/normalize` | 四个 agent 的报文解析 + 留痕报告 |
 | `model/envelope` | `packet.emitted` 事件（界面按 `packet_id` 回查） |
 | `model/structured` | 四个 agent 的唯一结构化调用路径 |
