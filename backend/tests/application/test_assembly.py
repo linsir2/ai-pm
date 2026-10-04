@@ -1607,6 +1607,104 @@ def test_open_item_keys_reads_the_active_ones_only():
     assert assembly.open_item_keys(make_document()) == frozenset()
 
 
+def _question(title: str, *, target: Target | None = None) -> Question:
+    return Question(
+        question_id=QuestionId("q1"),
+        target=target or Target.body("s6"),
+        type=QuestionType.TEXT,
+        title=title,
+        why="主流程要看下一轮的话",
+        consequence_if_skipped="先搁着，不影响本轮交付",
+    )
+
+
+def test_process_notes_are_stripped_before_landing_in_s11():
+    """s11 条目只写"问题本身"——模型交代的台账话不进库（M7 A′、真跑 L5 原文）。"""
+
+    proposal = assembly.open_question_proposal(
+        _question("菜单能否在锁单后调整？本轮已出题（见题『菜单能否在锁单后调整？』）。"),
+        eid=EvidenceId("E9"),
+        index=1,
+        round_id=ROUND_ID,
+        rationale="跳过的题按题面后果落开放问题",
+    )
+
+    assert "本轮已出题" not in proposal.text
+    assert "见题" not in proposal.text
+    parsed = assembly.parse_open_item(proposal.text)
+    # 问号是内容，照旧留着（与 `test_open_item_keys_reads_the_active_ones_only` 同一口径）
+    assert parsed is not None and parsed.title == "菜单能否在锁单后调整？"
+
+
+def test_entry_addresses_never_reach_the_document():
+    """内部条目地址（`open61/open67`、`[r-x#open61]`）是"撤哪一条"用的地址，不许进正文（L13）。"""
+
+    proposal = assembly.open_question_proposal(
+        _question("菜单能否在锁单后调整（open61/open67/open112）：本轮仍未定。"),
+        eid=EvidenceId("E9"),
+        index=1,
+        round_id=ROUND_ID,
+        rationale="跳过的题按题面后果落开放问题",
+    )
+
+    assert "open61" not in proposal.text
+    assert "open67" not in proposal.text
+    parsed = assembly.parse_open_item(proposal.text)
+    assert parsed is not None and parsed.title == "菜单能否在锁单后调整"
+
+
+def test_seat_inclination_sentence_is_not_stripped():
+    """**反例**：席位倾向是给用户的决策依据，不许被当台账话剥掉。"""
+
+    title = "菜单能否在锁单后调整（open61）？席位判断 E157 给出默认「要留痕」的倾向，但用户尚未拍板。"
+    proposal = assembly.open_question_proposal(
+        _question(title),
+        eid=EvidenceId("E9"),
+        index=1,
+        round_id=ROUND_ID,
+        rationale="跳过的题按题面后果落开放问题",
+    )
+
+    assert "席位判断 E157 给出默认「要留痕」的倾向，但用户尚未拍板。" in proposal.text
+    assert "open61" not in proposal.text
+
+
+def test_dedup_key_ignores_process_notes():
+    """老条目里带着台账话，也要能被"干净的新题"认出是同一件事（判重身份走同一套剥离）。"""
+
+    document = document_with_open_items(
+        [
+            "r0#open01|菜单能否在锁单后调整：本轮已出题（见题『菜单能否在锁单后调整？』）。"
+            "（未决定，待决人：PM；跳过后果：无）〔去处：s6〕",
+        ]
+    )
+
+    assert assembly.open_item_keys(document) == {("s6", "菜单能否在锁单后调整")}
+    assert (
+        assembly.unlanded_open_questions(
+            (_question("菜单能否在锁单后调整"),), known=assembly.open_item_keys(document)
+        )
+        == ()
+    )
+
+
+def test_old_open_items_still_parse_and_compare():
+    """**护栏**：老格式（没有 `〔去处：…〕`）照旧认，去处回落 s11；台账话照样剥。"""
+
+    document = document_with_open_items(
+        [
+            "r0#open01|口径是什么？本轮仍未定，未出题（题位已满），留待下一轮。"
+            "（未决定，待决人：PM；跳过后果：无）",
+        ]
+    )
+
+    assert assembly.open_item_keys(document) == {("s11", "口径是什么？")}
+    parsed = assembly.parse_open_item(
+        "口径是什么？本轮仍未定，未出题（题位已满），留待下一轮。（未决定，待决人：PM；跳过后果：无）"
+    )
+    assert parsed is not None and parsed.target_label is None
+
+
 def test_questions_already_in_s11_are_dropped_before_landing():
     """同一句话已经在 s11 挂着 → 不再落一遍（P10 真跑 removed 4 / added 18 里就有重复）。"""
 

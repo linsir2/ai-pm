@@ -172,6 +172,45 @@ def normalize(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
+#: 内部条目地址：模型把 `_render_open_items` 给它的 entry_id（`open61`）抄进了标题。
+#: 那是"撤下哪一条"用的**地址**，不是给读者的内容（learnings L13：提示词里不许出现
+#: 像编号的非编号——M6f 对记忆条目 id 做过同一件事）。
+_ENTRY_ADDRESS = re.compile(
+    r"[（(\[]\s*(?:r-[0-9a-z]+#)?open\d+"
+    r"(?:\s*[/、]\s*(?:r-[0-9a-z]+#)?open\d+)*\s*[）)\]]"
+)
+
+#: 台账话：模型在**标题末尾**交代"这件事这一轮怎么处置的"（真跑原文：
+#: "…：本轮已出题（见题『…』）。"、"…：本轮仍未定，未出题（题位已满），留待下一轮。"）。
+#: 对读者零信息，对判重是毒药——它让"同一件事"每轮换一个说法，判重就抓不住（M7 A′）。
+#: 只认**结尾**：中间出现的照旧不动，免得把真内容剪掉。
+_LEDGER_TAIL = re.compile(
+    r"[：:；;，,、\s]*"
+    r"(?:本轮已出题|本轮仍未定|本轮未问|本轮未再问|未出题|留待下一轮)"
+    r"[^。]*。?\s*$"
+)
+
+
+def strip_process_notes(title: str) -> str:
+    """剥掉 s11 标题里的**台账话**：内部条目地址 + 结尾的处置说明（M7 A′）。
+
+    ```
+    …是否要保留历史：本轮已出题（见题『…』）。   → …是否要保留历史
+    …怎么处理（open63/open69）：本轮仍未定。      → …怎么处理
+    ```
+
+    **不剥**席位倾向（"席位判断 E157 给出默认「要留痕」的倾向，但用户尚未拍板。"）——
+    那是给用户的**决策依据**，不是台账。剥完为空就原样返回（宁可留一句脏话，
+    也不能把一条未决变成解析不出来的空标题）。
+    """
+
+    stripped = _LEDGER_TAIL.sub("", _ENTRY_ADDRESS.sub("", title))
+    # 只清"被剥掉后悬空的分隔符"，**不吞句末的 `。` / `？`**——那是内容（既有用例钉着
+    # "口径是什么？"连问号一起算身份）。
+    stripped = " ".join(stripped.split()).strip("：:；;，,、 ")
+    return stripped or title
+
+
 def question_key(question: Question) -> tuple[str, str]:
     """题目的身份：**同一个去处 + 同一个问法**算同一件事（与 eval 的重复题判据同一口径）。
 
@@ -282,7 +321,8 @@ def open_item_keys(document: Document) -> frozenset[tuple[str, str]]:
     keys: set[tuple[str, str]] = set()
     for item in _open_item_entries(document):
         target_label = item.target_label or OPEN_QUESTION_HOME
-        keys.add((target_label, normalize(item.title)))
+        # 判重身份也剥台账话（M7 A′）：老条目带着"本轮已出题（见题『…』）"也要认得出
+        keys.add((target_label, normalize(strip_process_notes(item.title))))
     return frozenset(keys)
 
 
@@ -298,7 +338,11 @@ def unlanded_open_questions(
     return tuple(
         question
         for question in questions
-        if (question.target.label(), normalize(question.title)) not in known
+        if (
+            question.target.label(),
+            normalize(strip_process_notes(question.title)),
+        )
+        not in known
     )
 
 
@@ -899,7 +943,7 @@ def open_item_proposal(
         op=WriteOp.ADD,
         target=Target.body(OPEN_QUESTION_HOME),
         text=(
-            f"{BLOCKING_MARK if blocking else ''}{title}（未决定，待决人：PM；"
+            f"{BLOCKING_MARK if blocking else ''}{strip_process_notes(title)}（未决定，待决人：PM；"
             f"跳过后果：{consequence}）"
             f"〔去处：{target_label}〕"
         ),
