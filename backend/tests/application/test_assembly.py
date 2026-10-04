@@ -1672,6 +1672,25 @@ def test_seat_inclination_sentence_is_not_stripped():
     assert "open61" not in proposal.text
 
 
+def test_ledger_notes_are_only_stripped_at_the_tail_and_only_in_those_shapes():
+    """**反例（真跑原文回放抓到的两处剥过头）**：正当句子里的"留待下一轮""本轮仍未…"不许动。
+
+    两条都是 `.codex/runs/2026-10-03/M4验证/导出-两轮后-L5.md` 的原句：
+    - `非功能需求其余槽位：…；成本仍无口径，留待下一轮。`（"留待下一轮"是**真内容**）
+    - `s8.cost 仍无口径：本轮仍未拿到成本表态（open71 留待下一轮），需在后续轮次补齐。`
+      （第一版正则把后半句剪掉，留下一个悬空的 `（open71` —— 比不剥糟得多）
+    """
+
+    keep = [
+        "非功能需求其余槽位：兼容与可观测本轮已由席位判断落成内容（CSV 导出规范 E49 / "
+        "留痕粒度 E47、E54）；安全落成 E46 最小表态；成本仍无口径，留待下一轮。",
+        "s8.cost 仍无口径：本轮仍未拿到成本表态（open71 留待下一轮），需在后续轮次补齐。",
+    ]
+
+    for text in keep:
+        assert assembly.strip_process_notes(text) == text
+
+
 def test_dedup_key_ignores_process_notes():
     """老条目里带着台账话，也要能被"干净的新题"认出是同一件事（判重身份走同一套剥离）。"""
 
