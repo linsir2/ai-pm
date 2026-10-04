@@ -119,8 +119,6 @@ from pmstudio.application.ports import (
     RoundCanceller,
     SeatCatalog,
     SeatDefinition,
-    ToolCatalog,
-    ToolDefinition,
     WebFetcher,
     WebSearchGateway,
     WorkspaceIndex,
@@ -187,6 +185,7 @@ from pmstudio.harness.errors import (
     ToolCallFailed,
 )
 from pmstudio.harness.events import Event, EventPublisher
+from pmstudio.harness.tools.registry import ToolCatalog, ToolDefinition
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,10 +393,6 @@ class StartRound:
 WEB_SEARCH_KIND = "web_search"
 #: 联网结果在信息包里的 origin（`TavilySearchGateway` 盖的就是它）
 WEB_ORIGIN = "web_search"
-#: 目录没声明 `max_queries` 时的兜底（真定义在 `web_search.toml` 里）
-DEFAULT_WEB_QUERY_LIMIT = 3
-#: 目录没声明 `max_results` 时的兜底（同理）
-DEFAULT_WEB_LIMIT = 5
 
 
 def _tool_drop(handle: str, reason: str) -> DroppedItem:
@@ -406,6 +401,28 @@ def _tool_drop(handle: str, reason: str) -> DroppedItem:
     return DroppedItem(
         handle=handle, reason=reason, source=DropSource.TOOL, seat_id=None, pass_index=1
     )
+
+
+def _declared(tool: ToolDefinition, field: str) -> int:
+    """读联网工具的上限，**目录必须声明**。
+
+    为什么不再兜底：M5 之前这里是 `tool.max_queries or DEFAULT_WEB_QUERY_LIMIT`，
+    而 `DEFAULT_WEB_QUERY_LIMIT = 3` 与 `web_search.toml` 里的 `max_queries = 3`
+    **同一个数字写在两处**——改 TOML 忘了改 Python（或反过来）就静默用了旧值。
+    兜底已删（2026-10-04），现在"目录声明的值"是唯一真相。
+
+    缺声明时报**声明坏了**，而不是"你超了 0 条"：后者会让人以为是自己勾多了。
+    `attachment.toml` 没有这两个字段是对的——它不是联网工具，本来就用不到。
+    """
+
+    value = getattr(tool, field)
+    if value <= 0:
+        raise ShapeError(
+            f"工具声明 {tool.tool_id} 缺 {field}：联网工具必须声明这一轮的上限",
+            tool_id=tool.tool_id,
+            field=field,
+        )
+    return value
 
 
 def web_search_tool(tools: ToolCatalog, *, keys: frozenset[str]) -> ToolDefinition | None:
@@ -438,7 +455,7 @@ def _checked_queries(
             "这一轮勾了联网检索，但服务端没有配好联网工具（没配密钥，或工具被停用）",
             tool_ids=[item.tool_id for item in tools.all()],
         )
-    limit = tool.max_queries or DEFAULT_WEB_QUERY_LIMIT
+    limit = _declared(tool, "max_queries")
     if len(chosen) > limit:
         raise ShapeError(
             f"这一轮勾了 {len(chosen)} 条检索词，最多只允许 {limit} 条",
@@ -554,7 +571,7 @@ class SubmitOpening:
         packets: list[MaterialPacket] = []
         if not chosen or tool is None or self._web_search is None:
             return (), ()
-        limit = tool.max_results or DEFAULT_WEB_LIMIT
+        limit = _declared(tool, "max_results")
         for query in chosen:
             try:
                 drafts = await self._web_search.search(query=query, limit=limit)

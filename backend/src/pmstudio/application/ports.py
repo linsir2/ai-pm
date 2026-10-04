@@ -5,6 +5,11 @@
 和 `SeatDefinition` / `MaterialStore` 这些业务端口不是一类东西，混在一个文件里
 会让"模型能力"没有住处，`litellm_gateway.py` 也只好反向依赖 application。
 
+**工具声明也不在这里**（2026-10-04 · M5）：`ToolDefinition` + `ToolCatalog` +
+TOML 实现搬进 `pmstudio.harness.tools.registry`——"一个工具有哪些字段、没配密钥
+要不要出现"是控制平面的事，与产品做什么无关。留在外层会让 `application` 知道
+"工具怎么从 TOML 读"，那是装配细节。
+
 留在这里的都是**产品侧**能力：席位编制、材料库、全局检索投影、项目工厂、轮的编排与取消。
 """
 
@@ -68,24 +73,6 @@ class MaterialParser(Protocol):
         """我能产出的 `(parser_id, parser_version)` 集合——判断"这份材料是不是旧解析器读的"。"""
 
         ...
-
-
-@dataclass(frozen=True, slots=True)
-class ToolDefinition:
-    """一个工具的声明（从 TOML 读）。`requires` 是**配置项名**：没配就没这个工具。"""
-
-    tool_id: str
-    title: str
-    kind: str
-    requires: tuple[str, ...] = ()
-    max_queries: int = 0
-    max_results: int = 0
-
-
-@runtime_checkable
-class ToolCatalog(Protocol):
-    def all(self) -> tuple[ToolDefinition, ...]: ...
-    def available(self, *, has: frozenset[str]) -> tuple[ToolDefinition, ...]: ...
 
 
 @runtime_checkable

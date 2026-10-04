@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -11,11 +10,11 @@ from pmstudio.domain.round.web_query import WebQuery
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
 from pmstudio.harness.errors import PacketParseError
-from tests.support.builders import SEAT, make_seat
-from tests.support.doubles import RecordingPrompts, ScriptedModelGateway, StaticSeatCatalog
 
 #: 提示词本体：归位规则这类"模型每轮都看得见"的东西，钉在文件上比钉在槽里准
-PROMPTS_DIR = Path(__file__).resolve().parents[2] / "src/pmstudio/infrastructure/llm/prompts"
+from pmstudio.harness.prompt import PROMPTS_DIR  # 路径跟随资源，别在这里重算
+from tests.support.builders import SEAT, make_seat
+from tests.support.doubles import RecordingPrompts, ScriptedModelGateway, StaticSeatCatalog
 
 INPUT = "想做个订单导出的功能，运营每天都要用，数据量大概几万。登录页太丑了。下个月必须上线。"
 

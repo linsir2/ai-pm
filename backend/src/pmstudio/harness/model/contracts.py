@@ -8,7 +8,7 @@
 **结构化输出是一等公民**：`ModelRequest` 带 `schema_name` + `response_schema`，
 所以"要模型吐 JSON"这件事在契约层就成立，不必每个 agent 自己拼一遍。
 
-实现全在 `infrastructure/llm/`（M4 会搬进 `harness/model/providers/`），由 bootstrap 注入。
+实现在 `harness/model/providers/litellm.py`（2026-10-04 M4 搬入），由 bootstrap 注入。
 """
 
 from collections.abc import Mapping

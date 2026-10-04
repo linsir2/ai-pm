@@ -3,19 +3,13 @@
 口径（P17 §9·9）：**没配密钥 = 这个工具不可用**（复述卡不出现那一栏），不是"假成功"。
 """
 
-from pathlib import Path
 
 from pmstudio.bootstrap.settings import Settings
-from pmstudio.infrastructure.tools.catalog import TomlToolCatalog
+from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
 
-TOOLS_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "pmstudio"
-    / "infrastructure"
-    / "tools"
-    / "definitions"
-)
+#: 工具声明目录**从它所属的模块引**（M5 起）。原先这里独立重算了一遍路径，
+#: 搬目录时只有这一处会红，其余按旧路径算的调用方会静默指向空目录。
+TOOLS_DIR = DEFINITIONS_DIR
 
 
 def test_catalog_reads_toml_and_filters_by_required_keys():

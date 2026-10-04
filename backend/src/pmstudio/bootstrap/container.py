@@ -54,8 +54,9 @@ from pmstudio.domain.services.traceability import TraceabilityChecker
 from pmstudio.harness.events import InProcessEventBus
 from pmstudio.harness.model.contracts import ModelGateway
 from pmstudio.harness.model.providers.litellm import LiteLLMGateway
+from pmstudio.harness.prompt import PROMPTS_DIR, FilePromptLibrary
+from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
 from pmstudio.infrastructure.graph.graph import RoundRunner
-from pmstudio.infrastructure.llm.prompt_library import FilePromptLibrary
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.materials import SqliteLikeRetriever, SqliteMaterialStore
@@ -69,15 +70,17 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
-from pmstudio.infrastructure.tools.catalog import TomlToolCatalog
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
 from pmstudio.infrastructure.tools.tavily import TavilySearchGateway
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-PROMPTS_DIR = PACKAGE_ROOT / "infrastructure" / "llm" / "prompts"
+#: 提示词与工具声明目录**从 harness 那边 import**，不在这里拼：
+#: 路径跟着它指向的资源走，搬目录时改一处就够（自己拼的话，搬完只会有"碰巧用到
+#: 那一处"的调用者报错，其余静默指向空目录）。
+#: 席位目录暂时还住在外层，所以 `SEATS_DIR` 仍由这里拼——**它迟早也要跟着搬**
+#: （`tests/architecture/test_resource_paths.py` 那条守卫盯着这件事）。
 SEATS_DIR = PACKAGE_ROOT / "infrastructure" / "seats" / "definitions"
-TOOLS_DIR = PACKAGE_ROOT / "infrastructure" / "tools" / "definitions"
 
 
 class SystemClock:
@@ -150,7 +153,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         )
     catalog = TomlSeatCatalog(SEATS_DIR)
     # 工具目录：`requires` 没配上的工具**直接不可用**（不是"无密钥降级"）
-    tools = TomlToolCatalog(TOOLS_DIR)
+    tools = TomlToolCatalog(DEFINITIONS_DIR)
     available_tool_keys = settings.available_tool_keys()
     web_search = _web_search_gateway(settings, tools=tools, keys=available_tool_keys)
     assigner = EvidenceAssigner()

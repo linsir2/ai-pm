@@ -150,10 +150,9 @@ class Harness:
         self.seats = StaticSeatCatalog(tuple(seats) if seats else (make_seat(),))
         # 工具目录用**真实现**（读真 TOML）：判据 `requires` / `max_queries` 是数据，
         # 用替身就测不出".toml 写错了"这件事（与材料解析器同一个理由）。
-        from pmstudio.bootstrap.container import TOOLS_DIR
-        from pmstudio.infrastructure.tools.catalog import TomlToolCatalog
+        from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
 
-        self.tools = TomlToolCatalog(TOOLS_DIR)
+        self.tools = TomlToolCatalog(DEFINITIONS_DIR)
         self.available_tool_keys = available_tool_keys
         self.web_search = web_search or RecordingWebSearch()
         self.fetcher = fetcher or RecordingWebFetch()

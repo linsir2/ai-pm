@@ -1,7 +1,6 @@
 import asyncio
 import re
 import time
-from pathlib import Path
 
 import pytest
 
@@ -11,9 +10,10 @@ from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.harness.errors import ModelCallFailed
 from pmstudio.harness.model.contracts import ModelMessage, ModelRequest
+from pmstudio.harness.model.failure import classify
 from pmstudio.harness.model.providers import litellm as provider_module
 from pmstudio.harness.model.providers.litellm import LiteLLMGateway
-from pmstudio.infrastructure.llm.prompt_library import FilePromptLibrary
+from pmstudio.harness.prompt import PROMPTS_DIR, FilePromptLibrary
 
 
 class BadRequestError(Exception):
@@ -58,14 +58,9 @@ def _response_formats(seen: list[dict]) -> list[str]:
         (item.get("response_format") or {}).get("type") for item in seen
     ]
 
-PROMPTS = (
-    Path(__file__).resolve().parents[2]
-    / "src"
-    / "pmstudio"
-    / "infrastructure"
-    / "llm"
-    / "prompts"
-)
+#: 提示词目录**从它所属的模块引**，不在测试里重算：重算的话，搬目录时
+#: 只有这一处会报错，其余按旧路径算的调用方会静默指向空目录。
+PROMPTS = PROMPTS_DIR
 
 
 def test_prompt_library_renders_slots_and_reports_missing():
@@ -336,15 +331,11 @@ def test_the_retry_verdict_covers_the_structured_output_refusal():
     网关原来把 `invalid_parameter` 一律当不可重试，于是一次两分钟的抖动 = 一次调用判死。
     """
 
-    from pmstudio.harness.model.failure import classify
-
     assert classify(BadRequestError(STRUCTURED_OUTPUT_REFUSAL)).retryable
 
 
 def test_the_retry_verdict_still_rejects_a_real_model_param_mismatch():
     """**别放宽大类**：参数真的写错了要立刻失败（闸门就靠这条把"换模型忘了改参数"拦下来）。"""
-
-    from pmstudio.harness.model.failure import classify
 
     assert not classify(BadRequestError(MODEL_PARAM_MISMATCH)).retryable
     assert not classify(BadRequestError("InvalidParameter: field foo not allowed")).retryable
