@@ -16,6 +16,11 @@ class SectionSpec:
     allows_features: bool = False
 
 
+#: 未决清单落在第 11 章「风险与开放问题」——它既是"还没定的事"的家，也是**跨轮队列本身**
+#: （`02-编排与数据.md` §11.0.10：不另建表）。汇编层、就绪度、导出附录都要认它，**只写一次**。
+OPEN_QUESTION_SECTION = "s11"
+
+
 SECTIONS: tuple[SectionSpec, ...] = (
     SectionSpec(
         SectionId("s1"),

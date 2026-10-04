@@ -49,6 +49,42 @@ def ledger_with_two_entries() -> EvidenceLedger:
     return ledger
 
 
+def ledger_with_three_entries() -> EvidenceLedger:
+    """E1 会被正文引用·E2 只被未决清单引用·E3 谁都没引用（B 的三档正好各一条）。"""
+
+    ledger = ledger_with_two_entries()
+    ledger.record(
+        kind=EvidenceKind.SYSTEM_DEFAULT,
+        text="导出记录的保存期限是多少？（未决定，待决人：PM；跳过后果：先搁着）",
+        source=EvidenceSource(
+            round_id=RoundId("r1"), rationale="跳过的题按题面后果落成 s11 开放问题"
+        ),
+        now=NOW,
+    )
+    return ledger
+
+
+def with_open_question(document: Document, *, refs: tuple[EvidenceId, ...] = (EvidenceId("E2"),)):
+    """往 s11 落一条未决条目（与 `assembly.open_item_proposal` 同形）。"""
+
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-open",
+                entry_id=EntryId("en-open"),
+                op=WriteOp.ADD,
+                target=Target.body("s11"),
+                text="导出记录的保存期限是多少？（未决定，待决人：PM；跳过后果：先搁着）〔去处：s7〕",
+                refs=refs,
+                kind=BlockKind.QUESTION,
+            )
+        ],
+        now=NOW,
+        summary="落一条未决",
+    )
+    return document
+
+
 def export(document: Document, ledger: EvidenceLedger, readiness=()) -> str:  # type: ignore[no-untyped-def]
     return render_markdown(
         view=document.view(),
@@ -66,6 +102,14 @@ def visible_tokens(text: str) -> set[str]:
     for block in re.findall(r"〔([^〕]*)〕", text):
         found.update(part for part in block.split() if re.fullmatch(r"E\d+", part))
     return found
+
+
+def appendix_a_of(text: str) -> str:
+    """从导出里切出附录 A 那一段（不含后面的附录 B/C）。"""
+
+    _, rest = text.split("## 附录 A", 1)
+    appendix, _, _ = rest.partition("## 附录")
+    return appendix
 
 
 def test_header_carries_title_version_time_and_readiness_stamp():
@@ -247,6 +291,90 @@ def test_every_listed_evidence_is_visible_elsewhere_in_the_export():
 
     assert listed, "夹具得真的引用过编号"
     assert set(listed) <= visible_tokens(head + tail)
+
+
+def test_appendix_skips_evidence_only_the_open_question_list_cites():
+    """附录 A 是"交付物的出处"，不是"未决清单的记账"——
+    只被第 11 章引用的系统记录（正文里那句话的回声）不进附录（M7 B）。"""
+
+    document = with_open_question(document_with_feature())
+    text = export(document, ledger_with_three_entries())
+    appendix_a = appendix_a_of(text)
+
+    assert "- E1 · 用户输入 · 要做一个订单导出功能" in appendix_a
+    assert "- E2 ·" not in appendix_a
+    assert "单次导出应在 60 秒内完成" not in appendix_a
+
+
+def test_appendix_keeps_evidence_that_real_content_also_cites():
+    """s11 与正文都引用了同一条 → 它在正文里有落点，照样进附录。"""
+
+    document = with_open_question(document_with_feature(), refs=(EvidenceId("E2"),))
+    # 正文里也引用 E2（同一编号既在未决清单里、又在功能字段里）
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-rules",
+                entry_id=EntryId("en-rules"),
+                op=WriteOp.ADD,
+                target=Target.feature_field(FeatureSlug("order-export"), "rules"),
+                text="导出记录保留 30 天",
+                refs=(EvidenceId("E2"),),
+                kind=BlockKind.BULLET_LIST,
+            )
+        ],
+        now=NOW,
+        summary="补一条规则",
+    )
+    text = export(document, ledger_with_three_entries())
+    appendix_a = appendix_a_of(text)
+
+    assert "- E1 · 用户输入 · 要做一个订单导出功能" in appendix_a
+    assert "- E2 · 席位判断 · 单次导出应在 60 秒内完成" in appendix_a
+    assert "只被第 11 章未决清单引用" not in text
+
+
+def test_appendix_reports_open_question_echoes_separately():
+    """两类"没进附录"的要说清是两类：只被未决清单引用的、完全没被引用的。"""
+
+    document = with_open_question(document_with_feature())
+    text = export(document, ledger_with_three_entries())
+
+    assert "另有 1 条出处只被第 11 章未决清单引用" in text
+    assert "另有 1 条出处没有被本文引用" in text
+
+
+def test_appendix_still_lists_everything_when_there_is_no_open_question():
+    """没有未决清单时，行为与 P31 完全一致（B 只多一条排除口径）。"""
+
+    text = export(document_with_feature(), ledger_with_three_entries())
+    appendix_a = appendix_a_of(text)
+
+    assert "- E1 · 用户输入 · 要做一个订单导出功能" in appendix_a
+    assert "只被第 11 章未决清单引用" not in text
+    assert "另有 2 条出处没有被本文引用" in text
+
+
+def test_open_question_numbers_stay_visible_in_the_document():
+    """B 只动附录：s11 条目照旧挂编号（读者在系统里按编号能查到那条）。"""
+
+    document = with_open_question(document_with_feature())
+    text = export(document, ledger_with_three_entries())
+    body = text.split("## 附录 A")[0]
+
+    assert "导出记录的保存期限是多少？" in body
+    assert "〔E2〕" in body
+
+
+def test_used_by_entries_still_finds_the_open_question():
+    """界面那条通道（"这个编号被谁引用着"）**故意**与附录口径不同：它要能找到 s11 里的引用。"""
+
+    from pmstudio.application.dto import used_by_entries
+    from pmstudio.domain.shared.ids import EvidenceId as EID
+
+    document = with_open_question(document_with_feature())
+
+    assert used_by_entries(document.view(), EID("E2")) == ("en-open",)
 
 
 def test_acceptance_entries_are_rendered_as_list_items():

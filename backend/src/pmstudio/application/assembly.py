@@ -56,7 +56,11 @@ from pmstudio.domain.shared.ids import (
     RoundId,
 )
 from pmstudio.domain.shared.label import Zone
-from pmstudio.domain.shared.sections import FEATURE_HOME, section_slot
+from pmstudio.domain.shared.sections import (
+    FEATURE_HOME,
+    OPEN_QUESTION_SECTION,
+    section_slot,
+)
 from pmstudio.domain.shared.target import Target, target_from_label
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 
@@ -65,7 +69,8 @@ PURPOSE = "integration"
 NEW_FEATURE_YES = "new_feature_yes"
 NEW_FEATURE_NO = "new_feature_no"
 
-OPEN_QUESTION_HOME = "s11"
+#: 未决清单的家（第 11 章）——常量定义在 `domain/shared/sections.py`（一处），这里只是沿用旧名字
+OPEN_QUESTION_HOME = OPEN_QUESTION_SECTION
 
 #: 缺了这些章节的内容就"交不出去"——命中它们的题目算阻塞型（`01` §4 / `02` §⑤）
 BLOCKING_SECTIONS = frozenset({"s1", "s2", "s3", "s4", "s5", "s8", "s10", "s12"})

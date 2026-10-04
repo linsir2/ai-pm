@@ -26,7 +26,11 @@ from pmstudio.domain.authoring.views import BlockView, DocumentView, SectionView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.domain.shared.sections import OPEN_QUESTION_SECTION
 from pmstudio.domain.shared.writing import BlockKind
+
+#: 偏好区不在 13 章里，给它一个自己的名字，好让"按章节跳过"这套口径也能覆盖它
+PREFERENCE_SECTION = "preference"
 
 KIND_LABELS = {
     EvidenceKind.USER_INPUT: "用户输入",
@@ -200,21 +204,33 @@ def _versions_table(versions: Sequence[Version]) -> list[str]:
 
 
 def _appendix_a(view: DocumentView, ledger: EvidenceLedger) -> str:
-    """附录 A 只列**本文引用过**的编号（P31）。
+    """附录 A 是**交付物里看得见的编号**的清单（P31 收窄 + M7 B 再收一刀）。
 
-    准入判据 = 编号出现在 `DocumentView` 的任一条目 `refs` 里（13 章正文 + 偏好区）。
-    其余的不静默消失：末尾一行说清还有多少条留在系统里——账本本身一个字不动（E1/E2）。
+    两类不收：
+    1. **只被第 11 章未决清单引用**的——未决条目是"还没定的事"的记账，它引用的
+       `system_default` 就是那句话的回声（正文里已经写着），读者看不到第二个信息；
+    2. **压根没被本文引用**的——未被采纳的提案、被跳过的题、更早的轮次。
+
+    两类都**不静默消失**：末尾各一行说清条数与它们留在哪儿。账本本身一个字不动（E1/E2）。
+    判据与界面的"这个编号被谁引用着"（`dto.used_by_entries`）**故意不同**——界面要能找到
+    未决清单里的引用，交付物只收正文真用得上的（各有各的消费者）。
     """
 
-    listed_ids = cited_evidence_ids(view)
+    listed_ids = cited_evidence_ids(
+        view, skip_sections=frozenset({OPEN_QUESTION_SECTION})
+    )
+    open_only_ids = cited_evidence_ids(view) - listed_ids
     lines = ["## 附录 A · 出处（只给编号与一句话摘要）"]
-    total = 0
-    listed = 0
+    total = listed = open_only = 0
     for evidence in ledger.evidences():
         total += 1
-        if evidence.eid not in listed_ids:
+        if evidence.eid in listed_ids:
+            listed += 1
+        elif evidence.eid in open_only_ids:
+            open_only += 1
             continue
-        listed += 1
+        else:
+            continue
         label = KIND_LABELS.get(evidence.kind, str(evidence.kind))
         # 外部材料要写清"哪份材料的哪一块 / 哪个 URL"，否则读者不知道这句话从哪来（工具层 C-2）
         where = evidence.source.external_ref
@@ -222,9 +238,16 @@ def _appendix_a(view: DocumentView, ledger: EvidenceLedger) -> str:
         lines.append(f"- {evidence.eid} · {label} · {source}{_summarize(evidence.text)}")
     if not listed:
         lines.append("（还没有任何出处）" if not total else "（本文没有引用任何出处）")
-    if total > listed:
+    if open_only:
+        chapter = OPEN_QUESTION_SECTION.lstrip("s")
         lines.append(
-            f"（另有 {total - listed} 条出处没有被本文引用——未被采纳的提案、"
+            f"（另有 {open_only} 条出处只被第 {chapter} 章未决清单引用，未列入本附录——"
+            "它们是系统对「还没定的事」的记账，按编号仍可在系统里查）"
+        )
+    uncited = total - listed - open_only
+    if uncited:
+        lines.append(
+            f"（另有 {uncited} 条出处没有被本文引用——未被采纳的提案、"
             "被跳过的题与更早的轮次都留在系统里，可按编号查）"
         )
     return "\n".join(lines)
@@ -268,23 +291,44 @@ def iter_block_entries(block: BlockView) -> Iterator[Entry]:
         yield from iter_block_entries(child)
 
 
-def iter_document_entries(view: DocumentView) -> Iterator[Entry]:
-    """文档视图里的全部条目：13 章（含功能子树字段）+ 偏好区。
+def iter_section_entries(view: DocumentView) -> Iterator[tuple[str, Entry]]:
+    """`(章节 id, 条目)`：13 章（含功能子树字段）走章节 id，偏好区走 `preference`。
 
     正文渲染、"这个编号被谁引用了"（`dto.used_by_entries`）、附录 A 的准入判据
-    共用这一条走法——三处各写一遍就是三颗雷。
+    共用这一条走法——三处各写一遍就是三颗雷；**知道条目属于哪一章**是 M7 B 的前提。
     """
 
     for section in view.sections:
+        section_id = str(section.section_id)
         for block in section.blocks:
-            yield from iter_block_entries(block)
-    yield from view.preference_entries
+            for entry in iter_block_entries(block):
+                yield section_id, entry
+    for entry in view.preference_entries:
+        yield PREFERENCE_SECTION, entry
 
 
-def cited_evidence_ids(view: DocumentView) -> frozenset[EvidenceId]:
-    """本文引用到的编号集合（附录 A 的准入判据，`01-规格.md` §7.3）。"""
+def iter_document_entries(view: DocumentView) -> Iterator[Entry]:
+    """文档视图里的全部条目（不关心它在哪一章时用这个）。"""
 
-    return frozenset(eid for entry in iter_document_entries(view) for eid in entry.refs)
+    for _, entry in iter_section_entries(view):
+        yield entry
+
+
+def cited_evidence_ids(
+    view: DocumentView, *, skip_sections: frozenset[str] = frozenset()
+) -> frozenset[EvidenceId]:
+    """本文引用到的编号集合（附录 A 的准入判据，`01-规格.md` §7.3）。
+
+    `skip_sections` = "这一档不算本文"：附录 A 传 `{s11}`——未决清单是待办记录，
+    它引用的系统记录是那句话的回声（M7 B）。
+    """
+
+    return frozenset(
+        eid
+        for section_id, entry in iter_section_entries(view)
+        if section_id not in skip_sections
+        for eid in entry.refs
+    )
 
 
 def _child(feature: BlockView, field: str) -> BlockView | None:

@@ -16,7 +16,7 @@ from enum import StrEnum
 from pmstudio.domain.authoring.blocks import Entry
 from pmstudio.domain.authoring.views import BlockView, DocumentView, SectionView
 from pmstudio.domain.shared.ids import SectionId
-from pmstudio.domain.shared.sections import SECTION_SLOTS
+from pmstudio.domain.shared.sections import OPEN_QUESTION_SECTION, SECTION_SLOTS
 from pmstudio.domain.shared.writing import BlockKind
 
 #: 阻塞型未决条目的前缀（`01` §4：命中它的 s11 才挡交付）
@@ -64,7 +64,7 @@ class ReadinessChecker:
         items += self._feature_gaps(view)
         items += self._kind_presence(by_id)
         items += self._cross_links(by_id, view)
-        items += self._open_questions(by_id.get("s11"))
+        items += self._open_questions(by_id.get(OPEN_QUESTION_SECTION))
         return tuple(items)
 
     # —— 判据 ——
@@ -213,7 +213,7 @@ class ReadinessChecker:
             detail = "；".join(entry.text.removeprefix(BLOCKING_MARK) for entry in blocking[:3])
             return [
                 ReadinessItem(
-                    section_id="s11",
+                    section_id=OPEN_QUESTION_SECTION,
                     code="open_blocking_question",
                     title=f"有 {len(blocking)} 项阻塞未决",
                     detail=detail,
@@ -222,7 +222,7 @@ class ReadinessChecker:
             ]
         return [
             ReadinessItem(
-                section_id="s11",
+                section_id=OPEN_QUESTION_SECTION,
                 code="open_blocking_question",
                 title=f"有 {len(entries)} 项未决（没标阻塞）",
                 detail="未决不挡交付，但每条要有待决人",
