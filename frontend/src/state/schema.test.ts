@@ -17,6 +17,12 @@ const FROM_BACKEND: SchemaView = {
     { name: "name", title: "名字", kind: "text", multiple: false, required: true },
   ],
   limits: { max_seat_rounds: 5, max_questionnaires: 4, max_open_items_per_batch: 9 },
+  // 讨论角色（M9）：真相源在后端 roles.toml，这里照抄三行只为回落测试
+  discussion_roles: [
+    { role_id: "dlg.challenger", title: "反方", focus: "找漏洞、要反例、泼冷水" },
+    { role_id: "dlg.user_voice", title: "用户之声", focus: "替真实用户说话" },
+    { role_id: "dlg.analogist", title: "类比者", focus: "别人家怎么做过" },
+  ],
 };
 
 afterEach(() => setSchema(null));
@@ -25,6 +31,11 @@ describe("schema", () => {
   it("拿到 /schema 就用后端那一份", () => {
     setSchema(FROM_BACKEND);
 
+    expect(FROM_BACKEND.discussion_roles.map((item) => item.role_id)).toEqual([
+      "dlg.challenger",
+      "dlg.user_voice",
+      "dlg.analogist",
+    ]);
     expect(fieldTitle("name")).toBe("名字");
     expect(limitsOf().max_seat_rounds).toBe(5);
     expect(sectionPurpose("s5")).toBe("每个功能一棵子树。");

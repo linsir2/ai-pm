@@ -3043,14 +3043,20 @@ class ListRounds:
 
 
 class GetSchema:
-    """现行结构：13 章（含说明与槽）、功能字段表、三处上限。
+    """现行结构：13 章（含说明与槽）、功能字段表、三处上限、三个讨论角色。
 
     纯函数、不注入任何仓储——"读 schema 不可能开事务"是结构上的保证，不靠纪律
     （与 `GetReadiness` 同源：只读用例拿不到写端口）。
+
+    `discussion_roles` 是**构造时注入的元组**（不是仓储）：角色表随进程加载一次，
+    读 schema 只是把它摆出来，所以这里依然拿不到任何 IO 端口。
     """
 
+    def __init__(self, *, discussion_roles: tuple = ()) -> None:
+        self._discussion_roles = discussion_roles
+
     async def __call__(self) -> SchemaView:
-        return schema_view()
+        return schema_view(discussion_roles=self._discussion_roles)
 
 
 class GetReadiness:

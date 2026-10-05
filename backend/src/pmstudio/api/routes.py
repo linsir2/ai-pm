@@ -50,9 +50,10 @@ async def health(request: Request) -> dict[str, str]:
 
 @router.get("/schema")
 async def schema(request: Request):  # type: ignore[no-untyped-def]
-    """现行结构：13 章（含说明与槽）、功能字段表、三处上限。
+    """现行结构：13 章（含说明与槽）、功能字段表、三处上限、**＋讨论角色**。
 
-    界面不再自己抄一份字段中文名与上限常量——那两份的真相源在后端。
+    界面不再自己抄一份字段中文名、上限常量与角色表——那几份的真相源在后端
+    （讨论角色见 `infrastructure/discussion/roles.toml`，灵感区不抄一份）。
     """
 
     return as_json(await services_of(request).get_schema())

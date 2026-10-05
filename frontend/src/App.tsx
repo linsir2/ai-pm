@@ -14,6 +14,7 @@ import {
   materialHitTarget,
 } from "./api/payload";
 import type { ExplorationAnchor } from "./api/payload";
+import type { DiscussionAnchor } from "./state/discussions";
 import { BottomStrip } from "./components/BottomStrip";
 import { DocumentPane } from "./components/DocumentPane";
 import { EditScope } from "./components/EditContext";
@@ -51,6 +52,8 @@ export default function App() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   // 发起调研的抽屉（M8）：点条目的「调研」先落到这里，再点「开始调研」才真发请求。
   const [researchAnchor, setResearchAnchor] = useState<ExplorationAnchor | null>(null);
+  // 问卷题行上的「聊聊」（M9）：点一下只把题面与"问的人"放这儿，切到讨论 tab 才开聊。
+  const [discussionAnchor, setDiscussionAnchor] = useState<DiscussionAnchor | null>(null);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
 
@@ -303,6 +306,17 @@ export default function App() {
             onDismissCandidate={(explorationId, candidate) =>
               void data.dismissCandidate(explorationId, candidate.candidate_id)
             }
+            discussions={data.discussions}
+            discussionsPending={data.discussionsPending}
+            discussionAnchor={discussionAnchor}
+            onStartDiscussion={(anchor) => void data.startDiscussion(anchor)}
+            onSayToThread={(threadId, text) => void data.sayToThread(threadId, text)}
+            onAssembleCards={(threadId) => void data.assembleCards(threadId)}
+            onKeepDiscussionCard={(threadId, cardId) =>
+              void data.keepDiscussionCard(threadId, cardId)
+            }
+            onCloseDiscussion={(threadId) => void data.closeDiscussion(threadId)}
+            onDiscussQuestion={setDiscussionAnchor}
             history={
               readingHistory && data.historyRound !== null
                 ? { roundId: data.historyRound.round_id, onBack: data.backToLatest }

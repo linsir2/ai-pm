@@ -834,8 +834,19 @@ class LimitsView:
 
 
 @dataclass(frozen=True, slots=True)
+class RoleSchemaView:
+    """开聊卡上的一个固定角色（M9）。真相源是 `infrastructure/discussion/roles.toml`，
+    界面不再自己抄那三行——抄一份就是两份真相源，改了角色表只会看到一半生效。
+    """
+
+    role_id: str
+    title: str
+    focus: str
+
+
+@dataclass(frozen=True, slots=True)
 class SchemaView:
-    """`GET /schema`：现行结构（13 章 + 功能字段表 + 上限常量）。
+    """`GET /schema`：现行结构（13 章 + 功能字段表 + 上限常量 + 讨论角色）。
 
     它**不是**文档内容——`DocumentView` 才是；这里只是"这套结构长什么样"。
     """
@@ -843,10 +854,16 @@ class SchemaView:
     sections: tuple[SectionSchemaView, ...]
     feature_fields: tuple[FeatureFieldSchemaView, ...]
     limits: LimitsView
+    #: 讨论区的三个固定角色（`dlg.*`）。**必填**：没有它灵感区就没有角色可显示。
+    discussion_roles: tuple[RoleSchemaView, ...]
 
 
-def schema_view() -> SchemaView:
-    """把三张表与三个常量读出来。纯函数：无 IO、不开事务、不碰任何仓储。"""
+def schema_view(*, discussion_roles: tuple = ()) -> SchemaView:
+    """把三张表、三个常量与讨论角色读出来。纯函数：无 IO、不开事务、不碰任何仓储。
+
+    `discussion_roles` 按鸭子类型读 `.role_id/.title/.focus`——application 不 import
+    infrastructure（分层守卫），形状由 `DiscussionRole` 保证，调用方注入元组。
+    """
 
     return SchemaView(
         sections=tuple(
@@ -876,6 +893,10 @@ def schema_view() -> SchemaView:
             max_seat_rounds=MAX_SEAT_ROUNDS,
             max_questionnaires=MAX_QUESTIONNAIRES,
             max_open_items_per_batch=MAX_OPEN_ITEMS_PER_BATCH,
+        ),
+        discussion_roles=tuple(
+            RoleSchemaView(role_id=role.role_id, title=role.title, focus=role.focus)
+            for role in discussion_roles
         ),
     )
 

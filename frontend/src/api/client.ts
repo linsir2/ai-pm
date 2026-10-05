@@ -14,6 +14,7 @@ import type {
   RoundHeadView,
   SchemaView,
   SearchResultsView,
+  ThreadView,
   VersionListView,
   WorkspaceView,
 } from "./types";
@@ -32,6 +33,14 @@ export interface StartBody {
 export interface ExplorationBody {
   kind: "inquiry";
   scope: { kind: "entry" | "document"; ref: string | null; text: string | null };
+}
+
+/** 开一条讨论线程的请求体（M9，与后端 `StartDiscussionRequest` 一一对应）。 */
+export interface DiscussionBody {
+  topic: string;
+  role_id: string;
+  /** 问卷题快照：只当开场白，**可空**（讨论 tab 自由开聊时不带）。 */
+  question: { title: string; why: string | null } | null;
 }
 
 /** 真模型一轮要跑几十秒；给一个宽上限，避免请求永远挂着没人管。 */
@@ -293,6 +302,48 @@ export const api = {
       `/explorations/${encodeURIComponent(explorationId)}/candidates/${encodeURIComponent(candidateId)}/dismiss`,
       { method: "POST" },
     ),
+
+  /** 这个项目开过的讨论线程（最新在前，≤20 条）：讨论 tab 读它（M9）。 */
+  discussions: (projectId: string) =>
+    request<ThreadView[]>(`/projects/${projectId}/discussions`),
+
+  /**
+   * 开一条讨论线程：同（项目，归一化主题，角色）已有 open 线程时**幂等返那一条**
+   * （后端 D4 形态）——所以连点两次不会开出两条。
+   */
+  startDiscussion: (projectId: string, body: DiscussionBody) =>
+    request<ThreadView>(`/projects/${projectId}/discussions`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** 追问一轮：模型跑完、校验通过才原子记一对（user＋assistant）。 */
+  sayToThread: (discussionId: string, text: string) =>
+    request<ThreadView>(`/discussions/${encodeURIComponent(discussionId)}/say`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+
+  /** 把这段讨论总结成 1-3 张灵感卡（无 body：总结对象就是整段讨论）。 */
+  assembleCards: (discussionId: string) =>
+    request<ThreadView>(`/discussions/${encodeURIComponent(discussionId)}/cards`, {
+      method: "POST",
+      body: "{}",
+    }),
+
+  /** 收下一张卡为材料：收下即回流（默认按"它提议的"不勾选）。同卡重复收下幂等。 */
+  keepDiscussionCard: (discussionId: string, cardId: string) =>
+    request<ThreadView>(
+      `/discussions/${encodeURIComponent(discussionId)}/cards/${encodeURIComponent(cardId)}/keep`,
+      { method: "POST", body: "{}" },
+    ),
+
+  /** 关掉一条线程：终态幂等（无 body）。 */
+  closeDiscussion: (discussionId: string) =>
+    request<ThreadView>(`/discussions/${encodeURIComponent(discussionId)}/close`, {
+      method: "POST",
+      body: "{}",
+    }),
 
   submitOpening: (roundId: string, body: OpeningBody) =>
     request<RoundView>(`/rounds/${roundId}/opening`, {

@@ -427,7 +427,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         ),
         list_projects=ListProjects(index=index),
         get_round=get_round,
-        get_schema=GetSchema(),
+        # 复用 175 行已加载的那份角色表（同一进程只 `load_discussion_roles()` 一次）
+        get_schema=GetSchema(discussion_roles=discussion_roles),
         list_rounds=ListRounds(index=index),
         search=SearchProject(
             documents=documents, evidence=evidences, index=index, materials=material_search

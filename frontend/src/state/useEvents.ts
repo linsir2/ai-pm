@@ -13,6 +13,7 @@ const EVENT_NAMES = [
   "doc.changed",
   "generation.failed",
   "exploration.updated",
+  "discussion.updated",
 ] as const;
 
 export type ConnectionState = "idle" | "open" | "lost";

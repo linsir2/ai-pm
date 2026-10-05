@@ -382,6 +382,15 @@ export interface SchemaView {
   sections: SectionSchemaView[];
   feature_fields: FeatureFieldSchemaView[];
   limits: LimitsView;
+  /** 讨论区的三个固定角色（`dlg.*`）。**必填**：灵感区不抄一份角色表（M9）。 */
+  discussion_roles: DiscussionRoleSchema[];
+}
+
+/** `GET /schema` 里的一个讨论角色。 */
+export interface DiscussionRoleSchema {
+  role_id: string;
+  title: string;
+  focus: string;
 }
 
 /** 材料（工具层 C-2）。列表与上传回**摘要**（不含块正文）。 */
@@ -468,6 +477,44 @@ export interface CandidateView {
   falsification: string | null;
   evidence_needed: string | null;
   next_step: string | null;
+}
+
+/** 开聊时带的问卷题快照（只存题面与原因，不读轮）。 */
+export interface DiscussionQuestionView {
+  title: string;
+  why: string | null;
+}
+
+/** 讨论里的一轮（一说就是一**对**：user 与 assistant 各一条，`index` 连续）。 */
+export interface TurnView {
+  index: number;
+  role: "user" | "assistant" | string;
+  text: string;
+  based_on: string[];
+}
+
+/** 讨论总结出的一张灵感卡（M9）。`kept_ref` 非空 = 已收下为材料。 */
+export interface CardView {
+  card_id: string;
+  statement: string;
+  /** `document` = 文档里有据的（必带 E 编号）；`invented` = 凭空推演（收下默认不勾）。 */
+  grounding: "document" | "invented" | string;
+  based_on: string[];
+  kept_ref: string | null;
+}
+
+/** 一条讨论线程（M9）：列表与展开共用它；真身在后端。 */
+export interface ThreadView {
+  thread_id: string;
+  project_id: string;
+  topic: string;
+  question: DiscussionQuestionView | null;
+  role_id: string;
+  role_title: string;
+  status: "open" | "closed" | string;
+  turns: TurnView[];
+  cards: CardView[];
+  created_at: string;
 }
 
 /** 一趟探索运行（M8）：过目台与历史都读它。 */

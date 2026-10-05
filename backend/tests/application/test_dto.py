@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from pmstudio.application import dto
 from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.authoring.document import Document
@@ -685,7 +687,7 @@ def test_round_view_puts_the_coverage_advisory_first():
 def test_schema_view_freezes_the_shape():
     """`GET /schema` 的形状：13 章（含说明与槽）、12 个功能字段、三个上限常量。"""
 
-    view = dto.schema_view()
+    view = dto.schema_view(discussion_roles=_three_roles())
 
     assert [item.section_id for item in view.sections] == [f"s{i}" for i in range(1, 14)]
     assert all(item.purpose.strip() for item in view.sections)
@@ -717,6 +719,28 @@ def test_schema_view_freezes_the_shape():
     assert view.limits == dto.LimitsView(
         max_seat_rounds=3, max_questionnaires=2, max_open_items_per_batch=3
     )
+
+
+def _three_roles():
+    """就地造三个角色（与 `roles.toml` 同 id）：`schema_view` 只按鸭子类型读三个字段。"""
+
+    return (
+        SimpleNamespace(role_id="dlg.challenger", title="反方", focus="找漏洞、要反例、泼冷水"),
+        SimpleNamespace(role_id="dlg.user_voice", title="用户之声", focus="替真实用户说话"),
+        SimpleNamespace(role_id="dlg.analogist", title="类比者", focus="别人家怎么做过"),
+    )
+
+
+def test_schema_view_carries_the_discussion_roles():
+    """讨论角色进 `/schema`：三行、字段齐全（灵感区不再自己抄一份）。"""
+
+    view = dto.schema_view(discussion_roles=_three_roles())
+
+    assert [(item.role_id, item.title, item.focus) for item in view.discussion_roles] == [
+        ("dlg.challenger", "反方", "找漏洞、要反例、泼冷水"),
+        ("dlg.user_voice", "用户之声", "替真实用户说话"),
+        ("dlg.analogist", "类比者", "别人家怎么做过"),
+    ]
 
 
 def question(question_id: str, title: str, *, options: bool = False) -> Question:

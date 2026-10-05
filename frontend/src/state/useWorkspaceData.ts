@@ -9,6 +9,8 @@ import { ApiError, api } from "../api/client";
 import type { AnswersBody, EditBody, OpeningBody } from "../api/client";
 import { appendSeedText, buildExplorationBody, buildStart } from "../api/payload";
 import type { ExplorationAnchor } from "../api/payload";
+import { resolveRoleId } from "./discussions";
+import type { DiscussionAnchor } from "./discussions";
 import { seedText } from "./explorations";
 import type {
   CandidateView,
@@ -20,6 +22,7 @@ import type {
   RoundView,
   SchemaView,
   SearchResultsView,
+  ThreadView,
   WorkspaceEvent,
 } from "../api/types";
 import { setSchema as publishSchema } from "./schema";
@@ -39,7 +42,9 @@ export type PendingAction =
   /** 记忆抽屉上的动作（M6）：删一条记忆——同样串行，不与"这一轮"的动作并发。 */
   | "memory"
   /** 过目台上的动作（M8）：发起 / 重试 / 放弃 / 收下 / 删掉，串行不并发。 */
-  | "exploration";
+  | "exploration"
+  /** 讨论区上的动作（M9）：开聊 / 说 / 总结 / 收卡 / 关掉，同样串行不并发。 */
+  | "discussion";
 
 const PROJECT_PARAM = "project";
 
@@ -67,6 +72,8 @@ export function useWorkspaceData() {
   const [materials, setMaterials] = useState<MaterialSummaryView[]>([]);
   //: **过目台**：这个项目走过的探索（最新在前）——事件只置 stale，真身从这里读。
   const [explorations, setExplorations] = useState<ExplorationView[]>([]);
+  //: **讨论区**：这个项目开过的讨论线程（最新在前）——同样只置 stale，真身从这里读。
+  const [discussions, setDiscussions] = useState<ThreadView[]>([]);
   // 底部输入框的文本（上提是为了让"收下为下一轮输入"能往里追加）
   const [roundInput, setRoundInput] = useState("");
   // 收下为"下一轮输入"的候选 id（`探索id#候选id`）：起轮时随请求发出
@@ -95,6 +102,11 @@ export function useWorkspaceData() {
       .explorations(projectId)
       .then(setExplorations)
       .catch(() => setExplorations([]));
+    // 讨论线程列表（讨论 tab）同理
+    void api
+      .discussions(projectId)
+      .then(setDiscussions)
+      .catch(() => setDiscussions([]));
     return workspace;
   }, []);
 
@@ -238,6 +250,17 @@ export function useWorkspaceData() {
       .finally(() => dispatch({ type: "explorations" }));
   }, [state.explorationStale, state.projectId]);
 
+  // `discussion.updated` 同样只置 stale：线程真身从这里读回来，读完清信号。
+  useEffect(() => {
+    const projectId = state.projectId;
+    if (projectId === null || !state.discussionStale) return;
+    void api
+      .discussions(projectId)
+      .then(setDiscussions)
+      .catch((error: unknown) => dispatch({ type: "error", message: describe(error) }))
+      .finally(() => dispatch({ type: "discussions" }));
+  }, [state.discussionStale, state.projectId]);
+
   /** 跑一个长时间动作：串行、出错只提示、成功就把新的这一轮换进状态。 */
   const run = useCallback(
     async (action: PendingAction, work: () => Promise<void>) => {
@@ -364,6 +387,67 @@ export function useWorkspaceData() {
         replaceExploration(await api.dismissCandidate(explorationId, candidateId));
       }),
     [replaceExploration, run],
+  );
+
+  /** 把后端刚返回的那一条线程换进列表（没有就补在最前）。 */
+  const replaceThread = useCallback((view: ThreadView) => {
+    setDiscussions((list) =>
+      list.some((item) => item.thread_id === view.thread_id)
+        ? list.map((item) => (item.thread_id === view.thread_id ? view : item))
+        : [view, ...list],
+    );
+  }, []);
+
+  /** 开一条讨论（M9）：主题与角色都已由界面算好（`resolveRoleId` 兜过底）。 */
+  const startDiscussion = useCallback(
+    (anchor: DiscussionAnchor) =>
+      run("discussion", async () => {
+        const projectId = selected.current;
+        if (projectId === null) return;
+        replaceThread(
+          await api.startDiscussion(projectId, {
+            topic: anchor.topic,
+            role_id: resolveRoleId(anchor.role_id),
+            question: null,
+          }),
+        );
+      }),
+    [replaceThread, run],
+  );
+
+  /** 追问一轮：后端成对写入，返回的就是最新的那条线程。 */
+  const sayToThread = useCallback(
+    (discussionId: string, text: string) =>
+      run("discussion", async () => {
+        replaceThread(await api.sayToThread(discussionId, text));
+      }),
+    [replaceThread, run],
+  );
+
+  /** 总结成卡：返回的线程里多了 cards。 */
+  const assembleCards = useCallback(
+    (discussionId: string) =>
+      run("discussion", async () => {
+        replaceThread(await api.assembleCards(discussionId));
+      }),
+    [replaceThread, run],
+  );
+
+  /** 收下一张卡为材料：返回的线程里那张卡的 kept_ref 有值了。 */
+  const keepDiscussionCard = useCallback(
+    (discussionId: string, cardId: string) =>
+      run("discussion", async () => {
+        replaceThread(await api.keepDiscussionCard(discussionId, cardId));
+      }),
+    [replaceThread, run],
+  );
+
+  const closeDiscussion = useCallback(
+    (discussionId: string) =>
+      run("discussion", async () => {
+        replaceThread(await api.closeDiscussion(discussionId));
+      }),
+    [replaceThread, run],
   );
 
   /** 上传一份材料：成功后挂进"这一轮要带的材料"（还没开轮就能撤掉）。 */
@@ -586,6 +670,13 @@ export function useWorkspaceData() {
     abandonExploration,
     keepCandidate,
     dismissCandidate,
+    discussions,
+    discussionsPending: pending === "discussion",
+    startDiscussion,
+    sayToThread,
+    assembleCards,
+    keepDiscussionCard,
+    closeDiscussion,
     roundInput,
     setRoundInput,
     pendingSeeds,

@@ -17,12 +17,14 @@ class DiscussionRole:
     role_id: str
     title: str
     focus: str
-    stance: str
-    openers: tuple[str, ...]
 
 
 def load_discussion_roles(path: Path = ROLES_PATH) -> tuple[DiscussionRole, ...]:
-    """读 `roles.toml` 的 `[[roles]]` 三表；顺序即开聊卡上的三选顺序。"""
+    """读 `roles.toml` 的 `[[roles]]` 三表；顺序即开聊卡上的三选顺序。
+
+    **只有 id / title / focus 三个键**：角色怎么说话由提示词决定
+    （`harness/prompts/discussion_*.md`），表里再加"配置"就没人消费了。
+    """
 
     data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     return tuple(
@@ -30,8 +32,6 @@ def load_discussion_roles(path: Path = ROLES_PATH) -> tuple[DiscussionRole, ...]
             role_id=item["id"],
             title=item["title"],
             focus=item["focus"],
-            stance=item["stance"],
-            openers=tuple(item.get("openers", ())),
         )
         for item in data.get("roles", ())
     )

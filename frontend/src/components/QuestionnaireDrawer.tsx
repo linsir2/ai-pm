@@ -5,6 +5,7 @@ import type { AnswerDraft } from "../api/payload";
 import { answerBatchSummary, unansweredCount } from "../api/payload";
 import type { DocumentView, QuestionView, RoundView } from "../api/types";
 import { QUESTION_KIND_TEXT, QUESTION_TYPE_TEXT, targetText } from "../labels";
+import type { DiscussionAnchor } from "../state/discussions";
 import { EvidenceChip } from "./EvidenceChip";
 
 export function QuestionnaireDrawer({
@@ -15,6 +16,7 @@ export function QuestionnaireDrawer({
   onChange,
   onSubmit,
   onSkipAll,
+  onDiscuss,
   onCollapse,
 }: {
   round: RoundView;
@@ -24,6 +26,11 @@ export function QuestionnaireDrawer({
   onChange: (questionId: string, draft: AnswerDraft) => void;
   onSubmit: () => void;
   onSkipAll: () => void;
+  /**
+   * 题行上的「聊聊」（M9）：把这道题交给讨论 tab 开一条线程。
+   * 传了才有这个入口（没传就是这一版没接讨论）。
+   */
+  onDiscuss?: (anchor: DiscussionAnchor) => void;
   onCollapse: () => void;
 }) {
   const unanswered = unansweredCount(round, drafts);
@@ -78,6 +85,7 @@ export function QuestionnaireDrawer({
             doc={doc}
             draft={drafts[question.question_id]}
             onChange={(draft) => onChange(question.question_id, draft)}
+            onDiscuss={onDiscuss}
           />
         ))}
       </div>
@@ -106,11 +114,13 @@ function Question({
   doc,
   draft,
   onChange,
+  onDiscuss,
 }: {
   question: QuestionView;
   doc: DocumentView | null;
   draft: AnswerDraft | undefined;
   onChange: (draft: AnswerDraft) => void;
+  onDiscuss?: (anchor: DiscussionAnchor) => void;
 }) {
   const current: AnswerDraft = draft ?? { selected: [], text: "" };
   const multiple = question.type === "multi";
@@ -178,6 +188,18 @@ function Question({
       </p>
       <div className="row">
         <EvidenceChip eids={question.eids} />
+        {/* 「聊聊」只给**某个席位问的**题：整合者自己提的题没有"谁"可请 */}
+        {onDiscuss !== undefined && question.asked_by.length > 0 && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() =>
+              onDiscuss({ topic: question.title, role_id: question.asked_by[0] ?? null })
+            }
+          >
+            聊聊
+          </button>
+        )}
         <button
           type="button"
           className="btn btn--ghost btn--sm"

@@ -29,6 +29,8 @@ export interface State {
   roundStale: boolean;
   /** 探索列表（过目台）该重读了。与轮次无关：它由 `exploration.updated` 置起。 */
   explorationStale: boolean;
+  /** 讨论线程列表该重读了。与轮次无关：它由 `discussion.updated` 置起（M9）。 */
+  discussionStale: boolean;
   lastSeq: number;
   connection: Connection["state"];
   error: string | null;
@@ -45,6 +47,8 @@ export type Action =
   | { type: "written"; blockIds: string[] }
   /** 探索列表已从后端重读（数据在 `useWorkspaceData` 里）——清掉重读信号。 */
   | { type: "explorations" }
+  /** 讨论线程列表已从后端重读（数据在 `useWorkspaceData` 里）——清掉重读信号。 */
+  | { type: "discussions" }
   | { type: "reset" };
 
 export const initialState: State = {
@@ -57,6 +61,7 @@ export const initialState: State = {
   documentStale: false,
   roundStale: false,
   explorationStale: false,
+  discussionStale: false,
   lastSeq: 0,
   connection: "idle",
   error: null,
@@ -103,6 +108,9 @@ export function reduce(state: State, action: Action): State {
     case "explorations":
       return { ...state, explorationStale: false };
 
+    case "discussions":
+      return { ...state, discussionStale: false };
+
     case "reset":
       return { ...initialState, connection: state.connection };
 
@@ -139,6 +147,9 @@ function applyEvent(state: State, event: WorkspaceEvent): State {
     case "exploration.updated":
       // 只置"该重读了"：event payload 只有 id 与状态，列表真身去后端读。
       return { ...base, explorationStale: true };
+    case "discussion.updated":
+      // 同上（M9）：讨论线程不挂在轮次上，事件只说"有一条变了"。
+      return { ...base, discussionStale: true };
     default:
       return base;
   }

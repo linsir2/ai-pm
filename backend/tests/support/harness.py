@@ -181,22 +181,16 @@ def _default_discussion_roles() -> tuple[DiscussionRole, ...]:
             role_id="dlg.challenger",
             title="反方",
             focus="找漏洞、要反例、泼冷水",
-            stance="默认这个想法有问题，先证明它没问题再说",
-            openers=("先说说你的想法，我来挑刺。",),
         ),
         DiscussionRole(
             role_id="dlg.user_voice",
             title="用户之声",
             focus="替真实用户说话：他们会怎么用、哪里会骂",
-            stance="我是用户，不是专家；对不上日常用法的词我会打断",
-            openers=("我是来替用户说话的，你先讲。",),
         ),
         DiscussionRole(
             role_id="dlg.analogist",
             title="类比者",
             focus="别的产品、别的领域怎么做过类似的事",
-            stance="太阳底下无新事，先找相似，再谈不同",
-            openers=("说说你的主题，我帮你找三个别人家的做法。",),
         ),
     )
 
@@ -646,7 +640,7 @@ class Harness:
     def get_schema(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetSchema
 
-        return GetSchema()
+        return GetSchema(discussion_roles=self.discussion_roles)
 
     def list_rounds(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import ListRounds
