@@ -36,6 +36,12 @@ EXPECTED_PATHS = {
     "/api/explorations/{exploration_id}/abandon",
     "/api/explorations/{exploration_id}/candidates/{candidate_id}/keep",
     "/api/explorations/{exploration_id}/candidates/{candidate_id}/dismiss",
+    # M9 讨论：发起/列表（POST 与 GET 同路径）＋追问/总结/收卡/关闭
+    "/api/projects/{project_id}/discussions",
+    "/api/discussions/{discussion_id}/say",
+    "/api/discussions/{discussion_id}/cards",
+    "/api/discussions/{discussion_id}/cards/{card_id}/keep",
+    "/api/discussions/{discussion_id}/close",
 }
 
 
