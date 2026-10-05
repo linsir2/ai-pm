@@ -84,6 +84,18 @@ CREATE TABLE IF NOT EXISTS explorations (
 );
 CREATE INDEX IF NOT EXISTS idx_explorations_project ON explorations(project_id, created_at);
 
+-- 讨论线程（M9）：一条自由主题的多轮讨论一行，轮次与卡片全在 payload。
+-- 与 explorations 同一个范式：列只放"要按它查"的（项目/状态），其余进 JSON。
+CREATE TABLE IF NOT EXISTS discussions (
+  discussion_id TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  payload        TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_discussions_project ON discussions(project_id, created_at);
+
 -- 跨轮记忆（M6，原设计里的 PROJECT.md）：一个项目一行。
 -- payload 里两段：`entries`（事实）与 `revisions`（它怎么变成现在这样的）。
 --

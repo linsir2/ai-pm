@@ -9,6 +9,14 @@ from datetime import datetime
 from pmstudio.domain.authoring.blocks import Block, Entry
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.version import Snapshot, Version, VersionTrigger
+from pmstudio.domain.discussion.card import Card
+from pmstudio.domain.discussion.card import Grounding as DiscussionGrounding
+from pmstudio.domain.discussion.thread import (
+    Discussion,
+    QuestionSnapshot,
+    ThreadStatus,
+    Turn,
+)
 from pmstudio.domain.exploration.exploration import (
     Exploration,
     ExplorationFailure,
@@ -55,6 +63,7 @@ from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
     BlockId,
+    DiscussionId,
     DocumentId,
     DraftId,
     EntryId,
@@ -1015,4 +1024,95 @@ def exploration_from_payload(
         ),
         abandon_reason=payload.get("abandon_reason"),
         overflow_count=int(payload.get("overflow_count") or 0),
+    )
+
+
+# ── 讨论（M9）────────────────────────────────────────────────────────────────
+
+
+def discussion_to_payload(discussion: Discussion) -> dict:
+    """讨论的 payload。列字段（status / created_at）不放这里——读时从列传回来。"""
+
+    question = discussion.question
+    return {
+        "topic": discussion.topic,
+        "role_id": discussion.role_id,
+        "role_title": discussion.role_title,
+        "question": (
+            None
+            if question is None
+            else {"title": question.title, "why": question.why}
+        ),
+        "turns": [
+            {
+                "index": turn.index,
+                "role": turn.role,
+                "text": turn.text,
+                "based_on": [str(eid) for eid in turn.based_on],
+            }
+            for turn in discussion.turns
+        ],
+        "cards": [
+            {
+                "card_id": card.card_id,
+                "statement": card.statement,
+                "grounding": card.grounding.value,
+                "based_on": [str(eid) for eid in card.based_on],
+            }
+            for card in discussion.cards
+        ],
+        # 收下记录只存"已收下"的（kept_ref 是 None 就是没收下，存了只是噪声）
+        "kept": {
+            card.card_id: card.kept_ref
+            for card in discussion.cards
+            if card.kept_ref is not None
+        },
+    }
+
+
+def discussion_from_payload(
+    payload: dict,
+    *,
+    discussion_id: DiscussionId,
+    project_id: ProjectId,
+    status: ThreadStatus,
+    created_at: datetime,
+) -> Discussion:
+    question_data = payload.get("question")
+    kept = payload.get("kept") or {}
+    return Discussion(
+        discussion_id=discussion_id,
+        project_id=project_id,
+        topic=str(payload.get("topic") or ""),
+        role_id=str(payload.get("role_id") or ""),
+        role_title=str(payload.get("role_title") or ""),
+        created_at=created_at,
+        question=(
+            None
+            if not question_data
+            else QuestionSnapshot(
+                title=str(question_data.get("title") or ""),
+                why=question_data.get("why"),
+            )
+        ),
+        status=status,
+        turns=tuple(
+            Turn(
+                index=int(item["index"]),
+                role=str(item["role"]),
+                text=str(item["text"]),
+                based_on=tuple(EvidenceId(str(eid)) for eid in item.get("based_on") or ()),
+            )
+            for item in payload.get("turns") or ()
+        ),
+        cards=tuple(
+            Card(
+                card_id=str(item["card_id"]),
+                statement=str(item["statement"]),
+                grounding=DiscussionGrounding(str(item["grounding"])),
+                based_on=tuple(EvidenceId(str(eid)) for eid in item.get("based_on") or ()),
+                kept_ref=kept.get(str(item["card_id"])),
+            )
+            for item in payload.get("cards") or ()
+        ),
     )

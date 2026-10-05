@@ -16,8 +16,14 @@ from pmstudio.application.dto import (
     RoundOutcomeView,
     round_head_view,
 )
-from pmstudio.application.errors import UnknownExploration, UnknownProject, UnknownRound
+from pmstudio.application.errors import (
+    UnknownDiscussion,
+    UnknownExploration,
+    UnknownProject,
+    UnknownRound,
+)
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.discussion.thread import Discussion, ThreadStatus
 from pmstudio.domain.exploration.exploration import (
     Exploration,
     ExplorationKind,
@@ -27,7 +33,7 @@ from pmstudio.domain.memory.memory import ProjectMemory
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
-from pmstudio.domain.shared.ids import ExplorationId, ProjectId, RoundId
+from pmstudio.domain.shared.ids import DiscussionId, ExplorationId, ProjectId, RoundId
 from pmstudio.infrastructure.sqlite import serialization as ser
 
 
@@ -240,6 +246,72 @@ class SqliteExplorationRepository:
             project_id=ProjectId(row["project_id"]),
             kind=ExplorationKind(row["kind"]),
             status=ExplorationStatus(row["status"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+
+class SqliteDiscussionRepository:
+    """讨论线程（M9）：读端口 + 写端口都在一个类上（与探索仓储同一个形状）。
+
+    同一条口径：**坏行跳过不抛**（`list_for_project` 里逐行 try），
+    状态是列——"这个项目有没有开着的讨论"这类查询不该把整份 payload 读出来。
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def get(self, discussion_id: DiscussionId) -> Discussion:
+        row = self._connection.execute(
+            "SELECT * FROM discussions WHERE discussion_id = ?", (str(discussion_id),)
+        ).fetchone()
+        if row is None:
+            raise UnknownDiscussion(discussion_id)
+        return self._from_row(row)
+
+    def save(self, discussion: Discussion) -> None:
+        payload = json.dumps(ser.discussion_to_payload(discussion), ensure_ascii=False)
+        self._connection.execute(
+            """
+            INSERT INTO discussions (discussion_id, project_id, status, payload,
+                                     created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(discussion_id) DO UPDATE SET
+                status = excluded.status,
+                payload = excluded.payload,
+                updated_at = excluded.updated_at
+            """,
+            (
+                str(discussion.discussion_id),
+                str(discussion.project_id),
+                str(discussion.status),
+                payload,
+                discussion.created_at.isoformat(),
+                _now(),
+            ),
+        )
+
+    def list_for_project(
+        self, project_id: ProjectId, *, limit: int = 20
+    ) -> tuple[Discussion, ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM discussions WHERE project_id = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (str(project_id), limit),
+        ).fetchall()
+        found: list[Discussion] = []
+        for row in rows:
+            try:
+                found.append(self._from_row(row))
+            except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+                continue  # 坏行跳过不抛（与 explorations 同一条口径）
+        return tuple(found)
+
+    def _from_row(self, row: sqlite3.Row) -> Discussion:
+        return ser.discussion_from_payload(
+            json.loads(row["payload"]),
+            discussion_id=DiscussionId(row["discussion_id"]),
+            project_id=ProjectId(row["project_id"]),
+            status=ThreadStatus(row["status"]),
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
