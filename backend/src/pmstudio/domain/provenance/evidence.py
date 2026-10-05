@@ -83,6 +83,8 @@ def _validate_source(kind: EvidenceKind, source: EvidenceSource) -> None:
         _require(source.rationale, "system_default 必须写清依据的是哪条结构规则")
     elif kind is EvidenceKind.EXTERNAL:
         _require(source.external_ref, "external 必须带 external_ref")
+    elif kind is EvidenceKind.SIMULATED:
+        _require(source.external_ref, "simulated 必须带 external_ref（指向哪条探索产物）")
     # manual：用户自己敲的字，内容就是 text，不额外要求来源字段。
     # 它带 round_id 也可以（在某一轮中途手改时），但不强制。
     if source.derived_from and kind is not EvidenceKind.AGENT_DERIVED:

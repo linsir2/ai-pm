@@ -20,6 +20,7 @@ from pmstudio.harness.prompt import PROMPTS_DIR, FilePromptLibrary
 #: 搬之前目录里就有这 5 个。少了任何一个，说明搬的时候漏了数据文件。
 EXPECTED_PROMPTS = (
     "analyzer",
+    "inquiry",
     "integrator",
     "memory_curator",
     "opinion_dispositions",

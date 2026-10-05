@@ -13,7 +13,8 @@ class EvidenceKind(StrEnum):
     AGENT_DERIVED = "agent_derived"  # 席位判断，有依据
     AGENT_PROPOSED = "agent_proposed"  # 席位判断，无依据
     SYSTEM_DEFAULT = "system_default"  # 系统按结构规则补的（如跳过的题落开放问题）
-    EXTERNAL = "external"  # 外部材料（v1 留位，暂无生产者）
+    EXTERNAL = "external"  # 外部材料（上传 / 联网检索 / 抓来的网页）
+    SIMULATED = "simulated"  # 探索产物（模型推演，不是用户数据；**不是**可追溯终点）
     MANUAL = "manual"  # 用户自己在文档里改的（手改也要有自己的出处，见 04-未决 D1）
 
 

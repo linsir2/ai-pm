@@ -17,6 +17,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from pmstudio.domain.exploration.item import (
+    MAX_INQUIRY_BLIND_SPOTS,
+    MAX_INQUIRY_HYPOTHESES,
+)
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import FeatureSlug, SectionId
 from pmstudio.domain.shared.sections import FEATURE_HOME, section_slot
@@ -136,6 +140,44 @@ class SeatPacket(BaseModel):
     #: 上限跟着提示词走：`seat_review.md` 允许"最多 5 条判断"，加上疑问一共 12 条。
     #: 真跑实测：5 判断 + 5 疑问 = 10 条，旧的 8 条上限直接把整轮打死（报告 F4）。
     opinions: list[OpinionDraft] = Field(default_factory=list, max_length=12)
+
+
+class HypothesisDraft(BaseModel):
+    """一条待验证假设（M8 调研）。**可证伪是硬要求**：证伪方式与所需真实证据都不许空。"""
+
+    local_id: str = Field(default="", description="本包内唯一，如 H1；留空由系统按顺序补")
+    statement: str = Field(description="一句**可证伪**的陈述，不是结论、不是愿望")
+    grounding: Literal["document", "material", "invented"] = Field(
+        description="document=从上面文档的内容推的；material=从材料推的；invented=凭空推演"
+    )
+    based_on: list[str] = Field(
+        default_factory=list,
+        description="grounding=document 时必填（只能是文档里出现过的 E 编号）；invented 时必须留空",
+    )
+    falsification: str = Field(description="什么观察会推翻它")
+    evidence_needed: str = Field(
+        description="要什么真实证据才能确认（访谈谁 / 看什么行为 / 做什么实验）"
+    )
+
+
+class BlindSpotDraft(BaseModel):
+    """一条盲区：模拟答不了、只能靠真实接触回答的问题。"""
+
+    local_id: str = Field(default="", description="本包内唯一，如 B1；留空由系统按顺序补")
+    statement: str = Field(description="我们现在不知道什么")
+    next_step: str = Field(description="下一步去哪问 / 去看什么（一句话就能执行）")
+
+
+class InquiryPacket(BaseModel):
+    """调研回包：假设 + 盲区。两样都空**不算成功**（由解析层判，不靠提示词自觉）。"""
+
+    basis: str = Field(description="你读了文档里的哪些内容才推出这些")
+    hypotheses: list[HypothesisDraft] = Field(
+        default_factory=list, max_length=MAX_INQUIRY_HYPOTHESES
+    )
+    blind_spots: list[BlindSpotDraft] = Field(
+        default_factory=list, max_length=MAX_INQUIRY_BLIND_SPOTS
+    )
 
 
 class TargetDraft(BaseModel):

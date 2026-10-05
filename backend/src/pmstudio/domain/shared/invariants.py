@@ -43,6 +43,13 @@ class GlobalInvariant(StrEnum):
     GB1 = "GB1"  # 先有编号再有内容
 
 
+class XInvariant(StrEnum):
+    X1 = "X1"  # 假设必须可证伪：写清怎么被推翻、需要什么真实证据
+    X2 = "X2"  # 一趟调研的产物有上限（假设 6 / 盲区 3）
+    X3 = "X3"  # 候选只能被过目一次：new → kept|dismissed，单向、幂等；没跑完不许过目
+    X4 = "X4"  # 探索运行状态转换合法：只有 FAILED 能 resume；终态不可改
+
+
 ALL_INVARIANTS: tuple[StrEnum, ...] = (
     *DInvariant,
     *EInvariant,
@@ -50,4 +57,5 @@ ALL_INVARIANTS: tuple[StrEnum, ...] = (
     *LabelInvariant,
     *AgentInvariant,
     *GlobalInvariant,
+    *XInvariant,
 )

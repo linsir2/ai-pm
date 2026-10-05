@@ -7,7 +7,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[2] / "src"
 PACKAGE = "pmstudio"
 DOMAIN = SRC / PACKAGE / "domain"
-CONTEXTS = ("authoring", "memory", "provenance", "round")
+CONTEXTS = ("authoring", "memory", "provenance", "round", "exploration")
 FORBIDDEN_STEMS = ("fake", "mock", "stub", "dummy")
 
 # 白名单，而不是"所有标准库"：sqlite3 / json / http 这些同样是标准库，

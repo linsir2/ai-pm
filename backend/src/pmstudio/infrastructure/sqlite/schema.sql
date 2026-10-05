@@ -71,6 +71,19 @@ CREATE TABLE IF NOT EXISTS material_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_material_chunks_material ON material_chunks(material_id, ordinal);
 
+-- 探索运行（M8）：一趟调研（将来还有讨论/体检）一行，产物与候选状态全在 payload。
+-- 与 rounds 同一个范式：列只放"要按它查"的（项目/状态），其余进 JSON。
+CREATE TABLE IF NOT EXISTS explorations (
+  exploration_id TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL,
+  kind           TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  payload        TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_explorations_project ON explorations(project_id, created_at);
+
 -- 跨轮记忆（M6，原设计里的 PROJECT.md）：一个项目一行。
 -- payload 里两段：`entries`（事实）与 `revisions`（它怎么变成现在这样的）。
 --

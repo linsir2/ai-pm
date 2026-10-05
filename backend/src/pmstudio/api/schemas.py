@@ -28,6 +28,23 @@ class StartRoundRequest(BaseModel):
     material_ids: list[str] = Field(default_factory=list)
 
 
+class ExplorationScopeRequest(BaseModel):
+    kind: Literal["entry", "document"]
+    ref: str | None = Field(default=None, max_length=200)
+    text: str | None = Field(default=None, max_length=500)
+
+
+class StartExplorationRequest(BaseModel):
+    kind: Literal["inquiry"]
+    scope: ExplorationScopeRequest
+
+
+class KeepCandidateRequest(BaseModel):
+    """收下一条候选。JSON 键是 `as`——Python 关键字只能用别名接。"""
+
+    as_: Literal["seed", "material"] = Field(alias="as")
+
+
 class FetchRequest(BaseModel):
     """按网址抓一份网页材料（`P27`）：只收网址本身（护栏在 `HttpxWebFetcher` 里）。"""
 

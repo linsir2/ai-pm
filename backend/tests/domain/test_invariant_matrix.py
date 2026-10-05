@@ -40,4 +40,8 @@ def test_matrix_covers_every_invariant_code():
         "LB3",
         "AG1",
         "GB1",
+        "X1",
+        "X2",
+        "X3",
+        "X4",
     }

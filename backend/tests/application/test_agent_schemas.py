@@ -40,6 +40,21 @@ def test_integration_packet_caps_questions_at_twelve():
     assert schema["properties"]["questions"]["maxItems"] == 12
 
 
+def test_inquiry_packet_shape_caps_and_falsifiability_fields():
+    """调研包：上限 6/3 写进 schema；假设必须带证伪方式与所需真实证据（X1 的线形状）。"""
+
+    schema = schemas.InquiryPacket.model_json_schema()
+    assert set(schema["required"]) == {"basis"}
+    assert schema["properties"]["hypotheses"]["maxItems"] == 6
+    assert schema["properties"]["blind_spots"]["maxItems"] == 3
+    hypothesis = schema["$defs"]["HypothesisDraft"]
+    assert {"statement", "grounding", "falsification", "evidence_needed"} <= set(
+        hypothesis["required"]
+    )
+    assert "invented" in hypothesis["properties"]["grounding"]["enum"]
+    assert "next_step" in schema["$defs"]["BlindSpotDraft"]["required"]
+
+
 def test_parse_packet_returns_model_instance():
     text = json.dumps(
         {

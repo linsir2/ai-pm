@@ -9,12 +9,13 @@ from pmstudio.application.dto import (
     MaterialPacket,
     material_summary_view,
 )
-from pmstudio.application.errors import UnknownProject, UnknownRound
+from pmstudio.application.errors import UnknownExploration, UnknownProject, UnknownRound
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.exploration.exploration import Exploration
 from pmstudio.domain.memory.memory import ProjectMemory
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
-from pmstudio.domain.shared.ids import ProjectId, RoundId
+from pmstudio.domain.shared.ids import ExplorationId, ProjectId, RoundId
 
 
 class _InMemoryRepository:
@@ -72,6 +73,36 @@ class InMemoryRoundRepository(_InMemoryRepository):
         """按保存顺序给出全部轮次（测试替身专用：真实现是 SQL 的 `ORDER BY`）。"""
 
         return tuple(deepcopy(item) for item in self._items.values())
+
+
+class InMemoryExplorationRepository(_InMemoryRepository):
+    def __init__(self) -> None:
+        super().__init__("exploration")
+
+    def seed(self, exploration: Exploration) -> None:
+        self._items[exploration.exploration_id] = deepcopy(exploration)
+
+    def get(self, exploration_id: ExplorationId) -> Exploration:
+        item = self._items.get(exploration_id)
+        if item is None:
+            raise UnknownExploration(exploration_id)
+        return deepcopy(item)
+
+    def save(self, exploration: Exploration) -> None:
+        self.saves += 1
+        self._items[exploration.exploration_id] = deepcopy(exploration)
+
+    def list_for_project(
+        self, project_id: ProjectId, *, limit: int = 20
+    ) -> tuple[Exploration, ...]:
+        """后写的在前（真实现按 `created_at DESC`；测试里时钟常停在同一刻）。"""
+
+        items = [
+            item
+            for item in self._items.values()
+            if str(item.project_id) == str(project_id)
+        ]
+        return tuple(deepcopy(item) for item in items[::-1][:limit])
 
 
 class InMemoryMaterialStore:

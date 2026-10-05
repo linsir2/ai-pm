@@ -67,6 +67,7 @@ def test_the_prompts_directory_is_not_empty():
     assert prompts, "提示词目录空了——FilePromptLibrary 会返回空串，一切看起来正常"
     assert prompts == [
         "analyzer.md",
+        "inquiry.md",
         "integrator.md",
         "memory_curator.md",
         "opinion_dispositions.md",

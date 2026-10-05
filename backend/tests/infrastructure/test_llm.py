@@ -5,6 +5,7 @@ import time
 import pytest
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
@@ -99,6 +100,7 @@ def test_every_prompt_placeholder_is_declared_by_its_agent():
     expected = {
         "analyzer": ClaimAnalyzer.PROMPT_SLOTS,
         "seat_review": SeatReviewer.PROMPT_SLOTS,
+        "inquiry": Inquirer.PROMPT_SLOTS,
         "integrator": Integrator.PROMPT_SLOTS,
         "opinion_dispositions": Integrator.DISPOSITIONS_SLOTS,
         "memory_curator": MemoryCurator.PROMPT_SLOTS,

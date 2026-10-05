@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 import pytest
 
 from pmstudio.application.errors import (
+    ExplorationBusy,
+    UnknownExploration,
     UnknownProject,
     UnknownRound,
     unknown_ref_message,
@@ -11,6 +13,7 @@ from pmstudio.application.errors import (
 from pmstudio.application.events import (
     DOC_CHANGED,
     EVENT_NAMES,
+    EXPLORATION_UPDATED,
     GENERATION_FAILED,
     PACKET_EMITTED,
     ROUND_UPDATED,
@@ -38,12 +41,21 @@ from pmstudio.harness.model.contracts import (
 NOW = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
 
 
-def test_event_vocabulary_is_exactly_four():
-    assert EVENT_NAMES == {ROUND_UPDATED, PACKET_EMITTED, DOC_CHANGED, GENERATION_FAILED}
+def test_event_vocabulary_is_exactly_five():
+    """M8 起是**五**个：探索状态变化加了一个（前端订阅清单必须同步）。"""
+
+    assert EVENT_NAMES == {
+        ROUND_UPDATED,
+        PACKET_EMITTED,
+        DOC_CHANGED,
+        GENERATION_FAILED,
+        EXPLORATION_UPDATED,
+    }
     assert ROUND_UPDATED == "round.updated"
     assert PACKET_EMITTED == "packet.emitted"
     assert DOC_CHANGED == "doc.changed"
     assert GENERATION_FAILED == "generation.failed"
+    assert EXPLORATION_UPDATED == "exploration.updated"
 
 
 def test_event_no_longer_rejects_names_it_does_not_know():
@@ -139,6 +151,9 @@ def test_application_errors_carry_machine_readable_codes():
     assert UnknownProject("p9").code == "unknown_project"
     assert UnknownRound("r9").code == "unknown_round"
     assert UnknownRound("r9").details["round_id"] == "r9"
+    assert UnknownExploration("x9").code == "unknown_exploration"
+    assert UnknownExploration("x9").details["exploration_id"] == "x9"
+    assert ExplorationBusy("p9").code == "exploration_busy"
 def test_unknown_ref_message_explains_proposal_ids():
     """真跑里模型把 `r-f2a00f4e#08` 当出处编号写——提示要说清那是另一个命名空间。"""
 

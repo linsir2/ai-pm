@@ -7,6 +7,7 @@ from pmstudio.domain.shared.invariants import (
     GlobalInvariant,
     LabelInvariant,
     RInvariant,
+    XInvariant,
 )
 
 
@@ -307,6 +308,62 @@ class DuplicateProposalId(ShapeError):
 class DuplicateQuestionId(ShapeError):
     def __init__(self, *, question_id: object) -> None:
         super().__init__(f"题目 id {question_id} 重复", question_id=str(question_id))
+
+
+# —— exploration ——
+class UnfalsifiableHypothesis(InvariantViolation):
+    """不写"怎么被推翻"的假设不是假设，是口号（`02` 的诚实口径）。"""
+
+    def __init__(self, *, local_id: object, missing: str) -> None:
+        super().__init__(
+            f"假设 {local_id} 缺「{missing}」：可证伪的假设必须两样都写",
+            invariant=XInvariant.X1,
+            local_id=str(local_id),
+            missing=missing,
+        )
+
+
+class TooManyInquiryItems(InvariantViolation):
+    def __init__(self, *, kind: str, count: int, limit: int) -> None:
+        super().__init__(
+            f"一趟调研最多 {limit} 条{kind}，收到 {count} 条",
+            invariant=XInvariant.X2,
+            kind=kind,
+            count=count,
+            limit=limit,
+        )
+
+
+class CandidateNotReviewable(InvariantViolation):
+    """候选只能过一次目：删过的不能再收，收过的不能改去向。
+
+    `state` 是它现在在哪一步（已经收下为材料 / 已经删掉 / 还没跑完），
+    写进消息里，用户看到的是"为什么不行"而不是一句"不允许"。
+    """
+
+    def __init__(self, *, candidate_id: object, state: object, action: str) -> None:
+        super().__init__(
+            f"候选 {candidate_id} 已经是「{state}」，不能再{action}",
+            invariant=XInvariant.X3,
+            candidate_id=str(candidate_id),
+            state=str(state),
+            action=action,
+        )
+
+
+class IllegalExplorationTransition(InvariantViolation):
+    def __init__(self, *, current: object, target: object) -> None:
+        super().__init__(
+            f"探索状态不能从 {current} 变到 {target}",
+            invariant=XInvariant.X4,
+            current=str(current),
+            target=str(target),
+        )
+
+
+class DuplicateCandidateId(ShapeError):
+    def __init__(self, *, local_id: object) -> None:
+        super().__init__(f"候选 id {local_id} 重复", local_id=str(local_id))
 
 
 # —— services ——

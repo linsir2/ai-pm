@@ -154,6 +154,7 @@ class RoundRunner:
             project_id=ProjectId(command.project_id or ""),
             user_input=command.user_input,
             material_ids=command.material_ids,
+            seed_ids=command.seed_ids,
         )
         return {"round_id": str(round_id)}
 

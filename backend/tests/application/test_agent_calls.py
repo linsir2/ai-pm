@@ -6,12 +6,20 @@
 免得将来改了类名而 `response_format` 里的 `schema_name` 悄悄对不上供应商。
 """
 
-from pmstudio.application.agents import analyzer, integrator, memory_curator, schemas, seat
+from pmstudio.application.agents import (
+    analyzer,
+    inquirer,
+    integrator,
+    memory_curator,
+    schemas,
+    seat,
+)
 
 #: (模块名, CALL, 模块声明的 purpose 常量, 今天硬编码的 schema_name)
 CALLS = [
     ("analyzer", analyzer.ClaimAnalyzer.CALL, analyzer.PURPOSE, "ClaimsPacket"),
     ("seat", seat.SeatReviewer.CALL, seat.PURPOSE, "SeatPacket"),
+    ("inquirer", inquirer.Inquirer.CALL, inquirer.PURPOSE, "InquiryPacket"),
     ("integrator", integrator.Integrator.CALL, integrator.PURPOSE, "IntegrationPacket"),
     (
         "integrator.dispositions",
@@ -64,6 +72,7 @@ def test_call_prompt_is_the_module_prompt_constant_not_a_repeated_literal():
 
     assert analyzer.ClaimAnalyzer.CALL.prompt == analyzer.ClaimAnalyzer.PROMPT
     assert seat.SeatReviewer.CALL.prompt == seat.SeatReviewer.PROMPT
+    assert inquirer.Inquirer.CALL.prompt == inquirer.Inquirer.PROMPT
     assert integrator.Integrator.CALL.prompt == integrator.Integrator.PROMPT
     assert (
         integrator.Integrator.DISPOSITIONS_CALL.prompt
@@ -78,6 +87,7 @@ def test_kind_is_pinned_per_call():
 
     assert analyzer.ClaimAnalyzer.CALL.kind == "claims"
     assert seat.SeatReviewer.CALL.kind == "seat_review"
+    assert inquirer.Inquirer.CALL.kind == "inquiry"
     assert integrator.Integrator.CALL.kind == "integration"
     assert integrator.Integrator.DISPOSITIONS_CALL.kind == "opinion_dispositions"
     assert memory_curator.MemoryCurator.CALL.kind == "memory_curation"
@@ -99,6 +109,7 @@ def test_every_agent_returns_the_envelope_as_the_carrier_of_its_arrival_report()
 
     carriers = [
         seat.SeatOutcome,
+        inquirer.InquiryOutcome,
         integrator.IntegrationOutcome,
         integrator.DispositionOutcome,
         memory_curator.CuratorOutcome,

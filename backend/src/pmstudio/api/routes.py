@@ -12,7 +12,9 @@ from pmstudio.api.schemas import (
     CreateProjectRequest,
     EditEntryRequest,
     FetchRequest,
+    KeepCandidateRequest,
     OpeningRequest,
+    StartExplorationRequest,
     StartRoundRequest,
 )
 from pmstudio.api.sse import as_json, event_stream
@@ -23,7 +25,8 @@ from pmstudio.application.use_cases import (
     AnswerInput,
     ClaimEdit,
 )
-from pmstudio.domain.shared.ids import ProjectId, RoundId
+from pmstudio.domain.exploration.exploration import ExplorationScope, ScopeKind
+from pmstudio.domain.shared.ids import ExplorationId, ProjectId, RoundId
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
@@ -383,6 +386,79 @@ async def abandon_round(request: Request, round_id: str):  # type: ignore[no-unt
 
     view = await services_of(request).abandon_round(round_id=RoundId(round_id))
     return as_json(view)
+
+
+@router.post("/projects/{project_id}/explorations")
+async def start_exploration(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, body: StartExplorationRequest
+):
+    """发起一趟调研（M8）：请求内跑完，失败也返回 200 + status=failed（可重试）。
+
+    接地检查（空文档）与忙碌（同项目已有在跑）都是人话错误：422 / 409。
+    """
+
+    scope = ExplorationScope(
+        kind=ScopeKind(body.scope.kind), ref=body.scope.ref, text=body.scope.text
+    )
+    view = await services_of(request).exploration_runner.start(
+        project_id=ProjectId(project_id), scope=scope
+    )
+    return as_json(view)
+
+
+@router.get("/projects/{project_id}/explorations")
+async def list_explorations(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+    """这个项目走过的探索（最新在前）：过目台与历史都读它（≤20 条）。"""
+
+    return as_json(
+        await services_of(request).list_explorations(project_id=ProjectId(project_id))
+    )
+
+
+@router.post("/explorations/{exploration_id}/retry")
+async def retry_exploration(request: Request, exploration_id: str):  # type: ignore[no-untyped-def]
+    """重跑一趟失败的调研：只补这趟没跑完的那次调用（不重跑已经跑完的）。"""
+
+    return as_json(
+        await services_of(request).exploration_runner.retry(exploration_id=exploration_id)
+    )
+
+
+@router.post("/explorations/{exploration_id}/abandon")
+async def abandon_exploration(request: Request, exploration_id: str):  # type: ignore[no-untyped-def]
+    """放弃这一趟：**先写状态、再取消**（与放弃一轮同一条顺序与理由）。"""
+
+    return as_json(
+        await services_of(request).abandon_exploration(
+            exploration_id=ExplorationId(exploration_id)
+        )
+    )
+
+
+@router.post("/explorations/{exploration_id}/candidates/{candidate_id}/keep")
+async def keep_candidate(  # type: ignore[no-untyped-def]
+    request: Request, exploration_id: str, candidate_id: str, body: KeepCandidateRequest
+):
+    """收下一条候选：`seed` = 预填下一轮输入；`material` = 落一份材料（幂等）。"""
+
+    return as_json(
+        await services_of(request).keep_candidate(
+            exploration_id=ExplorationId(exploration_id),
+            candidate_id=candidate_id,
+            as_=body.as_,
+        )
+    )
+
+
+@router.post("/explorations/{exploration_id}/candidates/{candidate_id}/dismiss")
+async def dismiss_candidate(request: Request, exploration_id: str, candidate_id: str):  # type: ignore[no-untyped-def]
+    """删掉一条候选：终态——不过目台、不回流。"""
+
+    return as_json(
+        await services_of(request).dismiss_candidate(
+            exploration_id=ExplorationId(exploration_id), candidate_id=candidate_id
+        )
+    )
 
 
 @router.get("/events")

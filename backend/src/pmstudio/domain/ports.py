@@ -3,10 +3,11 @@
 from types import TracebackType
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from pmstudio.domain.shared.ids import ProjectId, RoundId
+from pmstudio.domain.shared.ids import ExplorationId, ProjectId, RoundId
 
 if TYPE_CHECKING:
     from pmstudio.domain.authoring.document import Document
+    from pmstudio.domain.exploration.exploration import Exploration
     from pmstudio.domain.memory.memory import ProjectMemory
     from pmstudio.domain.provenance.ledger import EvidenceLedger
     from pmstudio.domain.round.round import Round
@@ -32,6 +33,20 @@ class RoundReader(Protocol):
 @runtime_checkable
 class RoundWriter(Protocol):
     def save(self, round_: "Round") -> None: ...
+
+
+@runtime_checkable
+class ExplorationReader(Protocol):
+    def get(self, exploration_id: ExplorationId) -> "Exploration": ...
+
+    def list_for_project(
+        self, project_id: ProjectId, *, limit: int = 20
+    ) -> tuple["Exploration", ...]: ...
+
+
+@runtime_checkable
+class ExplorationWriter(Protocol):
+    def save(self, exploration: "Exploration") -> None: ...
 
 
 @runtime_checkable

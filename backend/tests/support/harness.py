@@ -6,6 +6,7 @@
 from collections.abc import Mapping, Sequence
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
@@ -34,6 +35,7 @@ from tests.support.fakes import (
     FakeTransaction,
     InMemoryDocumentRepository,
     InMemoryEvidenceRepository,
+    InMemoryExplorationRepository,
     InMemoryMaterialStore,
     InMemoryMemoryRepository,
     InMemoryRoundRepository,
@@ -130,13 +132,16 @@ class Harness:
         self.documents = InMemoryDocumentRepository()
         self.rounds = InMemoryRoundRepository()
         self.evidences = InMemoryEvidenceRepository()
+        self.explorations = InMemoryExplorationRepository()
         self.materials = InMemoryMaterialStore()
         self.memory = InMemoryMemoryRepository()
         # 真解析器（不是替身）：上传路径在测试里也走真 pdfminer / bs4
         from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 
         self.parser = LocalMaterialParser()
-        self.uow = FakeTransaction(self.documents, self.rounds, self.evidences, self.memory)
+        self.uow = FakeTransaction(
+            self.documents, self.rounds, self.evidences, self.explorations, self.memory
+        )
         # gateway 是给"要卡住/要乱来"的测试用的注入口；平时用脚本化网关
         self.gateway = gateway or ScriptedModelGateway(
             replies=replies or {}, seat_replies=seat_replies or {}
@@ -161,6 +166,7 @@ class Harness:
             model=self.gateway, prompts=self.prompts, catalog=self.seats
         )
         self.reviewer = SeatReviewer(model=self.gateway, prompts=self.prompts)
+        self.inquirer = Inquirer(model=self.gateway, prompts=self.prompts)
         self.integrator = Integrator(model=self.gateway, prompts=self.prompts)
         self.curator = MemoryCurator(model=self.gateway, prompts=self.prompts)
         self.assigner = EvidenceAssigner()
@@ -200,7 +206,89 @@ class Harness:
             ids=self.ids,
             events=self.events,
             materials=self.materials,
+            explorations=self.explorations,
         )
+
+    # —— 探索（M8）——
+    def run_inquiry(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import RunInquiry
+
+        return RunInquiry(
+            documents=self.documents,
+            explorations=self.explorations,
+            exploration_writer=self.explorations,
+            evidence=self.evidences,
+            memory=self.memory,
+            uow=self.uow,
+            inquirer=self.inquirer,
+            checker=self.readiness,
+            clock=self.clock,
+            ids=self.ids,
+            events=self.events,
+        )
+
+    def retry_exploration(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import RetryExploration
+
+        return RetryExploration(
+            explorations=self.explorations,
+            exploration_writer=self.explorations,
+            uow=self.uow,
+            clock=self.clock,
+            events=self.events,
+        )
+
+    def exploration_runner(self):  # type: ignore[no-untyped-def]
+        """**缓存同一个实例**（与 `runner()` 同一个理由：取消要能找到那个任务）。"""
+
+        from pmstudio.infrastructure.graph.exploration_runner import ExplorationRunner
+
+        if not hasattr(self, "_exploration_runner"):
+            self._exploration_runner = ExplorationRunner(
+                run_inquiry=self.run_inquiry(),
+                retry_exploration=self.retry_exploration(),
+                explorations=self.explorations,
+            )
+        return self._exploration_runner
+
+    def abandon_exploration(self, *, canceller):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import AbandonExploration
+
+        return AbandonExploration(
+            explorations=self.explorations,
+            exploration_writer=self.explorations,
+            uow=self.uow,
+            clock=self.clock,
+            events=self.events,
+            canceller=canceller,
+        )
+
+    def keep_candidate(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import KeepCandidate
+
+        return KeepCandidate(
+            explorations=self.explorations,
+            exploration_writer=self.explorations,
+            materials=self.materials,
+            uow=self.uow,
+            clock=self.clock,
+        )
+
+    def dismiss_candidate(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import DismissCandidate
+
+        return DismissCandidate(
+            explorations=self.explorations,
+            exploration_writer=self.explorations,
+            uow=self.uow,
+        )
+
+    def list_explorations(self, *, limit: int | None = None):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import ListExplorations
+
+        if limit is None:
+            return ListExplorations(explorations=self.explorations)
+        return ListExplorations(explorations=self.explorations, limit=limit)
 
     def submit_opening(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import SubmitOpening
@@ -530,6 +618,13 @@ class Harness:
             runner=self.runner(),
             dig_round=self.dig_round(),
             abandon_round=self.abandon_round(),
+            exploration_runner=self.exploration_runner(),
+            abandon_exploration=self.abandon_exploration(
+                canceller=self.exploration_runner()
+            ),
+            keep_candidate=self.keep_candidate(),
+            dismiss_candidate=self.dismiss_candidate(),
+            list_explorations=self.list_explorations(),
             create_project=self.create_project(),
             workspace=self.get_workspace(),
             list_projects=self.list_projects(),

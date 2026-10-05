@@ -30,6 +30,12 @@ EXPECTED_PATHS = {
     "/api/rounds/{round_id}/retry",
     "/api/rounds/{round_id}/dig",
     "/api/rounds/{round_id}/abandon",
+    # M8 探索：发起/列表（POST 与 GET 同路径）+ 重试/放弃 + 候选的收下/删掉
+    "/api/projects/{project_id}/explorations",
+    "/api/explorations/{exploration_id}/retry",
+    "/api/explorations/{exploration_id}/abandon",
+    "/api/explorations/{exploration_id}/candidates/{candidate_id}/keep",
+    "/api/explorations/{exploration_id}/candidates/{candidate_id}/dismiss",
 }
 
 

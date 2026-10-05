@@ -9,6 +9,20 @@ from datetime import datetime
 from pmstudio.domain.authoring.blocks import Block, Entry
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.version import Snapshot, Version, VersionTrigger
+from pmstudio.domain.exploration.exploration import (
+    Exploration,
+    ExplorationFailure,
+    ExplorationKind,
+    ExplorationScope,
+    ExplorationStatus,
+    ScopeKind,
+)
+from pmstudio.domain.exploration.item import (
+    BlindSpot,
+    CandidateState,
+    Grounding,
+    Hypothesis,
+)
 from pmstudio.domain.memory.memory import MemoryEntry, MemoryRevision, ProjectMemory
 from pmstudio.domain.provenance.evidence import Evidence, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -33,6 +47,7 @@ from pmstudio.domain.round.round import (
     MemoryProposal,
     Round,
     SeatNomination,
+    SeedRef,
 )
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.round.web_query import WebQuery
@@ -44,6 +59,7 @@ from pmstudio.domain.shared.ids import (
     DraftId,
     EntryId,
     EvidenceId,
+    ExplorationId,
     FeatureSlug,
     FormId,
     ProjectId,
@@ -599,6 +615,11 @@ def round_to_payload(round_: Round) -> dict:
             }
             for item in round_.materials
         ],
+        # 这一轮从过目台带进来的调研产物（老行没有这把键 → 读侧回落空，M8）
+        "seeds": [
+            {"exploration_id": item.exploration_id, "candidate_id": item.candidate_id}
+            for item in round_.seeds
+        ],
         # 分析者提名的检索词（老行没有这把键 → 读侧回落空）
         "web_queries": [
             {"query": item.query, "why": item.why} for item in round_.web_queries
@@ -681,6 +702,14 @@ def round_from_payload(
                 eid=EvidenceId(item["eid"]),
             )
             for item in payload.get("materials") or ()
+        ),
+        # 老行里没有这把键（调研种子是后加的，M8）：空——不编"它从探索来过"
+        seeds=tuple(
+            SeedRef(
+                exploration_id=str(item["exploration_id"]),
+                candidate_id=str(item["candidate_id"]),
+            )
+            for item in payload.get("seeds") or ()
         ),
         # 老行里没有这两把键（联网检索词是后加的）：空——不联网、也不编"它建议查过"
         web_queries=tuple(
@@ -870,3 +899,120 @@ def _memory_change_to_json(change: MemoryChange) -> dict:
         "target_id": change.target_id,
         "reason": change.reason,
     }
+
+
+# ── 探索（M8）────────────────────────────────────────────────────────────────
+
+
+def exploration_to_payload(exploration: Exploration) -> dict:
+    """探索的 payload。列字段（kind / status / created_at）不放这里——读时从列传回来。"""
+
+    candidates = {item.candidate_id: item for item in exploration.candidates()}
+    return {
+        "scope": {
+            "kind": exploration.scope.kind.value,
+            "ref": exploration.scope.ref,
+            "text": exploration.scope.text,
+        },
+        "hypotheses": [
+            {
+                "local_id": item.local_id,
+                "statement": item.statement,
+                "grounding": item.grounding.value,
+                "based_on": [str(eid) for eid in item.based_on],
+                "falsification": item.falsification,
+                "evidence_needed": item.evidence_needed,
+            }
+            for item in exploration.hypotheses
+        ],
+        "blind_spots": [
+            {
+                "local_id": item.local_id,
+                "statement": item.statement,
+                "next_step": item.next_step,
+            }
+            for item in exploration.blind_spots
+        ],
+        # 候选状态只存"非 new"的（new 是默认值，存了只是噪声）
+        "states": {
+            candidate_id: item.state.value
+            for candidate_id, item in candidates.items()
+            if item.state is not CandidateState.NEW
+        },
+        "kept": {
+            candidate_id: item.kept_as
+            for candidate_id, item in candidates.items()
+            if item.kept_as is not None
+        },
+        "kept_ref": {
+            candidate_id: item.kept_ref
+            for candidate_id, item in candidates.items()
+            if item.kept_ref is not None
+        },
+        "failure": (
+            None
+            if exploration.failure is None
+            else {"reason": exploration.failure.reason}
+        ),
+        "abandon_reason": exploration.abandon_reason,
+        "overflow_count": exploration.overflow_count,
+    }
+
+
+def exploration_from_payload(
+    payload: dict,
+    *,
+    exploration_id: ExplorationId,
+    project_id: ProjectId,
+    kind: ExplorationKind,
+    status: ExplorationStatus,
+    created_at: datetime,
+) -> Exploration:
+    scope_data = payload.get("scope") or {}
+    failure_data = payload.get("failure")
+    return Exploration(
+        exploration_id=exploration_id,
+        project_id=project_id,
+        kind=kind,
+        status=status,
+        created_at=created_at,
+        scope=ExplorationScope(
+            kind=ScopeKind(str(scope_data.get("kind") or "document")),
+            ref=scope_data.get("ref"),
+            text=scope_data.get("text"),
+        ),
+        hypotheses=tuple(
+            Hypothesis(
+                local_id=str(item["local_id"]),
+                statement=str(item["statement"]),
+                grounding=Grounding(str(item["grounding"])),
+                based_on=tuple(EvidenceId(str(eid)) for eid in item.get("based_on") or ()),
+                falsification=str(item["falsification"]),
+                evidence_needed=str(item["evidence_needed"]),
+            )
+            for item in payload.get("hypotheses") or ()
+        ),
+        blind_spots=tuple(
+            BlindSpot(
+                local_id=str(item["local_id"]),
+                statement=str(item["statement"]),
+                next_step=str(item["next_step"]),
+            )
+            for item in payload.get("blind_spots") or ()
+        ),
+        states={
+            str(key): CandidateState(str(value))
+            for key, value in (payload.get("states") or {}).items()
+        },
+        kept={str(key): str(value) for key, value in (payload.get("kept") or {}).items()},
+        kept_ref={
+            str(key): str(value) for key, value in (payload.get("kept_ref") or {}).items()
+        },
+        failure=(
+            None
+            if not failure_data
+            else ExplorationFailure(reason=str(failure_data["reason"]))
+        ),
+        abandon_reason=payload.get("abandon_reason"),
+        overflow_count=int(payload.get("overflow_count") or 0),
+    )

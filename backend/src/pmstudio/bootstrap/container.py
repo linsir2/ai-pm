@@ -8,16 +8,19 @@ from fastapi import FastAPI
 
 from pmstudio.api.app import ApiServices, create_app
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.ports import WebFetcher
 from pmstudio.application.use_cases import (
+    AbandonExploration,
     AbandonRound,
     ConfirmDraft,
     CreateProject,
     DeleteMaterial,
     DigRound,
+    DismissCandidate,
     EditEntry,
     ExportMarkdown,
     FetchMaterial,
@@ -31,12 +34,16 @@ from pmstudio.application.use_cases import (
     GetVersions,
     GetWorkspace,
     IntegrateRound,
+    KeepCandidate,
+    ListExplorations,
     ListMaterials,
     ListProjects,
     ListRounds,
     ReparseMaterial,
+    RetryExploration,
     RetryRound,
     RollbackVersion,
+    RunInquiry,
     RunSeatRound,
     SearchProject,
     StartRound,
@@ -56,6 +63,7 @@ from pmstudio.harness.model.contracts import ModelGateway
 from pmstudio.harness.model.providers.litellm import LiteLLMGateway
 from pmstudio.harness.prompt import PROMPTS_DIR, FilePromptLibrary
 from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
+from pmstudio.infrastructure.graph.exploration_runner import ExplorationRunner
 from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.sqlite import database
@@ -65,6 +73,7 @@ from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
+    SqliteExplorationRepository,
     SqliteMemoryRepository,
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
@@ -127,6 +136,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
 
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
+    explorations = SqliteExplorationRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
     materials = SqliteMaterialStore(connection, ids=ids)
     # 材料检索 v1：LIKE（中文可靠、零索引）。换 FTS5 / 向量只改这一行（`P18` C-2c-1）
@@ -160,6 +170,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     readiness = ReadinessChecker()
     analyzer = ClaimAnalyzer(model=gateway, prompts=prompts, catalog=catalog)
     reviewer = SeatReviewer(model=gateway, prompts=prompts)
+    inquirer = Inquirer(model=gateway, prompts=prompts)
     integrator = Integrator(model=gateway, prompts=prompts)
     curator = MemoryCurator(model=gateway, prompts=prompts)
     factory = SqliteProjectFactory(connection, ids=ids)
@@ -178,6 +189,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         ids=ids,
         events=bus,
         materials=materials,
+        explorations=explorations,
     )
     submit_opening = SubmitOpening(
         rounds=rounds,
@@ -275,6 +287,31 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         dig_round=dig_round,
         get_round=get_round,
     )
+    run_inquiry = RunInquiry(
+        documents=documents,
+        explorations=explorations,
+        exploration_writer=explorations,
+        evidence=evidences,
+        memory=memory,
+        uow=uow,
+        inquirer=inquirer,
+        checker=readiness,
+        clock=clock,
+        ids=ids,
+        events=bus,
+    )
+    retry_exploration = RetryExploration(
+        explorations=explorations,
+        exploration_writer=explorations,
+        uow=uow,
+        clock=clock,
+        events=bus,
+    )
+    exploration_runner = ExplorationRunner(
+        run_inquiry=run_inquiry,
+        retry_exploration=retry_exploration,
+        explorations=explorations,
+    )
     services = ApiServices(
         runner=runner,
         dig_round=dig_round,
@@ -286,6 +323,28 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             events=bus,
             canceller=runner,
         ),
+        exploration_runner=exploration_runner,
+        abandon_exploration=AbandonExploration(
+            explorations=explorations,
+            exploration_writer=explorations,
+            uow=uow,
+            clock=clock,
+            events=bus,
+            canceller=exploration_runner,
+        ),
+        keep_candidate=KeepCandidate(
+            explorations=explorations,
+            exploration_writer=explorations,
+            materials=materials,
+            uow=uow,
+            clock=clock,
+        ),
+        dismiss_candidate=DismissCandidate(
+            explorations=explorations,
+            exploration_writer=explorations,
+            uow=uow,
+        ),
+        list_explorations=ListExplorations(explorations=explorations),
         create_project=CreateProject(factory=factory, index=index, clock=clock, ids=ids),
         workspace=GetWorkspace(
             documents=documents,

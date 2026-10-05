@@ -133,6 +133,8 @@ def test_E3_bad_self_derivation():
         (EvidenceKind.AGENT_PROPOSED, EvidenceSource(rationale="纯专业判断")),
         (EvidenceKind.SYSTEM_DEFAULT, EvidenceSource(round_id=RoundId("r1"))),
         (EvidenceKind.EXTERNAL, EvidenceSource()),
+        # M8：探索产物必须指回是哪一条（external_ref = exploration:{id}#{候选}）
+        (EvidenceKind.SIMULATED, EvidenceSource()),
     ],
 )
 def test_source_shape_per_kind(kind: EvidenceKind, source: EvidenceSource):
@@ -150,6 +152,27 @@ def test_card_answer_needs_question_id():
         now=NOW,
     )
     assert ledger.get(eid).source.question_id == QuestionId("q3")
+
+
+def test_simulated_evidence_records_and_is_not_terminal():
+    """探索产物**不是**可追溯终点：只引它的提案会被装配层降级为 proposed（M8）。
+
+    这条与 `test_manual_edit_is_a_terminal_source` 成对：终点集合只能含
+    user_input / card_answer / manual——模拟推演永远不是"人能负责"的来源。
+    """
+
+    from pmstudio.domain.shared.evidence_kind import TERMINAL_KINDS
+
+    ledger = empty_ledger()
+    eid = ledger.record(
+        kind=EvidenceKind.SIMULATED,
+        text="运营做日报时按客户名找单（推演，未验证）",
+        source=EvidenceSource(external_ref="exploration:x-1#H1"),
+        now=NOW,
+    )
+
+    assert ledger.get(eid).kind is EvidenceKind.SIMULATED
+    assert EvidenceKind.SIMULATED not in TERMINAL_KINDS
 
 
 def test_manual_edit_is_a_terminal_source():

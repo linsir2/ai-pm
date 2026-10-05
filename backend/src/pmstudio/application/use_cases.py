@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import IntegrationOutcome, Integrator
 from pmstudio.application.agents.memory_curator import CuratorOutcome, MemoryCurator
 from pmstudio.application.agents.schemas import (
@@ -69,6 +70,7 @@ from pmstudio.application.dto import (
     SEARCH_LIMIT,
     DiffView,
     EvidenceLookupView,
+    ExplorationView,
     MaterialChunk,
     MaterialPacket,
     MaterialSummaryView,
@@ -85,6 +87,7 @@ from pmstudio.application.dto import (
     answer_text,
     diff_view,
     evidence_lookup_view,
+    exploration_view,
     material_summary_view,
     proposal_ignore_streak,
     readiness_view,
@@ -98,19 +101,31 @@ from pmstudio.application.dto import (
 from pmstudio.application.errors import (
     MaterialFrozen,
     MaterialTooLarge,
+    UnknownEntryId,
     UnknownEvidenceId,
     UnknownMaterial,
     UnsupportedMaterial,
 )
 from pmstudio.application.events import (
     DOC_CHANGED,
+    EXPLORATION_UPDATED,
     GENERATION_FAILED,
     PACKET_EMITTED,
     ROUND_UPDATED,
 )
+from pmstudio.application.exploration import (
+    ORIGIN_EXPLORATION,
+    candidate_material,
+    document_has_content,
+    entry_focus,
+    material_sha,
+    scope_line,
+    validate_inquiry,
+)
 from pmstudio.application.narrowing import narrow_seats
 from pmstudio.application.ports import (
     Clock,
+    ExplorationCanceller,
     IdGenerator,
     MaterialParser,
     MaterialRetriever,
@@ -129,11 +144,20 @@ from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS
 from pmstudio.domain.authoring.views import DocumentView
+from pmstudio.domain.exploration.exploration import (
+    Exploration,
+    ExplorationScope,
+    ExplorationStatus,
+    ScopeKind,
+)
+from pmstudio.domain.exploration.item import CandidateState
 from pmstudio.domain.memory.memory import screen_changes
 from pmstudio.domain.ports import (
     DocumentReader,
     EvidenceReader,
     EvidenceWriter,
+    ExplorationReader,
+    ExplorationWriter,
     MemoryReader,
     MemoryWriter,
     RoundReader,
@@ -154,7 +178,14 @@ from pmstudio.domain.round.questionnaire import (
     Question,
     QuestionKind,
 )
-from pmstudio.domain.round.round import DroppedItem, DropSource, MaterialRef, MemoryProposal, Round
+from pmstudio.domain.round.round import (
+    DroppedItem,
+    DropSource,
+    MaterialRef,
+    MemoryProposal,
+    Round,
+    SeedRef,
+)
 from pmstudio.domain.round.step import Step
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import (
@@ -168,6 +199,7 @@ from pmstudio.domain.shared.ids import (
     DraftId,
     EntryId,
     EvidenceId,
+    ExplorationId,
     FormId,
     ProjectId,
     ProposalId,
@@ -227,6 +259,7 @@ class StartRound:
         ids: IdGenerator,
         events: EventPublisher,
         materials: MaterialStore,
+        explorations: ExplorationReader,
     ) -> None:
         self._documents = documents
         self._rounds = rounds
@@ -241,6 +274,7 @@ class StartRound:
         self._ids = ids
         self._events = events
         self._materials = materials
+        self._explorations = explorations
 
     async def create(
         self,
@@ -248,9 +282,12 @@ class StartRound:
         project_id: ProjectId,
         user_input: str,
         material_ids: Sequence[str] = (),
+        seed_ids: Sequence[str] = (),
     ) -> RoundId:
         # 材料在**事务外**读（只读查询），选块是纯函数——所以下面那个事务里只有写入。
         picked, packets = self._pick_materials(material_ids)
+        # 种子同样是事务外的只读校验：必须存在、同项目、跑完了、且被收下为「下一轮输入」
+        seeds = self._resolve_seeds(project_id, seed_ids)
         with self._uow:
             self._documents.get(project_id)  # 项目不存在就地失败
             round_id = RoundId(self._ids.new("r"))
@@ -259,6 +296,7 @@ class StartRound:
                 project_id=project_id,
                 user_input=user_input,
                 now=self._clock.now(),
+                seeds=seeds,
             )
             if picked:
                 # 逐块记 `external` 出处：**只有带进这一轮的块才有编号**（口径见 02 §11.0.28）
@@ -269,7 +307,7 @@ class StartRound:
                             material_id=material_id,
                             chunk_id=chunk.chunk_id,
                             eid=ledger.record(
-                                kind=EvidenceKind.EXTERNAL,
+                                kind=_material_kind(packets[material_id]),
                                 text=chunk.text,
                                 source=EvidenceSource(
                                     external_ref=_external_ref(packets[material_id], chunk)
@@ -300,6 +338,43 @@ class StartRound:
             packets[material_id] = packet
         picked = select_chunks([packets[item] for item in dict.fromkeys(material_ids)])
         return picked, packets
+
+    def _resolve_seeds(
+        self, project_id: ProjectId, seed_ids: Sequence[str]
+    ) -> tuple[SeedRef, ...]:
+        """解析 `"x-xxxx#H1"`：必须存在、同项目、已跑完、且被收下为 seed——缺一条就拒。"""
+
+        refs: list[SeedRef] = []
+        seen: set[tuple[str, str]] = set()
+        for raw in seed_ids:
+            exploration_id, _, candidate_id = raw.partition("#")
+            if not exploration_id or not candidate_id:
+                raise ShapeError(f"种子格式必须是 exploration_id#候选id：{raw}", seed=raw)
+            key = (exploration_id, candidate_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            exploration = self._explorations.get(ExplorationId(exploration_id))
+            if str(exploration.project_id) != str(project_id):
+                raise ShapeError("种子不属于这个项目", seed=raw)
+            if exploration.status is not ExplorationStatus.DONE:
+                raise ShapeError("这趟探索还没跑完，不能用它的产物", seed=raw)
+            candidate = next(
+                (
+                    item
+                    for item in exploration.candidates()
+                    if item.candidate_id == candidate_id
+                ),
+                None,
+            )
+            if (
+                candidate is None
+                or candidate.state is not CandidateState.KEPT
+                or candidate.kept_as != "seed"
+            ):
+                raise ShapeError("这条候选没有被收下为「下一轮输入」", seed=raw)
+            refs.append(SeedRef(exploration_id=exploration_id, candidate_id=candidate_id))
+        return tuple(refs)
 
     async def analyze(self, *, round_id: RoundId) -> None:
         # 读取不开事务：模型调用不能包在事务里，也没必要读到同一快照。
@@ -542,7 +617,7 @@ class SubmitOpening:
                             material_id=packet.material_id,
                             chunk_id=chunk.chunk_id,
                             eid=ledger.record(
-                                kind=EvidenceKind.EXTERNAL,
+                                kind=_material_kind(packet),
                                 text=chunk.text,
                                 source=EvidenceSource(external_ref=_external_ref(packet, chunk)),
                                 now=self._clock.now(),
@@ -3391,3 +3466,341 @@ def fail_round(
             occurred_at=clock.now(),
         )
     )
+
+
+# ── 探索：调研（M8）────────────────────────────────────────────────────────────
+
+#: 调研报文两段式上限（重装 1 次，与 claims / 席位同一条口径）
+MAX_INQUIRY_ATTEMPTS = 2
+#: 过一次目台最多回几趟探索（列表投影的截断值；这不是"存了多少"，是"给多少"）
+MAX_EXPLORATION_LIST = 20
+
+
+def _material_kind(packet: MaterialPacket) -> EvidenceKind:
+    """材料块进账本的 kind **单点**：探索产物是 `simulated`，其余一律 `external`。
+
+    发号有两个点（起轮带材料 / 联网结果进轮），口径必须一处说了算——
+    两处各写一遍的话，"探索材料被当成外部事实"这种错只会错一半。
+    """
+
+    if packet.parsed.origin == ORIGIN_EXPLORATION:
+        return EvidenceKind.SIMULATED
+    return EvidenceKind.EXTERNAL
+
+
+def _publish_exploration(
+    events: EventPublisher, clock: Clock, exploration: Exploration
+) -> None:
+    events.publish(
+        Event(
+            name=EXPLORATION_UPDATED,
+            project_id=str(exploration.project_id),
+            payload={
+                "exploration_id": str(exploration.exploration_id),
+                "status": str(exploration.status),
+            },
+            occurred_at=clock.now(),
+        )
+    )
+
+
+def _candidate_of(exploration: Exploration, candidate_id: str):  # type: ignore[no-untyped-def]
+    for item in exploration.candidates():
+        if item.candidate_id == candidate_id:
+            return item
+    raise ShapeError(f"这一趟没有这条候选：{candidate_id}", candidate_id=candidate_id)
+
+
+class RunInquiry:
+    """发起并跑完一趟调研（M8 唯一的探索能力）。
+
+    两段式（与 `StartRound` 同款）：`create` 只碰数据库、中间没有 await
+    （所以在事件循环里是原子的——忙碌检查不会被两次并发请求同时穿过）；
+    `execute` 才调模型（事务外），两次都过不了校验就落 `FAILED` 并返回失败视图。
+    """
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        explorations: ExplorationReader,
+        exploration_writer: ExplorationWriter,
+        evidence: EvidenceReader,
+        memory: MemoryReader,
+        uow: UnitOfWork,
+        inquirer: Inquirer,
+        checker: ReadinessChecker,
+        clock: Clock,
+        ids: IdGenerator,
+        events: EventPublisher,
+    ) -> None:
+        self._documents = documents
+        self._explorations = explorations
+        self._exploration_writer = exploration_writer
+        self._evidence = evidence
+        self._memory = memory
+        self._uow = uow
+        self._inquirer = inquirer
+        self._checker = checker
+        self._clock = clock
+        self._ids = ids
+        self._events = events
+
+    async def create(
+        self, *, project_id: ProjectId, scope: ExplorationScope
+    ) -> ExplorationId:
+        document = self._documents.get(project_id)
+        view = document.view()
+        if not document_has_content(view):
+            raise ShapeError("文档还是空的：先倒一段想法（或等第一轮写完），再来调研")
+        if scope.kind is ScopeKind.ENTRY:
+            entry_focus(view, scope.ref or "")
+        exploration_id = ExplorationId(self._ids.new("x"))
+        with self._uow:
+            exploration = Exploration.start(
+                exploration_id=exploration_id,
+                project_id=project_id,
+                scope=scope,
+                now=self._clock.now(),
+            )
+            self._exploration_writer.save(exploration)
+        _publish_exploration(self._events, self._clock, exploration)
+        return exploration_id
+
+    async def clear_stale(self, project_id: ProjectId) -> None:
+        """把"挂着 running 但进程里没有任务"的僵壳就地判放弃（进程崩过）。
+
+        只有 runner 确认过内存里没有这趟任务才能调它——否则会把真在跑的探索杀掉。
+        """
+
+        for item in self._explorations.list_for_project(
+            project_id, limit=MAX_EXPLORATION_LIST
+        ):
+            if item.status is not ExplorationStatus.RUNNING:
+                continue
+            with self._uow:
+                stored = self._explorations.get(item.exploration_id)
+                stored.abandon("上一次运行没跑完（进程可能重启过）")
+                self._exploration_writer.save(stored)
+            _publish_exploration(self._events, self._clock, stored)
+
+    async def execute(
+        self, exploration_id: ExplorationId, *, retry_hint: str | None = None
+    ) -> ExplorationView:
+        exploration = self._explorations.get(exploration_id)
+        document = self._documents.get(exploration.project_id)
+        view = document.view()
+        focus: str | None = None
+        if exploration.scope.kind is ScopeKind.ENTRY:
+            try:
+                focus = entry_focus(view, exploration.scope.ref or "")
+            except UnknownEntryId:
+                focus = None  # 条目在调研期间被删了：不装作看得见
+        document_state = render_document_state(
+            view, readiness=self._checker.check(view)
+        )
+        memory_text = render_memory(self._memory.get(exploration.project_id).entries)
+        ledger = self._evidence.get(exploration.project_id)
+        known_eids = frozenset(item.eid for item in ledger.evidences())
+        scope_text = scope_line(exploration.scope, focus=focus)
+
+        repair = retry_hint or ""
+        outcome = None
+        last: Exception | None = None
+        for attempt in range(1, MAX_INQUIRY_ATTEMPTS + 1):
+            try:
+                outcome = await self._inquirer.run(
+                    scope=scope_text,
+                    document_state=document_state,
+                    project_memory=memory_text,
+                    exploration_id=str(exploration_id),
+                    known_eids=known_eids,
+                    validation_error=repair,
+                    packet_slot=f"a{attempt}",
+                )
+                validate_inquiry(
+                    outcome.hypotheses, outcome.blind_spots, known_eids=known_eids
+                )
+                break
+            except ModelCallFailed as error:
+                # 网关自己已经重试过 3 次：到这里就是这趟探索失败，落状态、可重跑
+                return self._fail(exploration_id, f"模型调用失败：{error.message}")
+            except (PacketParseError, ShapeError) as error:
+                outcome = None
+                last = error
+                if attempt == MAX_INQUIRY_ATTEMPTS:
+                    break
+                repair = (
+                    repair_note(error)
+                    if isinstance(error, PacketParseError)
+                    else f"上一次的产物没通过校验：{error.message}"
+                )
+        if outcome is None:
+            reason = f"调研两次都过不了校验：{getattr(last, 'message', str(last))}"
+            return self._fail(exploration_id, reason)
+        with self._uow:
+            stored = self._explorations.get(exploration_id)
+            stored.complete(
+                hypotheses=outcome.hypotheses,
+                blind_spots=outcome.blind_spots,
+                overflow_count=len(outcome.overflow),
+            )
+            self._exploration_writer.save(stored)
+        _publish_exploration(self._events, self._clock, stored)
+        return exploration_view(stored)
+
+    def _fail(self, exploration_id: ExplorationId, reason: str) -> ExplorationView:
+        with self._uow:
+            stored = self._explorations.get(exploration_id)
+            stored.fail(reason)
+            self._exploration_writer.save(stored)
+        _publish_exploration(self._events, self._clock, stored)
+        return exploration_view(stored)
+
+
+class RetryExploration:
+    """把失败的一趟恢复成 RUNNING，并把失败原因交给重跑的第一次尝试当 `validation_error`。"""
+
+    def __init__(
+        self,
+        *,
+        explorations: ExplorationReader,
+        exploration_writer: ExplorationWriter,
+        uow: UnitOfWork,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._explorations = explorations
+        self._exploration_writer = exploration_writer
+        self._uow = uow
+        self._clock = clock
+        self._events = events
+
+    async def resume(self, exploration_id: ExplorationId) -> str | None:
+        with self._uow:
+            stored = self._explorations.get(exploration_id)
+            hint = stored.failure.reason if stored.failure is not None else None
+            stored.resume()
+            self._exploration_writer.save(stored)
+        _publish_exploration(self._events, self._clock, stored)
+        return hint
+
+
+class AbandonExploration:
+    """放弃这一趟：**先写状态、再取消**（`AbandonRound` 同一条顺序与理由）。"""
+
+    def __init__(
+        self,
+        *,
+        explorations: ExplorationReader,
+        exploration_writer: ExplorationWriter,
+        uow: UnitOfWork,
+        clock: Clock,
+        events: EventPublisher,
+        canceller: ExplorationCanceller,
+    ) -> None:
+        self._explorations = explorations
+        self._exploration_writer = exploration_writer
+        self._uow = uow
+        self._clock = clock
+        self._events = events
+        self._canceller = canceller
+
+    async def __call__(self, *, exploration_id: ExplorationId) -> ExplorationView:
+        with self._uow:
+            exploration = self._explorations.get(exploration_id)
+            exploration.abandon("用户放弃了这一趟调研")
+            self._exploration_writer.save(exploration)
+        _publish_exploration(self._events, self._clock, exploration)
+        await self._canceller.cancel(exploration_id)
+        return exploration_view(self._explorations.get(exploration_id))
+
+
+class KeepCandidate:
+    """收下一条候选：`seed` 只记状态；`material` 还会合成一份材料（变体键去重）。"""
+
+    def __init__(
+        self,
+        *,
+        explorations: ExplorationReader,
+        exploration_writer: ExplorationWriter,
+        materials: MaterialStore,
+        uow: UnitOfWork,
+        clock: Clock,
+    ) -> None:
+        self._explorations = explorations
+        self._exploration_writer = exploration_writer
+        self._materials = materials
+        self._uow = uow
+        self._clock = clock
+
+    async def __call__(
+        self, *, exploration_id: ExplorationId, candidate_id: str, as_: str
+    ) -> ExplorationView:
+        if as_ not in ("seed", "material"):
+            raise ShapeError("收下的去向只能是 seed 或 material", as_=as_)
+        if as_ == "material":
+            exploration = self._explorations.get(exploration_id)
+            candidate = _candidate_of(exploration, candidate_id)
+            parsed, content = candidate_material(
+                candidate, exploration_id=str(exploration_id)
+            )
+            with self._uow:
+                packet = self._materials.put(
+                    project_id=exploration.project_id,
+                    parsed=parsed,
+                    sha256=material_sha(parsed.source_ref),
+                    content=content,
+                    now=self._clock.now(),
+                )
+                stored = self._explorations.get(exploration_id)
+                stored.keep(candidate_id, as_="material", material_id=packet.material_id)
+                self._exploration_writer.save(stored)
+            return exploration_view(stored)
+        with self._uow:
+            stored = self._explorations.get(exploration_id)
+            stored.keep(candidate_id, as_="seed")
+            self._exploration_writer.save(stored)
+        return exploration_view(stored)
+
+
+class DismissCandidate:
+    """删掉一条候选：终态——不进过目台、不回流（`02` 的"看不上就不流"）。"""
+
+    def __init__(
+        self,
+        *,
+        explorations: ExplorationReader,
+        exploration_writer: ExplorationWriter,
+        uow: UnitOfWork,
+    ) -> None:
+        self._explorations = explorations
+        self._exploration_writer = exploration_writer
+        self._uow = uow
+
+    async def __call__(
+        self, *, exploration_id: ExplorationId, candidate_id: str
+    ) -> ExplorationView:
+        with self._uow:
+            stored = self._explorations.get(exploration_id)
+            stored.dismiss(candidate_id)
+            self._exploration_writer.save(stored)
+        return exploration_view(stored)
+
+
+class ListExplorations:
+    """过目台与历史读的就是它：一次给全（≤上限），由界面投影出"待过目的那些"。"""
+
+    def __init__(
+        self, *, explorations: ExplorationReader, limit: int = MAX_EXPLORATION_LIST
+    ) -> None:
+        self._explorations = explorations
+        self._limit = limit
+
+    async def __call__(self, *, project_id: ProjectId) -> tuple[ExplorationView, ...]:
+        return tuple(
+            exploration_view(item)
+            for item in self._explorations.list_for_project(
+                project_id, limit=self._limit
+            )
+        )

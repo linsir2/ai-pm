@@ -7,12 +7,14 @@ from fastapi.responses import JSONResponse
 
 from pmstudio.api import routes
 from pmstudio.api.errors import body_for, status_for
-from pmstudio.application.ports import RoundOrchestrator
+from pmstudio.application.ports import ExplorationOrchestrator, RoundOrchestrator
 from pmstudio.application.use_cases import (
+    AbandonExploration,
     AbandonRound,
     CreateProject,
     DeleteMaterial,
     DigRound,
+    DismissCandidate,
     EditEntry,
     ExportMarkdown,
     FetchMaterial,
@@ -25,6 +27,8 @@ from pmstudio.application.use_cases import (
     GetVersionDiff,
     GetVersions,
     GetWorkspace,
+    KeepCandidate,
+    ListExplorations,
     ListMaterials,
     ListProjects,
     ListRounds,
@@ -43,6 +47,11 @@ class ApiServices:
     runner: RoundOrchestrator
     dig_round: DigRound
     abandon_round: AbandonRound
+    exploration_runner: ExplorationOrchestrator
+    abandon_exploration: AbandonExploration
+    keep_candidate: KeepCandidate
+    dismiss_candidate: DismissCandidate
+    list_explorations: ListExplorations
     create_project: CreateProject
     workspace: GetWorkspace
     list_projects: ListProjects

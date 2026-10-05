@@ -19,6 +19,7 @@ from pmstudio.domain.authoring.readiness import ReadinessItem
 from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.version import Version
 from pmstudio.domain.authoring.views import BlockView, DocumentView
+from pmstudio.domain.exploration.exploration import Exploration
 from pmstudio.domain.memory.memory import MemoryEntry
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Draft, Proposal
@@ -1473,6 +1474,78 @@ def _proposal_view(proposal: Proposal, *, warning: str | None) -> ProposalView:
         rationale=proposal.origin.rationale,
         kind=proposal.kind.value if proposal.kind is not None else None,
         warning=warning,
+    )
+
+
+# ── 探索（M8）：调研运行与候选的投影 ─────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateView:
+    """过目台/详情看到的一条候选。字段按类型二选一：假设带证伪两行，盲区带下一步。"""
+
+    candidate_id: str
+    kind: str  # hypothesis | blind_spot
+    statement: str
+    state: str  # new | kept | dismissed
+    kept_as: str | None = None
+    kept_ref: str | None = None
+    grounding: str | None = None
+    based_on: tuple[str, ...] = ()
+    falsification: str | None = None
+    evidence_needed: str | None = None
+    next_step: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExplorationView:
+    exploration_id: str
+    project_id: str
+    kind: str
+    status: str
+    scope_kind: str
+    scope_ref: str | None
+    scope_text: str | None
+    created_at: datetime
+    failure_reason: str | None
+    abandon_reason: str | None
+    overflow_count: int
+    candidates: tuple[CandidateView, ...]
+
+
+def exploration_view(exploration: Exploration) -> ExplorationView:
+    """一次探索运行的只读投影（过目台与详情共用它；投影不是第二份存储）。"""
+
+    return ExplorationView(
+        exploration_id=str(exploration.exploration_id),
+        project_id=str(exploration.project_id),
+        kind=exploration.kind.value,
+        status=exploration.status.value,
+        scope_kind=exploration.scope.kind.value,
+        scope_ref=exploration.scope.ref,
+        scope_text=exploration.scope.text,
+        created_at=exploration.created_at,
+        failure_reason=(
+            exploration.failure.reason if exploration.failure is not None else None
+        ),
+        abandon_reason=exploration.abandon_reason,
+        overflow_count=exploration.overflow_count,
+        candidates=tuple(
+            CandidateView(
+                candidate_id=item.candidate_id,
+                kind=item.kind,
+                statement=item.statement,
+                state=item.state.value,
+                kept_as=item.kept_as,
+                kept_ref=item.kept_ref,
+                grounding=item.grounding.value if item.grounding is not None else None,
+                based_on=tuple(str(eid) for eid in item.based_on),
+                falsification=item.falsification,
+                evidence_needed=item.evidence_needed,
+                next_step=item.next_step,
+            )
+            for item in exploration.candidates()
+        ),
     )
 
 

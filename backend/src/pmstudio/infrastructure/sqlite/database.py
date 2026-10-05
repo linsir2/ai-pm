@@ -4,8 +4,8 @@ import sqlite3
 from pathlib import Path
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-#: 3 = 加上 `project_memory`（M6 跨轮记忆；新表，不需要 `ALTER`，老库由 schema.sql 补齐）。
-USER_VERSION = 3
+#: 4 = 加上 `explorations`（M8 探索运行；新表，不需要 `ALTER`，老库由 schema.sql 补齐）。
+USER_VERSION = 4
 
 #: `CREATE TABLE IF NOT EXISTS` 补不了**已有**表的列，所以老库要靠这里的 `ALTER TABLE`（幂等）。
 #: 留样表本身是可丢的（`02` §5.3：要清就 DELETE），但**不主动删数据**。

@@ -114,6 +114,43 @@ class MaterialFrozen(ApplicationError):
         )
 
 
+class UnknownEntryId(ApplicationError):
+    """用户指的那条文档内容不存在（从条目发起调研时指错了）——资源不在，404。"""
+
+    def __init__(self, entry_id: object) -> None:
+        super().__init__(
+            f"文档里没有这条内容：{entry_id}",
+            code="unknown_entry",
+            entry_id=str(entry_id),
+        )
+
+
+class UnknownExploration(ApplicationError):
+    """查询/操作一个不存在的探索运行——资源不在，404。"""
+
+    def __init__(self, exploration_id: object) -> None:
+        super().__init__(
+            f"找不到这一趟探索：{exploration_id}",
+            code="unknown_exploration",
+            exploration_id=str(exploration_id),
+        )
+
+
+class ExplorationBusy(ApplicationError):
+    """同一个项目已经有一趟探索在跑。
+
+    单用户也会有并发：双击"开始调研"、开两个标签页都会撞上。与 `RoundBusy`
+    同一条口径——同一时间只允许一趟，等它跑完或先放弃它。
+    """
+
+    def __init__(self, project_id: object) -> None:
+        super().__init__(
+            "这个项目已经有一趟调研在跑：等它跑完，或先放弃它",
+            code="exploration_busy",
+            project_id=str(project_id),
+        )
+
+
 class RoundBusy(ApplicationError):
     """同一个 round 上已经有一个动作在跑。
 

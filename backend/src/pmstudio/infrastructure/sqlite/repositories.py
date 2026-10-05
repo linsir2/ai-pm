@@ -16,13 +16,18 @@ from pmstudio.application.dto import (
     RoundOutcomeView,
     round_head_view,
 )
-from pmstudio.application.errors import UnknownProject, UnknownRound
+from pmstudio.application.errors import UnknownExploration, UnknownProject, UnknownRound
 from pmstudio.domain.authoring.document import Document
+from pmstudio.domain.exploration.exploration import (
+    Exploration,
+    ExplorationKind,
+    ExplorationStatus,
+)
 from pmstudio.domain.memory.memory import ProjectMemory
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
-from pmstudio.domain.shared.ids import ProjectId, RoundId
+from pmstudio.domain.shared.ids import ExplorationId, ProjectId, RoundId
 from pmstudio.infrastructure.sqlite import serialization as ser
 
 
@@ -166,6 +171,77 @@ class SqliteRoundRepository:
             (str(project_id),),
         ).fetchone()
         return None if row is None else RoundId(row["round_id"])
+
+
+class SqliteExplorationRepository:
+    """探索运行（M8）：读端口 + 写端口都在一个类上（与 Round 仓储同一个形状）。
+
+    两条口径与轮次仓储一致：**坏行跳过不抛**（`list_for_project` 里逐行 try），
+    状态与类别是列——"同项目有没有在跑"这类查询不该把整份 payload 读出来。
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def get(self, exploration_id: ExplorationId) -> Exploration:
+        row = self._connection.execute(
+            "SELECT * FROM explorations WHERE exploration_id = ?", (str(exploration_id),)
+        ).fetchone()
+        if row is None:
+            raise UnknownExploration(exploration_id)
+        return self._from_row(row)
+
+    def save(self, exploration: Exploration) -> None:
+        payload = json.dumps(
+            ser.exploration_to_payload(exploration), ensure_ascii=False
+        )
+        self._connection.execute(
+            """
+            INSERT INTO explorations (exploration_id, project_id, kind, status, payload,
+                                      created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(exploration_id) DO UPDATE SET
+                kind = excluded.kind,
+                status = excluded.status,
+                payload = excluded.payload,
+                updated_at = excluded.updated_at
+            """,
+            (
+                str(exploration.exploration_id),
+                str(exploration.project_id),
+                str(exploration.kind),
+                str(exploration.status),
+                payload,
+                exploration.created_at.isoformat(),
+                _now(),
+            ),
+        )
+
+    def list_for_project(
+        self, project_id: ProjectId, *, limit: int = 20
+    ) -> tuple[Exploration, ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM explorations WHERE project_id = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (str(project_id), limit),
+        ).fetchall()
+        found: list[Exploration] = []
+        for row in rows:
+            try:
+                found.append(self._from_row(row))
+            except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+                continue  # 坏行跳过不抛（与 list_rounds 同一条口径）
+        return tuple(found)
+
+    def _from_row(self, row: sqlite3.Row) -> Exploration:
+        return ser.exploration_from_payload(
+            json.loads(row["payload"]),
+            exploration_id=ExplorationId(row["exploration_id"]),
+            project_id=ProjectId(row["project_id"]),
+            kind=ExplorationKind(row["kind"]),
+            status=ExplorationStatus(row["status"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
 
 
 class SqliteEvidenceRepository:

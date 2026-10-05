@@ -17,6 +17,8 @@ class RoundCommand:
     user_input: str = ""
     #: 这一轮带进来的材料（用户在上传框里挑的）；空 = 不带材料
     material_ids: tuple[str, ...] = ()
+    #: 这一轮从过目台带进来的调研产物（`"x-xxxx#H1"`）；空 = 不是从探索来的（M8）
+    seed_ids: tuple[str, ...] = ()
     seats: tuple[str, ...] = ()
     #: 用户在本轮复述卡上勾中的联网检索词；空 = 不联网（默认）
     web_queries: tuple[str, ...] = ()

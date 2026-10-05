@@ -20,6 +20,8 @@ def test_round_command_holds_no_business_state():
         "user_input",
         # 本次动作的参数：这一轮带进来的材料 id（与 user_input / seats 同类，不是聚合字段）
         "material_ids",
+        # 本次动作的参数：从过目台带进来的调研产物（M8，`"x-xxxx#H1"`）
+        "seed_ids",
         "seats",
         # 复述卡上勾中的联网检索词（工具层 C-2b）：同样是"本次动作的参数"
         "web_queries",

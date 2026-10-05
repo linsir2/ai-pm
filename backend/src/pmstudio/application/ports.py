@@ -18,11 +18,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from pmstudio.domain.shared.ids import DocumentId, ProjectId, RoundId
+from pmstudio.domain.shared.ids import DocumentId, ExplorationId, ProjectId, RoundId
 
 if TYPE_CHECKING:
     from pmstudio.application.commands import RoundCommand
     from pmstudio.application.dto import (
+        ExplorationView,
         MaterialHit,
         MaterialPacket,
         MaterialSummaryView,
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
         RoundOutcomeView,
         RoundView,
     )
+    from pmstudio.domain.exploration.exploration import ExplorationScope
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,3 +245,28 @@ class RoundCanceller(Protocol):
     """
 
     async def cancel(self, round_id: RoundId) -> None: ...
+
+
+@runtime_checkable
+class ExplorationOrchestrator(Protocol):
+    """探索的入口（实现是 infrastructure 里的 `ExplorationRunner`，M8）。
+
+    与 `RoundOrchestrator` 同一个理由：`api` 只认协议，不 import infrastructure。
+    一个动作 = 一次请求内跑完（与轮次同款：长请求 + SSE 事件推进度）。
+    """
+
+    async def start(
+        self, *, project_id: ProjectId, scope: "ExplorationScope"
+    ) -> "ExplorationView": ...
+
+    async def retry(self, *, exploration_id: str) -> "ExplorationView": ...
+
+
+@runtime_checkable
+class ExplorationCanceller(Protocol):
+    """把正在跑的探索停下来（实现是 `ExplorationRunner`）。
+
+    与 `RoundCanceller` 同一条纪律：先写状态、再取消；取消不写任何业务状态。
+    """
+
+    async def cancel(self, exploration_id: ExplorationId) -> None: ...

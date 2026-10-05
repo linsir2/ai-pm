@@ -1,0 +1,175 @@
+"""调研智能体：以潜在用户视角做推演，产出**可证伪的假设**与盲区。
+
+它不是席位：不发表专业意见、不判断该写什么，只回答"用户可能会怎么想"；
+而且**这不是真实调研**——没有接触过任何真实用户，产出是"待验证的假设清单"。
+证伪方式与所需真实证据由领域对象强制（`item.Hypothesis`），不靠提示词自觉。
+"""
+
+from dataclasses import dataclass
+
+from pmstudio.application.agents import schemas
+from pmstudio.application.agents.schemas import RULES
+from pmstudio.application.context import NO_MEMORY_TEXT
+from pmstudio.application.errors import unknown_ref_message
+from pmstudio.application.evidence_refs import candidates_for, normalize_ref
+from pmstudio.domain.exploration.item import BlindSpot, Grounding, Hypothesis
+from pmstudio.domain.shared.errors import DomainError
+from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.harness.errors import PacketParseError
+from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
+from pmstudio.harness.model.envelope import Envelope, make_packet_id
+from pmstudio.harness.model.structured import StructuredCall, call_structured
+
+PURPOSE = "inquiry"
+
+
+@dataclass(frozen=True, slots=True)
+class InquiryOutcome:
+    """一趟调研交回的东西：领域对象 + 信封（溢出/摘除只有信封一处存储）。"""
+
+    hypotheses: tuple[Hypothesis, ...]
+    blind_spots: tuple[BlindSpot, ...]
+    envelope: Envelope
+
+    @property
+    def overflow(self) -> tuple[schemas.Overflow, ...]:
+        return self.envelope.overflow
+
+    @property
+    def discarded(self) -> tuple[schemas.Discarded, ...]:
+        return self.envelope.discarded
+
+
+class Inquirer:
+    PURPOSE = PURPOSE
+    PROMPT = "inquiry"
+    CALL = StructuredCall(
+        purpose=PURPOSE,
+        kind="inquiry",
+        prompt=PROMPT,
+        packet=schemas.InquiryPacket,
+        rules=RULES,
+    )
+    PROMPT_SLOTS = (
+        "scope",
+        "document_state",
+        "project_memory",
+        "schema_json",
+        "validation_error",
+    )
+
+    def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
+        self._model = model
+        self._prompts = prompts
+
+    async def run(
+        self,
+        *,
+        scope: str,
+        document_state: str,
+        project_memory: str = NO_MEMORY_TEXT,
+        exploration_id: str | None = None,
+        known_eids: frozenset[EvidenceId] = frozenset(),
+        validation_error: str = "",
+        packet_slot: str = "",
+    ) -> InquiryOutcome:
+        outcome = await call_structured(
+            self.CALL,
+            gateway=self._model,
+            prompts=self._prompts,
+            slots={
+                "scope": scope,
+                "document_state": document_state,
+                "project_memory": project_memory,
+                "validation_error": validation_error,
+            },
+            metadata={} if exploration_id is None else {"exploration_id": exploration_id},
+            packet_id=make_packet_id(
+                str(exploration_id or "new"), self.CALL.kind, "inquirer", slot=packet_slot
+            ),
+            run_id=str(exploration_id or "new"),
+            produced_by="inquirer",
+        )
+        hypotheses, blind_spots = inquiry_from_packet(
+            outcome.packet, known_eids=known_eids
+        )
+        return InquiryOutcome(
+            hypotheses=hypotheses, blind_spots=blind_spots, envelope=outcome
+        )
+
+
+def inquiry_from_packet(
+    packet: schemas.InquiryPacket, *, known_eids: frozenset[EvidenceId]
+) -> tuple[tuple[Hypothesis, ...], tuple[BlindSpot, ...]]:
+    """线形状 → 领域对象。空结果与坏形状都抛 `PacketParseError`（走重装那一环）。"""
+
+    if not packet.hypotheses and not packet.blind_spots:
+        raise PacketParseError(
+            "调研既没给假设、也没给盲区（空结果不算成功）", purpose=PURPOSE
+        )
+    hypotheses: list[Hypothesis] = []
+    blind_spots: list[BlindSpot] = []
+    seen: set[str] = set()
+    for index, draft in enumerate(packet.hypotheses, start=1):
+        local_id = draft.local_id.strip() or f"H{index}"
+        _mark_unique(seen, local_id)
+        try:
+            grounding = Grounding(draft.grounding)
+        except ValueError as error:
+            raise PacketParseError(
+                f"未知的 grounding：{draft.grounding}",
+                purpose=PURPOSE,
+                local_id=local_id,
+            ) from error
+        refs = tuple(
+            EvidenceId(normalize_ref(ref, known=known_eids)) for ref in draft.based_on
+        )
+        unknown = [str(ref) for ref in refs if ref not in known_eids]
+        if unknown:
+            raise PacketParseError(
+                unknown_ref_message(unknown, what="假设引用了不存在的编号"),
+                purpose=PURPOSE,
+                local_id=local_id,
+                candidates=[candidates_for(item, known=known_eids) for item in unknown],
+            )
+        try:
+            hypotheses.append(
+                Hypothesis(
+                    local_id=local_id,
+                    statement=draft.statement,
+                    grounding=grounding,
+                    based_on=refs,
+                    falsification=draft.falsification,
+                    evidence_needed=draft.evidence_needed,
+                )
+            )
+        except DomainError as error:
+            raise PacketParseError(
+                f"假设过不了领域校验：{error.message}",
+                purpose=PURPOSE,
+                local_id=local_id,
+            ) from error
+    for index, spot in enumerate(packet.blind_spots, start=1):
+        local_id = spot.local_id.strip() or f"B{index}"
+        _mark_unique(seen, local_id)
+        try:
+            blind_spots.append(
+                BlindSpot(
+                    local_id=local_id,
+                    statement=spot.statement,
+                    next_step=spot.next_step,
+                )
+            )
+        except DomainError as error:
+            raise PacketParseError(
+                f"盲区过不了领域校验：{error.message}",
+                purpose=PURPOSE,
+                local_id=local_id,
+            ) from error
+    return tuple(hypotheses), tuple(blind_spots)
+
+
+def _mark_unique(seen: set[str], local_id: str) -> None:
+    if local_id in seen:
+        raise PacketParseError(f"候选 id 重复：{local_id}", purpose=PURPOSE, local_id=local_id)
+    seen.add(local_id)

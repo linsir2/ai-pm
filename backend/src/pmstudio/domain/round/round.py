@@ -73,6 +73,27 @@ class MaterialRef:
             raise ShapeError("材料引用必须带 chunk_id")
 
 
+@dataclass(frozen=True, slots=True)
+class SeedRef:
+    """这一轮从过目台带进来的调研产物（种子）：**只引用，不复制内容**。
+
+    本地 id（`H1`/`B1`）只有趟内唯一，所以必须连 `exploration_id` 一起记——
+    单靠本地 id 会跨趟撞名（与留痕必须带 `pass_index` 是同一条理由）。
+
+    它只是回链：主张的出处仍然是 `user_input`（用户编辑后提交的那段话），
+    种子回答的是"这段输入是从哪条调研产物来的"。
+    """
+
+    exploration_id: str
+    candidate_id: str
+
+    def __post_init__(self) -> None:
+        if not self.exploration_id.strip():
+            raise ShapeError("种子必须带 exploration_id")
+        if not self.candidate_id.strip():
+            raise ShapeError("种子必须带 candidate_id")
+
+
 class DropSource(StrEnum):
     """留痕是谁发现的。"""
 
@@ -194,6 +215,7 @@ class Round:
         extra_seat_rounds: int = 0,
         integration_seq: int = 0,
         materials: tuple[MaterialRef, ...] = (),
+        seeds: tuple[SeedRef, ...] = (),
         web_queries: tuple[WebQuery, ...] = (),
         web_queries_chosen: tuple[str, ...] = (),
         memory_proposals: tuple[MemoryProposal, ...] = (),
@@ -233,6 +255,8 @@ class Round:
         self._extra_seat_rounds = extra_seat_rounds
         self._integration_seq = integration_seq
         self._materials = tuple(materials)
+        #: 这一轮从过目台带进来的调研产物（M8 种子）；空 = 不是从探索来的
+        self._seeds = tuple(seeds)
         #: 分析者提名的检索词（它只提名，查不查由用户在复述卡上定）
         self._web_queries = tuple(web_queries)
         #: 用户在复述卡上勾中的那几条（没勾就是空 = 一次网络调用都没有）
@@ -250,12 +274,22 @@ class Round:
 
     @classmethod
     def start(
-        cls, *, round_id: RoundId, project_id: ProjectId, user_input: str, now: datetime
+        cls,
+        *,
+        round_id: RoundId,
+        project_id: ProjectId,
+        user_input: str,
+        now: datetime,
+        seeds: tuple[SeedRef, ...] = (),
     ) -> "Round":
         if not user_input.strip():
             raise EmptyUserInput()
         return cls(
-            round_id=round_id, project_id=project_id, user_input=user_input, created_at=now
+            round_id=round_id,
+            project_id=project_id,
+            user_input=user_input,
+            created_at=now,
+            seeds=seeds,
         )
 
     # —— 只读 ——
@@ -824,6 +858,12 @@ class Round:
         """这一轮**带进提示词**的外部材料块（附件与检索结果同一条路）。"""
 
         return self._materials
+
+    @property
+    def seeds(self) -> tuple[SeedRef, ...]:
+        """这一轮带进来的调研产物（M8）：只是回链，不是第二份内容。"""
+
+        return self._seeds
 
     def add_materials(self, refs: tuple[MaterialRef, ...] | list[MaterialRef]) -> None:
         """记下这一轮带进来的材料块。不能为空（空就不是"带进来了"）；同一块只留一次。"""
