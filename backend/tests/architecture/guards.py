@@ -120,6 +120,35 @@ LAYER_ROOTS: dict[str, str] = {
 # 否则 app.py 与 container.py 会成环）。bootstrap 是组装点，谁都可以调。
 # harness 是最内层：它只许依赖自己（外加白名单里的 pydantic，见 test_harness_imports.py），
 # 因此**没有** domain → harness 这条边——domain 不许碰运行时控制平面。
+#: `harness` 是最内层，所以它反过来不许依赖这些层里的任何一个（依赖只能朝内）。
+FORBIDDEN_HARNESS_LAYERS = ("domain", "application", "infrastructure", "api", "bootstrap")
+
+#: 产品词汇：这些名字属于产品文档，不属于运行时控制平面。
+#: **精确匹配**——所以 `MAX_SEAT_ROUNDS` 这种把产品概念藏在复合常量名里的写法它抓不住，
+#: 那道盲区由 `test_layers.py` 与 `tests/architecture/test_resource_paths.py` 的分层检查补。
+PRODUCT_VOCABULARY = frozenset(
+    {
+        "ClaimsPacket",
+        "SeatPacket",
+        "IntegrationPacket",
+        "DispositionsPacket",
+        "MemoryPacket",
+        "SectionId",
+        "FeatureSlug",
+        "Target",
+        "Round",
+        "ProjectMemory",
+        "DroppedItem",
+        "Proposal",
+        "seat_id",
+        "round_id",
+        "proposal_id",
+        "section_id",
+        "feature_slug",
+        "eid",
+    }
+)
+
 ALLOWED_LAYER_IMPORTS: dict[str, frozenset[str]] = {
     "harness": frozenset({"harness"}),
     "domain": frozenset({"domain"}),
@@ -243,3 +272,59 @@ def await_inside_uow_offenders(root: Path = SRC) -> dict[str, list[int]]:
         for path, source in iter_sources(root)
         if (lines := await_inside_uow(source))
     }
+
+
+# ── harness 专用的两条判据（2026-10-04 抽出）─────────────────────────────────
+#
+# **为什么抽出来**：`test_harness_never_imports_an_application_layer` 之前把判据写成
+# `f"{PACKAGE}.{layer}" in imported`——集合成员判断是**精确相等**，而 `imported` 里
+# 装的是完整点分名 `"pmstudio.application.ports"`。于是那个判据**永远为假**，
+# 这条守卫从落地起就没触发过，却一直报绿。
+#
+# 报绿的假守卫比没有守卫更坏：它把"没检查"伪装成"检查过"。而它能潜伏这么久，
+# 是因为"守卫自己的判据有没有效"从来没被测过——`tests/architecture/guard_coverage.py`
+# 现在补上了这一层（用合成违规输入，不去改 `src/`）。
+
+
+def harness_layer_violations(source: str) -> set[str]:
+    """`harness` 源码 import 了哪些**被禁的层**（应用 / 领域 / 基础设施 / api / 装配）。
+
+    判据是 `imported_layers()` 的**前缀匹配**，不是字符串成员判断——这一点由
+    `guard_coverage.py::test_imported_layers_matches_on_prefix_not_equality` 钉死。
+    """
+
+    imported = imported_layers(source)
+    return {layer for layer in FORBIDDEN_HARNESS_LAYERS if layer in imported}
+
+
+def code_identifiers(source: str) -> set[str]:
+    """代码里出现的标识符：变量 / 参数 / 属性 / 定义名。**不含字符串与注释**。
+
+    为什么不含字符串：注释与 docstring 里经常要**解释**那个词是什么
+    （"round_id 只是关联键"），算进去的话守卫会对着正确的解释报违规。
+    """
+
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Name):
+            found.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            found.add(node.attr)
+        elif isinstance(node, ast.arg):
+            found.add(node.arg)
+        elif isinstance(node, ast.keyword) and node.arg is not None:
+            found.add(node.arg)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            found.add(node.name)
+    return found
+
+
+def product_vocabulary_hits(source: str, *, allowed: frozenset[str] = frozenset()) -> set[str]:
+    """这份 harness 源码里出现的**产品词汇**标识符，扣掉显式欠账。
+
+    `allowed` 是**按文件**生效的欠账白名单，由调用方（守卫文件）按当前文件收窄——
+    一张全局白名单等于把欠账扩散到全层，而那道守卫唯一的职责就是回答
+    "harness 有没有开始长业务词汇"。
+    """
+
+    return (code_identifiers(source) & PRODUCT_VOCABULARY) - allowed

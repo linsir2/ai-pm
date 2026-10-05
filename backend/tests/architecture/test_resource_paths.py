@@ -25,31 +25,37 @@ from pathlib import Path
 
 from tests.architecture.guards import iter_sources
 
-#: 资源目录与其"读它的模块"。路径必须等于该模块所在目录加上这个相对路径。
-RESOURCE_DIRS: dict[str, tuple[str, str]] = {
-    "prompts": ("harness/prompt.py", "prompts"),
-    "tools/definitions": ("harness/tools/registry.py", "definitions"),
-    "seats/definitions": ("infrastructure/seats/catalog.py", "definitions"),
+#: 资源目录名 → 读它的模块。只给"硬写目录名"那条扫描用（它要按名字找字面量）。
+RESOURCE_DIRS: dict[str, str] = {
+    "prompts": "harness/prompt.py",
+    "tools/definitions": "harness/tools/registry.py",
+    "seats/definitions": "infrastructure/seats/catalog.py",
 }
 
 
-def test_each_resource_directory_sits_next_to_the_module_that_reads_it():
-    """路径 = 模块所在目录 + 相对路径。**不许由调用方拼**。
+def test_the_seat_definitions_directory_is_where_the_catalog_expects_it():
+    """**席位目录**是唯一一条没有功能测试兜底的资源路径，所以在这儿守着。
 
-    这条红了就说明有人把常量搬回了装配层，或者资源搬走了而常量没跟上。
+    另两个（提示词 / 工具声明）的"常量 == 模块旁目录"由它们自己的功能测试断言：
+    `test_prompt_library.py::test_the_prompts_directory_sits_next_to_the_module_that_reads_it`
+    与 `test_registry.py::test_the_definitions_directory_is_next_to_the_module_that_reads_it`
+    （两个文件都在 `tests/harness/` 下）。
+    本文件原来对三者都查一遍，但那是**独立重算**（自己算路径、自己判断存在），
+    它并不断言那个常量等于重算结果——所以对提示词/工具声明来说是重复且更弱的检查。
+    （变异证据：把 `PROMPTS_DIR` 指向不存在的目录 → 本文件那条**没红**，
+    功能测试**红了**。重复的守卫会给人"这里也在管"的错觉。）
     """
 
     package = Path(__file__).resolve().parents[2] / "src" / "pmstudio"
+    catalog = package / "infrastructure" / "seats" / "catalog.py"
 
-    for name, (module, relative) in RESOURCE_DIRS.items():
-        anchor = package / module
-        assert anchor.is_file(), f"{name} 的锚点模块不存在：{anchor}"
+    assert catalog.is_file()
+    definitions = catalog.parent / "definitions"
+    assert definitions.is_dir(), f"{definitions} 不存在：席位目录读不到 = 一个席位都没有"
 
-        actual = anchor.parent / relative
-        assert actual.is_dir(), (
-            f"{name} 目录不存在：{actual}。搬资源时漏了数据文件？"
-            "（注意：这类问题不会产生 import 错误，只在读文件时炸）"
-        )
+    from pmstudio.bootstrap.container import SEATS_DIR
+
+    assert SEATS_DIR == definitions, "装配层的 SEATS_DIR 与目录实际位置不一致"
 
 
 def test_the_prompts_directory_is_not_empty():

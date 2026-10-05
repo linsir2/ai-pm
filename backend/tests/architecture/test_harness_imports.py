@@ -5,14 +5,14 @@
 依赖方向就倒过来了，整套分层声明失效。
 """
 
-import ast
 import sys
 
 from tests.architecture.guards import (
     PACKAGE,
     SRC,
+    harness_layer_violations,
     iter_sources,
-    runtime_modules,
+    product_vocabulary_hits,
     top_level_imports,
 )
 
@@ -30,33 +30,6 @@ ALLOWED_THIRD_PARTY = frozenset({"pydantic", "litellm"})
 #: 标准库全集由解释器给出，不手抄一份（手抄必然漏，然后漏的那条就成了免检通道）。
 _STDLIB = frozenset(sys.stdlib_module_names)
 
-#: harness 绝对不许依赖的层——依赖只能朝内，harness 是最里面那个。
-FORBIDDEN_LAYERS = ("domain", "application", "infrastructure", "api", "bootstrap")
-
-#: 产品词汇：这些名字属于产品文档，不属于运行时控制平面。
-PRODUCT_VOCABULARY = frozenset(
-    {
-        "ClaimsPacket",
-        "SeatPacket",
-        "IntegrationPacket",
-        "DispositionsPacket",
-        "MemoryPacket",
-        "SectionId",
-        "FeatureSlug",
-        "Target",
-        "Round",
-        "ProjectMemory",
-        "DroppedItem",
-        "Proposal",
-        "seat_id",
-        "round_id",
-        "proposal_id",
-        "section_id",
-        "feature_slug",
-        "eid",
-    }
-)
-
 #: 显式欠账：{文件 : 词汇} → 为什么还在、什么时候消。见下面那条"只许减"的测试。
 ALLOWED_PRODUCT_WORDS: dict[tuple[str, str], str] = {
     # `Event` 的关联键：这封通知属于哪一轮。信封**不按它分支、不组装它**，
@@ -64,24 +37,6 @@ ALLOWED_PRODUCT_WORDS: dict[tuple[str, str], str] = {
     # `event.round_id` 过滤），而事件名与 payload 键这一层是不许改的——所以先登记。
     ("events/schemas.py", "round_id"): "关联键，不是产品知识；改名会破 SSE 契约",
 }
-
-
-def _identifiers(source: str) -> set[str]:
-    """代码里出现的标识符：变量 / 参数 / 属性 / 函数名 / 类名。**不含字符串与注释**。"""
-
-    found: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Name):
-            found.add(node.id)
-        elif isinstance(node, ast.Attribute):
-            found.add(node.attr)
-        elif isinstance(node, ast.arg):
-            found.add(node.arg)
-        elif isinstance(node, ast.keyword) and node.arg is not None:
-            found.add(node.arg)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            found.add(node.name)
-    return found
 
 
 def test_harness_layer_exists_and_is_not_empty():
@@ -92,14 +47,23 @@ def test_harness_layer_exists_and_is_not_empty():
 
 
 def test_harness_never_imports_an_application_layer():
-    """用 `runtime_modules()` 而不是裸子串：裸子串会把注释与 docstring 也算进来，
-    于是将来谁在文档里写一句"`RoundId` 来自 `pmstudio.domain.shared.ids`"就会红，
-    而报错说的是"harness import 了 application"——那不是事实，会白烧一个人一小时。"""
+    """harness 是最内层，**不许反向依赖**应用 / 领域 / 基础设施 / api / 装配。
+
+    判据在 `guards.harness_layer_violations()`，它走 `imported_layers()` 的前缀匹配。
+    **这里曾经是一句 `f"{PACKAGE}.{layer}" in imported`**——集合成员判断是精确相等，
+    而被比的是完整点分名 `pmstudio.application.ports`，于是那个判据**永远为假**，
+    这条守卫从落地起一次都没触发过，却一直报绿。
+
+    为什么两种写法差别这么大：裸子串会把注释与 docstring 算进来（将来谁在文档里写一句
+    "`RoundId` 来自 `pmstudio.domain.shared.ids`"就会红，而报错说的是"harness import 了
+    application"——那不是事实，会白烧一个人一小时）；而集合成员判断则会漏掉真正的导入。
+    正确写法只有一种：**AST + 前缀匹配**，也就是共享机制那个。
+    它的有效性由 `guard_coverage.py::test_harness_layer_violations_flags_outward_imports` 钉住。
+    """
 
     offenders: dict[str, list[str]] = {}
     for path, source in iter_sources(HARNESS):
-        imported = runtime_modules(source)
-        bad = sorted(layer for layer in FORBIDDEN_LAYERS if f"{PACKAGE}.{layer}" in imported)
+        bad = sorted(harness_layer_violations(source))
         if bad:
             offenders[path.relative_to(HARNESS).as_posix()] = bad
     assert offenders == {}
@@ -140,8 +104,8 @@ def test_harness_code_identifiers_carry_no_product_vocabulary():
         here = path.relative_to(HARNESS).as_posix()
         # 白名单必须**按文件**生效：键是 (文件, 词)，只按词放行等于把欠账扩散到全层——
         # 那道守卫唯一的职责就是回答"harness 有没有开始长业务词汇"。
-        allowed = {word for (where, word) in ALLOWED_PRODUCT_WORDS if where == here}
-        hits = sorted((_identifiers(source) & PRODUCT_VOCABULARY) - allowed)
+        allowed = frozenset(word for (where, word) in ALLOWED_PRODUCT_WORDS if where == here)
+        hits = sorted(product_vocabulary_hits(source, allowed=allowed))
         if hits:
             offenders[here] = hits
     assert offenders == {}
