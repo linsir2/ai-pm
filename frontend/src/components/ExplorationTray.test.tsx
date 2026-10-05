@@ -145,4 +145,21 @@ describe("ExplorationTray", () => {
 
     expect(props.onStartDocument).toHaveBeenCalledTimes(1);
   });
+
+  it("有动作在途时重试 / 放弃点不下去（跑中放弃走不进后端）", () => {
+    const props = draw({
+      explorations: [
+        exploration({ status: "failed", failure_reason: "模型调用超时", candidates: [] }),
+      ],
+      pending: true,
+    });
+
+    expect(
+      (screen.getByRole("button", { name: "重试" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "放弃" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(props.onAbandon).not.toHaveBeenCalled();
+  });
 });
