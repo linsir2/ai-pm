@@ -80,6 +80,18 @@ export const SEAT_STATE_TEXT: Record<string, string> = {
   pending: "待启动",
 };
 
+export const EXPLORATION_STATUS_TEXT: Record<string, string> = {
+  running: "进行中",
+  done: "已完成",
+  failed: "失败",
+  abandoned: "已放弃",
+};
+
+export const CANDIDATE_KIND_TEXT: Record<string, string> = {
+  hypothesis: "假设",
+  blind_spot: "盲区",
+};
+
 export function stepText(step: string): string {
   return STEP_TEXT[step] ?? step;
 }

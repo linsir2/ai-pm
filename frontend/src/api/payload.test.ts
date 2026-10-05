@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   allProposalIds,
   answerBatchSummary,
+  appendSeedText,
   awaitingMode,
   buildAnswers,
   buildClaimEdits,
+  buildExplorationBody,
   buildOpeningBody,
   buildStart,
   defaultAccepted,
@@ -396,10 +398,11 @@ describe("answerBatchSummary", () => {
 });
 
 describe("buildStart", () => {
-  it("没选材料就是空的 material_ids（不是 undefined）", () => {
+  it("没选材料、没带种子时都是空数组（不是 undefined）", () => {
     expect(buildStart("想做个导出", [])).toEqual({
       input: "想做个导出",
       material_ids: [],
+      seed_ids: [],
     });
   });
 
@@ -412,6 +415,56 @@ describe("buildStart", () => {
     expect(buildStart("按这两份写", materials)).toEqual({
       input: "按这两份写",
       material_ids: ["m1", "m2"],
+      seed_ids: [],
+    });
+  });
+
+  it("收下的调研产物按顺序带上种子 id（M8：`探索id#候选id`）", () => {
+    expect(buildStart("接着调研的结论写", [], ["x-1#H1", "x-1#B2"])).toEqual({
+      input: "接着调研的结论写",
+      material_ids: [],
+      seed_ids: ["x-1#H1", "x-1#B2"],
+    });
+  });
+});
+
+describe("appendSeedText", () => {
+  it("输入框空着时直接填入（不加前导换行）", () => {
+    expect(appendSeedText("", "导出要支持筛选")).toBe("导出要支持筛选");
+  });
+
+  it("已有内容时换行追加，不覆盖用户打的字", () => {
+    expect(appendSeedText("先做个订单导出", "需要搞清楚：权限边界")).toBe(
+      "先做个订单导出\n需要搞清楚：权限边界",
+    );
+  });
+
+  it("空文本不加分隔（也不会多出一个空行）", () => {
+    expect(appendSeedText("已有内容", "")).toBe("已有内容");
+    expect(appendSeedText("", "")).toBe("");
+  });
+
+  it("连收三条，一条一行", () => {
+    let text = "";
+    text = appendSeedText(text, "一");
+    text = appendSeedText(text, "二");
+    text = appendSeedText(text, "三");
+    expect(text).toBe("一\n二\n三");
+  });
+});
+
+describe("buildExplorationBody", () => {
+  it("条目锚点带上条目 id 与原文", () => {
+    expect(buildExplorationBody({ kind: "entry", ref: "e1", focus: "导出要有筛选" })).toEqual({
+      kind: "inquiry",
+      scope: { kind: "entry", ref: "e1", text: "导出要有筛选" },
+    });
+  });
+
+  it("整份文档锚点不带 ref/text（后端按整份文档调研）", () => {
+    expect(buildExplorationBody({ kind: "document" })).toEqual({
+      kind: "inquiry",
+      scope: { kind: "document", ref: null, text: null },
     });
   });
 });

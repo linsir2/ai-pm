@@ -1,6 +1,6 @@
 /* SSE 契约：事件名、后端发什么、前端读什么。
 
-**为什么需要这条**：前端只通过三个面接后端——30 个端点 JSON、4 个事件名 + payload 键、
+**为什么需要这条**：前端只通过三个面接后端——30 个端点 JSON、5 个事件名 + payload 键、
 6 个请求体。这一层**以前零测试**，而后端改事件名或 payload 键的后果是
 "SSE 静默死亡但顶栏显示已连上"（`TopBar.tsx` 只看连接状态，不看有没有事件进来）。
 
@@ -18,9 +18,10 @@ const EVENT_NAMES = [
   "packet.emitted",
   "doc.changed",
   "generation.failed",
+  "exploration.updated",
 ] as const;
 
-/** 后端**发**的键（`use_cases.py` 的四个 publish 点）。 */
+/** 后端**发**的键（`use_cases.py` 的五个 publish 点）。 */
 const SENT_KEYS: Record<string, string[]> = {
   "packet.emitted": [
     "packet_id",
@@ -35,6 +36,7 @@ const SENT_KEYS: Record<string, string[]> = {
   "round.updated": ["step", "waiting_on", "seat_round_count"],
   "doc.changed": ["version_no", "written_block_ids", "summary"],
   "generation.failed": ["reason", "at_step"],
+  "exploration.updated": ["exploration_id", "status"],
 };
 
 /** 前端 `workspace.ts` **读**的键（按事件分）。 */
@@ -43,15 +45,19 @@ const READ_KEYS: Record<string, string[]> = {
   "round.updated": ["step", "waiting_on", "seat_round_count"],
   "doc.changed": ["written_block_ids"],
   "generation.failed": ["reason"],
+  // 探索事件对界面只是个"该重读列表"的信号；payload 里的两个键是后端随事件发的身份，
+  // 前端不拼数据（列表真身从 `GET /projects/{id}/explorations` 读回来）。
+  "exploration.updated": ["exploration_id", "status"],
 };
 
-describe("SSE 事件名恰好四个", () => {
+describe("SSE 事件名恰好五个", () => {
   it("多一个少一个都不行——多出来的那个前端不会订阅，少掉的那个界面不更新", () => {
     expect([...EVENT_NAMES]).toEqual([
       "round.updated",
       "packet.emitted",
       "doc.changed",
       "generation.failed",
+      "exploration.updated",
     ]);
   });
 

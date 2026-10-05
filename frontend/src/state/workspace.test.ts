@@ -204,7 +204,51 @@ describe("reduce", () => {
     expect(state.connection).toBe("open");
   });
 
-  it("事件名不在四类里就当没发生", () => {
+  it("exploration.updated 只置「该重读探索列表」，轮次与文档一根手指都不碰", () => {
+    const document = { version_no: 1 } as never;
+    const state = reduce(
+      { ...initialState, projectId: "p1", round, document },
+      {
+        type: "event",
+        event: {
+          name: "exploration.updated",
+          project_id: "p1",
+          round_id: null,
+          payload: { exploration_id: "x-1", status: "running" },
+          seq: 11,
+        } as never,
+      },
+    );
+    expect(state.explorationStale).toBe(true);
+    expect(state.round).toBe(round);
+    expect(state.document).toBe(document);
+    expect(state.error).toBeNull();
+  });
+
+  it("别的项目的 exploration.updated 不影响当前工作区", () => {
+    const base = { ...initialState, projectId: "p1", round };
+    const state = reduce(base, {
+      type: "event",
+      event: {
+        name: "exploration.updated",
+        project_id: "p2",
+        round_id: null,
+        payload: { exploration_id: "x-9", status: "done" },
+        seq: 12,
+      } as never,
+    });
+    expect(state).toBe(base);
+  });
+
+  it("探索列表重读完之后清掉信号（不然第二趟的变化不会再触发重读）", () => {
+    const state = reduce(
+      { ...initialState, projectId: "p1", explorationStale: true },
+      { type: "explorations" },
+    );
+    expect(state.explorationStale).toBe(false);
+  });
+
+  it("事件名不在五类里就当没发生", () => {
     const base = { ...initialState, projectId: "p1", round };
     const event = {
       name: "made.up",

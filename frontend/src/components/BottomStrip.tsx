@@ -1,8 +1,6 @@
 /* 底部常驻条：左边是"这一轮的想法"，右边是这一轮现在能做的动作。
    左边的宽度与文档栏对齐，右边的宽度与闭环栏对齐 —— 视线不用跨屏找。 */
 
-import { useState } from "react";
-
 import type { AwaitingMode } from "../api/payload";
 import type { MaterialSummaryView } from "../api/types";
 import { MaterialPicker } from "./MaterialPicker";
@@ -12,7 +10,10 @@ export function BottomStrip({
   mode,
   pending,
   drawerOpen,
+  value,
+  onChange,
   onStartRound,
+  pendingSeedCount = 0,
   materials = [],
   onMaterialUploaded,
   onMaterialRemove,
@@ -26,7 +27,12 @@ export function BottomStrip({
   mode: AwaitingMode;
   pending: string | null;
   drawerOpen: boolean;
-  onStartRound: (input: string) => void;
+  /** 输入文本（受控）：由 `useWorkspaceData` 管，因为"收下为下一轮输入"要往里追加。 */
+  value: string;
+  onChange: (text: string) => void;
+  onStartRound: () => void;
+  /** 已经收下、等着随下一轮发出的调研产物条数。 */
+  pendingSeedCount?: number;
   /** 这一轮已经选好的材料（上传成功的那些）。 */
   materials?: MaterialSummaryView[];
   onMaterialUploaded?: (material: MaterialSummaryView) => void;
@@ -37,16 +43,14 @@ export function BottomStrip({
   onOpenDrawer: () => void;
   onRetry: () => void;
 }) {
-  const [text, setText] = useState("");
   // 放弃也是终点：不妨碍开下一轮（这一轮不再占用输入框）
   const accepting =
     mode === "input" || mode === "done" || mode === "failed" || mode === "abandoned";
-  const canSubmit = accepting && pending === null && text.trim() !== "";
+  const canSubmit = accepting && pending === null && value.trim() !== "";
 
   const submit = () => {
     if (!canSubmit) return;
-    onStartRound(text.trim());
-    setText("");
+    onStartRound();
   };
 
   return (
@@ -58,7 +62,7 @@ export function BottomStrip({
         <textarea
           id="round-input"
           className="input__box"
-          value={text}
+          value={value}
           readOnly={!accepting}
           disabled={!accepting}
           placeholder={
@@ -66,11 +70,14 @@ export function BottomStrip({
               ? "把这一轮的想法倒进来：一个新功能、一句要求、一个约束，或者你刚想到的点。"
               : "这一轮还没结束，先在上面把它走完。"
           }
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit();
           }}
         />
+        {pendingSeedCount > 0 && (
+          <p className="input__hint">来自 {pendingSeedCount} 条调研产物</p>
+        )}
         <div className="input__actions">
           {accepting && onMaterialUploaded !== undefined && onMaterialRemove !== undefined && (
             <MaterialPicker

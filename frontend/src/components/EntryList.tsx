@@ -6,6 +6,7 @@ import { useId, useState } from "react";
 
 import type { Entry } from "../api/types";
 import { useEdit } from "./EditContext";
+import { useExploration } from "./ExplorationContext";
 import { EvidenceChip } from "./EvidenceChip";
 
 export function EntryList({
@@ -98,6 +99,7 @@ function EntryRow({
   onStopEdit: () => void;
 }) {
   const edit = useEdit();
+  const research = useExploration();
   const [armed, setArmed] = useState(false);
 
   if (editing) {
@@ -122,37 +124,54 @@ function EntryRow({
     <li className="entry" id={`entry-${entry.entry_id}`}>
       <span className="entry__text">{entry.text}</span>
       <span className="entry__refs">
-        {canEdit && (
+        {(canEdit || research.canStart) && (
           <span className="entry__tools">
-            <button
-              type="button"
-              className="iconbtn"
-              onClick={onStartEdit}
-              aria-label="改这一条"
-              title="改这一条（会记一版）"
-            >
-              改
-            </button>
-            {armed ? (
-              <button
-                type="button"
-                className="iconbtn iconbtn--danger"
-                onClick={() => edit.remove(blockId, entry.entry_id)}
-                onBlur={() => setArmed(false)}
-                title="再点一次就真的删掉"
-              >
-                确认删
-              </button>
-            ) : (
+            {research.canStart && (
               <button
                 type="button"
                 className="iconbtn"
-                onClick={() => setArmed(true)}
-                aria-label="删这一条"
-                title="删这一条（会记一版）"
+                onClick={() =>
+                  research.start({ kind: "entry", ref: entry.entry_id, focus: entry.text })
+                }
+                aria-label="调研这一条"
+                title="拿这一条去调研（只出待过目的候选，不改文档）"
               >
-                删
+                调研
               </button>
+            )}
+            {canEdit && (
+              <>
+                <button
+                  type="button"
+                  className="iconbtn"
+                  onClick={onStartEdit}
+                  aria-label="改这一条"
+                  title="改这一条（会记一版）"
+                >
+                  改
+                </button>
+                {armed ? (
+                  <button
+                    type="button"
+                    className="iconbtn iconbtn--danger"
+                    onClick={() => edit.remove(blockId, entry.entry_id)}
+                    onBlur={() => setArmed(false)}
+                    title="再点一次就真的删掉"
+                  >
+                    确认删
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="iconbtn"
+                    onClick={() => setArmed(true)}
+                    aria-label="删这一条"
+                    title="删这一条（会记一版）"
+                  >
+                    删
+                  </button>
+                )}
+              </>
             )}
           </span>
         )}

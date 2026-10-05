@@ -6,6 +6,7 @@ import type {
   DocumentView,
   EditResult,
   EvidenceLookupView,
+  ExplorationView,
   MaterialSummaryView,
   ProjectSummaryView,
   RollbackResult,
@@ -19,10 +20,18 @@ import type {
 
 const BASE = "/api";
 
-/** 起轮的请求体（工具层 C-2 起带材料 id）。 */
+/** 起轮的请求体（工具层 C-2 起带材料 id；M8 起带调研种子）。 */
 export interface StartBody {
   input: string;
   material_ids: string[];
+  /** 过目台收下的候选：`探索id#候选id`。缺省 = 这一轮不带种子。 */
+  seed_ids: string[];
+}
+
+/** 发起调研的请求体（M8）。 */
+export interface ExplorationBody {
+  kind: "inquiry";
+  scope: { kind: "entry" | "document"; ref: string | null; text: string | null };
 }
 
 /** 真模型一轮要跑几十秒；给一个宽上限，避免请求永远挂着没人管。 */
@@ -245,6 +254,45 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  /** 这个项目走过的探索（最新在前，≤20）：过目台与历史都读它（M8）。 */
+  explorations: (projectId: string) =>
+    request<ExplorationView[]>(`/projects/${projectId}/explorations`),
+
+  /** 发起一趟调研：请求内跑完，失败也返回 200 + status=failed（可重试）。 */
+  startExploration: (projectId: string, body: ExplorationBody) =>
+    request<ExplorationView>(`/projects/${projectId}/explorations`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** 重跑一趟失败的调研：只补没跑完的那次调用。 */
+  retryExploration: (explorationId: string) =>
+    request<ExplorationView>(
+      `/explorations/${encodeURIComponent(explorationId)}/retry`,
+      { method: "POST" },
+    ),
+
+  /** 放弃一趟调研：先记状态、再取消正在跑的调用。 */
+  abandonExploration: (explorationId: string) =>
+    request<ExplorationView>(
+      `/explorations/${encodeURIComponent(explorationId)}/abandon`,
+      { method: "POST" },
+    ),
+
+  /** 收下一条候选：`seed` = 预填下一轮输入；`material` = 落成材料。 */
+  keepCandidate: (explorationId: string, candidateId: string, as: "seed" | "material") =>
+    request<ExplorationView>(
+      `/explorations/${encodeURIComponent(explorationId)}/candidates/${encodeURIComponent(candidateId)}/keep`,
+      { method: "POST", body: JSON.stringify({ as }) },
+    ),
+
+  /** 删掉一条候选：终态，不过目台、不回流。 */
+  dismissCandidate: (explorationId: string, candidateId: string) =>
+    request<ExplorationView>(
+      `/explorations/${encodeURIComponent(explorationId)}/candidates/${encodeURIComponent(candidateId)}/dismiss`,
+      { method: "POST" },
+    ),
 
   submitOpening: (roundId: string, body: OpeningBody) =>
     request<RoundView>(`/rounds/${roundId}/opening`, {

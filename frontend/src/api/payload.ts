@@ -255,14 +255,55 @@ export function integrationSummary(round: RoundView): string {
   return parts.length === 0 ? "整合完成" : `整合：${parts.join(" · ")}`;
 }
 
-/** 起轮的请求体：一句话 + 这一轮带进来的材料 id（工具层 C-2）。 */
+/** 起轮的请求体：一句话 + 这一轮带进来的材料 id（工具层 C-2）+ 调研种子（M8）。 */
 export interface StartBody {
   input: string;
   material_ids: string[];
+  /** 过目台上"收下为下一轮输入"的那些候选：`探索id#候选id`。 */
+  seed_ids: string[];
 }
 
-export function buildStart(input: string, materials: MaterialSummaryView[]): StartBody {
-  return { input, material_ids: materials.map((item) => item.material_id) };
+export function buildStart(
+  input: string,
+  materials: MaterialSummaryView[],
+  seeds: string[] = [],
+): StartBody {
+  return {
+    input,
+    material_ids: materials.map((item) => item.material_id),
+    seed_ids: [...seeds],
+  };
+}
+
+/**
+ * 发起调研的锚点（M8）：要么钉在文档里某一条上，要么是整份文档。
+ * `focus` 是条目原文——后端拿它当调研的题目。
+ */
+export type ExplorationAnchor =
+  | { kind: "entry"; ref: string; focus: string }
+  | { kind: "document" };
+
+/** `POST /projects/{id}/explorations` 的请求体（与后端 `StartExplorationRequest` 一一对应）。 */
+export interface ExplorationBody {
+  kind: "inquiry";
+  scope: { kind: "entry" | "document"; ref: string | null; text: string | null };
+}
+
+export function buildExplorationBody(anchor: ExplorationAnchor): ExplorationBody {
+  if (anchor.kind === "entry") {
+    return { kind: "inquiry", scope: { kind: "entry", ref: anchor.ref, text: anchor.focus } };
+  }
+  return { kind: "inquiry", scope: { kind: "document", ref: null, text: null } };
+}
+
+/**
+ * 收下一条候选后往输入框里追加种子文本：多条之间换行分隔，空文本不加分隔，
+ * 用户已经打的内容原样保留。
+ */
+export function appendSeedText(current: string, text: string): string {
+  if (text === "") return current;
+  if (current === "") return text;
+  return `${current}\n${text}`;
 }
 
 /**

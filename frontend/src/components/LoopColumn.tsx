@@ -1,10 +1,22 @@
-/* 闭环栏（右栏）：本轮讨论流；到了要你决定的时候，问卷/草案从右侧滑出盖住这一栏。
-   复述卡是特例——它不是抽屉，它就是这一轮的开场，所以占满整栏。 */
+/* 闭环栏（右栏）：上半是「本轮 / 过目台」两个页签。
+   本轮讨论流里，到了要你决定的时候，问卷/草案从右侧滑出盖住这一栏。
+   复述卡是特例——它不是抽屉，它就是这一轮的开场，所以占满整栏、且不显示页签
+   （显示会把复述卡藏到「过目台」后面）。 */
+
+import { useState } from "react";
 
 import type { AwaitingMode } from "../api/payload";
-import type { DocumentView, RoundHeadView, RoundView, SchemaView } from "../api/types";
+import type {
+  CandidateView,
+  DocumentView,
+  ExplorationView,
+  RoundHeadView,
+  RoundView,
+  SchemaView,
+} from "../api/types";
 import type { RoundDrafts } from "../state/useRoundDrafts";
 import { DraftDrawer } from "./DraftDrawer";
+import { ExplorationTray } from "./ExplorationTray";
 import { LoopPane } from "./LoopPane";
 import { OpeningCard } from "./OpeningCard";
 import { QuestionnaireDrawer } from "./QuestionnaireDrawer";
@@ -19,6 +31,8 @@ export function LoopColumn({
   pending,
   drafts,
   history = null,
+  explorations = [],
+  explorationsPending = false,
   onSubmitOpening,
   onSubmitAnswers,
   onSkipAll,
@@ -27,6 +41,12 @@ export function LoopColumn({
   onRetry,
   onAbandon,
   onViewRound,
+  onStartResearch,
+  onRetryExploration,
+  onAbandonExploration,
+  onKeepSeed,
+  onKeepMaterial,
+  onDismissCandidate,
 }: {
   round: RoundView | null;
   doc: DocumentView | null;
@@ -40,6 +60,9 @@ export function LoopColumn({
   drafts: RoundDrafts;
   /** 正在看历史轮（只读）时给出的横幅；null = 正常看当前这一轮。 */
   history?: { roundId: string; onBack: () => void } | null;
+  /** 过目台的数据源（M8）：这个项目走过的探索。 */
+  explorations?: ExplorationView[];
+  explorationsPending?: boolean;
   onSubmitOpening: () => void;
   onSubmitAnswers: () => void;
   onSkipAll: () => void;
@@ -49,89 +72,137 @@ export function LoopColumn({
   onAbandon: () => void;
   /** 切过去只读看某一轮（复用已有的 `viewRound`）。 */
   onViewRound: (roundId: string) => void;
+  /** 发起调研（整份文档；条目入口在文档的条目工具行上）。 */
+  onStartResearch: () => void;
+  onRetryExploration: (explorationId: string) => void;
+  onAbandonExploration: (explorationId: string) => void;
+  onKeepSeed: (explorationId: string, candidate: CandidateView) => void;
+  onKeepMaterial: (explorationId: string, candidate: CandidateView) => void;
+  onDismissCandidate: (explorationId: string, candidate: CandidateView) => void;
 }) {
+  const [tab, setTab] = useState<"round" | "tray">("round");
+  const showTabs = mode !== "opening";
+  const onTray = tab === "tray" && showTabs;
   const drawerOpen =
     history == null &&
     !drafts.collapsed && (mode === "questionnaire" || mode === "draft") && round !== null;
 
   return (
     <div className="loop">
-      <RoundHistory
-        rounds={rounds}
-        currentRoundId={round?.round_id ?? null}
-        onView={onViewRound}
-      />
-      {history != null && (
-        <div className="loop__history">
-          <span className="muted small">
-            正在看历史轮次 {history.roundId}（只读，不能在这里答题或写入）
-          </span>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={history.onBack}>
-            回到最新一轮
+      {showTabs && (
+        <div className="loop__tabs" role="tablist" aria-label="闭环区">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!onTray}
+            className={onTray ? "loop__tab" : "loop__tab loop__tab--on"}
+            onClick={() => setTab("round")}
+          >
+            本轮
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={onTray}
+            className={onTray ? "loop__tab loop__tab--on" : "loop__tab"}
+            onClick={() => setTab("tray")}
+          >
+            过目台
           </button>
         </div>
       )}
-      {mode === "opening" && round !== null ? (
-        <OpeningCard
-          round={round}
-          doc={doc}
-          edits={drafts.edits}
-          seats={drafts.seats}
-          webQueries={drafts.webQueries}
-          pending={pending === "opening"}
-          onChangeClaim={drafts.changeClaim}
-          onToggleSeat={drafts.toggleSeat}
-          onToggleWebQuery={drafts.toggleWebQuery}
-          onSubmit={onSubmitOpening}
+
+      {onTray ? (
+        <ExplorationTray
+          explorations={explorations}
+          pending={explorationsPending}
+          onRetry={onRetryExploration}
+          onAbandon={onAbandonExploration}
+          onKeepSeed={onKeepSeed}
+          onKeepMaterial={onKeepMaterial}
+          onDismiss={onDismissCandidate}
+          onStartDocument={onStartResearch}
         />
-      ) : round === null ? (
-        <div className="loop__scroll">
-          <div className="loop__head">
-            <h2 className="loop__title">还没有开过一轮</h2>
-          </div>
-          <p className="muted small">
-            把这一轮的想法写在下面。它会先复述给你看，你确认了才请席位发言，最后才可能写进文档。
-          </p>
-        </div>
       ) : (
-        <LoopPane
-          round={round}
-          pending={pending}
-          limits={schema?.limits ?? null}
-          onRetry={onRetry}
-          onAbandon={onAbandon}
-          onOpenQuestionnaire={() => drafts.setCollapsed(false)}
-          onOpenDraft={() => drafts.setCollapsed(false)}
-        />
-      )}
+        <>
+          <RoundHistory
+            rounds={rounds}
+            currentRoundId={round?.round_id ?? null}
+            onView={onViewRound}
+          />
+          {history != null && (
+            <div className="loop__history">
+              <span className="muted small">
+                正在看历史轮次 {history.roundId}（只读，不能在这里答题或写入）
+              </span>
+              <button type="button" className="btn btn--ghost btn--sm" onClick={history.onBack}>
+                回到最新一轮
+              </button>
+            </div>
+          )}
+          {mode === "opening" && round !== null ? (
+            <OpeningCard
+              round={round}
+              doc={doc}
+              edits={drafts.edits}
+              seats={drafts.seats}
+              webQueries={drafts.webQueries}
+              pending={pending === "opening"}
+              onChangeClaim={drafts.changeClaim}
+              onToggleSeat={drafts.toggleSeat}
+              onToggleWebQuery={drafts.toggleWebQuery}
+              onSubmit={onSubmitOpening}
+            />
+          ) : round === null ? (
+            <div className="loop__scroll">
+              <div className="loop__head">
+                <h2 className="loop__title">还没有开过一轮</h2>
+              </div>
+              <p className="muted small">
+                把这一轮的想法写在下面。它会先复述给你看，你确认了才请席位发言，最后才可能写进文档。
+              </p>
+            </div>
+          ) : (
+            <LoopPane
+              round={round}
+              pending={pending}
+              limits={schema?.limits ?? null}
+              onRetry={onRetry}
+              onAbandon={onAbandon}
+              onOpenQuestionnaire={() => drafts.setCollapsed(false)}
+              onOpenDraft={() => drafts.setCollapsed(false)}
+            />
+          )}
 
-      {drawerOpen && mode === "questionnaire" && round !== null && (
-        <QuestionnaireDrawer
-          round={round}
-          doc={doc}
-          drafts={drafts.answers}
-          pending={pending === "answers"}
-          onChange={drafts.changeAnswer}
-          onSubmit={onSubmitAnswers}
-          onSkipAll={onSkipAll}
-          onCollapse={() => drafts.setCollapsed(true)}
-        />
-      )}
+          {drawerOpen && mode === "questionnaire" && round !== null && (
+            <QuestionnaireDrawer
+              round={round}
+              doc={doc}
+              drafts={drafts.answers}
+              pending={pending === "answers"}
+              onChange={drafts.changeAnswer}
+              onSubmit={onSubmitAnswers}
+              onSkipAll={onSkipAll}
+              onCollapse={() => drafts.setCollapsed(true)}
+            />
+          )}
 
-      {drawerOpen && mode === "draft" && round !== null && (
-        <DraftDrawer
-          round={round}
-          doc={doc}
-          accepted={drafts.accepted}
-          memoryAccepted={drafts.memoryAccepted}
-          pending={pending === "confirm"}
-          onToggle={drafts.toggleAccepted}
-          onToggleMemory={drafts.toggleMemory}
-          onSetAccepted={drafts.setAccepted}
-          onSubmit={onConfirm}
-          onDig={onDig}
-          onCollapse={() => drafts.setCollapsed(true)}
-        />
+          {drawerOpen && mode === "draft" && round !== null && (
+            <DraftDrawer
+              round={round}
+              doc={doc}
+              accepted={drafts.accepted}
+              memoryAccepted={drafts.memoryAccepted}
+              pending={pending === "confirm"}
+              onToggle={drafts.toggleAccepted}
+              onToggleMemory={drafts.toggleMemory}
+              onSetAccepted={drafts.setAccepted}
+              onSubmit={onConfirm}
+              onDig={onDig}
+              onCollapse={() => drafts.setCollapsed(true)}
+            />
+          )}
+        </>
       )}
     </div>
   );

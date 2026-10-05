@@ -12,6 +12,7 @@ const EVENT_NAMES = [
   "packet.emitted",
   "doc.changed",
   "generation.failed",
+  "exploration.updated",
 ] as const;
 
 export type ConnectionState = "idle" | "open" | "lost";

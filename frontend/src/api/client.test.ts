@@ -131,3 +131,81 @@ describe("request() 非 2xx 的回包", () => {
     });
   });
 });
+
+/* ── 探索端点（M8）：六个方法各自打到哪、带什么（契约在 routes.py:391-461） ── */
+
+function captureFetch(payload: unknown = {}): { url: string; init: RequestInit }[] {
+  const calls: { url: string; init: RequestInit }[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init ?? {} });
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => JSON.stringify(payload),
+      json: async () => payload,
+    };
+  }) as unknown as typeof fetch;
+  return calls;
+}
+
+describe("探索端点的路径与请求体（M8）", () => {
+  it("列表：GET 项目的探索", async () => {
+    const calls = captureFetch([]);
+
+    await api.explorations("p1");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("/api/projects/p1/explorations");
+    expect(calls[0]!.init.method).toBeUndefined();
+  });
+
+  it("发起：POST 项目的探索，带上 kind 与 scope", async () => {
+    const calls = captureFetch({ exploration_id: "x-1" });
+
+    await api.startExploration("p1", {
+      kind: "inquiry",
+      scope: { kind: "entry", ref: "e1", text: "导出要有筛选" },
+    });
+
+    expect(calls[0]!.url).toBe("/api/projects/p1/explorations");
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      kind: "inquiry",
+      scope: { kind: "entry", ref: "e1", text: "导出要有筛选" },
+    });
+  });
+
+  it("重试 / 放弃：POST 到那一趟探索的动作端点", async () => {
+    const calls = captureFetch({ exploration_id: "x-1" });
+
+    await api.retryExploration("x-1");
+    await api.abandonExploration("x-1");
+
+    expect(calls.map((call) => [call.url, call.init.method])).toEqual([
+      ["/api/explorations/x-1/retry", "POST"],
+      ["/api/explorations/x-1/abandon", "POST"],
+    ]);
+  });
+
+  it("收下：POST 带上 `as`（seed / material 是后端定的两种去向）", async () => {
+    const calls = captureFetch({ exploration_id: "x-1" });
+
+    await api.keepCandidate("x-1", "H1", "seed");
+    await api.keepCandidate("x-1", "B2", "material");
+
+    expect(calls[0]!.url).toBe("/api/explorations/x-1/candidates/H1/keep");
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ as: "seed" });
+    expect(calls[1]!.url).toBe("/api/explorations/x-1/candidates/B2/keep");
+    expect(JSON.parse(String(calls[1]!.init.body))).toEqual({ as: "material" });
+  });
+
+  it("删掉：POST 到候选的 dismiss", async () => {
+    const calls = captureFetch({ exploration_id: "x-1" });
+
+    await api.dismissCandidate("x-1", "H1");
+
+    expect(calls[0]!.url).toBe("/api/explorations/x-1/candidates/H1/dismiss");
+    expect(calls[0]!.init.method).toBe("POST");
+  });
+});

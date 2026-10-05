@@ -27,6 +27,8 @@ export interface State {
   memory: MemoryEntryView[];
   documentStale: boolean;
   roundStale: boolean;
+  /** 探索列表（过目台）该重读了。与轮次无关：它由 `exploration.updated` 置起。 */
+  explorationStale: boolean;
   lastSeq: number;
   connection: Connection["state"];
   error: string | null;
@@ -41,6 +43,8 @@ export type Action =
   | { type: "connection"; state: Connection["state"] }
   | { type: "error"; message: string | null }
   | { type: "written"; blockIds: string[] }
+  /** 探索列表已从后端重读（数据在 `useWorkspaceData` 里）——清掉重读信号。 */
+  | { type: "explorations" }
   | { type: "reset" };
 
 export const initialState: State = {
@@ -52,6 +56,7 @@ export const initialState: State = {
   memory: [],
   documentStale: false,
   roundStale: false,
+  explorationStale: false,
   lastSeq: 0,
   connection: "idle",
   error: null,
@@ -95,6 +100,9 @@ export function reduce(state: State, action: Action): State {
     case "written":
       return { ...state, justWritten: action.blockIds };
 
+    case "explorations":
+      return { ...state, explorationStale: false };
+
     case "reset":
       return { ...initialState, connection: state.connection };
 
@@ -128,6 +136,9 @@ function applyEvent(state: State, event: WorkspaceEvent): State {
         error:
           typeof event.payload.reason === "string" ? event.payload.reason : "这一轮失败了",
       };
+    case "exploration.updated":
+      // 只置"该重读了"：event payload 只有 id 与状态，列表真身去后端读。
+      return { ...base, explorationStale: true };
     default:
       return base;
   }

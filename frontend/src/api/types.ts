@@ -453,3 +453,36 @@ export interface SearchResultsView {
   hits: SearchHitView[];
   truncated: boolean;
 }
+
+/** 一趟调研里的一条候选（M8）：假设带证伪两行，盲区带下一步。 */
+export interface CandidateView {
+  candidate_id: string;
+  kind: "hypothesis" | "blind_spot" | string;
+  statement: string;
+  state: "new" | "kept" | "dismissed" | string;
+  kept_as: "seed" | "material" | null;
+  /** 收下为材料时的 material_id；收下为种子时为空。 */
+  kept_ref: string | null;
+  grounding: "document" | "material" | "invented" | null;
+  based_on: string[];
+  falsification: string | null;
+  evidence_needed: string | null;
+  next_step: string | null;
+}
+
+/** 一趟探索运行（M8）：过目台与历史都读它。 */
+export interface ExplorationView {
+  exploration_id: string;
+  project_id: string;
+  kind: "inquiry" | string;
+  status: "running" | "done" | "failed" | "abandoned" | string;
+  scope_kind: "entry" | "document" | string;
+  scope_ref: string | null;
+  scope_text: string | null;
+  created_at: string;
+  failure_reason: string | null;
+  abandon_reason: string | null;
+  /** 超上限被解析层截掉的候选条数（界面照实说）。 */
+  overflow_count: number;
+  candidates: CandidateView[];
+}

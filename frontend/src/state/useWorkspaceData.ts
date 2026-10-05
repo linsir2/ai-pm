@@ -7,8 +7,13 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { ApiError, api } from "../api/client";
 import type { AnswersBody, EditBody, OpeningBody } from "../api/client";
+import { appendSeedText, buildExplorationBody, buildStart } from "../api/payload";
+import type { ExplorationAnchor } from "../api/payload";
+import { seedText } from "./explorations";
 import type {
+  CandidateView,
   EditResult,
+  ExplorationView,
   MaterialSummaryView,
   ProjectSummaryView,
   RoundHeadView,
@@ -32,7 +37,9 @@ export type PendingAction =
   /** 材料库上的动作（删 / 重解析）：与"这一轮"无关，但仍然串行，不并发点。 */
   | "material"
   /** 记忆抽屉上的动作（M6）：删一条记忆——同样串行，不与"这一轮"的动作并发。 */
-  | "memory";
+  | "memory"
+  /** 过目台上的动作（M8）：发起 / 重试 / 放弃 / 收下 / 删掉，串行不并发。 */
+  | "exploration";
 
 const PROJECT_PARAM = "project";
 
@@ -58,6 +65,12 @@ export function useWorkspaceData() {
   const [pendingMaterials, setPendingMaterials] = useState<MaterialSummaryView[]>([]);
   //: **材料库**：这个项目里全部材料（与"这一轮带哪些"是两回事）
   const [materials, setMaterials] = useState<MaterialSummaryView[]>([]);
+  //: **过目台**：这个项目走过的探索（最新在前）——事件只置 stale，真身从这里读。
+  const [explorations, setExplorations] = useState<ExplorationView[]>([]);
+  // 底部输入框的文本（上提是为了让"收下为下一轮输入"能往里追加）
+  const [roundInput, setRoundInput] = useState("");
+  // 收下为"下一轮输入"的候选 id（`探索id#候选id`）：起轮时随请求发出
+  const [pendingSeeds, setPendingSeeds] = useState<string[]>([]);
   // 我们自己取消掉的那条在途请求会以网络错误回来——别把它当"连不上后端"弹出来
   const abandoning = useRef(false);
   // 点跨轮编号时临时切过去看的那一轮（只读；"回到最新"就清掉）
@@ -77,6 +90,11 @@ export function useWorkspaceData() {
       .materials(projectId)
       .then(setMaterials)
       .catch(() => setMaterials([]));
+    // 探索列表（过目台）同理：独立 catch，失败置空不崩工作区
+    void api
+      .explorations(projectId)
+      .then(setExplorations)
+      .catch(() => setExplorations([]));
     return workspace;
   }, []);
 
@@ -208,6 +226,18 @@ export function useWorkspaceData() {
       .catch((error: unknown) => dispatch({ type: "error", message: describe(error) }));
   }, [state.roundStale, state.round]);
 
+  // `exploration.updated` 只置 stale（事件 payload 只有 id 与状态）：列表真身从这里读回来。
+  // 读完必须清信号——否则第二趟调研的完成事件不会再把 effect 触发一遍。
+  useEffect(() => {
+    const projectId = state.projectId;
+    if (projectId === null || !state.explorationStale) return;
+    void api
+      .explorations(projectId)
+      .then(setExplorations)
+      .catch((error: unknown) => dispatch({ type: "error", message: describe(error) }))
+      .finally(() => dispatch({ type: "explorations" }));
+  }, [state.explorationStale, state.projectId]);
+
   /** 跑一个长时间动作：串行、出错只提示、成功就把新的这一轮换进状态。 */
   const run = useCallback(
     async (action: PendingAction, work: () => Promise<void>) => {
@@ -244,22 +274,89 @@ export function useWorkspaceData() {
     [loadWorkspace],
   );
 
+  /** 起轮：输入、材料与调研种子都从本地状态读（输入框已上提到这里）。 */
   const startRound = useCallback(
-    (input: string, materials: MaterialSummaryView[] = []) =>
+    () =>
       run("start", async () => {
         const projectId = selected.current;
         if (projectId === null) return;
+        const input = roundInput.trim();
+        if (input === "") return;
         setHistoryRound(null); // 推进当前这一轮的动作，先把历史视图关掉
         dispatch({
           type: "round",
-          round: await api.startRound(projectId, {
-            input,
-            material_ids: materials.map((item) => item.material_id),
-          }),
+          round: await api.startRound(
+            projectId,
+            buildStart(input, pendingMaterials, pendingSeeds),
+          ),
         });
-        setPendingMaterials([]);    // 材料已经随这一轮发出去了
+        // **成功才清**（有意修正旧行为：以前一提交就清，失败后用户得重打一遍）。
+        setPendingMaterials([]); // 材料已经随这一轮发出去了
+        setRoundInput("");
+        setPendingSeeds([]);
       }),
-    [run],
+    [run, roundInput, pendingMaterials, pendingSeeds],
+  );
+
+  /** 收下一条候选为"下一轮输入"：把话并进输入框，并记下种子 id（去重）。 */
+  const addSeed = useCallback((candidate: CandidateView, explorationId: string) => {
+    const seedId = `${explorationId}#${candidate.candidate_id}`;
+    setRoundInput((text) => appendSeedText(text, seedText(candidate)));
+    setPendingSeeds((list) => (list.includes(seedId) ? list : [...list, seedId]));
+  }, []);
+
+  /** 把后端刚返回的那一趟探索换进列表（没有就补在最前）。 */
+  const replaceExploration = useCallback((view: ExplorationView) => {
+    setExplorations((list) =>
+      list.some((item) => item.exploration_id === view.exploration_id)
+        ? list.map((item) => (item.exploration_id === view.exploration_id ? view : item))
+        : [view, ...list],
+    );
+  }, []);
+
+  /** 发起一趟调研：请求内跑完（失败也会返回 status=failed 的那一份）。 */
+  const research = useCallback(
+    (anchor: ExplorationAnchor) =>
+      run("exploration", async () => {
+        const projectId = selected.current;
+        if (projectId === null) return;
+        replaceExploration(
+          await api.startExploration(projectId, buildExplorationBody(anchor)),
+        );
+      }),
+    [replaceExploration, run],
+  );
+
+  const retryExploration = useCallback(
+    (explorationId: string) =>
+      run("exploration", async () => {
+        replaceExploration(await api.retryExploration(explorationId));
+      }),
+    [replaceExploration, run],
+  );
+
+  const abandonExploration = useCallback(
+    (explorationId: string) =>
+      run("exploration", async () => {
+        replaceExploration(await api.abandonExploration(explorationId));
+      }),
+    [replaceExploration, run],
+  );
+
+  const keepCandidate = useCallback(
+    (explorationId: string, candidateId: string, as: "seed" | "material") =>
+      run("exploration", async () => {
+        replaceExploration(await api.keepCandidate(explorationId, candidateId, as));
+      }),
+    [replaceExploration, run],
+  );
+
+  const dismissCandidate = useCallback(
+    (explorationId: string, candidateId: string) =>
+      run("exploration", async () => {
+        replaceExploration(await api.dismissCandidate(explorationId, candidateId));
+      }),
+    [replaceExploration, run],
   );
 
   /** 上传一份材料：成功后挂进"这一轮要带的材料"（还没开轮就能撤掉）。 */
@@ -475,6 +572,17 @@ export function useWorkspaceData() {
     state,
     schema,
     rounds,
+    explorations,
+    explorationsPending: pending === "exploration",
+    research,
+    retryExploration,
+    abandonExploration,
+    keepCandidate,
+    dismissCandidate,
+    roundInput,
+    setRoundInput,
+    pendingSeeds,
+    addSeed,
     searchQuery,
     searchResults,
     searchPending,

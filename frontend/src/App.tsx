@@ -13,10 +13,12 @@ import {
   buildOpeningBody,
   materialHitTarget,
 } from "./api/payload";
+import type { ExplorationAnchor } from "./api/payload";
 import { BottomStrip } from "./components/BottomStrip";
 import { DocumentPane } from "./components/DocumentPane";
 import { EditScope } from "./components/EditContext";
 import { EvidenceScope } from "./components/EvidenceContext";
+import { ExplorationScope } from "./components/ExplorationContext";
 import { jumpToChunk, jumpToEntry, jumpToEvidence } from "./components/jump";
 import { sectionOfEntry } from "./document/structure";
 import { LoopColumn } from "./components/LoopColumn";
@@ -24,6 +26,7 @@ import { MaterialLibrary } from "./components/MaterialLibrary";
 import { MemoryDrawer } from "./components/MemoryDrawer";
 import { Onboarding } from "./components/Onboarding";
 import { ReadinessDrawer } from "./components/ReadinessDrawer";
+import { ResearchDrawer } from "./components/ResearchDrawer";
 import { SideRail } from "./components/SideRail";
 import { Banner, Skeleton } from "./components/States";
 import { TopBar } from "./components/TopBar";
@@ -46,6 +49,8 @@ export default function App() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [readinessOpen, setReadinessOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  // 发起调研的抽屉（M8）：点条目的「调研」先落到这里，再点「开始调研」才真发请求。
+  const [researchAnchor, setResearchAnchor] = useState<ExplorationAnchor | null>(null);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
 
@@ -179,6 +184,15 @@ export default function App() {
     [data, project],
   );
 
+  // 调研的入口（M8）：条目工具行只负责把锚点交给发起抽屉，不直接发请求。
+  const researchApi = useMemo(
+    () => ({
+      canStart: project !== null && data.pending === null,
+      start: (anchor: ExplorationAnchor) => setResearchAnchor(anchor),
+    }),
+    [project, data.pending],
+  );
+
   if (project === null) {
     return (
       <div className="shell shell--plain">
@@ -214,6 +228,7 @@ export default function App() {
   return (
     <EvidenceScope index={evidence} onJump={jumpToEvidenceById}>
       <EditScope value={editApi}>
+        <ExplorationScope value={researchApi}>
         <div className="shell">
           <TopBar
             projects={projects}
@@ -272,6 +287,25 @@ export default function App() {
             mode={readingHistory ? null : mode}
             pending={data.pending}
             drafts={drafts}
+            explorations={data.explorations}
+            explorationsPending={data.explorationsPending}
+            onStartResearch={() => setResearchAnchor({ kind: "document" })}
+            onRetryExploration={(explorationId) => void data.retryExploration(explorationId)}
+            onAbandonExploration={(explorationId) =>
+              void data.abandonExploration(explorationId)
+            }
+            onKeepSeed={(explorationId, candidate) => {
+              // 先入输入框（本地立即反馈），后端收下是另一条在途请求；
+              // 万一它失败，起轮时后端会以人话拒绝这条种子，不会静默混过去。
+              data.addSeed(candidate, explorationId);
+              void data.keepCandidate(explorationId, candidate.candidate_id, "seed");
+            }}
+            onKeepMaterial={(explorationId, candidate) =>
+              void data.keepCandidate(explorationId, candidate.candidate_id, "material")
+            }
+            onDismissCandidate={(explorationId, candidate) =>
+              void data.dismissCandidate(explorationId, candidate.candidate_id)
+            }
             history={
               readingHistory && data.historyRound !== null
                 ? { roundId: data.historyRound.round_id, onBack: data.backToLatest }
@@ -325,12 +359,15 @@ export default function App() {
               (mode === "questionnaire" || mode === "draft") &&
               round !== null
             }
+            value={data.roundInput}
+            onChange={data.setRoundInput}
+            pendingSeedCount={data.pendingSeeds.length}
             materials={data.pendingMaterials}
             onMaterialUploaded={data.addMaterial}
             onMaterialRemove={data.removeMaterial}
             libraryCount={data.materials.length}
             onOpenLibrary={() => setLibraryOpen(true)}
-            onStartRound={(input) => void data.startRound(input, data.pendingMaterials)}
+            onStartRound={() => void data.startRound()}
             onOpenDrawer={() => drafts.setCollapsed(false)}
             onRetry={() => {
               if (round !== null) void data.retry(round.round_id);
@@ -386,6 +423,21 @@ export default function App() {
               />
             </div>
           )}
+
+          {researchAnchor !== null && (
+            <div className="overlay-slot">
+              <ResearchDrawer
+                anchor={researchAnchor}
+                pending={data.explorationsPending}
+                onStart={() => {
+                  const anchor = researchAnchor;
+                  setResearchAnchor(null);
+                  void data.research(anchor);
+                }}
+                onCancel={() => setResearchAnchor(null)}
+              />
+            </div>
+          )}
         </div>
 
         {state.error !== null && (
@@ -402,6 +454,7 @@ export default function App() {
             </Banner>
           </div>
         )}
+        </ExplorationScope>
       </EditScope>
     </EvidenceScope>
   );
