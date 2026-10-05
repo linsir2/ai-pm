@@ -1017,3 +1017,17 @@ def test_round_view_packet_id_is_none_for_reviews_attested_without_one():
     round_.attest(SeatReview(seat_id=SEAT, basis="读了 s5 与 E1", opinions=()))
     view = dto.round_view(round_, seat_titles={SEAT: "数据规模与性能"})
     assert view.seat_packets[0].packet_id is None
+
+
+def test_attest_preserves_packet_id_already_on_review():
+    """review 自带的 id + 空 attest → 保留，不被默认 None 洗掉。
+
+    覆盖 `Round.attest` 里那行 `stamped` 三元：给了参数才盖戳，
+    没给必须原样保留。这是"给了才盖戳"语义的另一半（上一条只测了"没给→None"）。"""
+
+    round_ = make_round(seats=(SEAT,))
+    round_.attest(
+        SeatReview(seat_id=SEAT, basis="读了 s5 与 E1", opinions=(), packet_id="pkt-keep")
+    )
+    view = dto.round_view(round_, seat_titles={SEAT: "数据规模与性能"})
+    assert view.seat_packets[0].packet_id == "pkt-keep"
