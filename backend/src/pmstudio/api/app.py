@@ -11,6 +11,8 @@ from pmstudio.application.ports import ExplorationOrchestrator, RoundOrchestrato
 from pmstudio.application.use_cases import (
     AbandonExploration,
     AbandonRound,
+    AssembleCards,
+    CloseDiscussion,
     CreateProject,
     DeleteMaterial,
     DigRound,
@@ -28,13 +30,17 @@ from pmstudio.application.use_cases import (
     GetVersions,
     GetWorkspace,
     KeepCandidate,
+    KeepDiscussionCard,
+    ListDiscussions,
     ListExplorations,
     ListMaterials,
     ListProjects,
     ListRounds,
     ReparseMaterial,
     RollbackVersion,
+    SayToThread,
     SearchProject,
+    StartDiscussion,
     UploadMaterial,
 )
 from pmstudio.domain.shared.errors import DomainError
@@ -52,6 +58,12 @@ class ApiServices:
     keep_candidate: KeepCandidate
     dismiss_candidate: DismissCandidate
     list_explorations: ListExplorations
+    start_discussion: StartDiscussion
+    say_to_thread: SayToThread
+    assemble_cards: AssembleCards
+    keep_card: KeepDiscussionCard
+    close_discussion: CloseDiscussion
+    list_discussions: ListDiscussions
     create_project: CreateProject
     workspace: GetWorkspace
     list_projects: ListProjects

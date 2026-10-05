@@ -11,6 +11,7 @@ from pmstudio.application.errors import (
     unknown_ref_message,
 )
 from pmstudio.application.events import (
+    DISCUSSION_UPDATED,
     DOC_CHANGED,
     EVENT_NAMES,
     EXPLORATION_UPDATED,
@@ -42,7 +43,7 @@ NOW = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
 
 
 def test_event_vocabulary_is_exactly_five():
-    """M8 起是**五**个：探索状态变化加了一个（前端订阅清单必须同步）。"""
+    """M9 起是**六**个：讨论线程状态变化加了一个（前端订阅清单必须同步）。"""
 
     assert EVENT_NAMES == {
         ROUND_UPDATED,
@@ -50,12 +51,14 @@ def test_event_vocabulary_is_exactly_five():
         DOC_CHANGED,
         GENERATION_FAILED,
         EXPLORATION_UPDATED,
+        DISCUSSION_UPDATED,
     }
     assert ROUND_UPDATED == "round.updated"
     assert PACKET_EMITTED == "packet.emitted"
     assert DOC_CHANGED == "doc.changed"
     assert GENERATION_FAILED == "generation.failed"
     assert EXPLORATION_UPDATED == "exploration.updated"
+    assert DISCUSSION_UPDATED == "discussion.updated"
 
 
 def test_event_no_longer_rejects_names_it_does_not_know():

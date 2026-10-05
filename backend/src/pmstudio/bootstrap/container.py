@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from pmstudio.api.app import ApiServices, create_app
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.agents.discusser import Discusser
 from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
@@ -16,6 +17,8 @@ from pmstudio.application.ports import WebFetcher
 from pmstudio.application.use_cases import (
     AbandonExploration,
     AbandonRound,
+    AssembleCards,
+    CloseDiscussion,
     ConfirmDraft,
     CreateProject,
     DeleteMaterial,
@@ -35,6 +38,8 @@ from pmstudio.application.use_cases import (
     GetWorkspace,
     IntegrateRound,
     KeepCandidate,
+    KeepDiscussionCard,
+    ListDiscussions,
     ListExplorations,
     ListMaterials,
     ListProjects,
@@ -45,7 +50,9 @@ from pmstudio.application.use_cases import (
     RollbackVersion,
     RunInquiry,
     RunSeatRound,
+    SayToThread,
     SearchProject,
+    StartDiscussion,
     StartRound,
     SubmitAnswers,
     SubmitOpening,
@@ -63,6 +70,7 @@ from pmstudio.harness.model.contracts import ModelGateway
 from pmstudio.harness.model.providers.litellm import LiteLLMGateway
 from pmstudio.harness.prompt import PROMPTS_DIR, FilePromptLibrary
 from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
+from pmstudio.infrastructure.discussion.roles import load_discussion_roles
 from pmstudio.infrastructure.graph.exploration_runner import ExplorationRunner
 from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
@@ -71,6 +79,7 @@ from pmstudio.infrastructure.sqlite.materials import SqliteLikeRetriever, Sqlite
 from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
 from pmstudio.infrastructure.sqlite.repositories import (
+    SqliteDiscussionRepository,
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
     SqliteExplorationRepository,
@@ -137,6 +146,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
     explorations = SqliteExplorationRepository(connection)
+    discussions = SqliteDiscussionRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
     materials = SqliteMaterialStore(connection, ids=ids)
     # 材料检索 v1：LIKE（中文可靠、零索引）。换 FTS5 / 向量只改这一行（`P18` C-2c-1）
@@ -162,6 +172,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             model_params=settings.model_params,
         )
     catalog = TomlSeatCatalog(SEATS_DIR)
+    discussion_roles = load_discussion_roles()
     # 工具目录：`requires` 没配上的工具**直接不可用**（不是"无密钥降级"）
     tools = TomlToolCatalog(DEFINITIONS_DIR)
     available_tool_keys = settings.available_tool_keys()
@@ -171,6 +182,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     analyzer = ClaimAnalyzer(model=gateway, prompts=prompts, catalog=catalog)
     reviewer = SeatReviewer(model=gateway, prompts=prompts)
     inquirer = Inquirer(model=gateway, prompts=prompts)
+    discusser = Discusser(model=gateway, prompts=prompts)
     integrator = Integrator(model=gateway, prompts=prompts)
     curator = MemoryCurator(model=gateway, prompts=prompts)
     factory = SqliteProjectFactory(connection, ids=ids)
@@ -312,6 +324,43 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         retry_exploration=retry_exploration,
         explorations=explorations,
     )
+    start_discussion = StartDiscussion(
+        documents=documents,
+        discussions=discussions,
+        discussion_writer=discussions,
+        uow=uow,
+        clock=clock,
+        ids=ids,
+        events=bus,
+        catalog=catalog,
+        discussion_roles=discussion_roles,
+    )
+    say_to_thread = SayToThread(
+        documents=documents,
+        discussions=discussions,
+        discussion_writer=discussions,
+        evidence=evidences,
+        uow=uow,
+        discusser=discusser,
+        checker=readiness,
+        clock=clock,
+        events=bus,
+        catalog=catalog,
+        discussion_roles=discussion_roles,
+    )
+    assemble_cards = AssembleCards(
+        documents=documents,
+        discussions=discussions,
+        discussion_writer=discussions,
+        evidence=evidences,
+        uow=uow,
+        discusser=discusser,
+        checker=readiness,
+        clock=clock,
+        events=bus,
+        catalog=catalog,
+        discussion_roles=discussion_roles,
+    )
     services = ApiServices(
         runner=runner,
         dig_round=dig_round,
@@ -345,6 +394,24 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             uow=uow,
         ),
         list_explorations=ListExplorations(explorations=explorations),
+        start_discussion=start_discussion,
+        say_to_thread=say_to_thread,
+        assemble_cards=assemble_cards,
+        keep_card=KeepDiscussionCard(
+            discussions=discussions,
+            discussion_writer=discussions,
+            materials=materials,
+            uow=uow,
+            clock=clock,
+        ),
+        close_discussion=CloseDiscussion(
+            discussions=discussions,
+            discussion_writer=discussions,
+            uow=uow,
+            clock=clock,
+            events=bus,
+        ),
+        list_discussions=ListDiscussions(discussions=discussions),
         create_project=CreateProject(factory=factory, index=index, clock=clock, ids=ids),
         workspace=GetWorkspace(
             documents=documents,

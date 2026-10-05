@@ -48,6 +48,27 @@ class KeepCandidateRequest(BaseModel):
     as_: Literal["seed", "material"] = Field(alias="as")
 
 
+class QuestionRefRequest(BaseModel):
+    """开聊时带的问卷题（只当开场白：题面快照进 topic，角色由前端定）。"""
+
+    title: str = Field(min_length=1, max_length=500)
+    why: str | None = Field(default=None, max_length=500)
+
+
+class StartDiscussionRequest(BaseModel):
+    """开一条讨论线程：主题＋角色必填，问卷题可选（只当开场白）。"""
+
+    topic: str = Field(min_length=1, max_length=200)
+    role_id: str = Field(min_length=1)
+    question: QuestionRefRequest | None = None
+
+
+class SayRequest(BaseModel):
+    """追问一轮：空文本不算一轮（422），上限 1000 字。"""
+
+    text: str = Field(min_length=1, max_length=1000)
+
+
 class FetchRequest(BaseModel):
     """按网址抓一份网页材料（`P27`）：只收网址本身（护栏在 `HttpxWebFetcher` 里）。"""
 

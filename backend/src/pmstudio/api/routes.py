@@ -14,6 +14,8 @@ from pmstudio.api.schemas import (
     FetchRequest,
     KeepCandidateRequest,
     OpeningRequest,
+    SayRequest,
+    StartDiscussionRequest,
     StartExplorationRequest,
     StartRoundRequest,
 )
@@ -25,8 +27,9 @@ from pmstudio.application.use_cases import (
     AnswerInput,
     ClaimEdit,
 )
+from pmstudio.domain.discussion.thread import QuestionSnapshot
 from pmstudio.domain.exploration.exploration import ExplorationScope, ScopeKind
-from pmstudio.domain.shared.ids import ExplorationId, ProjectId, RoundId
+from pmstudio.domain.shared.ids import DiscussionId, ExplorationId, ProjectId, RoundId
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
@@ -458,6 +461,83 @@ async def dismiss_candidate(request: Request, exploration_id: str, candidate_id:
     return as_json(
         await services_of(request).dismiss_candidate(
             exploration_id=ExplorationId(exploration_id), candidate_id=candidate_id
+        )
+    )
+
+
+@router.post("/projects/{project_id}/discussions")
+async def start_discussion(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, body: StartDiscussionRequest
+):
+    """开一条讨论线程（M9）：同（项目，归一化主题，角色）的 open 线程幂等返。"""
+
+    return as_json(
+        await services_of(request).start_discussion(
+            project_id=ProjectId(project_id),
+            topic=body.topic,
+            role_id=body.role_id,
+            question=(
+                None
+                if body.question is None
+                else QuestionSnapshot(title=body.question.title, why=body.question.why)
+            ),
+        )
+    )
+
+
+@router.get("/projects/{project_id}/discussions")
+async def list_discussions(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+    """这个项目的讨论线程（最新在前，≤20 条）。"""
+
+    return as_json(
+        await services_of(request).list_discussions(project_id=ProjectId(project_id))
+    )
+
+
+@router.post("/discussions/{discussion_id}/say")
+async def say_to_thread(  # type: ignore[no-untyped-def]
+    request: Request, discussion_id: str, body: SayRequest
+):
+    """追问一轮：模型跑完、校验通过才原子记一对（user＋assistant）。"""
+
+    return as_json(
+        await services_of(request).say_to_thread(
+            discussion_id=DiscussionId(discussion_id), text=body.text
+        )
+    )
+
+
+@router.post("/discussions/{discussion_id}/cards")
+async def assemble_cards(request: Request, discussion_id: str):  # type: ignore[no-untyped-def]
+    """把讨论总结成 1-3 张灵感卡（无 body：总结对象就是整段讨论）。"""
+
+    return as_json(
+        await services_of(request).assemble_cards(
+            discussion_id=DiscussionId(discussion_id)
+        )
+    )
+
+
+@router.post("/discussions/{discussion_id}/cards/{card_id}/keep")
+async def keep_discussion_card(  # type: ignore[no-untyped-def]
+    request: Request, discussion_id: str, card_id: str
+):
+    """收下一张卡为材料（无 body：收下即默认回流口径 SIMULATED；同卡重复收下幂等）。"""
+
+    return as_json(
+        await services_of(request).keep_card(
+            discussion_id=DiscussionId(discussion_id), card_id=card_id
+        )
+    )
+
+
+@router.post("/discussions/{discussion_id}/close")
+async def close_discussion(request: Request, discussion_id: str):  # type: ignore[no-untyped-def]
+    """关掉一条线程：终态幂等（无 body）。"""
+
+    return as_json(
+        await services_of(request).close_discussion(
+            discussion_id=DiscussionId(discussion_id)
         )
     )
 
