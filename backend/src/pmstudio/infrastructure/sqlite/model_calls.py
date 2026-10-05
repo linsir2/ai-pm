@@ -7,7 +7,9 @@
 **为什么这张表留在 infrastructure 而没搬进 harness**：它是 SQLite 仓库，搬进去等于
 让控制平面拥有持久化；而查询侧 `recent()` 零生产调用，没有任何强制力把它拉进内层。
 **为什么列名仍是 `round_id`**（协议侧已改名 `trace_id`，见 `harness/model/contracts.py`）：
-那列里装的就是 `r-xxxx`，改名叫 trace_id 等于让列名撒谎。
+那列里装的是 trace id：轮次是 `r-xxxx`，探索是 `x-xxxx`
+（M8.1：inquiry 的 metadata 只有 exploration_id，网关按 round_id → exploration_id 回退取值）。
+列名不动——改列名要迁移，伤筋。
 """
 
 import json

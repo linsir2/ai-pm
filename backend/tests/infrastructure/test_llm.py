@@ -1079,6 +1079,76 @@ async def test_gateway_records_the_call_when_a_recorder_is_given(monkeypatch):
     assert row["duration_ms"] >= 0
 
 
+async def test_gateway_links_an_exploration_call_by_exploration_id(monkeypatch):
+    """M8.1：inquiry 的 metadata 只有 exploration_id——留样不能记成 NULL，否则按趟查不到。"""
+
+    async def scripted(**kwargs):
+        class _Message:
+            content = '{"ok": true}'
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "provider-model"
+            usage = {"total_tokens": 7}
+
+        return _Response()
+
+    monkeypatch.setattr(provider_module, "acompletion", scripted)
+    recorder = _RecordingRecorder()
+    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
+
+    await gateway.complete(
+        ModelRequest(
+            purpose="inquiry",
+            messages=(ModelMessage(role="user", content="提示词"),),
+            schema_name="InquiryPacket",
+            response_schema={"type": "object"},
+            metadata={"exploration_id": "x-1"},
+        )
+    )
+
+    assert len(recorder.rows) == 1
+    assert recorder.rows[0]["trace_id"] == "x-1"
+
+
+async def test_gateway_prefers_round_id_when_both_ids_are_present(monkeypatch):
+    """两键都在时 round_id 赢——老调用的行为一字不动。"""
+
+    async def scripted(**kwargs):
+        class _Message:
+            content = '{"ok": true}'
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "provider-model"
+            usage = {"total_tokens": 7}
+
+        return _Response()
+
+    monkeypatch.setattr(provider_module, "acompletion", scripted)
+    recorder = _RecordingRecorder()
+    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
+
+    await gateway.complete(
+        ModelRequest(
+            purpose="inquiry",
+            messages=(ModelMessage(role="user", content="提示词"),),
+            schema_name="InquiryPacket",
+            response_schema={"type": "object"},
+            metadata={"round_id": "r1", "exploration_id": "x-1"},
+        )
+    )
+
+    assert len(recorder.rows) == 1
+    assert recorder.rows[0]["trace_id"] == "r1"
+
+
 def test_integrator_prompt_forbids_ledger_talk_in_open_item_titles():
     """未决清单那节要说清两件事（M7 A′ / learnings L13）。
 

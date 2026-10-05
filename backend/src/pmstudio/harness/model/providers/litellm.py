@@ -253,7 +253,7 @@ class LiteLLMGateway:
             return
         prompt = "\n".join(message.content for message in request.messages)
         self._recorder.record(
-            trace_id=request.metadata.get("round_id"),
+            trace_id=request.metadata.get("round_id") or request.metadata.get("exploration_id"),
             purpose=request.purpose,
             model=model,
             prompt_sha=hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
