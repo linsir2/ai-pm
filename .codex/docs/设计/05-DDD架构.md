@@ -166,6 +166,7 @@ backend/src/pmstudio/
 │   ├── authoring/
 │   ├── provenance/
 │   ├── round/
+│   ├── exploration/
 │   ├── services/
 │   ├── memory/
 │   └── shared/
@@ -182,6 +183,7 @@ backend/src/pmstudio/
 │   ├── repair.py
 │   ├── deliverable.py
 │   ├── evidence_refs.py
+│   ├── exploration.py
 │   └── agents/
 ├── infrastructure/
 │   ├── sqlite/
@@ -215,20 +217,21 @@ tests/                architecture / contracts / domain / application / infrastr
 ```
 harness/model/        contracts.py envelope.py structured.py normalize.py failure.py jsonio.py prompt_log.py
 harness/events/       schemas.py bus.py
-harness/prompts/      analyzer.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md
+harness/prompts/      analyzer.md inquiry.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md
 harness/providers/    litellm.py
 harness/tools/        registry.py definitions/*.toml
 domain/authoring/     document.py blocks.py schema.py version.py instruction.py views.py diff.py readiness.py
 domain/provenance/    ledger.py evidence.py
 domain/round/         round.py step.py claim.py opinion.py questionnaire.py draft.py web_query.py
+domain/exploration/   exploration.py item.py
 domain/services/      traceability.py committer.py scope_guard.py assigner.py
 domain/memory/        memory.py
 domain/shared/        ids.py errors.py invariants.py target.py label.py sections.py writing.py evidence_kind.py memory.py
-application/agents/   analyzer.py integrator.py memory_curator.py seat.py schemas.py
+application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py
 infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py model_calls.py project_factory.py
 infrastructure/seats/ catalog.py definitions/*.toml
 infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py
-infrastructure/graph/ graph.py
+infrastructure/graph/ graph.py exploration_runner.py
 ```
 
 节点与路由器**全部在 `infrastructure/graph/graph.py` 里**（原来这张图写的
@@ -242,7 +245,7 @@ infrastructure/graph/ graph.py
 
 **domain 内部的三条依赖规矩**（同样由 `tests/architecture/` 扫 AST 守）：
 
-1. 三个上下文（authoring / provenance / round）**互不 import**，只能通过 `shared/` 与 `services/` 协作；
+1. 领域上下文（authoring / provenance / round / exploration）**互不 import**，只能通过 `shared/` 与 `services/` 协作；
 2. domain 内一律**绝对导入**（相对导入会让上下文守卫失效）；
 3. **写能力单独拆成 `DocumentWriter`**，全项目只有 `domain/services/committer.py` 能持有它——
    `DocumentReader` 谁都能拿，`DocumentWriter` 不行。
