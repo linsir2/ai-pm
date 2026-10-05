@@ -19,6 +19,7 @@ from pmstudio.domain.authoring.readiness import ReadinessItem
 from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.version import Version
 from pmstudio.domain.authoring.views import BlockView, DocumentView
+from pmstudio.domain.discussion.thread import Discussion
 from pmstudio.domain.exploration.exploration import Exploration
 from pmstudio.domain.memory.memory import MemoryEntry
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -1546,6 +1547,90 @@ def exploration_view(exploration: Exploration) -> ExplorationView:
             )
             for item in exploration.candidates()
         ),
+    )
+
+
+# ── 讨论（M9-T3）：线程与卡片的投影 ────────────────────────────────────────────
+# 字段名冻结（T6 前端逐字对）：thread_id/project_id/topic/question/role_id/role_title/
+# status/turns/cards/created_at；TurnView{index,role,text,based_on}；
+# CardView{card_id,statement,grounding,based_on,kept_ref}。
+
+
+@dataclass(frozen=True, slots=True)
+class DiscussionQuestionView:
+    """开聊时带的问卷题快照（只存题面与原因，不读轮）。"""
+
+    title: str
+    why: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TurnView:
+    index: int
+    role: str
+    text: str
+    based_on: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CardView:
+    card_id: str
+    statement: str
+    grounding: str
+    based_on: tuple[str, ...] = ()
+    kept_ref: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadView:
+    thread_id: str
+    project_id: str
+    topic: str
+    question: DiscussionQuestionView | None
+    role_id: str
+    role_title: str
+    status: str
+    turns: tuple[TurnView, ...]
+    cards: tuple[CardView, ...]
+    created_at: datetime
+
+
+def thread_view(thread: Discussion) -> ThreadView:
+    """一条讨论线程的只读投影（列表与展开共用它；投影不是第二份存储）。"""
+
+    question = thread.question
+    return ThreadView(
+        thread_id=str(thread.discussion_id),
+        project_id=str(thread.project_id),
+        topic=thread.topic,
+        question=(
+            None
+            if question is None
+            else DiscussionQuestionView(title=question.title, why=question.why)
+        ),
+        role_id=thread.role_id,
+        role_title=thread.role_title,
+        status=thread.status.value,
+        turns=tuple(
+            TurnView(
+                index=turn.index,
+                role=turn.role,
+                text=turn.text,
+                based_on=tuple(str(eid) for eid in turn.based_on),
+            )
+            for turn in thread.turns
+        ),
+        cards=tuple(
+            CardView(
+                card_id=card.card_id,
+                statement=card.statement,
+                grounding=card.grounding.value,
+                based_on=tuple(str(eid) for eid in card.based_on),
+                kept_ref=card.kept_ref,
+            )
+            for card in thread.cards
+        ),
+        created_at=thread.created_at,
     )
 
 

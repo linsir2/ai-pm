@@ -6,18 +6,22 @@
 from collections.abc import Mapping, Sequence
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.agents.discusser import Discusser
 from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.dto import ProjectSummaryView
+from pmstudio.application.errors import UnknownDiscussion
 from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.readiness import ReadinessChecker
+from pmstudio.domain.discussion.thread import Discussion
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.services.assigner import EvidenceAssigner
-from pmstudio.domain.shared.ids import DocumentId, ProjectId
+from pmstudio.domain.shared.ids import DiscussionId, DocumentId, ProjectId
 from pmstudio.harness.model.contracts import ModelGateway
+from pmstudio.infrastructure.discussion.roles import DiscussionRole
 from tests.support.builders import PROJECT, make_document, make_seat
 from tests.support.doubles import (
     FixedClock,
@@ -116,6 +120,87 @@ class _RoundMaterialIndex:
         return {material_id: tuple(eids) for material_id, eids in found.items()}
 
 
+class InMemoryDiscussionRepository:
+    """讨论线程的内存仓储（M9-T3）：与 `InMemoryExplorationRepository` 同口径。
+
+    后写的在前（真实现按 `created_at DESC`）；找不到抛 `UnknownDiscussion`（404）。
+    定义在这里而不是 `fakes.py`：Task 3 文件清单只含 `harness.py`，不另动 fakes。
+    """
+
+    def __init__(self) -> None:
+        from copy import deepcopy as _deepcopy  # noqa: F401  (局部 import 免顶层噪音)
+
+        self._items: dict[object, Discussion] = {}
+        self.saves = 0
+
+    def seed(self, discussion: Discussion) -> None:  # type: ignore[no-untyped-def]
+        from copy import deepcopy
+
+        self._items[discussion.discussion_id] = deepcopy(discussion)
+
+    def get(self, discussion_id: DiscussionId) -> Discussion:  # type: ignore[no-untyped-def]
+        from copy import deepcopy
+
+        item = self._items.get(discussion_id)
+        if item is None:
+            raise UnknownDiscussion(discussion_id)
+        return deepcopy(item)
+
+    def save(self, discussion: Discussion) -> None:  # type: ignore[no-untyped-def]
+        from copy import deepcopy
+
+        self.saves += 1
+        self._items[discussion.discussion_id] = deepcopy(discussion)
+
+    def list_for_project(
+        self, project_id, *, limit: int = 20  # type: ignore[no-untyped-def]
+    ):  # type: ignore[no-untyped-def]
+        from copy import deepcopy
+
+        items = [
+            item for item in self._items.values() if str(item.project_id) == str(project_id)
+        ]
+        return tuple(deepcopy(item) for item in items[::-1][:limit])
+
+    def snapshot(self):  # type: ignore[no-untyped-def]
+        from copy import deepcopy
+
+        return deepcopy(self._items)
+
+    def restore(self, snapshot) -> None:  # type: ignore[no-untyped-def]
+        from copy import deepcopy
+
+        self._items = deepcopy(snapshot)
+
+
+def _default_discussion_roles() -> tuple[DiscussionRole, ...]:
+    """测试默认的三固定角色（与 `roles.toml` 同 id/title，零文件依赖）。"""
+
+    return (
+        DiscussionRole(
+            role_id="dlg.challenger",
+            title="反方",
+            focus="找漏洞、要反例、泼冷水",
+            stance="默认这个想法有问题，先证明它没问题再说",
+            openers=("先说说你的想法，我来挑刺。",),
+        ),
+        DiscussionRole(
+            role_id="dlg.user_voice",
+            title="用户之声",
+            focus="替真实用户说话：他们会怎么用、哪里会骂",
+            stance="我是用户，不是专家；对不上日常用法的词我会打断",
+            openers=("我是来替用户说话的，你先讲。",),
+        ),
+        DiscussionRole(
+            role_id="dlg.analogist",
+            title="类比者",
+            focus="别的产品、别的领域怎么做过类似的事",
+            stance="太阳底下无新事，先找相似，再谈不同",
+            openers=("说说你的主题，我帮你找三个别人家的做法。",),
+        ),
+    )
+
+
 class Harness:
     def __init__(
         self,
@@ -133,6 +218,7 @@ class Harness:
         self.rounds = InMemoryRoundRepository()
         self.evidences = InMemoryEvidenceRepository()
         self.explorations = InMemoryExplorationRepository()
+        self.discussions = InMemoryDiscussionRepository()
         self.materials = InMemoryMaterialStore()
         self.memory = InMemoryMemoryRepository()
         # 真解析器（不是替身）：上传路径在测试里也走真 pdfminer / bs4
@@ -140,7 +226,12 @@ class Harness:
 
         self.parser = LocalMaterialParser()
         self.uow = FakeTransaction(
-            self.documents, self.rounds, self.evidences, self.explorations, self.memory
+            self.documents,
+            self.rounds,
+            self.evidences,
+            self.explorations,
+            self.discussions,
+            self.memory,
         )
         # gateway 是给"要卡住/要乱来"的测试用的注入口；平时用脚本化网关
         self.gateway = gateway or ScriptedModelGateway(
@@ -167,6 +258,8 @@ class Harness:
         )
         self.reviewer = SeatReviewer(model=self.gateway, prompts=self.prompts)
         self.inquirer = Inquirer(model=self.gateway, prompts=self.prompts)
+        self.discusser = Discusser(model=self.gateway, prompts=self.prompts)
+        self.discussion_roles = _default_discussion_roles()
         self.integrator = Integrator(model=self.gateway, prompts=self.prompts)
         self.curator = MemoryCurator(model=self.gateway, prompts=self.prompts)
         self.assigner = EvidenceAssigner()
@@ -289,6 +382,85 @@ class Harness:
         if limit is None:
             return ListExplorations(explorations=self.explorations)
         return ListExplorations(explorations=self.explorations, limit=limit)
+
+    # —— 讨论（M9-T3；照 exploration 接入点仿写）——
+    def start_discussion(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import StartDiscussion
+
+        return StartDiscussion(
+            documents=self.documents,
+            discussions=self.discussions,
+            discussion_writer=self.discussions,
+            uow=self.uow,
+            clock=self.clock,
+            ids=self.ids,
+            events=self.events,
+            catalog=self.seats,
+            discussion_roles=self.discussion_roles,
+        )
+
+    def say_to_thread(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import SayToThread
+
+        return SayToThread(
+            documents=self.documents,
+            discussions=self.discussions,
+            discussion_writer=self.discussions,
+            evidence=self.evidences,
+            uow=self.uow,
+            discusser=self.discusser,
+            checker=self.readiness,
+            clock=self.clock,
+            events=self.events,
+            catalog=self.seats,
+            discussion_roles=self.discussion_roles,
+        )
+
+    def assemble_cards(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import AssembleCards
+
+        return AssembleCards(
+            documents=self.documents,
+            discussions=self.discussions,
+            discussion_writer=self.discussions,
+            evidence=self.evidences,
+            uow=self.uow,
+            discusser=self.discusser,
+            checker=self.readiness,
+            clock=self.clock,
+            events=self.events,
+            catalog=self.seats,
+            discussion_roles=self.discussion_roles,
+        )
+
+    def keep_discussion_card(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import KeepDiscussionCard
+
+        return KeepDiscussionCard(
+            discussions=self.discussions,
+            discussion_writer=self.discussions,
+            materials=self.materials,
+            uow=self.uow,
+            clock=self.clock,
+        )
+
+    def close_discussion(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import CloseDiscussion
+
+        return CloseDiscussion(
+            discussions=self.discussions,
+            discussion_writer=self.discussions,
+            uow=self.uow,
+            clock=self.clock,
+            events=self.events,
+        )
+
+    def list_discussions(self, *, limit: int | None = None):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import ListDiscussions
+
+        if limit is None:
+            return ListDiscussions(discussions=self.discussions)
+        return ListDiscussions(discussions=self.discussions, limit=limit)
 
     def submit_opening(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import SubmitOpening

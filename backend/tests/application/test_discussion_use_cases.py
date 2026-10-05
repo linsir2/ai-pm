@@ -1,0 +1,285 @@
+"""讨论用例层（M9-T3）：5 用例＋ThreadView 与材料回流。"""
+
+import json
+
+import pytest
+
+from pmstudio.application.errors import UnknownRole
+from pmstudio.application.use_cases import (
+    AssembleCards,  # noqa: F401  (红点：Step 2 确认它未定义)
+    CloseDiscussion,  # noqa: F401
+    KeepDiscussionCard,  # noqa: F401
+    ListDiscussions,  # noqa: F401
+    SayToThread,  # noqa: F401
+    StartDiscussion,  # noqa: F401
+    _material_kind,
+)
+from pmstudio.domain.discussion.thread import QuestionSnapshot
+from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
+from pmstudio.domain.shared.errors import ShapeError
+from pmstudio.domain.shared.ids import DiscussionId
+from pmstudio.harness.errors import PacketParseError
+from tests.support.builders import PROJECT, ROUND_ID, make_material_packet
+from tests.support.harness import Harness
+
+SAY_TEXT = "先把导出范围收窄到本店本月，再谈全量。"
+BAD_REF_TEXT = "这个做法有依据。"
+
+
+def _say_reply(*, text: str = SAY_TEXT, based_on: list[str] | None = None) -> str:
+    return json.dumps(
+        {"text": text, "based_on": based_on or []}, ensure_ascii=False
+    )
+
+
+def _bad_ref_reply() -> str:
+    return json.dumps(
+        {"text": BAD_REF_TEXT, "based_on": ["E99"]}, ensure_ascii=False
+    )
+
+
+def _cards_reply_2() -> str:
+    return json.dumps(
+        {
+            "cards": [
+                {
+                    "statement": "给导出加一个按客户名找单的快捷入口",
+                    "grounding": "invented",
+                    "based_on": [],
+                },
+                {
+                    "statement": "月末对账前先收窄范围再全量导出",
+                    "grounding": "document",
+                    "based_on": ["E1"],
+                },
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+def _empty_cards_reply() -> str:
+    return json.dumps({"cards": []}, ensure_ascii=False)
+
+
+def _seed_e1(harness: Harness) -> None:
+    ledger = harness.evidences.get(PROJECT)
+    ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做一个订单导出功能",
+        source=EvidenceSource(round_id=ROUND_ID, raw_span="想做个订单导出的功能"),
+        now=harness.clock.now(),
+    )
+    harness.evidences.seed(ledger)
+
+
+async def _start(
+    harness: Harness, *, topic: str = "导出优化", role_id: str = "dlg.challenger",
+    question: QuestionSnapshot | None = None,
+):  # type: ignore[no-untyped-def]
+    return await harness.start_discussion()(
+        project_id=PROJECT, topic=topic, role_id=role_id, question=question
+    )
+
+
+async def test_start_resolves_explicit_role_and_snapshots_topic() -> None:
+    harness = Harness(replies={})
+    harness.seed_project()
+    question = QuestionSnapshot(title="题面", why="为啥问")
+    view = await _start(
+        harness, topic="  导出   优化  ", role_id="dlg.challenger", question=question
+    )
+
+    assert view.topic == "导出 优化"
+    assert view.role_id == "dlg.challenger"
+    assert view.role_title == "反方"
+    assert view.status == "open"
+    assert view.turns == ()
+    assert view.cards == ()
+    assert view.question is not None and view.question.title == "题面"
+    stored = harness.discussions.get(DiscussionId(view.thread_id))
+    assert stored.topic == "导出 优化"
+
+
+async def test_start_returns_existing_open_thread_for_same_topic_role() -> None:
+    harness = Harness(replies={})
+    harness.seed_project()
+    first = await _start(harness, topic="导出 优化", role_id="dlg.challenger")
+    second = await _start(harness, topic="  导出   优化 ", role_id="dlg.challenger")
+    assert second.thread_id == first.thread_id
+
+    third = await _start(harness, topic="导出 优化", role_id="dlg.user_voice")
+    assert third.thread_id != first.thread_id
+
+
+async def test_start_rejects_unknown_role_with_404_code() -> None:
+    harness = Harness(replies={})
+    harness.seed_project()
+    with pytest.raises(UnknownRole) as caught:
+        await _start(harness, topic="导出优化", role_id="dlg.nope")
+    assert caught.value.code == "unknown_role"
+
+
+async def test_start_rejects_empty_topic() -> None:
+    harness = Harness(replies={})
+    harness.seed_project()
+    with pytest.raises(ShapeError):
+        await _start(harness, topic="   ", role_id="dlg.challenger")
+
+
+async def test_say_appends_pair_and_counts_turn_slot() -> None:
+    harness = Harness(replies={"discussion": _say_reply()})
+    harness.seed_project()
+    started = await _start(harness)
+    first = await harness.say_to_thread()(
+        discussion_id=DiscussionId(started.thread_id), text="我想做导出"
+    )
+
+    assert len(first.turns) == 2
+    assert first.turns[0].role == "user" and first.turns[0].text == "我想做导出"
+    assert first.turns[0].index == 0
+    assert first.turns[1].role == "assistant" and first.turns[1].text == SAY_TEXT
+    assert first.turns[1].index == 1
+
+    second = await harness.say_to_thread()(
+        discussion_id=DiscussionId(started.thread_id), text="再补一句"
+    )
+    assert [turn.index for turn in second.turns] == [0, 1, 2, 3]
+    assert len(harness.gateway.requests) == 2
+
+
+async def test_say_repairs_once_then_succeeds() -> None:
+    harness = Harness(replies={"discussion": [_bad_ref_reply(), _say_reply()]})
+    harness.seed_project()
+    started = await _start(harness)
+    view = await harness.say_to_thread()(
+        discussion_id=DiscussionId(started.thread_id), text="我想做导出"
+    )
+
+    assert len(view.turns) == 2
+    assert len(harness.gateway.requests) == 2
+
+
+async def test_say_fails_twice_leaves_thread_untouched() -> None:
+    harness = Harness(replies={"discussion": [_bad_ref_reply(), _bad_ref_reply()]})
+    harness.seed_project()
+    started = await _start(harness)
+    with pytest.raises(PacketParseError) as caught:
+        await harness.say_to_thread()(
+            discussion_id=DiscussionId(started.thread_id), text="我想做导出"
+        )
+    assert caught.value.code == "model_packet_unparsable"
+    assert harness.discussions.get(DiscussionId(started.thread_id)).turns == ()
+
+
+async def test_say_on_closed_thread_is_409() -> None:
+    harness = Harness(replies={"discussion": _say_reply()})
+    harness.seed_project()
+    started = await _start(harness)
+    await harness.close_discussion()(discussion_id=DiscussionId(started.thread_id))
+    with pytest.raises(Exception) as caught:
+        await harness.say_to_thread()(
+            discussion_id=DiscussionId(started.thread_id), text="还能聊吗"
+        )
+    assert str(getattr(caught.value, "code", "")).startswith("invariant:")
+
+
+async def test_say_refuses_13th_turn() -> None:
+    harness = Harness(replies={"discussion": _say_reply()})
+    harness.seed_project()
+    started = await _start(harness)
+    did = DiscussionId(started.thread_id)
+    for _ in range(6):
+        stored = harness.discussions.get(did)
+        stored.say_pair(user_text="u", assistant_text="a", based_on=())
+        harness.discussions.save(stored)
+    assert len(harness.discussions.get(did).turns) == 12
+    with pytest.raises(Exception) as caught:
+        await harness.say_to_thread()(discussion_id=did, text="第 13 轮")
+    assert str(getattr(caught.value, "code", "")).startswith("invariant:")
+
+
+async def test_assemble_stamps_c_ids_in_order_and_caps_6() -> None:
+    harness = Harness(replies={"discussion_cards": _cards_reply_2()})
+    harness.seed_project()
+    _seed_e1(harness)
+    started = await _start(harness)
+    did = DiscussionId(started.thread_id)
+
+    first = await harness.assemble_cards()(discussion_id=did)
+    assert [card.card_id for card in first.cards] == ["C1", "C2"]
+    second = await harness.assemble_cards()(discussion_id=did)
+    assert [card.card_id for card in second.cards] == ["C1", "C2", "C3", "C4"]
+    third = await harness.assemble_cards()(discussion_id=did)
+    assert [card.card_id for card in third.cards] == ["C1", "C2", "C3", "C4", "C5", "C6"]
+
+    # 同一线程第 7 张必须拒（ThreadFull → invariant:）
+    with pytest.raises(Exception) as caught:
+        await harness.assemble_cards()(discussion_id=did)
+    assert str(getattr(caught.value, "code", "")).startswith("invariant:")
+    assert len(harness.discussions.get(did).cards) == 6
+
+
+async def test_assemble_empty_packet_fails_without_touching_thread() -> None:
+    harness = Harness(
+        replies={"discussion_cards": [_empty_cards_reply(), _empty_cards_reply()]}
+    )
+    harness.seed_project()
+    started = await _start(harness)
+    did = DiscussionId(started.thread_id)
+    with pytest.raises(PacketParseError):
+        await harness.assemble_cards()(discussion_id=did)
+    assert harness.discussions.get(did).cards == ()
+
+
+async def test_keep_card_puts_material_and_records_ref() -> None:
+    harness = Harness(replies={"discussion_cards": _cards_reply_2()})
+    harness.seed_project()
+    _seed_e1(harness)
+    started = await _start(harness)
+    did = DiscussionId(started.thread_id)
+    await harness.assemble_cards()(discussion_id=did)
+
+    view = await harness.keep_discussion_card()(discussion_id=did, card_id="C1")
+    kept = next(card for card in view.cards if card.card_id == "C1")
+    assert kept.kept_ref
+
+    packet = harness.materials.get(kept.kept_ref or "")
+    assert packet is not None
+    assert packet.parsed.origin == "discussion"
+    assert packet.parsed.source_ref == f"discussion:{did}#C1"
+
+
+async def test_keep_same_card_twice_returns_same_material() -> None:
+    harness = Harness(replies={"discussion_cards": _cards_reply_2()})
+    harness.seed_project()
+    _seed_e1(harness)
+    started = await _start(harness)
+    did = DiscussionId(started.thread_id)
+    await harness.assemble_cards()(discussion_id=did)
+
+    first = await harness.keep_discussion_card()(discussion_id=did, card_id="C1")
+    ref = next(card for card in first.cards if card.card_id == "C1").kept_ref
+    second = await harness.keep_discussion_card()(discussion_id=did, card_id="C1")
+    again = next(card for card in second.cards if card.card_id == "C1").kept_ref
+    assert again == ref
+    assert len(harness.materials.list_for_project(PROJECT, current=frozenset())) == 1
+
+
+async def test_discussion_material_sorts_to_simulated() -> None:
+    from pmstudio.application.discussion import discussion_material
+    from pmstudio.domain.discussion.card import Card, Grounding
+
+    harness = Harness(replies={})
+    harness.seed_project()
+    card = Card(card_id="C1", statement="快捷入口", grounding=Grounding.INVENTED)
+    parsed, content = discussion_material(card, thread_id="d-1")
+    packet = harness.materials.put(
+        project_id=PROJECT,
+        parsed=parsed,
+        sha256="discussion-material:discussion:d-1#C1",
+        content=content,
+        now=harness.clock.now(),
+    )
+    assert _material_kind(packet).value == "simulated"
+    assert _material_kind(make_material_packet()).value == "external"

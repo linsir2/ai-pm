@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.agents.discusser import Discusser
 from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import IntegrationOutcome, Integrator
 from pmstudio.application.agents.memory_curator import CuratorOutcome, MemoryCurator
@@ -66,6 +67,12 @@ from pmstudio.application.context import (
     web_block_cost,
 )
 from pmstudio.application.deliverable import Deliverable, render_markdown
+from pmstudio.application.discussion import (
+    ORIGIN_DISCUSSION,
+    discussion_material,
+    render_thread_history,
+    validate_ledger_refs,
+)
 from pmstudio.application.dto import (
     SEARCH_LIMIT,
     DiffView,
@@ -82,6 +89,7 @@ from pmstudio.application.dto import (
     RoundView,
     SchemaView,
     SearchResultsView,
+    ThreadView,
     VersionListView,
     WorkspaceView,
     answer_text,
@@ -94,6 +102,7 @@ from pmstudio.application.dto import (
     round_view,
     schema_view,
     search_hits,
+    thread_view,
     used_by_entries,
     version_summary_view,
     workspace_view,
@@ -104,6 +113,7 @@ from pmstudio.application.errors import (
     UnknownEntryId,
     UnknownEvidenceId,
     UnknownMaterial,
+    UnknownRole,
     UnsupportedMaterial,
 )
 from pmstudio.application.events import (
@@ -121,6 +131,9 @@ from pmstudio.application.exploration import (
     material_sha,
     scope_line,
     validate_inquiry,
+)
+from pmstudio.application.material_synthesis import (
+    material_sha as namespaced_material_sha,
 )
 from pmstudio.application.narrowing import narrow_seats
 from pmstudio.application.ports import (
@@ -144,6 +157,13 @@ from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS
 from pmstudio.domain.authoring.views import DocumentView
+from pmstudio.domain.discussion.card import Card
+from pmstudio.domain.discussion.thread import (
+    MAX_DISCUSSION_TURNS,
+    Discussion,
+    QuestionSnapshot,
+    ThreadStatus,
+)
 from pmstudio.domain.exploration.exploration import (
     Exploration,
     ExplorationScope,
@@ -153,6 +173,8 @@ from pmstudio.domain.exploration.exploration import (
 from pmstudio.domain.exploration.item import CandidateState
 from pmstudio.domain.memory.memory import screen_changes
 from pmstudio.domain.ports import (
+    DiscussionReader,
+    DiscussionWriter,
     DocumentReader,
     EvidenceReader,
     EvidenceWriter,
@@ -193,9 +215,16 @@ from pmstudio.domain.services.committer import (
     ProposalCommitter,
     to_write_instruction,
 )
-from pmstudio.domain.shared.errors import DomainError, NotAwaitingAnswers, ShapeError
+from pmstudio.domain.shared.errors import (
+    DomainError,
+    NotAwaitingAnswers,
+    ShapeError,
+    ThreadClosed,
+    ThreadFull,
+)
 from pmstudio.domain.shared.ids import (
     PREFERENCE_AREA_ID,
+    DiscussionId,
     DraftId,
     EntryId,
     EvidenceId,
@@ -3485,6 +3514,8 @@ def _material_kind(packet: MaterialPacket) -> EvidenceKind:
 
     if packet.parsed.origin == ORIGIN_EXPLORATION:
         return EvidenceKind.SIMULATED
+    if packet.parsed.origin == ORIGIN_DISCUSSION:
+        return EvidenceKind.SIMULATED
     return EvidenceKind.EXTERNAL
 
 
@@ -3801,6 +3832,418 @@ class ListExplorations:
         return tuple(
             exploration_view(item)
             for item in self._explorations.list_for_project(
+                project_id, limit=self._limit
+            )
+        )
+
+
+# ── 讨论：自由主题的多轮灵感讨论（M9-T3）────────────────────────────────────
+
+#: 一次给几条线程（列表投影的截断值；这不是"存了多少"，是"给多少"）
+MAX_DISCUSSION_LIST = 20
+
+
+def _publish_discussion(events: EventPublisher, clock: Clock, thread: Discussion) -> None:
+    # 事件名 T5 抽成 DISCUSSION_UPDATED 常量；此处先用字面量，payload 与 exploration 同形。
+    events.publish(
+        Event(
+            name="discussion.updated",
+            project_id=str(thread.project_id),
+            payload={
+                "discussion_id": str(thread.discussion_id),
+                "status": str(thread.status),
+            },
+            occurred_at=clock.now(),
+        )
+    )
+
+
+def _discussion_role_of(
+    role_id: str, *, catalog: SeatCatalog, discussion_roles: tuple
+) -> tuple[str, str]:
+    """`role_id` →（标题，focus）。`dlg.*` 走三固定，`seat.*` 走席位注册表。
+
+    `discussion_roles` 只按鸭子类型读 `.role_id/.title/.focus`——application 不 import
+    infrastructure（分层守卫），形状由 `DiscussionRole` 保证，测试直接构元组。
+    """
+
+    if role_id.startswith("dlg."):
+        for role in discussion_roles:
+            if role.role_id == role_id:
+                return role.title, role.focus
+        raise UnknownRole(role_id)
+    if role_id.startswith("seat."):
+        try:
+            seat = catalog.by_id(role_id)
+        except KeyError as error:
+            raise UnknownRole(role_id) from error
+        return seat.title, seat.focus
+    raise UnknownRole(role_id)
+
+
+def _question_text(question: QuestionSnapshot | None) -> str:
+    if question is None:
+        return ""
+    if question.why:
+        return f"{question.title}\n为什么问：{question.why}"
+    return question.title
+
+
+def _card_of(thread: Discussion, card_id: str) -> Card:
+    for card in thread.cards:
+        if card.card_id == card_id:
+            return card
+    raise ShapeError(f"这条讨论没有这张卡片：{card_id}", card_id=card_id)
+
+
+class StartDiscussion:
+    """开一条讨论线程：角色双查＋同（项目，归一化主题，角色）的 open 线程幂等返。"""
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        discussions: DiscussionReader,
+        discussion_writer: DiscussionWriter,
+        uow: UnitOfWork,
+        clock: Clock,
+        ids: IdGenerator,
+        events: EventPublisher,
+        catalog: SeatCatalog,
+        discussion_roles: tuple,
+    ) -> None:
+        self._documents = documents
+        self._discussions = discussions
+        self._discussion_writer = discussion_writer
+        self._uow = uow
+        self._clock = clock
+        self._ids = ids
+        self._events = events
+        self._catalog = catalog
+        self._discussion_roles = discussion_roles
+
+    async def __call__(
+        self,
+        *,
+        project_id: ProjectId,
+        topic: str,
+        role_id: str,
+        question: QuestionSnapshot | None,
+    ) -> ThreadView:
+        self._documents.get(project_id)  # 存在性；空文档不拒（与 M8 create 的接地判据差在这里）
+        if not role_id.strip():
+            raise ShapeError("开聊必须指定角色")
+        normalized = " ".join(topic.split())  # 与 _clip 同式，不新建函数
+        if not normalized:
+            raise ShapeError("开聊必须带主题")
+        role_title, _ = _discussion_role_of(
+            role_id, catalog=self._catalog, discussion_roles=self._discussion_roles
+        )
+        for existing in self._discussions.list_for_project(
+            project_id, limit=MAX_DISCUSSION_LIST
+        ):
+            if (
+                existing.status is ThreadStatus.OPEN
+                and " ".join(existing.topic.split()) == normalized
+                and existing.role_id == role_id
+            ):
+                return thread_view(existing)
+        discussion_id = DiscussionId(self._ids.new("d"))
+        with self._uow:
+            thread = Discussion.start(
+                discussion_id=discussion_id,
+                project_id=project_id,
+                topic=normalized,
+                role_id=role_id,
+                role_title=role_title,
+                question=question,
+                now=self._clock.now(),
+            )
+            self._discussion_writer.save(thread)
+        _publish_discussion(self._events, self._clock, thread)
+        return thread_view(thread)
+
+
+class SayToThread:
+    """追问一轮：模型跑完、校验通过才原子记一对；失败线程不动。"""
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        discussions: DiscussionReader,
+        discussion_writer: DiscussionWriter,
+        evidence: EvidenceReader,
+        uow: UnitOfWork,
+        discusser: Discusser,
+        checker: ReadinessChecker,
+        clock: Clock,
+        events: EventPublisher,
+        catalog: SeatCatalog,
+        discussion_roles: tuple,
+    ) -> None:
+        self._documents = documents
+        self._discussions = discussions
+        self._discussion_writer = discussion_writer
+        self._evidence = evidence
+        self._uow = uow
+        self._discusser = discusser
+        self._checker = checker
+        self._clock = clock
+        self._events = events
+        self._catalog = catalog
+        self._discussion_roles = discussion_roles
+
+    async def __call__(
+        self, *, discussion_id: DiscussionId, text: str
+    ) -> ThreadView:
+        if not text.strip():
+            raise ShapeError("追问必须写清内容")
+        thread = self._discussions.get(discussion_id)
+        # 前置门与领域 say_pair 同一判据：不烧模型（烧了也写不进来）。
+        if thread.status is not ThreadStatus.OPEN:
+            raise ThreadClosed(discussion_id=discussion_id)
+        if len(thread.turns) + 2 > MAX_DISCUSSION_TURNS:
+            raise ThreadFull(limit=MAX_DISCUSSION_TURNS)
+        role_title, role_focus = _discussion_role_of(
+            thread.role_id, catalog=self._catalog, discussion_roles=self._discussion_roles
+        )
+        document = self._documents.get(thread.project_id)
+        view = document.view()
+        document_state = render_document_state(
+            view, readiness=self._checker.check(view)
+        )
+        ledger = self._evidence.get(thread.project_id)
+        known_eids = frozenset(item.eid for item in ledger.evidences())
+        history = render_thread_history(thread.turns)
+        question = _question_text(thread.question)
+        base = len(thread.turns)
+        try:
+            outcome = await self._discusser.say(
+                role_title=role_title,
+                role_focus=role_focus,
+                topic=thread.topic,
+                question=question,
+                history=history,
+                document_state=document_state,
+                discussion_id=str(discussion_id),
+                turn_slot=f"s{base}",
+                known_eids=known_eids,
+            )
+            validate_ledger_refs(outcome.refs, known_eids=known_eids)
+        except ModelCallFailed:
+            # 网关已重试：直接抛，线程不动（照 RunInquiry.execute 同款）。
+            raise
+        except (PacketParseError, ShapeError) as error:
+            repair = (
+                repair_note(error)
+                if isinstance(error, PacketParseError)
+                else f"上一次的产物没通过校验：{error.message}"
+            )
+            outcome = await self._discusser.say(
+                role_title=role_title,
+                role_focus=role_focus,
+                topic=thread.topic,
+                question=question,
+                history=history,
+                document_state=document_state,
+                discussion_id=str(discussion_id),
+                turn_slot=f"s{base + 1}",
+                known_eids=known_eids,
+                validation_error=repair,
+            )
+            # 第二次的账本成员检查失败就地抛（线程不动，照 say 两次失败同款）。
+            validate_ledger_refs(outcome.refs, known_eids=known_eids)
+        with self._uow:
+            stored = self._discussions.get(discussion_id)
+            stored.say_pair(
+                user_text=text, assistant_text=outcome.text, based_on=outcome.refs
+            )
+            self._discussion_writer.save(stored)
+        _publish_discussion(self._events, self._clock, stored)
+        return thread_view(stored)
+
+
+class AssembleCards:
+    """把讨论总结成 1-3 张卡：repair 1 次；再坏线程不动。"""
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        discussions: DiscussionReader,
+        discussion_writer: DiscussionWriter,
+        evidence: EvidenceReader,
+        uow: UnitOfWork,
+        discusser: Discusser,
+        checker: ReadinessChecker,
+        clock: Clock,
+        events: EventPublisher,
+        catalog: SeatCatalog,
+        discussion_roles: tuple,
+    ) -> None:
+        self._documents = documents
+        self._discussions = discussions
+        self._discussion_writer = discussion_writer
+        self._evidence = evidence
+        self._uow = uow
+        self._discusser = discusser
+        self._checker = checker
+        self._clock = clock
+        self._events = events
+        self._catalog = catalog
+        self._discussion_roles = discussion_roles
+
+    async def __call__(
+        self, *, discussion_id: DiscussionId
+    ) -> ThreadView:
+        thread = self._discussions.get(discussion_id)
+        if thread.status is not ThreadStatus.OPEN:
+            raise ThreadClosed(discussion_id=discussion_id)
+        role_title, role_focus = _discussion_role_of(
+            thread.role_id, catalog=self._catalog, discussion_roles=self._discussion_roles
+        )
+        document = self._documents.get(thread.project_id)
+        view = document.view()
+        document_state = render_document_state(
+            view, readiness=self._checker.check(view)
+        )
+        ledger = self._evidence.get(thread.project_id)
+        known_eids = frozenset(item.eid for item in ledger.evidences())
+        thread_text = render_thread_history(thread.turns)
+        # slot = 已有 cards 数＋1：cards 只增，单调，撞不了；不用另设计数器。
+        base = len(thread.cards) + 1
+        try:
+            outcome = await self._discusser.assemble(
+                role_title=role_title,
+                role_focus=role_focus,
+                topic=thread.topic,
+                thread_text=thread_text,
+                document_state=document_state,
+                discussion_id=str(discussion_id),
+                assemble_slot=f"c{base}",
+                known_eids=known_eids,
+            )
+        except ModelCallFailed:
+            raise
+        except (PacketParseError, ShapeError) as error:
+            repair = (
+                repair_note(error)
+                if isinstance(error, PacketParseError)
+                else f"上一次的产物没通过校验：{error.message}"
+            )
+            outcome = await self._discusser.assemble(
+                role_title=role_title,
+                role_focus=role_focus,
+                topic=thread.topic,
+                thread_text=thread_text,
+                document_state=document_state,
+                discussion_id=str(discussion_id),
+                assemble_slot=f"c{base + 1}",
+                known_eids=known_eids,
+                validation_error=repair,
+            )
+        stamped = tuple(
+            Card(
+                card_id=f"C{len(thread.cards) + index + 1}",
+                statement=item.statement,
+                grounding=item.grounding,
+                based_on=item.based_on,
+            )
+            for index, item in enumerate(outcome.cards)
+        )
+        with self._uow:
+            stored = self._discussions.get(discussion_id)
+            stored.append_cards(stamped)
+            self._discussion_writer.save(stored)
+        _publish_discussion(self._events, self._clock, stored)
+        return thread_view(stored)
+
+
+class KeepDiscussionCard:
+    """收下一张卡为材料：合成＋同 uow 落库＋记 ref；同卡重复收下幂等返。"""
+
+    def __init__(
+        self,
+        *,
+        discussions: DiscussionReader,
+        discussion_writer: DiscussionWriter,
+        materials: MaterialStore,
+        uow: UnitOfWork,
+        clock: Clock,
+    ) -> None:
+        self._discussions = discussions
+        self._discussion_writer = discussion_writer
+        self._materials = materials
+        self._uow = uow
+        self._clock = clock
+
+    async def __call__(
+        self, *, discussion_id: DiscussionId, card_id: str
+    ) -> ThreadView:
+        thread = self._discussions.get(discussion_id)
+        card = _card_of(thread, card_id)
+        if card.kept_ref is not None:
+            return thread_view(thread)
+        parsed, content = discussion_material(card, thread_id=str(discussion_id))
+        with self._uow:
+            packet = self._materials.put(
+                project_id=thread.project_id,
+                parsed=parsed,
+                sha256=namespaced_material_sha(
+                    "discussion-material", parsed.source_ref
+                ),
+                content=content,
+                now=self._clock.now(),
+            )
+            stored = self._discussions.get(discussion_id)
+            stored.keep_card(card_id, packet.material_id)
+            self._discussion_writer.save(stored)
+        return thread_view(self._discussions.get(discussion_id))
+
+
+class CloseDiscussion:
+    """关掉一条线程：终态幂等（M8 abandon 去 canceller 版，无 runner 可取消）。"""
+
+    def __init__(
+        self,
+        *,
+        discussions: DiscussionReader,
+        discussion_writer: DiscussionWriter,
+        uow: UnitOfWork,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._discussions = discussions
+        self._discussion_writer = discussion_writer
+        self._uow = uow
+        self._clock = clock
+        self._events = events
+
+    async def __call__(
+        self, *, discussion_id: DiscussionId
+    ) -> ThreadView:
+        with self._uow:
+            thread = self._discussions.get(discussion_id)
+            thread.close()
+            self._discussion_writer.save(thread)
+        _publish_discussion(self._events, self._clock, thread)
+        return thread_view(self._discussions.get(discussion_id))
+
+
+class ListDiscussions:
+    """线程列表：一次给全（≤上限），由界面投影出要看的那些。"""
+
+    def __init__(
+        self, *, discussions: DiscussionReader, limit: int = MAX_DISCUSSION_LIST
+    ) -> None:
+        self._discussions = discussions
+        self._limit = limit
+
+    async def __call__(self, *, project_id: ProjectId) -> tuple[ThreadView, ...]:
+        return tuple(
+            thread_view(item)
+            for item in self._discussions.list_for_project(
                 project_id, limit=self._limit
             )
         )

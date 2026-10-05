@@ -136,6 +136,28 @@ class UnknownExploration(ApplicationError):
         )
 
 
+class UnknownDiscussion(ApplicationError):
+    """查询/操作一条不存在的讨论线程——资源不在，404。"""
+
+    def __init__(self, discussion_id: object) -> None:
+        super().__init__(
+            f"找不到这条讨论：{discussion_id}",
+            code="unknown_discussion",
+            discussion_id=str(discussion_id),
+        )
+
+
+class UnknownRole(ApplicationError):
+    """开聊时点的讨论角色不存在（`dlg.*` 不在三固定里，或 `seat.*` 不在注册表里）——404。"""
+
+    def __init__(self, role_id: object) -> None:
+        super().__init__(
+            f"没有这个讨论角色：{role_id}",
+            code="unknown_role",
+            role_id=str(role_id),
+        )
+
+
 class ExplorationBusy(ApplicationError):
     """同一个项目已经有一趟探索在跑。
 
