@@ -34,6 +34,16 @@ def response_format_for(mode: str, *, schema_name: str, schema: Mapping[str, obj
             "json_schema": {"name": schema_name, "schema": dict(schema)},
         }
     return {"type": "json_object"}
+#: ── 控制平面的三个上限（**不是**产品上限）─────────────────────────────────
+#:
+#: 这三个属于"怎么调模型"这一层，所以归 harness。产品上限（问几轮席位、分几批问卷、
+#: 各 agent 重装几次）在 `domain/` 与 `application/`，**不许搬进来**——
+#: 现有守卫的 `PRODUCT_VOCABULARY` 是精确匹配，`MAX_SEAT_ROUNDS` ≠ `seat_id`，
+#: 搬进去它一条都拦不住。那个盲区由 `tests/contracts/test_limits.py` 的
+#: `test_product_limits_never_enter_harness` 堵着。
+#:
+#: 这四个数与它们的文档依据，由 `tests/contracts/test_limits.py` 钉住。
+
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (1.0, 3.0)
 #: 默认每次调用的墙钟上限（秒）。真值由 `Settings.model_timeout` 传进来（默认 90）。

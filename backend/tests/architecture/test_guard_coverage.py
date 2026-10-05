@@ -210,7 +210,7 @@ def test_every_guard_uses_the_shared_mechanisms():
         "test_harness_imports.py": ("harness_layer_violations", "product_vocabulary_hits"),
         "test_layers.py": ("imported_layers", "unregistered_packages"),
         "test_no_await_in_uow.py": ("await_inside_uow", "await_inside_uow_offenders"),
-        "test_no_fakes_in_production.py": ("forbidden_names",),
+        "test_no_fakes_in_production.py": ("forbidden_names", "runtime_modules"),
         "test_write_path.py": ("uses_symbol",),
         "test_resource_paths.py": ("iter_sources",),
         # `test_parse_entry_points` 按 `__all__` 名单 + 调用方扫描判定，不走这些机制；
