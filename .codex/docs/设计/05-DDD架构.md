@@ -167,6 +167,7 @@ backend/src/pmstudio/
 │   ├── provenance/
 │   ├── round/
 │   ├── exploration/
+│   ├── discussion/
 │   ├── services/
 │   ├── memory/
 │   └── shared/
@@ -224,6 +225,7 @@ domain/authoring/     document.py blocks.py schema.py version.py instruction.py 
 domain/provenance/    ledger.py evidence.py
 domain/round/         round.py step.py claim.py opinion.py questionnaire.py draft.py web_query.py
 domain/exploration/   exploration.py item.py
+domain/discussion/    thread.py card.py
 domain/services/      traceability.py committer.py scope_guard.py assigner.py
 domain/memory/        memory.py
 domain/shared/        ids.py errors.py invariants.py target.py label.py sections.py writing.py evidence_kind.py memory.py

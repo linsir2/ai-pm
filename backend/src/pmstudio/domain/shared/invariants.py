@@ -50,6 +50,13 @@ class XInvariant(StrEnum):
     X4 = "X4"  # 探索运行状态转换合法：只有 FAILED 能 resume；终态不可改
 
 
+class TInvariant(StrEnum):
+    T1 = "T1"  # say/组装只认 open 线程（收卡不判 open：收下是回流不是聊天）
+    T2 = "T2"  # turns 原子成对、user 开头交替；失败不记轮
+    T3 = "T3"  # close 终态幂等
+    T4 = "T4"  # turns≤12、cards≤6
+
+
 ALL_INVARIANTS: tuple[StrEnum, ...] = (
     *DInvariant,
     *EInvariant,
@@ -58,4 +65,5 @@ ALL_INVARIANTS: tuple[StrEnum, ...] = (
     *AgentInvariant,
     *GlobalInvariant,
     *XInvariant,
+    *TInvariant,
 )

@@ -3,10 +3,16 @@
 from types import TracebackType
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from pmstudio.domain.shared.ids import ExplorationId, ProjectId, RoundId
+from pmstudio.domain.shared.ids import (
+    DiscussionId,
+    ExplorationId,
+    ProjectId,
+    RoundId,
+)
 
 if TYPE_CHECKING:
     from pmstudio.domain.authoring.document import Document
+    from pmstudio.domain.discussion.thread import Discussion
     from pmstudio.domain.exploration.exploration import Exploration
     from pmstudio.domain.memory.memory import ProjectMemory
     from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -47,6 +53,20 @@ class ExplorationReader(Protocol):
 @runtime_checkable
 class ExplorationWriter(Protocol):
     def save(self, exploration: "Exploration") -> None: ...
+
+
+@runtime_checkable
+class DiscussionReader(Protocol):
+    def get(self, discussion_id: DiscussionId) -> "Discussion": ...
+
+    def list_for_project(
+        self, project_id: ProjectId, *, limit: int = 20
+    ) -> tuple["Discussion", ...]: ...
+
+
+@runtime_checkable
+class DiscussionWriter(Protocol):
+    def save(self, discussion: "Discussion") -> None: ...
 
 
 @runtime_checkable

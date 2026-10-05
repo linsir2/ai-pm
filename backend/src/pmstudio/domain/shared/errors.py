@@ -7,6 +7,7 @@ from pmstudio.domain.shared.invariants import (
     GlobalInvariant,
     LabelInvariant,
     RInvariant,
+    TInvariant,
     XInvariant,
 )
 
@@ -364,6 +365,25 @@ class IllegalExplorationTransition(InvariantViolation):
 class DuplicateCandidateId(ShapeError):
     def __init__(self, *, local_id: object) -> None:
         super().__init__(f"候选 id {local_id} 重复", local_id=str(local_id))
+
+
+# —— discussion ——
+class ThreadClosed(InvariantViolation):
+    def __init__(self, *, discussion_id: object) -> None:
+        super().__init__(
+            f"讨论线程 {discussion_id} 已关闭，不能再聊天",
+            invariant=TInvariant.T1,
+            discussion_id=str(discussion_id),
+        )
+
+
+class ThreadFull(InvariantViolation):
+    def __init__(self, *, limit: int) -> None:
+        super().__init__(
+            f"讨论线程已满（上限 {limit}），开新线程继续聊",
+            invariant=TInvariant.T4,
+            limit=limit,
+        )
 
 
 # —— services ——
