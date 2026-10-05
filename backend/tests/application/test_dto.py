@@ -995,3 +995,25 @@ def test_round_head_view_reads_only_the_head_and_survives_old_rows():
     )
     assert old.questions_count == 0
     assert old.confirmed_version_no is None
+
+
+def test_round_view_projects_packet_id_from_attested_review():
+    """REST 投影必须带 `packet_id`（真跑抓到的漂移：SSE 事件有、REST 没有，
+    前端类型却声明必填——留痕精确匹配在 REST 路径下静默降级）。"""
+
+    round_ = make_round(seats=(SEAT,))
+    round_.attest(
+        SeatReview(seat_id=SEAT, basis="读了 s5 与 E1", opinions=()),
+        packet_id="pkt-r1-seat_review-seat.data_scale-p1a1",
+    )
+    view = dto.round_view(round_, seat_titles={SEAT: "数据规模与性能"})
+    assert view.seat_packets[0].packet_id == "pkt-r1-seat_review-seat.data_scale-p1a1"
+
+
+def test_round_view_packet_id_is_none_for_reviews_attested_without_one():
+    """老数据（修之前落库的轮次）没有包 id：投影给 None，不编一个。"""
+
+    round_ = make_round(seats=(SEAT,))
+    round_.attest(SeatReview(seat_id=SEAT, basis="读了 s5 与 E1", opinions=()))
+    view = dto.round_view(round_, seat_titles={SEAT: "数据规模与性能"})
+    assert view.seat_packets[0].packet_id is None

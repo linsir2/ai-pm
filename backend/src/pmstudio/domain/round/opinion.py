@@ -46,6 +46,10 @@ class SeatReview:
     basis: str
     opinions: tuple[Opinion, ...] = ()
     pass_index: int = 1  # 属于第几次席位轮；由 Round.attest 盖真值
+    #: 这一包是谁交回的（§4.4 信封的 `packet_id`，`pkt-{轮次}-{kind}-{谁}-{槽位}`）。
+    #: **可选，默认 None**：None = 修之前落库的老数据（那时没存），不是"没填"——
+    #: REST 投影原样给 None，前端按缺失回退启发式，不许编一个。
+    packet_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.basis.strip():

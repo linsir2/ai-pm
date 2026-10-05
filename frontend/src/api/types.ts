@@ -79,7 +79,8 @@ export interface SeatPacketView {
   judgment_count: number;
   question_count: number;
   /** 这一包是谁交回的（§4.4 信封的 `packet_id`）。留痕行按它精确挂载。 */
-  packet_id: string;
+  /** `null` = 修之前落库的老轮次（后端没存）：`dropped.ts` 会回退 (seat_id, pass_index) 启发式。 */
+  packet_id: string | null;
 }
 
 /** 一条"没进卡片"的留痕：地址、席位、第几趟、原因、来源（`04` C5 后半）。 */

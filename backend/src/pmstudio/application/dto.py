@@ -92,6 +92,9 @@ class SeatPacketView:
     opinions: tuple[OpinionView, ...]
     judgment_count: int
     question_count: int
+    #: 这一包是谁交回的（§4.4 信封的 `packet_id`）。None = 修之前落库的老轮次，
+    #: 前端按缺失回退 (seat_id, pass_index) 启发式——见 `frontend/.../dropped.ts`。
+    packet_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1387,6 +1390,7 @@ def _seat_packets(
                 question_count=sum(
                     1 for opinion in opinions if opinion.form == OpinionForm.QUESTION.value
                 ),
+                packet_id=review.packet_id if review is not None else None,
             )
         )
     return tuple(packets)

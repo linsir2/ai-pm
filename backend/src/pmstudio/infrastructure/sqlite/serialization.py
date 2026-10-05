@@ -336,6 +336,8 @@ def review_to_json(review: SeatReview) -> dict:
         "basis": review.basis,
         "opinions": [_opinion_to_json(item) for item in review.opinions],
         "pass_index": review.pass_index,
+        # 老数据没有这个键（修之前落库的）：读时默认 None，不给旧轮次补编。
+        "packet_id": review.packet_id,
     }
 
 
@@ -345,6 +347,7 @@ def review_from_json(data: dict) -> SeatReview:
         basis=data["basis"],
         opinions=tuple(_opinion_from_json(item) for item in data["opinions"]),
         pass_index=data["pass_index"],
+        packet_id=data.get("packet_id"),
     )
 
 

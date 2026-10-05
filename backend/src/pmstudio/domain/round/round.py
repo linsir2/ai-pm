@@ -541,12 +541,13 @@ class Round:
         self._begin_seat_round()
         self._advance_to(Step.SEATS_RUNNING)
 
-    def attest(self, review: SeatReview) -> None:
+    def attest(self, review: SeatReview, *, packet_id: str | None = None) -> None:
         self._require_step(Step.SEATS_RUNNING)
         if review.seat_id not in self.active_seats:
             raise UnknownSeat(seat_id=review.seat_id)
+        stamped = review if packet_id is None else replace(review, packet_id=packet_id)
         self._seat_reviews = self._seat_reviews + (
-            replace(review, pass_index=self._seat_round_count),
+            replace(stamped, pass_index=self._seat_round_count),
         )
 
     def note_dropped(self, items: Iterable[DroppedItem]) -> None:

@@ -827,7 +827,7 @@ class RunSeatRound:
         review = outcome.review
         with self._uow:
             round_ = self._rounds.get(round_id)
-            round_.attest(review)
+            round_.attest(review, packet_id=outcome.envelope.packet_id)
             # 被截断掉的意见要留痕（"一条都不许默默丢掉"）——它没进卡片，但要说清为什么。
             round_.note_dropped(
                 _truncation_items(
