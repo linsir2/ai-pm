@@ -154,25 +154,86 @@
 
 ```
 backend/src/pmstudio/
+├── harness/
+│   ├── errors.py
+│   ├── prompt.py
+│   ├── events/
+│   ├── tools/
+│   ├── model/
+│   └── prompts/
 ├── domain/
-│   ├── ports.py      仓储与事务端口（P1 只声明，实现只在测试里）
-│   ├── authoring/    document.py blocks.py schema.py version.py instruction.py views.py
-│   ├── provenance/   ledger.py evidence.py
-│   ├── round/        round.py step.py claim.py opinion.py questionnaire.py draft.py
-│   ├── services/     traceability.py committer.py scope_guard.py assigner.py
-│   └── shared/       ids.py errors.py invariants.py target.py label.py sections.py writing.py
-├── application/      use_cases.py ports.py dto.py
+│   ├── ports.py
+│   ├── authoring/
+│   ├── provenance/
+│   ├── round/
+│   ├── services/
+│   ├── memory/
+│   └── shared/
+├── application/
+│   ├── ports.py
+│   ├── errors.py
+│   ├── events.py
+│   ├── commands.py
+│   ├── use_cases.py
+│   ├── context.py
+│   ├── assembly.py
+│   ├── dto.py
+│   ├── narrowing.py
+│   ├── repair.py
+│   ├── deliverable.py
+│   ├── evidence_refs.py
+│   └── agents/
 ├── infrastructure/
-│   ├── sqlite/       schema.sql repositories.py unit_of_work.py
-│   ├── llm/          litellm_gateway.py prompts/ parsers.py
-│   ├── seats/        catalog.py definitions/*.yaml
-│   └── graph/        graph.py nodes/   ← LangGraph
-├── api/              app.py routes.py sse.py dtos.py
-└── bootstrap/        container.py settings.py
+│   ├── sqlite/
+│   ├── seats/
+│   ├── tools/
+│   └── graph/
+├── api/
+│   ├── app.py
+│   ├── routes.py
+│   ├── schemas.py
+│   ├── sse.py
+│   └── errors.py
+└── bootstrap/
+    ├── container.py
+    └── settings.py
 
 frontend/             React + Vite：文档区 / 闭环区 / 弹出层
-tests/                domain/ application/ infrastructure/
+tests/                architecture / contracts / domain / application / infrastructure / harness / api
 ```
+
+**这一段是 `tests/architecture/test_doc_directory_map.py` 守着**（双向）：
+
+- 图上提到的每个路径必须真实存在（否则读的人照着找会以为代码丢了）；
+- 磁盘上的每个模块与目录必须出现在图里（否则搬了新东西没进图）。
+  harness 这一层搬了四次（M1/M2/M3/M4）而这张图一次都没跟上，正是这条守卫要防的那种漂移。
+
+**子目录下的文件清单**（`2026-10-04` 按磁盘实际重列；`2026-10-04` 之前这张图里有
+4 个文件已被搬走或从不存在、扩展名把 `.toml` 写成 `.yaml`、并漏掉 `harness/` 整层
+与 12+ 个真实模块）：
+
+```
+harness/model/        contracts.py envelope.py structured.py normalize.py failure.py jsonio.py prompt_log.py
+harness/events/       schemas.py bus.py
+harness/prompts/      analyzer.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md
+harness/providers/    litellm.py
+harness/tools/        registry.py definitions/*.toml
+domain/authoring/     document.py blocks.py schema.py version.py instruction.py views.py diff.py readiness.py
+domain/provenance/    ledger.py evidence.py
+domain/round/         round.py step.py claim.py opinion.py questionnaire.py draft.py web_query.py
+domain/services/      traceability.py committer.py scope_guard.py assigner.py
+domain/memory/        memory.py
+domain/shared/        ids.py errors.py invariants.py target.py label.py sections.py writing.py evidence_kind.py memory.py
+application/agents/   analyzer.py integrator.py memory_curator.py seat.py schemas.py
+infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py model_calls.py project_factory.py
+infrastructure/seats/ catalog.py definitions/*.toml
+infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py
+infrastructure/graph/ graph.py
+```
+
+节点与路由器**全部在 `infrastructure/graph/graph.py` 里**（原来这张图写的
+`nodes/` 子目录从不存在）。席位目录与提示词是 **TOML / Markdown**，不是 YAML——
+`tomllib` 是标准库，不加依赖。
 
 **依赖方向**：`api → application → domain`；
 `infrastructure` 实现端口协议，被 bootstrap 注入；

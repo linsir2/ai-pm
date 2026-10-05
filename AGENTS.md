@@ -22,9 +22,12 @@
 **P2 主闭环已完成，前后端都跑通真模型**（2026-09-23）：
 输入 → 复述 → 席位 → 问卷 → 草案 → 确认写入 → 文档多一版，三个面 + SSE 都在。
 
-- 后端：306 条测试全绿、`ruff` 无告警、四道结构性守卫全绿；
-  计划与执行记录见 `docs/plans/2026-09-22-P2-单轮闭环.md`。
-- 前端：`frontend/`（React 18 + Vite 6 + TS strict），纯函数 69 条 vitest 全绿、
+- 后端：测试全绿、`ruff` 无告警；**结构性守卫 69 条全绿**（`tests/architecture/` 与
+  `tests/contracts/`，含"守卫自己的判据有没有效"那一层）。守卫条数与测试条数**都会过期**，
+  这里只写当前值作参考——**要查就跑一次 pytest**，别信这个数字。
+  计划与执行记录见 `docs/plans/2026-09-22-P2-单轮闭环.md` 与
+  `docs/plans/2026-10-04-Harness解耦里程碑.md`。
+- 前端：`frontend/`（React 18 + Vite 6 + TS strict），vitest 全绿、
   `tsc --noEmit` 无输出；界面设计见 `.codex/docs/设计/06-前端.md`。
 - 真模型证据（qwen3.8-flash via DashScope）：`p-3b0ad2b4` 一轮里出 10 条主张 → 6 个席位
   → 两轮问卷 → 第三轮席位失败（模型编了 `E34`）→ 点"接着跑"只补没交回的席位。

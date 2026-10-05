@@ -94,7 +94,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     throw apiErrorFrom(response.status, body, "请求失败");
   }
-  return (await response.json()) as T;
+  // **空 body 不许调 `.json()`**——204 / 205 / 空字符串 body 上它抛
+  // `SyntaxError: Unexpected end of JSON input`，而那不是"请求失败"，是成功。
+  // 真踩过：`DELETE /projects/{id}/memory/{id}` 返回 204，于是「忘掉一条记忆」
+  // 每次都抛，`useWorkspaceData.ts:300` 之后的刷新永不执行——后端删了，界面没删，
+  // 下一轮提示词还带着那条记忆。
+  //
+  // 先取文本再判空，而不是只看 `status === 204`：非 204 的成功回包也可能是空的。
+  const text = await response.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 /** 导出交付用 Markdown：拿文本自己触发一次下载（不新开窗口，不依赖后端文件名）。 */
