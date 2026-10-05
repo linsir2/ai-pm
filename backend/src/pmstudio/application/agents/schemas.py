@@ -180,6 +180,33 @@ class InquiryPacket(BaseModel):
     )
 
 
+class DiscussionReply(BaseModel):
+    """讨论里的一轮回答：全文 + 引用的 E 编号；空串不算成功。"""
+
+    text: str = Field(
+        min_length=1, description="这一轮的回答全文；空串不算成功"
+    )
+    based_on: list[str] = Field(
+        default_factory=list, description="引用的 E 编号；凭空推演留空"
+    )
+
+
+class DiscussionCardDraft(BaseModel):
+    """一条待收下的灵感（M9 讨论）。模型不管 id：`card_id` 由服务端 stamp C1..。"""
+
+    statement: str = Field(description="一条可收下的灵感，一句话")
+    grounding: Literal["document", "invented"] = Field(
+        description="document 必须带 based_on；invented 必须留空"
+    )
+    based_on: list[str] = Field(default_factory=list)
+
+
+class CardsPacket(BaseModel):
+    """组装回包：1-3 张卡。空 list 不算成功；超 3 不算成功（重装指引会说）。"""
+
+    cards: list[DiscussionCardDraft] = Field(min_length=1, max_length=3)
+
+
 class TargetDraft(BaseModel):
     zone: Zone = "body"
     section_id: str | None = Field(

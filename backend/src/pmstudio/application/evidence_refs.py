@@ -10,8 +10,11 @@
 """
 
 import re
+from collections.abc import Sequence
 
+from pmstudio.application.errors import unknown_ref_message
 from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.harness.errors import PacketParseError
 
 #: `E` + 可选空格 + 任意个前导零 + 数字；大小写与全角都收
 EID = re.compile(r"^[EeＥｅ]\s*0*(\d+)$")
@@ -52,3 +55,29 @@ def candidates_for(
         if re.fullmatch(r"E\d+", str(item))
     )
     return tuple(item for delta, item in ranked if delta <= 1)[:limit]
+
+
+def resolve_evidence_refs(
+    raw_refs: Sequence[str],
+    *,
+    known: frozenset[EvidenceId],
+    what: str,
+    local_id: str,
+    purpose: str = "inquiry",
+) -> tuple[EvidenceId, ...]:
+    """`based_on` 原串 → 规范 E 编号元组；未知编号抛 `PacketParseError`（带 candidates 供重装）。
+
+    inquiry 与 discussion 共用（`_NUMERIC` 不搬：discussion 不验数量，M8.1 结论）。
+    `purpose` 默认 inquiry（调用方 inquirer 的口径）；discusser 按自己那一趟传。
+    """
+
+    refs = tuple(EvidenceId(normalize_ref(ref, known=known)) for ref in raw_refs)
+    unknown = [str(ref) for ref in refs if ref not in known]
+    if unknown:
+        raise PacketParseError(
+            unknown_ref_message(unknown, what=what),
+            purpose=purpose,
+            local_id=local_id,
+            candidates=[candidates_for(item, known=known) for item in unknown],
+        )
+    return refs

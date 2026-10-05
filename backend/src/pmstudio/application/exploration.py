@@ -5,12 +5,12 @@
 用户指的条目不存在抛 `UnknownEntryId`（资源不在 = 404）。
 """
 
-import hashlib
 import re
 
 from pmstudio.application.deliverable import iter_document_entries
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
 from pmstudio.application.errors import UnknownEntryId
+from pmstudio.application.material_synthesis import material_sha as _namespaced_sha
 from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.exploration.exploration import ExplorationScope, ScopeKind
 from pmstudio.domain.exploration.item import BlindSpot, Candidate, Hypothesis
@@ -139,9 +139,13 @@ def candidate_material(
 
 
 def material_sha(source_ref: str) -> str:
-    """材料去重的**变体键**：与真实文件的 sha256 隔离（同文不同源不互相顶掉）。"""
+    """材料去重的**变体键**：与真实文件的 sha256 隔离（同文不同源不互相顶掉）。
 
-    return hashlib.sha256(f"exploration-material:{source_ref}".encode()).hexdigest()
+    单参签名是冻结口径（`test_exploration.py:148-150` 钉着旧值）：实现走
+    `material_synthesis.material_sha("exploration-material", …)`，输出逐字同。
+    """
+
+    return _namespaced_sha("exploration-material", source_ref)
 
 
 def _clip(text: str, limit: int = 24) -> str:

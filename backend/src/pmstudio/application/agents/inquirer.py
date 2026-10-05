@@ -10,8 +10,7 @@ from dataclasses import dataclass
 from pmstudio.application.agents import schemas
 from pmstudio.application.agents.schemas import RULES
 from pmstudio.application.context import NO_MEMORY_TEXT
-from pmstudio.application.errors import unknown_ref_message
-from pmstudio.application.evidence_refs import candidates_for, normalize_ref
+from pmstudio.application.evidence_refs import resolve_evidence_refs
 from pmstudio.domain.exploration.item import BlindSpot, Grounding, Hypothesis
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import EvidenceId
@@ -121,17 +120,12 @@ def inquiry_from_packet(
                 purpose=PURPOSE,
                 local_id=local_id,
             ) from error
-        refs = tuple(
-            EvidenceId(normalize_ref(ref, known=known_eids)) for ref in draft.based_on
+        refs = resolve_evidence_refs(
+            draft.based_on,
+            known=known_eids,
+            what="假设引用了不存在的编号",
+            local_id=local_id,
         )
-        unknown = [str(ref) for ref in refs if ref not in known_eids]
-        if unknown:
-            raise PacketParseError(
-                unknown_ref_message(unknown, what="假设引用了不存在的编号"),
-                purpose=PURPOSE,
-                local_id=local_id,
-                candidates=[candidates_for(item, known=known_eids) for item in unknown],
-            )
         try:
             hypotheses.append(
                 Hypothesis(

@@ -185,12 +185,15 @@ backend/src/pmstudio/
 │   ├── deliverable.py
 │   ├── evidence_refs.py
 │   ├── exploration.py
+│   ├── discussion.py
+│   ├── material_synthesis.py
 │   └── agents/
 ├── infrastructure/
 │   ├── sqlite/
 │   ├── seats/
 │   ├── tools/
-│   └── graph/
+│   ├── graph/
+│   └── discussion/
 ├── api/
 │   ├── app.py
 │   ├── routes.py
@@ -218,7 +221,7 @@ tests/                architecture / contracts / domain / application / infrastr
 ```
 harness/model/        contracts.py envelope.py structured.py normalize.py failure.py jsonio.py prompt_log.py
 harness/events/       schemas.py bus.py
-harness/prompts/      analyzer.md inquiry.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md
+harness/prompts/      analyzer.md inquiry.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md discussion_say.md discussion_cards.md
 harness/providers/    litellm.py
 harness/tools/        registry.py definitions/*.toml
 domain/authoring/     document.py blocks.py schema.py version.py instruction.py views.py diff.py readiness.py
@@ -229,11 +232,12 @@ domain/discussion/    thread.py card.py
 domain/services/      traceability.py committer.py scope_guard.py assigner.py
 domain/memory/        memory.py
 domain/shared/        ids.py errors.py invariants.py target.py label.py sections.py writing.py evidence_kind.py memory.py
-application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py
+application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py discusser.py
 infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py model_calls.py project_factory.py
 infrastructure/seats/ catalog.py definitions/*.toml
 infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py
 infrastructure/graph/ graph.py exploration_runner.py
+infrastructure/discussion/ roles.py
 ```
 
 节点与路由器**全部在 `infrastructure/graph/graph.py` 里**（原来这张图写的

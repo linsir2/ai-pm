@@ -186,3 +186,34 @@ def test_a_question_with_a_kind_still_validates():
     )
 
     assert packet.questions[0].kind == "conflict"
+
+
+def test_discussion_reply_rejects_empty_text():
+    """say 回包空串不算成功（M9-T2）：空回答没有推进讨论。"""
+
+    with pytest.raises(ValidationError):
+        schemas.DiscussionReply.model_validate({"text": "", "based_on": []})
+    assert (
+        schemas.DiscussionReply.model_validate(
+            {"text": "先说说你的想法", "based_on": []}
+        ).text
+        == "先说说你的想法"
+    )
+
+
+def test_cards_packet_rejects_more_than_3():
+    """组装回包超 3 张不算成功——走 PacketParseError，不做 lenient 截断（M9-T2）。"""
+
+    drafts = [
+        {"statement": f"灵感{i}", "grounding": "invented", "based_on": []}
+        for i in range(4)
+    ]
+    with pytest.raises(ValidationError):
+        schemas.CardsPacket.model_validate({"cards": drafts})
+
+
+def test_cards_packet_rejects_empty_list():
+    """组装回包空 list 不算成功（M9-T2）。"""
+
+    with pytest.raises(ValidationError):
+        schemas.CardsPacket.model_validate({"cards": []})
