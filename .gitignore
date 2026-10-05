@@ -69,6 +69,7 @@ tmp/
 *.rej
 *.bak
 *.tmp
+*.omx/
 
 # ── 编辑器 / 操作系统 ───────────────────────────────────
 .idea/
@@ -86,3 +87,4 @@ Thumbs.db
 .codex/log/
 .codex/cache/
 .codex/history*
+.codex/runs/
