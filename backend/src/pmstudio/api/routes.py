@@ -190,6 +190,7 @@ async def start_round(request: Request, project_id: str, body: StartRoundRequest
             project_id=project_id,
             user_input=body.input,
             material_ids=tuple(body.material_ids),
+            seed_ids=tuple(body.seed_ids),
         )
     )
     return as_json(view)
