@@ -295,9 +295,6 @@ export default function App() {
               void data.abandonExploration(explorationId)
             }
             onKeepSeed={(explorationId, candidate) => {
-              // 先入输入框（本地立即反馈），后端收下是另一条在途请求；
-              // 万一它失败，起轮时后端会以人话拒绝这条种子，不会静默混过去。
-              data.addSeed(candidate, explorationId);
               void data.keepCandidate(explorationId, candidate.candidate_id, "seed");
             }}
             onKeepMaterial={(explorationId, candidate) =>

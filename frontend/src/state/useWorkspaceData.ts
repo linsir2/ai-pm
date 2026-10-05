@@ -346,9 +346,16 @@ export function useWorkspaceData() {
   const keepCandidate = useCallback(
     (explorationId: string, candidateId: string, as: "seed" | "material") =>
       run("exploration", async () => {
-        replaceExploration(await api.keepCandidate(explorationId, candidateId, as));
+        const view = await api.keepCandidate(explorationId, candidateId, as);
+        replaceExploration(view);
+        // 成功才入框（M8.1）：失败走 run() 的 banner，文本与种子 id 都不落——
+        // 否则框里有话、后端没收下，下次起轮整轮 422 且种子删不掉（无删除 UI）。
+        if (as === "seed") {
+          const kept = view.candidates.find((item) => item.candidate_id === candidateId);
+          if (kept !== undefined) addSeed(kept, explorationId);
+        }
       }),
-    [replaceExploration, run],
+    [replaceExploration, run, addSeed],
   );
 
   const dismissCandidate = useCallback(
