@@ -219,6 +219,51 @@ class WebQueryView:
 
 
 @dataclass(frozen=True, slots=True)
+class SimSliceView:
+    """模拟抽屉里的一条处境切片：分组展示 + 锚点可跳回原文。"""
+
+    local_id: str
+    situation: str
+    job: str
+    trigger: str
+    workaround: str
+    anchors: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SimHypothesisView:
+    """模拟抽屉里的一条假设：陈述 + 从哪推的 + 怎么被推翻 + 要什么证据。"""
+
+    local_id: str
+    statement: str
+    grounding: str
+    based_on: tuple[str, ...]
+    falsification: str
+    evidence_needed: str
+
+
+@dataclass(frozen=True, slots=True)
+class SimUnknownView:
+    """模拟抽屉里的一条盲区：不知道什么 + 为什么值得问 + 怎么去验证。"""
+
+    local_id: str
+    statement: str
+    why_it_matters: str
+    how_to_find_out: str
+
+
+@dataclass(frozen=True, slots=True)
+class SimInquiryView:
+    """一轮的模拟调研产物（没跑过是 None，不是空对象——抽屉靠它决定出不出现）。"""
+
+    slices: tuple[SimSliceView, ...]
+    hypotheses: tuple[SimHypothesisView, ...]
+    unknowns: tuple[SimUnknownView, ...]
+    runs: int
+    chosen: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RoundView:
     """一轮的只读投影。"""
 
@@ -259,6 +304,8 @@ class RoundView:
     materials: tuple[RoundMaterialView, ...] = ()
     #: 分析者提名的检索词（**只是提名**；勾了才会真去查）
     web_queries: tuple[WebQueryView, ...] = ()
+    #: 模拟调研产物（没跑过是 None；抽屉与 eval 读它）
+    sim_inquiry: SimInquiryView | None = None
     #: 联网工具现在能不能用（没配密钥就是 False）——复述卡据此决定要不要出现那一栏
     web_search_available: bool = False
     #: 这一轮攒下的记忆提议（M6）：**提议**，默认不勾；勾了随 `/confirm` 一起生效
@@ -1057,6 +1104,7 @@ def round_view(
         answer_sets=answer_batches(round_),
         materials=round_material_views(round_, materials=materials),
         web_queries=_web_query_views(round_),
+        sim_inquiry=_sim_inquiry_view(round_),
         web_search_available=web_search_available,
         memory_proposals=tuple(
             MemoryProposalView(
@@ -1070,6 +1118,48 @@ def round_view(
             )
             for item in round_.memory_proposals
         ),
+    )
+
+
+def _sim_inquiry_view(round_: Round) -> SimInquiryView | None:
+    """轮次里的模拟产物 → 抽屉投影。没跑过是 None（抽屉靠它决定出不出现）。"""
+
+    if not round_.sim_slices and not round_.sim_hypotheses and not round_.sim_unknowns:
+        return None
+    return SimInquiryView(
+        slices=tuple(
+            SimSliceView(
+                local_id=str(item["local_id"]),
+                situation=str(item["situation"]),
+                job=str(item["job"]),
+                trigger=str(item["trigger"]),
+                workaround=str(item["workaround"]),
+                anchors=tuple(str(eid) for eid in item.get("anchors") or ()),
+            )
+            for item in round_.sim_slices
+        ),
+        hypotheses=tuple(
+            SimHypothesisView(
+                local_id=str(item["local_id"]),
+                statement=str(item["statement"]),
+                grounding=str(item["grounding"]),
+                based_on=tuple(str(eid) for eid in item.get("based_on") or ()),
+                falsification=str(item["falsification"]),
+                evidence_needed=str(item["evidence_needed"]),
+            )
+            for item in round_.sim_hypotheses
+        ),
+        unknowns=tuple(
+            SimUnknownView(
+                local_id=str(item["local_id"]),
+                statement=str(item["statement"]),
+                why_it_matters=str(item["why_it_matters"]),
+                how_to_find_out=str(item["how_to_find_out"]),
+            )
+            for item in round_.sim_unknowns
+        ),
+        runs=round_.sim_inquiry_runs,
+        chosen=tuple(round_.sim_inquiry_chosen),
     )
 
 

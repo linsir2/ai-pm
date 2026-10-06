@@ -1055,3 +1055,45 @@ def test_attest_preserves_packet_id_already_on_review():
     )
     view = dto.round_view(round_, seat_titles={SEAT: "数据规模与性能"})
     assert view.seat_packets[0].packet_id == "pkt-keep"
+
+
+def test_round_view_carries_sim_inquiry_artifact() -> None:
+    """RoundView.inquiry：没跑过是 None；跑过是 artifact + 次数 + 勾选（eval 与抽屉读它）。"""
+
+    from tests.support.builders import make_round
+
+    assert dto.round_view(make_round()).sim_inquiry is None
+
+    round_ = make_round()
+    round_.record_sim_inquiry(
+        slices=(
+            {
+                "local_id": "S1",
+                "situation": "运营月底要对账",
+                "job": "按时间筛出订单",
+                "trigger": "月底结账",
+                "workaround": "导出全部再手工筛",
+                "anchors": ["E1"],
+            },
+        ),
+        hypotheses=(
+            {
+                "local_id": "H1",
+                "statement": "运营宁愿等一分钟也不愿分两次导",
+                "grounding": "document",
+                "based_on": ["E1"],
+                "falsification": "观察到运营主动分多次小批量导出",
+                "evidence_needed": "跟两场月底结账",
+            },
+        ),
+        unknowns=(),
+    )
+    round_.choose_sim_inquiry(("H1",))
+
+    view = dto.round_view(round_).sim_inquiry
+    assert view is not None
+    assert view.runs == 1
+    assert view.chosen == ("H1",)
+    assert view.slices[0].anchors == ("E1",)
+    assert view.hypotheses[0].falsification.startswith("观察到运营")
+    assert view.unknowns == ()
