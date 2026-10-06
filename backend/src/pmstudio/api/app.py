@@ -23,7 +23,6 @@ from pmstudio.application.use_cases import (
     ForgetMemory,
     GetDocument,
     GetEvidence,
-    GetReadiness,
     GetRound,
     GetSchema,
     GetVersionDiff,
@@ -77,7 +76,6 @@ class ApiServices:
     delete_material: DeleteMaterial
     reparse_material: ReparseMaterial
     get_document: GetDocument
-    get_readiness: GetReadiness
     export_markdown: ExportMarkdown
     edit_entry: EditEntry
     get_versions: GetVersions

@@ -30,7 +30,6 @@ from pmstudio.application.use_cases import (
     ForgetMemory,
     GetDocument,
     GetEvidence,
-    GetReadiness,
     GetRound,
     GetSchema,
     GetVersionDiff,
@@ -453,7 +452,6 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             materials=materials, parser=parser, index=index, uow=uow, clock=clock
         ),
         get_document=GetDocument(documents=documents),
-        get_readiness=GetReadiness(documents=documents, checker=readiness),
         export_markdown=ExportMarkdown(
             documents=documents, evidence=evidences, checker=readiness, clock=clock
         ),

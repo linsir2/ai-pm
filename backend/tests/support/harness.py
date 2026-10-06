@@ -632,11 +632,6 @@ class Harness:
             clock=self.clock,
         )
 
-    def get_readiness(self):  # type: ignore[no-untyped-def]
-        from pmstudio.application.use_cases import GetReadiness
-
-        return GetReadiness(documents=self.documents, checker=self.readiness)
-
     def get_schema(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetSchema
 
@@ -810,7 +805,6 @@ class Harness:
             delete_material=self.delete_material(),
             reparse_material=self.reparse_material(),
             get_document=self.get_document(),
-            get_readiness=self.get_readiness(),
             export_markdown=self.export_markdown(),
             edit_entry=self.edit_entry(),
             get_versions=self.get_versions(),

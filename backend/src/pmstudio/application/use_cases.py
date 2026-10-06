@@ -83,7 +83,6 @@ from pmstudio.application.dto import (
     MaterialSummaryView,
     ParsedMaterial,
     ProjectSummaryView,
-    ReadinessItemView,
     RollbackResult,
     RoundHeadView,
     RoundView,
@@ -98,7 +97,6 @@ from pmstudio.application.dto import (
     exploration_view,
     material_summary_view,
     proposal_ignore_streak,
-    readiness_view,
     round_view,
     schema_view,
     search_hits,
@@ -3049,7 +3047,7 @@ class GetSchema:
     """现行结构：13 章（含说明与槽）、功能字段表、三处上限、三个讨论角色。
 
     纯函数、不注入任何仓储——"读 schema 不可能开事务"是结构上的保证，不靠纪律
-    （与 `GetReadiness` 同源：只读用例拿不到写端口）。
+    （与只读用例同源：它们拿不到写端口）。
 
     `discussion_roles` 是**构造时注入的元组**（不是仓储）：角色表随进程加载一次，
     读 schema 只是把它摆出来，所以这里依然拿不到任何 IO 端口。
@@ -3062,16 +3060,7 @@ class GetSchema:
         return schema_view(discussion_roles=self._discussion_roles)
 
 
-class GetReadiness:
-    """只读：这份文档按合格标准还差什么（`01-规格.md` §4/§7）。"""
 
-    def __init__(self, *, documents: DocumentReader, checker: ReadinessChecker) -> None:
-        self._documents = documents
-        self._checker = checker
-
-    async def __call__(self, *, project_id: ProjectId) -> tuple[ReadinessItemView, ...]:
-        view = self._documents.get(project_id).view()
-        return tuple(readiness_view(item) for item in self._checker.check(view))
 
 
 class ExportMarkdown:

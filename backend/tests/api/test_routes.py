@@ -703,23 +703,6 @@ async def test_model_failure_is_502():
     assert response.json()["code"] == "model_call_failed"
 
 
-async def test_readiness_endpoint_reports_counts_and_items():
-    app, _ = make_client()
-    async with async_client(app) as client:
-        project_id = (
-            await client.post("/api/projects", json={"title": "订单中台"})
-        ).json()["project_id"]
-        response = await client.get(f"/api/projects/{project_id}/readiness")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ready"] is False
-    assert body["blockers"] >= 1
-    assert body["warns"] >= 0
-    assert {"section_id", "code", "title", "detail", "severity"} == set(body["items"][0])
-    assert body["blockers"] == sum(1 for item in body["items"] if item["severity"] == "blocker")
-
-
 async def test_export_markdown_returns_a_downloadable_file():
     app, _ = make_client()
     async with async_client(app) as client:
