@@ -15,13 +15,13 @@ PARSER_VERSION_SIMULATION = "1"
 #: 数字断言正则：与 `exploration._NUMERIC` 同形但各判各的包（inquiry 包判它的
 #: 假设/盲区，sim 包判它的切片/假设/盲区；形状不同，合并不了。等第三个消费者
 #: 出现再抽公共处——现在抽就是为通用而通用）。
-_SIM_NUMERIC = re.compile(r"\d+\s*(%|％|成|倍)|占比|百分比|比例|数据显示|调查显示|大多数|多数人")
+SIM_NUMERIC = re.compile(r"\d+\s*(%|％|成|倍)|占比|百分比|比例|数据显示|调查显示|大多数|多数人")
 
 
 def sim_numeric_hit(text: str) -> bool:
     """这段文本有没有数量断言（模拟推演不许出数字，D1 筛#4）。"""
 
-    return _SIM_NUMERIC.search(text) is not None
+    return SIM_NUMERIC.search(text) is not None
 
 #: 身份词窄表：命中即"这条在装人"。故意窄——单字"男/女/岁"误杀太大不收，
 #: 数字断言是 `_NUMERIC`（exploration 那边）的活，这里只抓身份。
