@@ -74,6 +74,7 @@ def test_the_prompts_directory_is_not_empty():
         "memory_curator.md",
         "opinion_dispositions.md",
         "seat_review.md",
+        "sim_inquiry.md",
     ], "提示词清单变了，确认一下是有意为之"
 
 

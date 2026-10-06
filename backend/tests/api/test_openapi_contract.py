@@ -29,6 +29,9 @@ EXPECTED_PATHS = {
     "/api/rounds/{round_id}/retry",
     "/api/rounds/{round_id}/dig",
     "/api/rounds/{round_id}/abandon",
+    # M10 模拟调研：跑一趟（轮内动作）+ 收下勾选为材料
+    "/api/rounds/{round_id}/sim-inquiry",
+    "/api/rounds/{round_id}/sim-inquiry/keep",
     # M8 探索：发起/列表（POST 与 GET 同路径）+ 重试/放弃 + 候选的收下/删掉
     "/api/projects/{project_id}/explorations",
     "/api/explorations/{exploration_id}/retry",

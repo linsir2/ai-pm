@@ -269,3 +269,19 @@ def test_every_limit_in_this_file_is_a_positive_integer():
     values = [value for value, _, _ in DOCUMENTED_CALL_LIMITS]
 
     assert all(isinstance(value, int) and value > 0 for value in values), values
+
+def test_sim_inquiry_budget_is_its_own_account_and_pinned():
+    """M10：模拟调研的调用账**另算第五本**（不进轮次的 66，不占调研/讨论那几本）。"""
+
+    from pmstudio.application import use_cases as uc
+    from pmstudio.domain.exploration import item as sim_items
+
+    assert uc.MAX_SIM_INQUIRY_ATTEMPTS == 2
+    assert uc.MAX_SIM_INQUIRIES_PER_ROUND == 2
+    assert sim_items.MAX_SIM_INQUIRY_SLICES == 3
+    assert sim_items.MAX_SIM_INQUIRY_HYPOTHESES == 6
+    assert sim_items.MAX_SIM_INQUIRY_UNKNOWNS == 3
+
+    text = LIMITS_DOC.read_text(encoding="utf-8")
+    assert "另算第五本账" in text, "文档里那节口径不见了？"
+    assert "切片 3 /" in text and "假设 6 / 盲区 3" in text
