@@ -7,10 +7,11 @@
 import re
 
 from pmstudio.application.dto import RoundView
+from pmstudio.application.sim_inquiry import SIM_NUMERIC
 
 EID = re.compile(r"^E\d+$")
 
-#: 跑每条用例时默认要过的七条（case 里可以覆盖）
+#: 跑每条用例时默认要过的十条（case 里可以覆盖）
 EVAL_ASSERTIONS: list[dict] = [
     {"type": "evidence_refs_are_eids"},
     {"type": "every_proposal_has_evidence"},
@@ -19,11 +20,14 @@ EVAL_ASSERTIONS: list[dict] = [
     {"type": "no_duplicate_questions"},
     {"type": "dropped_items_are_explained"},
     {"type": "outside_scope_items_are_labeled"},
+    {"type": "inquiry_hypotheses_are_grounded"},
+    {"type": "inquiry_needs_verification"},
+    {"type": "inquiry_has_no_quantities"},
 ]
 
 #: **没进默认集**的那一条：`unaccounted_at_most`。
 #:
-#: 为什么：默认集里那七条量的是**结构**（编号形状、题数、标注对齐……），而
+#: 为什么：默认集里那十条量的是**结构**（编号形状、题数、标注对齐……），而
 #: `unaccounted` 量的是**模型行为率**——四个车道 13 个轮次实测 4–26 条/轮，
 #: 补了提示词之后 2–3 轮实测 8–23 条/轮，**没有可测的下降**（见
 #: `.codex/runs/2026-10-01/P22验证.md`）。给这种量挂一个"默认必须过"的阈值，
@@ -199,6 +203,62 @@ def check(assertion: dict, view: RoundView) -> str | None:
                 f"顶部有 {len(outside)} 条（另有 {len(others)} 条置顶告警）"
             )
         return None
+
+    if kind == "inquiry_hypotheses_are_grounded":
+        # M10：模拟假设的编号必须真实存在（E 形状），invented 必须留空 based_on。
+        # 没跑过模拟（sim_inquiry 是 None）无事可查，直接过——默认集加这三条
+        # 不炸旧用例的前提（`test_inquiry_assertions_pass_vacuously_without_sim`）。
+        inquiry = view.sim_inquiry
+        if inquiry is None:
+            return None
+        bad = sorted(
+            {
+                ref
+                for item in inquiry.hypotheses
+                for ref in item.based_on
+                if not EID.match(ref)
+            }
+        )
+        if bad:
+            return f"模拟假设引用了不存在的编号：{'、'.join(bad)}"
+        naked = sorted(
+            item.local_id
+            for item in inquiry.hypotheses
+            if item.grounding == "invented" and item.based_on
+        )
+        if naked:
+            return f"凭空推演却带了依据编号：{'、'.join(naked)}"
+        return None
+
+    if kind == "inquiry_needs_verification":
+        # M10：每条假设/盲区必须写清"怎么被推翻/去哪验证"——没写就是口号，不是假设。
+        inquiry = view.sim_inquiry
+        if inquiry is None:
+            return None
+        bad = sorted(
+            item.local_id
+            for item in inquiry.hypotheses
+            if not item.falsification.strip() or not item.evidence_needed.strip()
+        )
+        bad += sorted(
+            item.local_id
+            for item in inquiry.unknowns
+            if not item.why_it_matters.strip() or not item.how_to_find_out.strip()
+        )
+        return None if not bad else f"这些模拟条目没写怎么验证：{'、'.join(bad)}"
+
+    if kind == "inquiry_has_no_quantities":
+        # M10：模拟推演不许出数字（与装配层 `_SIM_NUMERIC` 同一口径，判据写两遍、
+        # 各判各的层：装配层拦回包，eval 拦退化）。
+        inquiry = view.sim_inquiry
+        if inquiry is None:
+            return None
+        texts = [
+            item.statement
+            for item in (*inquiry.hypotheses, *inquiry.unknowns)
+        ] + [item.situation for item in inquiry.slices]
+        bad = sorted({text for text in texts if SIM_NUMERIC.search(text)})
+        return None if not bad else f"模拟产物出现了数量断言：{bad[0][:30]}"
 
     raise ValueError(f"未知断言：{kind}")
 

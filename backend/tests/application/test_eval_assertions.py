@@ -451,3 +451,92 @@ def test_unaccounted_opinions_are_capped():
 
     assert check({"type": "unaccounted_at_most", "count": 2}, view) is not None
     assert check({"type": "unaccounted_at_most", "count": 3}, view) is None
+
+
+def _sim_round() -> Round:
+    round_ = make_round()
+    round_.record_sim_inquiry(
+        slices=(
+            {
+                "local_id": "S1",
+                "situation": "运营月底要对账",
+                "job": "按时间筛出订单",
+                "trigger": "月底结账",
+                "workaround": "导出全部再手工筛",
+                "anchors": ["E1"],
+            },
+        ),
+        hypotheses=(
+            {
+                "local_id": "H1",
+                "slice_id": "S1",
+                "statement": "运营宁愿等一分钟也不愿分两次导",
+                "grounding": "document",
+                "based_on": ["E1"],
+                "falsification": "观察到运营主动分多次小批量导出",
+                "evidence_needed": "跟两场月底结账看实际操作",
+            },
+        ),
+        unknowns=(
+            {
+                "local_id": "U1",
+                "statement": "节假日前的导出量会不会爆",
+                "why_it_matters": "决定要不要做异步导出",
+                "how_to_find_out": "拉去年节假日的导出日志",
+            },
+        ),
+    )
+    return round_
+
+
+def test_inquiry_assertions_pass_vacuously_without_sim() -> None:
+    """没跑过模拟：三条断言无事可查，通过（默认集加它们不炸旧用例的前提）。"""
+
+    from evals.assertions import check
+
+    view = view_of(make_round())
+    assert view.sim_inquiry is None
+    assert check({"type": "inquiry_hypotheses_are_grounded"}, view) is None
+    assert check({"type": "inquiry_needs_verification"}, view) is None
+    assert check({"type": "inquiry_has_no_quantities"}, view) is None
+
+
+def test_inquiry_assertions_pass_on_clean_artifact() -> None:
+    from evals.assertions import check
+
+    view = view_of(_sim_round())
+    assert check({"type": "inquiry_hypotheses_are_grounded"}, view) is None
+    assert check({"type": "inquiry_needs_verification"}, view) is None
+    assert check({"type": "inquiry_has_no_quantities"}, view) is None
+
+
+def test_inquiry_grounded_catches_bad_refs() -> None:
+    from evals.assertions import check
+
+    round_ = _sim_round()
+    round_.sim_hypotheses[0]["based_on"] = ["X9"]
+    failure = check({"type": "inquiry_hypotheses_are_grounded"}, view_of(round_))
+    assert failure is not None and "X9" in failure
+
+    round_ = _sim_round()
+    round_.sim_hypotheses[0]["grounding"] = "invented"
+    failure = check({"type": "inquiry_hypotheses_are_grounded"}, view_of(round_))
+    assert failure is not None and "H1" in failure
+
+
+def test_inquiry_needs_verification_catches_slogans() -> None:
+    from evals.assertions import check
+
+    round_ = _sim_round()
+    round_.sim_hypotheses[0]["falsification"] = "   "
+    failure = check({"type": "inquiry_needs_verification"}, view_of(round_))
+    assert failure is not None and "H2" not in failure and "H1" in failure
+
+
+def test_inquiry_no_quantities_catches_numbers() -> None:
+    from evals.assertions import check
+
+    round_ = _sim_round()
+    round_.sim_hypotheses[0]["statement"] = "约 62% 用户会用导出"
+    failure = check({"type": "inquiry_has_no_quantities"}, view_of(round_))
+    assert failure is not None and "62%" in failure

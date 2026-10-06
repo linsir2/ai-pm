@@ -2096,3 +2096,42 @@ def test_proposal_citing_material_backed_claim_stays_derived():
     assert [proposal.origin.type for proposal in result.proposals] == [
         OriginType.DERIVED
     ]
+
+
+def ledger_with_a_simulated_chunk() -> EvidenceLedger:
+    """E1 用户输入 + E2 模拟材料块（M10 收下回流后的样子）：只引 E2 的提案没有终点可回溯。"""
+
+    from tests.support.builders import NOW, PROJECT, ROUND_ID
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="想做个订单导出的功能",
+        source=EvidenceSource(round_id=ROUND_ID, raw_span="想做个订单导出的功能"),
+        now=NOW,
+    )
+    ledger.record(
+        kind=EvidenceKind.SIMULATED,
+        text="待验证假设（模拟推演）H1：运营宁愿等一分钟也不愿分两次导",
+        source=EvidenceSource(external_ref="simulation:inquiry:r1#H1"),
+        now=NOW,
+    )
+    return ledger
+
+
+def test_simulated_only_proposal_is_downgraded_to_proposed():
+    """只引模拟块的提案：回溯不到任何终点 → 降级成"它提议的"（默认不勾）。
+
+    M10 的整条回流就靠这一降：如果不断言，SIMULATED 材料的引用会悄悄变成"已验证"。
+    """
+
+    result = assembly.assemble(
+        packet(proposals=[slot_proposal(refs=["E2"])]),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_a_simulated_chunk(),
+    )
+
+    assert [proposal.origin.type for proposal in result.proposals] == [
+        OriginType.PROPOSED
+    ]
