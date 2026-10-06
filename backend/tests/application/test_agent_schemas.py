@@ -217,3 +217,124 @@ def test_cards_packet_rejects_empty_list():
 
     with pytest.raises(ValidationError):
         schemas.CardsPacket.model_validate({"cards": []})
+
+
+def _sim_slice(i: int) -> dict:
+    return {
+        "local_id": f"S{i}",
+        "situation": "运营月底要对账",
+        "job": "按时间筛出订单",
+        "trigger": "月底结账",
+        "workaround": "导出全部再手工筛",
+        "anchors": ["E1"],
+    }
+
+
+def _sim_hypothesis(i: int) -> dict:
+    return {
+        "local_id": f"H{i}",
+        "slice_id": "S1",
+        "statement": "运营宁愿等一分钟也不愿分两次导",
+        "grounding": "document",
+        "based_on": ["E1"],
+        "falsification": "观察到运营主动分多次小批量导出",
+        "evidence_needed": "跟两场月底结账看实际操作",
+    }
+
+
+def test_sim_inquiry_packet_caps_slices_hypotheses_unknowns():
+    """模拟调研包：上限 3 切片 / 6 假设 / 3 盲区写进 schema。"""
+
+    with pytest.raises(ValidationError):
+        schemas.SimInquiryPacket.model_validate(
+            {"basis": "x", "slices": [_sim_slice(i) for i in range(4)]}
+        )
+    with pytest.raises(ValidationError):
+        schemas.SimInquiryPacket.model_validate(
+            {
+                "basis": "x",
+                "slices": [_sim_slice(1)],
+                "hypotheses": [_sim_hypothesis(i) for i in range(7)],
+            }
+        )
+    with pytest.raises(ValidationError):
+        schemas.SimInquiryPacket.model_validate(
+            {
+                "basis": "x",
+                "slices": [_sim_slice(1)],
+                "unknowns": [
+                    {
+                        "local_id": f"U{i}",
+                        "statement": "s",
+                        "why_it_matters": "w",
+                        "how_to_find_out": "h",
+                    }
+                    for i in range(4)
+                ],
+            }
+        )
+
+
+def test_sim_slice_requires_at_least_one_anchor():
+    """切片没有锚点就是凭空分组：anchors 为空直接拒收（parse 层，不靠提示词自觉）。"""
+
+    bad = _sim_slice(1)
+    bad["anchors"] = []
+    with pytest.raises(ValidationError):
+        schemas.SimInquiryPacket.model_validate({"basis": "x", "slices": [bad]})
+
+
+def test_sim_inquiry_packet_empty_parses_ok():
+    """有切片、无假设无盲区时 parse 放行："没东西"算不算成功是装配层的事（筛#6），
+    parse 只管形状。注意切片至少 1 个（无切片就没有锚点单位，parse 直接拒）。"""
+
+    packet = schemas.SimInquiryPacket.model_validate(
+        {"basis": "读了 E1", "slices": [_sim_slice(1)]}
+    )
+    assert packet.hypotheses == [] and packet.unknowns == []
+
+
+def test_sim_hypothesis_has_no_kind_subject_touches():
+    """砍掉的字段不许悄悄回来：kind/subject/touches 没有任何机械消费者，
+    假设的字段集锁死这 7 个（M10 审核 C1 旁的裁决）。"""
+
+    assert set(schemas.SimHypothesisDraft.model_fields) == {
+        "local_id",
+        "slice_id",
+        "statement",
+        "grounding",
+        "based_on",
+        "falsification",
+        "evidence_needed",
+    }
+    assert set(schemas.SimSliceDraft.model_fields) == {
+        "local_id",
+        "situation",
+        "job",
+        "trigger",
+        "workaround",
+        "anchors",
+    }
+
+
+def test_sim_inquiry_schema_has_no_demographic_or_numeric_fields():
+    """schema 里根本没有可填人口学/数字的位置（三篇证据的落地：不是提示词口号，是形状）。"""
+
+    banned = {
+        "age", "gender", "sex", "region", "income", "education", "ethnicity",
+        "score", "confidence", "percentage", "ratio", "satisfaction",
+    }
+    for model in (
+        schemas.SimSliceDraft,
+        schemas.SimHypothesisDraft,
+        schemas.SimUnknownDraft,
+        schemas.SimInquiryPacket,
+    ):
+        assert not (set(model.model_fields) & banned), model.__name__
+
+
+def test_sim_inquiry_packet_rejects_zero_slices():
+    """切片是锚点单位：0 个切片 parse 直接拒（连分组都没有的推演不必进装配）。"""
+
+    with pytest.raises(ValidationError):
+        schemas.SimInquiryPacket.model_validate({"basis": "读了 E1", "slices": []})

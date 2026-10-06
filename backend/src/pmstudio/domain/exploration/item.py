@@ -16,6 +16,12 @@ from pmstudio.domain.shared.ids import EvidenceId
 MAX_INQUIRY_HYPOTHESES = 6
 MAX_INQUIRY_BLIND_SPOTS = 3
 
+#: 模拟调研（M10）与 M8 同上限：切片是锚点单位，假设与盲区是条目。
+#: 单独常量（不复用 M8 的两个）：两包的上限理由不同，改一边不许悄悄带走另一边。
+MAX_SIM_INQUIRY_SLICES = 3
+MAX_SIM_INQUIRY_HYPOTHESES = 6
+MAX_SIM_INQUIRY_UNKNOWNS = 3
+
 
 class Grounding(StrEnum):
     """这条假设从哪来。`invented` = 凭空推演（允许，但不能伪装成有据）。"""

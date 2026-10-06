@@ -1,4 +1,4 @@
-"""这个产品的报文长什么样：5 个信息包 + 它们的 JSON Schema + 两个去处工具。
+"""这个产品的报文长什么样：信息包 + 它们的 JSON Schema + 两个去处工具。
 
 **这里只回答"报文与去处"，不回答"怎么解析"**（2026-10-04 拆出）：
 归一化引擎（补壳 / 收 null / 摘非对象 / 超限截断）与三档 `parse_packet*` 已搬进
@@ -20,6 +20,9 @@ from pydantic import BaseModel, Field
 from pmstudio.domain.exploration.item import (
     MAX_INQUIRY_BLIND_SPOTS,
     MAX_INQUIRY_HYPOTHESES,
+    MAX_SIM_INQUIRY_HYPOTHESES,
+    MAX_SIM_INQUIRY_SLICES,
+    MAX_SIM_INQUIRY_UNKNOWNS,
 )
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import FeatureSlug, SectionId
@@ -184,6 +187,67 @@ class InquiryPacket(BaseModel):
     )
     blind_spots: list[BlindSpotDraft] = Field(
         default_factory=list, max_length=MAX_INQUIRY_BLIND_SPOTS
+    )
+
+
+class SimSliceDraft(BaseModel):
+    """一个处境切片（M10 模拟调研）：任务/处境分组，不是人口学画像。
+
+    schema 里没有可填身份属性的位置；`anchors` 是它唯一的机械作用
+    （装配层逐个验账本存在性，落空则丢条 + 留痕）。
+    """
+
+    local_id: str = Field(default="", description="本包内唯一，如 S1；留空由系统按顺序补")
+    situation: str = Field(description="谁·在什么场景·要完成什么（不许写身份属性）")
+    job: str = Field(description="他真正要推进的一件事")
+    trigger: str = Field(description="触发点")
+    workaround: str = Field(description="现在怎么凑合（替代方案/手工流程/竞品）")
+    anchors: list[str] = Field(
+        min_length=1, description="出发点：文档/材料里已有的 E 编号（≥1 个）"
+    )
+
+
+class SimHypothesisDraft(BaseModel):
+    """一条模拟假设：字段集锁死这 7 个。
+
+    kind / subject / touches 被砍掉过（M10 审核：没有任何机械消费者，
+    分组看 grounding 就够，去向提示是展示文案不是字段）——加回来先过评审。
+    """
+
+    local_id: str = Field(default="", description="本包内唯一，如 H1；留空由系统按顺序补")
+    slice_id: str = Field(description="挂在哪个切片（装配层验存在性，挂不上则丢条 + 留痕）")
+    statement: str = Field(description="一句**可证伪**的陈述，不是结论")
+    grounding: Literal["document", "material", "invented"] = Field(
+        description="document=从文档推的；material=从材料推的；invented=凭空推演"
+    )
+    based_on: list[str] = Field(default_factory=list)
+    falsification: str = Field(description="什么观察会推翻它")
+    evidence_needed: str = Field(description="要什么真实证据才能确认")
+
+
+class SimUnknownDraft(BaseModel):
+    """一条盲区：模拟答不了、只能靠真实接触回答的问题（只活在 artifact，不落文档）。"""
+
+    local_id: str = Field(default="", description="本包内唯一，如 U1；留空由系统按顺序补")
+    statement: str = Field(description="我们现在不知道什么")
+    why_it_matters: str = Field(description="为什么值得问")
+    how_to_find_out: str = Field(description="只能靠真实接触的动作")
+
+
+class SimInquiryPacket(BaseModel):
+    """模拟调研回包：切片 + 假设 + 盲区。
+
+    分层：parse 只管形状（空假设/空盲区放行）；"没东西算不算成功"、
+    slice 挂载、账本锚点都是装配层的事。
+    """
+
+    basis: str = Field(description="你读了文档里的哪些内容才推出这些")
+    slices: list[SimSliceDraft] = Field(min_length=1, max_length=MAX_SIM_INQUIRY_SLICES)
+    hypotheses: list[SimHypothesisDraft] = Field(
+        default_factory=list, max_length=MAX_SIM_INQUIRY_HYPOTHESES
+    )
+    unknowns: list[SimUnknownDraft] = Field(
+        default_factory=list, max_length=MAX_SIM_INQUIRY_UNKNOWNS
     )
 
 
