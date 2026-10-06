@@ -7,6 +7,7 @@ import type {
   EditResult,
   EvidenceLookupView,
   ExplorationView,
+  KeepSimResult,
   MaterialSummaryView,
   ProjectSummaryView,
   RollbackResult,
@@ -374,6 +375,17 @@ export const api = {
   /** 草案卡上的"继续深挖"：回到提问，把刚才没问上的题问出来（C6）。 */
   dig: (roundId: string) =>
     request<RoundView>(`/rounds/${roundId}/dig`, { method: "POST", body: "{}" }),
+
+  /** 草案卡上的"去模拟调研"：轮内动作（不碰 step），跑完读回最新投影。 */
+  runSimInquiry: (roundId: string) =>
+    request<RoundView>(`/rounds/${roundId}/sim-inquiry`, { method: "POST", body: "{}" }),
+
+  /** 收下模拟的勾选为材料（空选择后端直接拒；同选择重复收下幂等）。 */
+  keepSimInquiry: (roundId: string, chosen: string[]) =>
+    request<KeepSimResult>(`/rounds/${roundId}/sim-inquiry/keep`, {
+      method: "POST",
+      body: JSON.stringify({ chosen }),
+    }),
 
   /** 放弃这一轮：后端先记状态、再取消正在跑的模型调用。 */
   abandonRound: (roundId: string) =>

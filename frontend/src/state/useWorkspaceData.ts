@@ -44,7 +44,9 @@ export type PendingAction =
   /** 过目台上的动作（M8）：发起 / 重试 / 放弃 / 收下 / 删掉，串行不并发。 */
   | "exploration"
   /** 讨论区上的动作（M9）：开聊 / 说 / 总结 / 收卡 / 关掉，同样串行不并发。 */
-  | "discussion";
+  | "discussion"
+  /** 模拟抽屉上的动作（M10）：跑一趟 / 收下勾选，同样串行不并发。 */
+  | "simulation";
 
 const PROJECT_PARAM = "project";
 
@@ -567,6 +569,25 @@ export function useWorkspaceData() {
     [run],
   );
 
+  /** 跑一趟模拟调研：读回的投影里带 artifact，抽屉靠它渲染。 */
+  const runSimInquiry = useCallback(
+    (roundId: string) =>
+      run("simulation", async () => {
+        dispatch({ type: "round", round: await api.runSimInquiry(roundId) });
+      }),
+    [run],
+  );
+
+  /** 收下勾选为材料：keep 只回小结果，读回整轮刷新勾选态。 */
+  const keepSimInquiry = useCallback(
+    (roundId: string, chosen: string[]) =>
+      run("simulation", async () => {
+        await api.keepSimInquiry(roundId, chosen);
+        dispatch({ type: "round", round: await api.getRound(roundId) });
+      }),
+    [run],
+  );
+
   /** 放弃这一轮：不动 pending（那条在途请求由 abandoning 标志位接住）。 */
   const abandon = useCallback(async (roundId: string) => {
     abandoning.current = true;
@@ -706,6 +727,8 @@ export function useWorkspaceData() {
     confirm,
     retry,
     dig,
+    runSimInquiry,
+    keepSimInquiry,
     abandon,
     editEntry,
     rollback,

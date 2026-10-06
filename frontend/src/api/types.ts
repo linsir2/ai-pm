@@ -213,6 +213,47 @@ export interface RoundView {
   web_search_available: boolean;
   /** 这一轮攒下的记忆提议（M6）：**提议**，界面上默认不勾。老轮次为 undefined。 */
   memory_proposals?: MemoryProposalView[];
+  /** 模拟调研产物（M10）：没跑过是 null/undefined；抽屉靠它决定出不出现。 */
+  sim_inquiry?: SimInquiryView | null;
+}
+
+export interface SimSliceView {
+  local_id: string;
+  situation: string;
+  job: string;
+  trigger: string;
+  workaround: string;
+  anchors: string[];
+}
+
+export interface SimHypothesisView {
+  local_id: string;
+  slice_id: string;
+  statement: string;
+  grounding: string;
+  based_on: string[];
+  falsification: string;
+  evidence_needed: string;
+}
+
+export interface SimUnknownView {
+  local_id: string;
+  statement: string;
+  why_it_matters: string;
+  how_to_find_out: string;
+}
+
+export interface SimInquiryView {
+  slices: SimSliceView[];
+  hypotheses: SimHypothesisView[];
+  unknowns: SimUnknownView[];
+  runs: number;
+  chosen: string[];
+}
+
+export interface KeepSimResult {
+  material_id: string;
+  kept: string[];
 }
 
 export interface WebQueryView {

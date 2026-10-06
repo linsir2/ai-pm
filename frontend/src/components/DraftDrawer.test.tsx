@@ -65,6 +65,7 @@ function draw(over: Partial<Parameters<typeof DraftDrawer>[0]> = {}) {
     onSetAccepted: vi.fn(),
     onSubmit: vi.fn(),
     onDig: vi.fn(),
+    onSimInquiry: vi.fn(),
     onCollapse: vi.fn(),
     ...over,
   };
@@ -114,6 +115,15 @@ describe("DraftDrawer", () => {
     fireEvent.click(screen.getByRole("button", { name: /继续深挖/ }));
 
     expect(props.onDig).toHaveBeenCalledTimes(1);
+    expect(props.onSubmit).not.toHaveBeenCalled()
+  });
+
+  it("点『去模拟调研』调到 onSimInquiry（M10：草案卡唯一新入口）", () => {
+    const props = draw();
+
+    fireEvent.click(screen.getByRole("button", { name: /去模拟调研/ }));
+
+    expect(props.onSimInquiry).toHaveBeenCalledTimes(1);
     expect(props.onSubmit).not.toHaveBeenCalled()
   });
 
@@ -204,6 +214,7 @@ it("相同的告警合并成一条并带条数（不再三句一样的话摆三�
         onSetAccepted={() => undefined}
         onSubmit={() => undefined}
         onDig={() => undefined}
+        onSimInquiry={() => undefined}
         onCollapse={() => undefined}
       />
     </EvidenceScope>,

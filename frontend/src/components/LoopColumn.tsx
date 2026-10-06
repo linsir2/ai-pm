@@ -24,6 +24,7 @@ import { ExplorationTray } from "./ExplorationTray";
 import { LoopPane } from "./LoopPane";
 import { OpeningCard } from "./OpeningCard";
 import { QuestionnaireDrawer } from "./QuestionnaireDrawer";
+import { SimInquiryDrawer } from "./SimInquiryDrawer";
 import { RoundHistory } from "./RoundHistory";
 
 export function LoopColumn({
@@ -45,6 +46,11 @@ export function LoopColumn({
   onSkipAll,
   onConfirm,
   onDig,
+  onSimInquiry,
+  simOpen,
+  simPending,
+  onKeepSim,
+  onCloseSim,
   onRetry,
   onAbandon,
   onViewRound,
@@ -81,6 +87,13 @@ export function LoopColumn({
   onSkipAll: () => void;
   onConfirm: () => void;
   onDig: () => void;
+  /** 草案卡上的"去模拟调研"（M10）：调用方跑完打开模拟抽屉。 */
+  onSimInquiry: () => void;
+  /** 模拟抽屉开没开：开关只管显隐，内容从 round.sim_inquiry 来。 */
+  simOpen: boolean;
+  simPending: boolean;
+  onKeepSim: (ids: string[]) => void;
+  onCloseSim: () => void;
   onRetry: () => void;
   onAbandon: () => void;
   /** 切过去只读看某一轮（复用已有的 `viewRound`）。 */
@@ -248,7 +261,19 @@ export function LoopColumn({
               onSetAccepted={drafts.setAccepted}
               onSubmit={onConfirm}
               onDig={onDig}
+              onSimInquiry={onSimInquiry}
               onCollapse={() => drafts.setCollapsed(true)}
+            />
+          )}
+
+          {simOpen && round !== null && (
+            <SimInquiryDrawer
+              key={`${round.sim_inquiry?.runs ?? 0}:${(round.sim_inquiry?.chosen ?? []).join(",")}`}
+              inquiry={round.sim_inquiry ?? null}
+              pending={simPending}
+              initialChosen={round.sim_inquiry?.chosen ?? []}
+              onKeep={onKeepSim}
+              onClose={onCloseSim}
             />
           )}
         </>

@@ -54,6 +54,8 @@ export default function App() {
   const [researchAnchor, setResearchAnchor] = useState<ExplorationAnchor | null>(null);
   // 问卷题行上的「聊聊」（M9）：点一下只把题面与"问的人"放这儿，切到讨论 tab 才开聊。
   const [discussionAnchor, setDiscussionAnchor] = useState<DiscussionAnchor | null>(null);
+  /** 模拟抽屉开没开（M10）：artifact 在 round.sim_inquiry 里，开关只管显隐。 */
+  const [simOpen, setSimOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
 
@@ -353,6 +355,18 @@ export default function App() {
             onDig={() => {
               if (round !== null) void data.dig(round.round_id);
             }}
+            onSimInquiry={() => {
+              if (round !== null) {
+                setSimOpen(true);
+                void data.runSimInquiry(round.round_id);
+              }
+            }}
+            simOpen={simOpen}
+            simPending={data.pending === "simulation"}
+            onKeepSim={(ids) => {
+              if (round !== null) void data.keepSimInquiry(round.round_id, ids);
+            }}
+            onCloseSim={() => setSimOpen(false)}
             onRetry={() => {
               if (round !== null) void data.retry(round.round_id);
             }}

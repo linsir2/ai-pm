@@ -24,6 +24,7 @@ export function DraftDrawer({
   onSetAccepted,
   onSubmit,
   onDig,
+  onSimInquiry,
   onCollapse,
 }: {
   round: RoundView;
@@ -38,6 +39,8 @@ export function DraftDrawer({
   onSubmit: () => void;
   /** 草案卡上的"继续深挖"：回到提问，把刚才没问上的题问出来（C6）。 */
   onDig: () => void;
+  /** 草案卡上的"去模拟调研"：轮内动作，缺需求信息时去推一轮假设（M10）。 */
+  onSimInquiry: () => void;
   onCollapse: () => void;
 }) {
   const draft: DraftView | null = round.draft;
@@ -143,6 +146,14 @@ export function DraftDrawer({
             disabled={pending}
           >
             继续深挖（再问一批）
+          </button>
+          <button
+            type="button"
+            className="btn btn--sm btn--ghost"
+            onClick={onSimInquiry}
+            disabled={pending}
+          >
+            去模拟调研
           </button>
           <button type="button" className="btn btn--primary" disabled={pending} onClick={onSubmit}>
             {pending ? "正在写入…" : `确认写入 ${accepted.length} 条`}
