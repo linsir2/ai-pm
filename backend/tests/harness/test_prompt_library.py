@@ -27,6 +27,7 @@ EXPECTED_PROMPTS = (
     "memory_curator",
     "opinion_dispositions",
     "seat_review",
+    "sim_inquiry",
 )
 
 
