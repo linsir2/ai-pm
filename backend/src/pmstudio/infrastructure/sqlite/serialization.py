@@ -645,6 +645,12 @@ def round_to_payload(round_: Round) -> dict:
         ],
         # 确认时用户勾了哪几条记忆提议（老行 → 空，不是 None）
         "accepted_memory_ids": list(round_.accepted_memory_ids),
+        # 模拟调研产物（老行没有这几把键 → 空/0：那时候还没跑过模拟）
+        "sim_slices": [dict(item) for item in round_.sim_slices],
+        "sim_hypotheses": [dict(item) for item in round_.sim_hypotheses],
+        "sim_unknowns": [dict(item) for item in round_.sim_unknowns],
+        "sim_inquiry_runs": round_.sim_inquiry_runs,
+        "sim_inquiry_chosen": list(round_.sim_inquiry_chosen),
     }
 
 
@@ -755,6 +761,14 @@ def round_from_payload(
         ),
         accepted_memory_ids=tuple(
             str(item) for item in payload.get("accepted_memory_ids") or ()
+        ),
+        # 老行里没有这几把键（模拟调研是后加的，M10）：空/0——不编"它跑过模拟"
+        sim_slices=tuple(dict(item) for item in payload.get("sim_slices") or ()),
+        sim_hypotheses=tuple(dict(item) for item in payload.get("sim_hypotheses") or ()),
+        sim_unknowns=tuple(dict(item) for item in payload.get("sim_unknowns") or ()),
+        sim_inquiry_runs=int(payload.get("sim_inquiry_runs") or 0),
+        sim_inquiry_chosen=tuple(
+            str(item) for item in payload.get("sim_inquiry_chosen") or ()
         ),
     )
 

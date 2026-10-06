@@ -220,6 +220,11 @@ class Round:
         web_queries_chosen: tuple[str, ...] = (),
         memory_proposals: tuple[MemoryProposal, ...] = (),
         accepted_memory_ids: tuple[str, ...] = (),
+        sim_slices: tuple[dict, ...] = (),
+        sim_hypotheses: tuple[dict, ...] = (),
+        sim_unknowns: tuple[dict, ...] = (),
+        sim_inquiry_runs: int = 0,
+        sim_inquiry_chosen: tuple[str, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -265,6 +270,14 @@ class Round:
         self._memory_proposals = tuple(memory_proposals)
         #: 确认时用户勾了哪几条记忆提议（身份，不只是数量）
         self._accepted_memory_ids = tuple(accepted_memory_ids)
+        #: 模拟调研产物（M10）：三件套全是 plain dict——`round` 不许 import
+        #: `exploration`（上下文隔离守卫），校验形状住在那边，装配层转成 dict 才落这里。
+        #: 假设 dict 与 `exploration_to_payload` 的 6 键同形。
+        self._sim_slices = tuple(sim_slices)
+        self._sim_hypotheses = tuple(sim_hypotheses)
+        self._sim_unknowns = tuple(sim_unknowns)
+        self._sim_inquiry_runs = sim_inquiry_runs
+        self._sim_inquiry_chosen = tuple(sim_inquiry_chosen)
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -874,6 +887,50 @@ class Round:
         known = {ref.chunk_id for ref in self._materials}
         fresh = [ref for ref in refs if ref.chunk_id not in known]
         self._materials = self._materials + tuple(fresh)
+
+    @property
+    def sim_slices(self) -> tuple[dict, ...]:
+        return self._sim_slices
+
+    @property
+    def sim_hypotheses(self) -> tuple[dict, ...]:
+        return self._sim_hypotheses
+
+    @property
+    def sim_unknowns(self) -> tuple[dict, ...]:
+        return self._sim_unknowns
+
+    @property
+    def sim_inquiry_runs(self) -> int:
+        return self._sim_inquiry_runs
+
+    @property
+    def sim_inquiry_chosen(self) -> tuple[str, ...]:
+        return self._sim_inquiry_chosen
+
+    def record_sim_inquiry(
+        self,
+        *,
+        slices: tuple[dict, ...] | list[dict],
+        hypotheses: tuple[dict, ...] | list[dict],
+        unknowns: tuple[dict, ...] | list[dict],
+    ) -> None:
+        """记下一趟模拟调研的产物（覆盖写，不是追加——抽屉里永远只看最新一份）。
+
+        不校验内容：装配层落进来之前已经验过（账本锚点/去重/窄词表），
+        这里只记数（`sim_inquiry_runs` 是每轮 ≤2 次上限的分子）。
+        """
+
+        self._sim_slices = tuple(slices)
+        self._sim_hypotheses = tuple(hypotheses)
+        self._sim_unknowns = tuple(unknowns)
+        self._sim_inquiry_chosen = ()
+        self._sim_inquiry_runs += 1
+
+    def choose_sim_inquiry(self, chosen: tuple[str, ...] | list[str]) -> None:
+        """记下用户勾中的假设/盲区 id（keep 时读它合成材料）。"""
+
+        self._sim_inquiry_chosen = tuple(chosen)
 
     def dig(self) -> None:
         """从草案卡回到提问：**把这一轮没问上的那些题重新问一遍**（P14 C6）。
