@@ -30,6 +30,7 @@ from pmstudio.application.use_cases import (
     GetWorkspace,
     KeepCandidate,
     KeepDiscussionCard,
+    KeepSimInquiry,
     ListDiscussions,
     ListExplorations,
     ListMaterials,
@@ -61,6 +62,7 @@ class ApiServices:
     say_to_thread: SayToThread
     assemble_cards: AssembleCards
     keep_card: KeepDiscussionCard
+    keep_sim_inquiry: KeepSimInquiry
     close_discussion: CloseDiscussion
     list_discussions: ListDiscussions
     create_project: CreateProject

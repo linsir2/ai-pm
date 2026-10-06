@@ -23,6 +23,11 @@ from pmstudio.application.agents.schemas import (
     Overflow,
 )
 from pmstudio.application.agents.seat import SeatReviewer
+from pmstudio.application.agents.sim_inquirer import (
+    SimInquiryAgent,
+    SimInquiryOutcome,
+    filled_local_id,
+)
 from pmstudio.application.assembly import (
     NEW_FEATURE_YES,
     OPEN_QUESTION_HOME,
@@ -66,7 +71,11 @@ from pmstudio.application.context import (
     select_chunks,
     web_block_cost,
 )
-from pmstudio.application.deliverable import Deliverable, render_markdown
+from pmstudio.application.deliverable import (
+    Deliverable,
+    iter_document_entries,
+    render_markdown,
+)
 from pmstudio.application.discussion import (
     ORIGIN_DISCUSSION,
     discussion_material,
@@ -150,6 +159,14 @@ from pmstudio.application.ports import (
     WorkspaceIndex,
 )
 from pmstudio.application.repair import repair_note
+from pmstudio.application.sim_inquiry import (
+    ORIGIN_SIMULATION,
+    duplicate_of,
+    normalize_statement,
+    sim_demographic_hits,
+    sim_numeric_hit,
+    synthesize_sim_material,
+)
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
@@ -168,7 +185,7 @@ from pmstudio.domain.exploration.exploration import (
     ExplorationStatus,
     ScopeKind,
 )
-from pmstudio.domain.exploration.item import CandidateState
+from pmstudio.domain.exploration.item import CandidateState, Hypothesis
 from pmstudio.domain.memory.memory import screen_changes
 from pmstudio.domain.ports import (
     DiscussionReader,
@@ -206,7 +223,7 @@ from pmstudio.domain.round.round import (
     Round,
     SeedRef,
 )
-from pmstudio.domain.round.step import Step
+from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import (
     CommitResult,
@@ -215,10 +232,13 @@ from pmstudio.domain.services.committer import (
 )
 from pmstudio.domain.shared.errors import (
     DomainError,
+    IllegalStepTransition,
     NotAwaitingAnswers,
     ShapeError,
     ThreadClosed,
     ThreadFull,
+    TooManySimInquiries,
+    WaitingOnHuman,
 )
 from pmstudio.domain.shared.ids import (
     PREFERENCE_AREA_ID,
@@ -3499,6 +3519,10 @@ def fail_round(
 
 #: 调研报文两段式上限（重装 1 次，与 claims / 席位同一条口径）
 MAX_INQUIRY_ATTEMPTS = 2
+#: 模拟调研同款两段式（包不合格重装 1 次；条目级违规走丢条，不整包重装）
+MAX_SIM_INQUIRY_ATTEMPTS = 2
+#: R8：一轮最多跑 2 次模拟调研（显式点击才花调用，到顶就停，不排队）
+MAX_SIM_INQUIRIES_PER_ROUND = 2
 #: 过一次目台最多回几趟探索（列表投影的截断值；这不是"存了多少"，是"给多少"）
 MAX_EXPLORATION_LIST = 20
 
@@ -3513,6 +3537,8 @@ def _material_kind(packet: MaterialPacket) -> EvidenceKind:
     if packet.parsed.origin == ORIGIN_EXPLORATION:
         return EvidenceKind.SIMULATED
     if packet.parsed.origin == ORIGIN_DISCUSSION:
+        return EvidenceKind.SIMULATED
+    if packet.parsed.origin == ORIGIN_SIMULATION:
         return EvidenceKind.SIMULATED
     return EvidenceKind.EXTERNAL
 
@@ -4245,3 +4271,302 @@ class ListDiscussions:
                 project_id, limit=self._limit
             )
         )
+
+
+def _hypothesis_to_json(hypothesis: Hypothesis, *, slice_id: str) -> dict:
+    """领域假设 → 轮次快照 dict（与 `exploration_to_payload` 的 6 键同形 + 挂载）。
+
+    `slice_id` 必须带上：抽屉按它把假设挂回切片下分组，没有它就是一盘散沙。
+    """
+
+    return {
+        "local_id": hypothesis.local_id,
+        "slice_id": slice_id,
+        "statement": hypothesis.statement,
+        "grounding": hypothesis.grounding.value,
+        "based_on": [str(ref) for ref in hypothesis.based_on],
+        "falsification": hypothesis.falsification,
+        "evidence_needed": hypothesis.evidence_needed,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class KeepSimResult:
+    """收下模拟的结果：材料 id + 实际收下的 id（去重保序后）。"""
+
+    material_id: str
+    kept: tuple[str, ...]
+
+
+class RunSimInquiry:
+    """跑一趟模拟调研（M10 轮内动作）：只在草案卡上跑，不碰轮次状态。
+
+    与 M8 `execute` 同款两段式：报文不合格重装 1 次；网关失败直接抛（轮次不动、
+    不记 runs）。条目级违规（身份词 / 数字 / 重复）不整包重装：窄表命中给一次
+    重跑机会，第二次仍犯或命中重复就丢条 + `ASSEMBLY` 留痕。
+    """
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        documents: DocumentReader,
+        evidence: EvidenceReader,
+        memory: MemoryReader,
+        uow: UnitOfWork,
+        sim_inquirer: SimInquiryAgent,
+        checker: ReadinessChecker,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._documents = documents
+        self._evidence = evidence
+        self._memory = memory
+        self._uow = uow
+        self._sim_inquirer = sim_inquirer
+        self._checker = checker
+        self._clock = clock
+        self._events = events
+
+    async def __call__(self, *, round_id: RoundId) -> None:
+        round_ = self._rounds.get(round_id)
+        if round_.step is not Step.AWAITING_CONFIRM:
+            raise IllegalStepTransition(
+                current=round_.step, target=Step.AWAITING_CONFIRM
+            )
+        if round_.waiting_on is not WaitingOn.DRAFT:
+            raise WaitingOnHuman(waiting_on=round_.waiting_on)
+        if round_.sim_inquiry_runs >= MAX_SIM_INQUIRIES_PER_ROUND:
+            raise TooManySimInquiries(limit=MAX_SIM_INQUIRIES_PER_ROUND)
+        document = self._documents.get(round_.project_id)
+        view = document.view()
+        document_state = render_document_state(
+            view, readiness=self._checker.check(view)
+        )
+        memory_text = render_memory(self._memory.get(round_.project_id).entries)
+        ledger = self._evidence.get(round_.project_id)
+        known_eids = frozenset(item.eid for item in ledger.evidences())
+        doc_keys = frozenset(
+            normalize_statement(entry.text) for entry in iter_document_entries(view)
+        )
+        open_keys = frozenset(
+            normalize_statement(title) for _, title in open_item_keys(document)
+        )
+
+        repair = ""
+        accepted: tuple | None = None
+        for attempt in range(1, MAX_SIM_INQUIRY_ATTEMPTS + 1):
+            try:
+                outcome = await self._sim_inquirer.run(
+                    document_state=document_state,
+                    project_memory=memory_text,
+                    round_id=str(round_id),
+                    known_eids=known_eids,
+                    validation_error=repair,
+                    packet_slot=f"s{attempt}",
+                )
+            except ModelCallFailed:
+                raise
+            except (PacketParseError, ShapeError) as error:
+                if attempt == MAX_SIM_INQUIRY_ATTEMPTS:
+                    raise
+                repair = (
+                    repair_note(error)
+                    if isinstance(error, PacketParseError)
+                    else f"上一次的产物没通过校验：{error.message}"
+                )
+                continue
+            clean, drops, offense = self._sieve(
+                outcome,
+                doc_keys=doc_keys,
+                open_keys=open_keys,
+                pass_index=round_.sim_inquiry_runs + 1,
+            )
+            if offense is not None and attempt < MAX_SIM_INQUIRY_ATTEMPTS:
+                repair = offense
+                continue
+            accepted = (clean, drops)
+            break
+        assert accepted is not None  # 循环只会 break 或 raise
+        (clean_slices, clean_hypotheses, clean_unknowns), drops = accepted
+        if not clean_hypotheses and not clean_unknowns:
+            raise PacketParseError(
+                "模拟筛完没剩可用的假设与盲区（重复的、带身份词与数字的全被丢了）",
+                purpose=SimInquiryAgent.PURPOSE,
+            )
+        with self._uow:
+            stored = self._rounds.get(round_id)
+            stored.record_sim_inquiry(
+                slices=clean_slices,
+                hypotheses=[
+                    _hypothesis_to_json(item, slice_id=slice_id)
+                    for item, slice_id in clean_hypotheses
+                ],
+                unknowns=clean_unknowns,
+            )
+            stored.note_dropped(drops)
+            self._round_writer.save(stored)
+        _publish(self._events, self._clock, stored)
+
+    def _sieve(
+        self,
+        outcome: SimInquiryOutcome,
+        *,
+        doc_keys: frozenset[str],
+        open_keys: frozenset[str],
+        pass_index: int,
+    ) -> tuple[tuple, tuple[DroppedItem, ...], str | None]:
+        """条目级筛：窄表（身份词/数字）+ 去重。返回（干净三件套，丢条，重跑指引或 None）。
+
+        挂载反查走 packet drafts（只有 draft 才有 slice_id）：`filled_local_id`
+        与装配层同一规则，漂移会在测试里 loud fail（`by_id[lid]` 直接 KeyError），
+        不静默错配。返回的干净假设带 `(对象, slice_id)` 对，落快照时写进去。
+        """
+
+        dropped_slices: set[str] = set()
+        drops: list[DroppedItem] = []
+        offense: str | None = None
+        by_id = {item.local_id: item for item in outcome.hypotheses}
+
+        def drop(handle: str, reason: str) -> None:
+            drops.append(
+                DroppedItem(
+                    handle=handle,
+                    reason=reason,
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=pass_index,
+                )
+            )
+
+        for item in outcome.slices:
+            text = " ".join(
+                (item["situation"], item["job"], item["trigger"], item["workaround"])
+            )
+            hit = self._narrow_offense(f"切片 {item['local_id']}", text)
+            if hit is not None:
+                dropped_slices.add(item["local_id"])
+                drop(f"模拟切片 {item['local_id']}", hit)
+                if offense is None:
+                    offense = hit
+        clean_hypotheses: list[tuple[Hypothesis, str]] = []
+        for index, draft in enumerate(outcome.packet.hypotheses, start=1):
+            local_id = filled_local_id(draft.local_id, "H", index)
+            if draft.slice_id in dropped_slices:
+                drop(
+                    f"模拟假设 {local_id}",
+                    f"它挂的切片 {draft.slice_id} 被丢了（分组没了，挂载无意义）",
+                )
+                continue
+            hit = self._narrow_offense(f"假设 {local_id}", draft.statement)
+            if hit is not None:
+                drop(f"模拟假设 {local_id}", hit)
+                if offense is None:
+                    offense = hit
+                continue
+            dup = duplicate_of(
+                draft.statement, doc_keys=doc_keys, open_keys=open_keys
+            )
+            if dup == "document":
+                drop(f"模拟假设 {local_id}", "与文档已有内容重复，丢条不问")
+                continue
+            if dup == "open_item":
+                drop(f"模拟假设 {local_id}", "与 s11 活跃未决条目重复，丢条不问")
+                continue
+            clean_hypotheses.append((by_id[local_id], draft.slice_id))
+        clean_unknowns: list = []
+        for item in outcome.unknowns:
+            hit = self._narrow_offense(f"盲区 {item['local_id']}", item["statement"])
+            if hit is not None:
+                drop(f"模拟盲区 {item['local_id']}", hit)
+                if offense is None:
+                    offense = hit
+                continue
+            dup = duplicate_of(item["statement"], doc_keys=doc_keys, open_keys=open_keys)
+            if dup == "document":
+                drop(f"模拟盲区 {item['local_id']}", "与文档已有内容重复，丢条不问")
+                continue
+            if dup == "open_item":
+                drop(f"模拟盲区 {item['local_id']}", "与 s11 活跃未决条目重复，丢条不问")
+                continue
+            clean_unknowns.append(item)
+        clean_slices = [
+            item for item in outcome.slices if item["local_id"] not in dropped_slices
+        ]
+        return (clean_slices, clean_hypotheses, clean_unknowns), tuple(drops), offense
+
+    @staticmethod
+    def _narrow_offense(where: str, text: str) -> str | None:
+        """窄表命中 → 重跑指引（只点名，不复制错串：P5d 同款纪律）。"""
+
+        hits = sim_demographic_hits(text)
+        if hits:
+            return (
+                f"{where}命中身份词（{hits[0]}）：处境与假设不许写身份属性，"
+                f"重写这条（不要复述这句指引里的原话）"
+            )
+        if sim_numeric_hit(text):
+            return f"{where}命中数量断言：模拟推演不许出数字，改成可证伪的定性陈述"
+        return None
+
+
+class KeepSimInquiry:
+    """收下模拟的勾选为材料：合成一份（多块）＋同 uow 落库＋记 chosen；同选择重复收下幂等。
+
+    切片是分组不能单收；空选择直接拒（不合成空材料占材料位）。
+    """
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        materials: MaterialStore,
+        uow: UnitOfWork,
+        clock: Clock,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._materials = materials
+        self._uow = uow
+        self._clock = clock
+
+    async def __call__(
+        self, *, round_id: RoundId, chosen: Sequence[str]
+    ) -> KeepSimResult:
+        kept = tuple(dict.fromkeys(chosen))
+        if not kept:
+            raise ShapeError("没勾不能收：先在模拟抽屉里勾中假设或盲区")
+        round_ = self._rounds.get(round_id)
+        hyp_ids = {item["local_id"] for item in round_.sim_hypotheses}
+        unk_ids = {item["local_id"] for item in round_.sim_unknowns}
+        slice_ids = {item["local_id"] for item in round_.sim_slices}
+        for cid in kept:
+            if cid in slice_ids:
+                raise ShapeError(
+                    f"切片是分组，不能单收：{cid}，勾它下面的假设或盲区"
+                )
+            if cid not in hyp_ids and cid not in unk_ids:
+                raise ShapeError(f"这一轮模拟没有这条：{cid}", candidate_id=cid)
+        parsed, content = synthesize_sim_material(
+            round_id=str(round_id),
+            chosen=kept,
+            hypotheses=tuple(round_.sim_hypotheses),
+            unknowns=tuple(round_.sim_unknowns),
+            now=self._clock.now().isoformat(),
+        )
+        with self._uow:
+            packet = self._materials.put(
+                project_id=round_.project_id,
+                parsed=parsed,
+                sha256=namespaced_material_sha("simulation-material", parsed.source_ref),
+                content=content,
+                now=self._clock.now(),
+            )
+            stored = self._rounds.get(round_id)
+            stored.choose_sim_inquiry(kept)
+            self._round_writer.save(stored)
+        return KeepSimResult(material_id=packet.material_id, kept=kept)

@@ -204,6 +204,17 @@ class TooManyQuestions(InvariantViolation):
         )
 
 
+class TooManySimInquiries(InvariantViolation):
+    """一轮最多跑 2 次模拟调研（R8）：显式点击才花调用，到顶就停，不排队。"""
+
+    def __init__(self, *, limit: int) -> None:
+        super().__init__(
+            f"一轮最多跑 {limit} 次模拟调研，到上限请先收下或换一轮",
+            invariant=RInvariant.R8,
+            limit=limit,
+        )
+
+
 class ProposalWithoutRefs(InvariantViolation):
     def __init__(self, *, proposal_id: object) -> None:
         super().__init__(

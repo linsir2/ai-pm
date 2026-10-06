@@ -13,6 +13,7 @@ from pmstudio.api.schemas import (
     EditEntryRequest,
     FetchRequest,
     KeepCandidateRequest,
+    KeepSimInquiryRequest,
     OpeningRequest,
     SayRequest,
     StartDiscussionRequest,
@@ -363,6 +364,29 @@ async def dig(request: Request, round_id: str):  # type: ignore[no-untyped-def]
 
     view = await services_of(request).runner.run(RoundCommand(kind="dig", round_id=round_id))
     return as_json(view)
+
+
+@router.post("/rounds/{round_id}/sim-inquiry")
+async def run_sim_inquiry(request: Request, round_id: str):  # type: ignore[no-untyped-def]
+    """草案卡上的"去模拟调研"：轮内动作（不碰 step），跑完界面读回最新投影。"""
+
+    view = await services_of(request).runner.run(
+        RoundCommand(kind="sim_inquiry", round_id=round_id)
+    )
+    return as_json(view)
+
+
+@router.post("/rounds/{round_id}/sim-inquiry/keep")
+async def keep_sim_inquiry(  # type: ignore[no-untyped-def]
+    request: Request, round_id: str, body: KeepSimInquiryRequest
+):
+    """收下模拟的勾选为材料（空选择直接拒；同选择重复收下幂等）。"""
+
+    return as_json(
+        await services_of(request).keep_sim_inquiry(
+            round_id=RoundId(round_id), chosen=tuple(body.chosen)
+        )
+    )
 
 
 @router.post("/rounds/{round_id}/abandon")

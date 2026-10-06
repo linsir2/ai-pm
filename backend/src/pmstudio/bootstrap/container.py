@@ -13,6 +13,7 @@ from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
+from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
 from pmstudio.application.ports import WebFetcher
 from pmstudio.application.use_cases import (
     AbandonExploration,
@@ -38,6 +39,7 @@ from pmstudio.application.use_cases import (
     IntegrateRound,
     KeepCandidate,
     KeepDiscussionCard,
+    KeepSimInquiry,
     ListDiscussions,
     ListExplorations,
     ListMaterials,
@@ -49,6 +51,7 @@ from pmstudio.application.use_cases import (
     RollbackVersion,
     RunInquiry,
     RunSeatRound,
+    RunSimInquiry,
     SayToThread,
     SearchProject,
     StartDiscussion,
@@ -181,6 +184,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     analyzer = ClaimAnalyzer(model=gateway, prompts=prompts, catalog=catalog)
     reviewer = SeatReviewer(model=gateway, prompts=prompts)
     inquirer = Inquirer(model=gateway, prompts=prompts)
+    sim_inquirer = SimInquiryAgent(model=gateway, prompts=prompts)
     discusser = Discusser(model=gateway, prompts=prompts)
     integrator = Integrator(model=gateway, prompts=prompts)
     curator = MemoryCurator(model=gateway, prompts=prompts)
@@ -279,6 +283,25 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         rounds=rounds, round_writer=rounds, uow=uow, clock=clock, events=bus
     )
     dig_round = DigRound(rounds=rounds, round_writer=rounds, uow=uow, clock=clock, events=bus)
+    run_sim_inquiry = RunSimInquiry(
+        rounds=rounds,
+        round_writer=rounds,
+        documents=documents,
+        evidence=evidences,
+        memory=memory,
+        uow=uow,
+        sim_inquirer=sim_inquirer,
+        checker=readiness,
+        clock=clock,
+        events=bus,
+    )
+    keep_sim_inquiry = KeepSimInquiry(
+        rounds=rounds,
+        round_writer=rounds,
+        materials=materials,
+        uow=uow,
+        clock=clock,
+    )
     get_round = GetRound(
         rounds=rounds,
         evidence=evidences,
@@ -297,6 +320,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         retry_round=retry_round,
         dig_round=dig_round,
         get_round=get_round,
+        run_sim_inquiry=run_sim_inquiry,
     )
     run_inquiry = RunInquiry(
         documents=documents,
@@ -403,6 +427,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             uow=uow,
             clock=clock,
         ),
+        keep_sim_inquiry=keep_sim_inquiry,
         close_discussion=CloseDiscussion(
             discussions=discussions,
             discussion_writer=discussions,

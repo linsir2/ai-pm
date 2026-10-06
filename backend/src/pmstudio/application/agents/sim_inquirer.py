@@ -26,11 +26,16 @@ PURPOSE = "sim_inquiry"
 
 @dataclass(frozen=True, slots=True)
 class SimInquiryOutcome:
-    """一趟模拟交回的东西：切片（dict 存 payload 即此形）+ 领域对象 + 信封。"""
+    """一趟模拟交回的东西：切片（dict 存 payload 即此形）+ 领域对象 + 信封。
+
+    `packet` 也带上：装配层按 draft 反查 slice 挂载（draft 才有 slice_id），
+    用 `filled_local_id` 与这里同一规则对齐 local_id。
+    """
 
     slices: list[dict]
     hypotheses: tuple[Hypothesis, ...]
     unknowns: list[dict]
+    packet: schemas.SimInquiryPacket
     envelope: Envelope
 
     @property
@@ -96,6 +101,7 @@ class SimInquiryAgent:
             slices=slices,
             hypotheses=hypotheses,
             unknowns=unknowns,
+            packet=outcome.packet,
             envelope=outcome,
         )
 
@@ -117,7 +123,7 @@ def sim_from_packet(
     seen: set[str] = set()
     slices: list[dict] = []
     for index, draft in enumerate(packet.slices, start=1):
-        local_id = draft.local_id.strip() or f"S{index}"
+        local_id = filled_local_id(draft.local_id, "S", index)
         _mark_unique(seen, local_id)
         anchors = resolve_evidence_refs(
             draft.anchors,
@@ -139,7 +145,7 @@ def sim_from_packet(
     slice_ids = {item["local_id"] for item in slices}
     hypotheses: list[Hypothesis] = []
     for index, draft in enumerate(packet.hypotheses, start=1):
-        local_id = draft.local_id.strip() or f"H{index}"
+        local_id = filled_local_id(draft.local_id, "H", index)
         _mark_unique(seen, local_id)
         if draft.slice_id not in slice_ids:
             raise PacketParseError(
@@ -181,7 +187,7 @@ def sim_from_packet(
             ) from error
     unknowns: list[dict] = []
     for index, draft in enumerate(packet.unknowns, start=1):
-        local_id = draft.local_id.strip() or f"U{index}"
+        local_id = filled_local_id(draft.local_id, "U", index)
         _mark_unique(seen, local_id)
         for field in (draft.statement, draft.why_it_matters, draft.how_to_find_out):
             if not field.strip():
@@ -211,6 +217,13 @@ def sim_from_packet(
             }
         )
     return slices, tuple(hypotheses), unknowns
+
+
+def filled_local_id(raw: str, prefix: str, index: int) -> str:
+    """空 local_id 按顺序补（S1/H1/U1 三类各自编号）。装配层按同一规则反查，
+    所以规则只许写在这里——改编号规则只改这一处。"""
+
+    return raw.strip() or f"{prefix}{index}"
 
 
 def _mark_unique(seen: set[str], local_id: str) -> None:

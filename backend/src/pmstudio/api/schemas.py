@@ -48,6 +48,12 @@ class KeepCandidateRequest(BaseModel):
     as_: Literal["seed", "material"] = Field(alias="as")
 
 
+class KeepSimInquiryRequest(BaseModel):
+    """收下模拟的勾选：假设/盲区 id 列表（切片是分组，不能单收，由用例层拦）。"""
+
+    chosen: list[str] = Field(default_factory=list)
+
+
 class QuestionRefRequest(BaseModel):
     """开聊时带的问卷题（只当开场白：题面快照进 topic，角色由前端定）。"""
 

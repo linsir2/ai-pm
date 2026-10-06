@@ -235,6 +235,7 @@ class SimHypothesisView:
     """模拟抽屉里的一条假设：陈述 + 从哪推的 + 怎么被推翻 + 要什么证据。"""
 
     local_id: str
+    slice_id: str
     statement: str
     grounding: str
     based_on: tuple[str, ...]
@@ -1141,6 +1142,7 @@ def _sim_inquiry_view(round_: Round) -> SimInquiryView | None:
         hypotheses=tuple(
             SimHypothesisView(
                 local_id=str(item["local_id"]),
+                slice_id=str(item.get("slice_id") or ""),
                 statement=str(item["statement"]),
                 grounding=str(item["grounding"]),
                 based_on=tuple(str(eid) for eid in item.get("based_on") or ()),

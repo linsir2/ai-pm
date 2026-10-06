@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.discusser import Discusser
 from pmstudio.application.agents.inquirer import Inquirer
+from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
@@ -252,6 +253,7 @@ class Harness:
         )
         self.reviewer = SeatReviewer(model=self.gateway, prompts=self.prompts)
         self.inquirer = Inquirer(model=self.gateway, prompts=self.prompts)
+        self.sim_inquirer = SimInquiryAgent(model=self.gateway, prompts=self.prompts)
         self.discusser = Discusser(model=self.gateway, prompts=self.prompts)
         self.discussion_roles = _default_discussion_roles()
         self.integrator = Integrator(model=self.gateway, prompts=self.prompts)
@@ -433,6 +435,33 @@ class Harness:
         return KeepDiscussionCard(
             discussions=self.discussions,
             discussion_writer=self.discussions,
+            materials=self.materials,
+            uow=self.uow,
+            clock=self.clock,
+        )
+
+    def run_sim_inquiry(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import RunSimInquiry
+
+        return RunSimInquiry(
+            rounds=self.rounds,
+            round_writer=self.rounds,
+            documents=self.documents,
+            evidence=self.evidences,
+            memory=self.memory,
+            uow=self.uow,
+            sim_inquirer=self.sim_inquirer,
+            checker=self.readiness,
+            clock=self.clock,
+            events=self.events,
+        )
+
+    def keep_sim_inquiry(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import KeepSimInquiry
+
+        return KeepSimInquiry(
+            rounds=self.rounds,
+            round_writer=self.rounds,
             materials=self.materials,
             uow=self.uow,
             clock=self.clock,
@@ -749,6 +778,7 @@ class Harness:
                 confirm_draft=self.confirm_draft(),
                 retry_round=self.retry_round(),
                 dig_round=self.dig_round(),
+                run_sim_inquiry=self.run_sim_inquiry(),
                 get_round=GetRound(
                     rounds=self.rounds,
                     evidence=self.evidences,
@@ -790,6 +820,7 @@ class Harness:
             say_to_thread=self.say_to_thread(),
             assemble_cards=self.assemble_cards(),
             keep_card=self.keep_discussion_card(),
+            keep_sim_inquiry=self.keep_sim_inquiry(),
             close_discussion=self.close_discussion(),
             list_discussions=self.list_discussions(),
             create_project=self.create_project(),
