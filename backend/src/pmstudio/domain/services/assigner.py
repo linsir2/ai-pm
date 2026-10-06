@@ -39,7 +39,13 @@ class EvidenceAssigner:
             eid = ledger.record(
                 kind=EvidenceKind.USER_INPUT,
                 text=claim.text,
-                source=EvidenceSource(round_id=round_id, raw_span=claim.raw_span),
+                source=EvidenceSource(
+                    round_id=round_id,
+                    raw_span=claim.raw_span,
+                    # 主张读过的材料块：落编号时写进 derived_from，"材料→主张"才可查。
+                    # 空元组＝老行为；非材料编号由 ledger.record 拦（形状见 evidence 法）。
+                    derived_from=tuple(claim.material_eids),
+                ),
                 now=now,
             )
             assigned.append(replace(claim, eid=eid))

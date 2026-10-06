@@ -37,6 +37,9 @@ class Claim:
     eid: EvidenceId | None = None
     assumption: Assumption | None = None
     decided_by: str | None = None
+    #: 这条主张读过的材料块编号（落编号时写进 `derived_from`，让"材料→主张"可查）。
+    #: 空＝没读过，老构造一字不动。
+    material_eids: tuple[EvidenceId, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.text.strip():

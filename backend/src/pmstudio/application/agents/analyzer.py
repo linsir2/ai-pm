@@ -19,12 +19,13 @@ from pmstudio.application.context import (
     SECTIONS_TEXT,
     render_seat_catalog,
 )
+from pmstudio.application.evidence_refs import resolve_evidence_refs
 from pmstudio.application.ports import SeatCatalog
 from pmstudio.domain.round.claim import Assumption, Claim, Contradiction
 from pmstudio.domain.round.round import DroppedItem, DropSource, SeatNomination
 from pmstudio.domain.round.web_query import MAX_WEB_QUERIES, WebQuery
 from pmstudio.domain.shared.errors import DomainError
-from pmstudio.domain.shared.ids import RoundId
+from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.harness.errors import PacketParseError
 from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
@@ -185,6 +186,7 @@ class ClaimAnalyzer:
         round_id: RoundId | None = None,
         validation_error: str = "",
         packet_slot: str = "",
+        material_eids: frozenset[EvidenceId] = frozenset(),
     ) -> Analysis:
         outcome = await call_structured(
             self.CALL,
@@ -214,7 +216,9 @@ class ClaimAnalyzer:
         # （轮次都还没建出来）。截断保留它自己排的前 N 条，溢出写成留痕。
         packet, overflow, discarded = outcome.packet, outcome.overflow, outcome.discarded
         seats, dropped = nominations_from_packet(packet, catalog=self._catalog)
-        claims, claim_drops = claims_from_packet(packet, user_input=user_input)
+        claims, claim_drops = claims_from_packet(
+            packet, user_input=user_input, material_eids=material_eids
+        )
         # 被摘掉的那些条（根本不是对象）会让后面主张的序号整体前移，而互斥对子是按
         # **模型自己写的序号**指认的——所以要用"原始序号 → 落下来的第几条"换算，
         # 不能直接拿下标去取（真跑 F17 那一包只错了一条，换算错了就等于把互斥指到别人身上）。
@@ -385,7 +389,10 @@ def nominations_from_packet(
 
 
 def claims_from_packet(
-    packet: schemas.ClaimsPacket, *, user_input: str
+    packet: schemas.ClaimsPacket,
+    *,
+    user_input: str,
+    material_eids: frozenset[EvidenceId] = frozenset(),
 ) -> tuple[tuple[Claim, ...], tuple[DroppedItem, ...]]:
     """报文 → 主张 + **就地修掉的那些字段的留痕**（P21 F16-b）。
 
@@ -413,6 +420,15 @@ def claims_from_packet(
                 raw_span=draft.raw_span,
             )
         assumption = draft.assumption
+        # 读过的材料：只能是本轮挑中（进提示词）的块——许它引没见过的等于许它编。
+        # 未知编号走重装（与原话找不到同级：都是"编造"，代价都是整包重装一次）。
+        material_refs = resolve_evidence_refs(
+            draft.material_eids,
+            known=material_eids,
+            what="主张引用了不存在或本轮没带进来的材料块编号",
+            local_id=claim_id,
+            purpose=PURPOSE,
+        )
         if assumption is not None and draft.label.strip().lower() != ClaimLabel.GUESS.value:
             dropped.append(
                 DroppedItem(
@@ -444,6 +460,7 @@ def claims_from_packet(
                         else None
                     ),
                     decided_by=draft.decided_by,
+                    material_eids=material_refs,
                 )
             )
         except DomainError as error:

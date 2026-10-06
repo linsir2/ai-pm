@@ -207,3 +207,60 @@ async def test_the_seat_prompt_also_carries_the_material(tmp_path):
     seat_calls = [item for item in harness.prompts.calls if item[0] == "seat_review"]
     assert seat_calls, "席位没被调用"
     assert "需求.md" in seat_calls[-1][1]["external_material"]
+
+
+def material_backed_claims_reply() -> str:
+    """主张说读过 E1（本轮带进来的那块材料）——E43 那一幕的复现形状。"""
+
+    return json.dumps(
+        {
+            "basis": "读了本轮输入与带进来的材料块 E1",
+            "claims": [
+                {
+                    "text": "按这份材料写",
+                    "raw_span": "按这份材料写",
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                    "material_eids": ["E1"],
+                }
+            ],
+            "seats": [{"seat_id": "seat.data_scale", "why": "材料里有量级"}],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_start_round_links_picked_material_into_claim_derived_from():
+    from pmstudio.domain.shared.ids import EvidenceId
+
+    harness = Harness(replies={"claims": material_backed_claims_reply()})
+    harness.seed_project()
+    harness.materials.seed(make_material("目标：导出要有权限"))
+    starter = harness.start_round()
+    round_id = await starter.create(
+        project_id=PROJECT, user_input="按这份材料写", material_ids=["m1"]
+    )
+    await starter.analyze(round_id=round_id)
+
+    ledger = harness.evidences.get(PROJECT)
+    claims = [item for item in ledger.evidences() if item.kind is EvidenceKind.USER_INPUT]
+    assert [item.source.derived_from for item in claims] == [(EvidenceId("E1"),)]
+
+
+async def test_evidence_lookup_shows_material_in_claim_chain():
+    harness = Harness(replies={"claims": material_backed_claims_reply()})
+    harness.seed_project()
+    harness.materials.seed(make_material("目标：导出要有权限"))
+    starter = harness.start_round()
+    round_id = await starter.create(
+        project_id=PROJECT, user_input="按这份材料写", material_ids=["m1"]
+    )
+    await starter.analyze(round_id=round_id)
+
+    ledger = harness.evidences.get(PROJECT)
+    claim_eid = next(
+        item.eid for item in ledger.evidences() if item.kind is EvidenceKind.USER_INPUT
+    )
+    view = await harness.get_evidence()(project_id=PROJECT, eid=str(claim_eid))
+    assert [item.eid for item in view.chain] == [str(claim_eid), "E1"]

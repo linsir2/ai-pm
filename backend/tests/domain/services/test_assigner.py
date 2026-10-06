@@ -302,3 +302,29 @@ def test_retrying_the_same_round_still_reuses_the_number():
 
     assert str(first[0].eid) == str(again[0].eid)
     assert len(ledger) == size
+
+
+def test_assign_claims_records_derived_from_materials():
+    """落编号时把主张读过的材料写进 derived_from（E43 那一幕的机器形态）。"""
+
+    from pmstudio.domain.provenance.evidence import EvidenceSource
+
+    ledger = new_ledger()
+    material = ledger.record(
+        kind=EvidenceKind.SIMULATED,
+        text="讨论追问",
+        source=EvidenceSource(external_ref="discussion:d-1#C1"),
+        now=NOW,
+    )
+    claims = (
+        Claim(
+            claim_id="c1",
+            text="按材料写",
+            label=ClaimLabel.NEED,
+            target=Target.body("s5"),
+            raw_span="按这份材料写",
+            material_eids=(material,),
+        ),
+    )
+    assigned = EvidenceAssigner().assign_claims(claims, ledger=ledger, round_id=ROUND, now=NOW)
+    assert ledger.get(assigned[0].eid).source.derived_from == (material,)

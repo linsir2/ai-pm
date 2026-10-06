@@ -269,3 +269,81 @@ def test_find_by_local_strict_mode_refuses_the_legacy_fallback():
         )
         is None
     )
+
+
+def record_material(
+    ledger: EvidenceLedger, text: str = "讨论追问", *, ref: str = "discussion:d-1#C1"
+) -> EvidenceId:
+    return ledger.record(
+        kind=EvidenceKind.SIMULATED,
+        text=text,
+        source=EvidenceSource(external_ref=ref),
+        now=NOW,
+    )
+
+
+def test_user_input_may_cite_material_chunks():
+    """主张读过材料：user_input 可以带 derived_from，但只能是材料 kind。"""
+
+    ledger = empty_ledger()
+    material = record_material(ledger)
+    claim = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="按材料说的导出",
+        source=EvidenceSource(
+            round_id=RoundId("r1"), raw_span="按材料说的", derived_from=(material,)
+        ),
+        now=NOW,
+    )
+    assert ledger.get(claim).source.derived_from == (material,)
+    assert material in [item.eid for item in ledger.chain(claim)]
+
+
+def test_user_input_citing_a_judgment_is_still_refused():
+    """墙还在：引席位的判断（非材料）照旧拒绝——根必须留在用户手里或材料本身。"""
+
+    ledger = empty_ledger()
+    material = record_material(ledger)
+    judgment = record_derived(ledger, basis=(material,), text="同步导出够快")
+    with pytest.raises(EvidenceSourceShape, match="只能引用材料块"):
+        ledger.record(
+            kind=EvidenceKind.USER_INPUT,
+            text="按判断写",
+            source=EvidenceSource(
+                round_id=RoundId("r1"), raw_span="按判断写", derived_from=(judgment,)
+            ),
+            now=NOW,
+        )
+
+
+def test_user_input_citing_unknown_evidence_is_refused():
+    ledger = empty_ledger()
+    with pytest.raises(UnknownEvidence):
+        ledger.record(
+            kind=EvidenceKind.USER_INPUT,
+            text="按空气写",
+            source=EvidenceSource(
+                round_id=RoundId("r1"),
+                raw_span="按空气写",
+                derived_from=(EvidenceId("E99"),),
+            ),
+            now=NOW,
+        )
+
+
+def test_other_kinds_still_refuse_derived_from():
+    """user_input 之外的口子没开：system_default 带 derived_from 照旧是形状错误。"""
+
+    ledger = empty_ledger()
+    material = record_material(ledger)
+    with pytest.raises(EvidenceSourceShape):
+        ledger.record(
+            kind=EvidenceKind.SYSTEM_DEFAULT,
+            text="系统默认",
+            source=EvidenceSource(
+                round_id=RoundId("r1"),
+                rationale="结构规则",
+                derived_from=(material,),
+            ),
+            now=NOW,
+        )

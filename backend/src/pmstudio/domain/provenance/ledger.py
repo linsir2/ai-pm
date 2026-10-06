@@ -6,6 +6,7 @@ from datetime import datetime
 from pmstudio.domain.provenance.evidence import Evidence, EvidenceKind, EvidenceSource
 from pmstudio.domain.shared.errors import (
     DuplicateEvidenceId,
+    EvidenceSourceShape,
     SelfDerivation,
     ShapeError,
     UnknownEvidence,
@@ -79,6 +80,23 @@ class EvidenceLedger:
                 raise SelfDerivation(eid=eid)
             if ref not in self._by_id:
                 raise UnknownEvidence(eid=ref)
+        # 用户侧条目的材料门：主张可以引用**读过**的材料块（external/simulated），
+        # 但不能引用别的判断/主张——根必须留在用户手里或材料本身。
+        # 这是 `_validate_source` 开的那扇门的守卫：形状层只管"能不能带"，这里管"带的对不对"。
+        if source.derived_from and kind is EvidenceKind.USER_INPUT:
+            non_material = [
+                str(ref)
+                for ref in source.derived_from
+                if self._by_id[ref].kind
+                not in (EvidenceKind.EXTERNAL, EvidenceKind.SIMULATED)
+            ]
+            if non_material:
+                raise EvidenceSourceShape(
+                    "主张只能引用材料块的编号（读过的）："
+                    + "、".join(non_material)
+                    + "不是材料",
+                    eid=str(eid),
+                )
         if supersedes is not None:
             if supersedes not in self._by_id:
                 raise UnknownEvidence(eid=supersedes)

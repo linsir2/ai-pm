@@ -57,6 +57,13 @@ class ClaimDraft(BaseModel):
     field: str | None = None
     assumption: AssumptionDraft | None = None
     decided_by: str | None = None
+    material_eids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "这条主张主要依据的材料块编号（如 E43，本轮外部材料那节里出现过的）。"
+            "没依据就留空——乱写不存在或没给它看过的编号，整包走重装"
+        ),
+    )
 
 
 class SeatPickDraft(BaseModel):

@@ -87,5 +87,13 @@ def _validate_source(kind: EvidenceKind, source: EvidenceSource) -> None:
         _require(source.external_ref, "simulated 必须带 external_ref（指向哪条探索产物）")
     # manual：用户自己敲的字，内容就是 text，不额外要求来源字段。
     # 它带 round_id 也可以（在某一轮中途手改时），但不强制。
-    if source.derived_from and kind is not EvidenceKind.AGENT_DERIVED:
-        raise EvidenceSourceShape(f"{kind} 不能带 derived_from，只有 agent_derived 才带")
+    # derived_from 只许 agent_derived 与 user_input 带：前者是席位判断的依据链，
+    # 后者是"主张读过的材料块"（材料→主张可查，E43 那一案的立法）。
+    # user_input 能引谁、由谁来判，形状层不管——`ledger.record` 拿着全账本设材料门。
+    if source.derived_from and kind not in (
+        EvidenceKind.AGENT_DERIVED,
+        EvidenceKind.USER_INPUT,
+    ):
+        raise EvidenceSourceShape(
+            f"{kind} 不能带 derived_from，只有 agent_derived 与读过材料的 user_input 才带"
+        )

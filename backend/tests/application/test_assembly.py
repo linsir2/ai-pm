@@ -2060,3 +2060,39 @@ def test_a_model_labelled_conflict_without_a_pair_is_left_alone():
     )
 
     assert result.questions[0].kind is QuestionKind.CONFLICT
+
+
+def ledger_with_material_backed_claim() -> EvidenceLedger:
+    """E1 材料块 + E2 主张（读过 E1）：E46 那一幕落编号之后的样子。"""
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    material = ledger.record(
+        kind=EvidenceKind.SIMULATED,
+        text="讨论追问",
+        source=EvidenceSource(external_ref="discussion:d-1#C1"),
+        now=NOW,
+    )
+    ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="按材料写",
+        source=EvidenceSource(
+            round_id=ROUND_ID, raw_span="按材料写", derived_from=(material,)
+        ),
+        now=NOW,
+    )
+    return ledger
+
+
+def test_proposal_citing_material_backed_claim_stays_derived():
+    """主张挂了材料链，引用它的提案分组必须原样不动（副作用为零的证据）。"""
+
+    result = assembly.assemble(
+        packet(proposals=[slot_proposal(refs=["E2"])]),
+        round_=round_with_two_seats_attested(),
+        document=document_with_feature(),
+        ledger=ledger_with_material_backed_claim(),
+    )
+
+    assert [proposal.origin.type for proposal in result.proposals] == [
+        OriginType.DERIVED
+    ]

@@ -433,6 +433,9 @@ class StartRound:
                     round_id=round_id,
                     validation_error=repair,
                     packet_slot=f"a{attempt}",
+                    # 本轮挑中（进提示词）的材料块编号：主张只能引这些，
+                    # 引没见过的等于编（`analyzer.md` 硬规矩第 5 条）。
+                    material_eids=frozenset(ref.eid for ref in round_.materials),
                 )
                 break
             except PacketParseError as error:

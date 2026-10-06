@@ -806,3 +806,61 @@ async def test_a_contradiction_pointing_at_a_dropped_claim_is_dropped_too():
         "互斥对子 2↔3",
     ]
     assert "没切进来" in analysis.dropped[1].reason
+
+
+MATERIAL_CLAIM_REPLY = json.dumps(
+    {
+        "basis": "读了本轮输入与带进来的材料块 E1",
+        "claims": [
+            {
+                "text": "按这份材料写",
+                "raw_span": "按这份材料写",
+                "label": "need",
+                "zone": "body",
+                "section_id": "s5",
+                "material_eids": ["E1"],
+            }
+        ],
+        "seats": [{"seat_id": SEAT, "why": "材料里有量级"}],
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_claim_with_material_eids_passes_when_chunk_was_picked():
+    """主张说读过 E1，而 E1 正是本轮带进来的块 → 过，Claim 上记下来源。"""
+
+    from pmstudio.domain.shared.ids import EvidenceId
+
+    gateway = ScriptedModelGateway(replies={"claims": MATERIAL_CLAIM_REPLY})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+    analysis = await analyzer.analyze(
+        user_input="按这份材料写",
+        document_state="# 文档",
+        material_eids=frozenset({EvidenceId("E1")}),
+    )
+    assert analysis.claims[0].material_eids == (EvidenceId("E1"),)
+
+
+async def test_claim_citing_unpicked_material_fails_packet():
+    """E2 在账本里但本轮没给它看——许它引等于许它编，走重装。"""
+
+    from pmstudio.domain.shared.ids import EvidenceId
+
+    gateway = ScriptedModelGateway(replies={"claims": MATERIAL_CLAIM_REPLY})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+    with pytest.raises(PacketParseError, match="材料块"):
+        await analyzer.analyze(
+            user_input="按这份材料写",
+            document_state="# 文档",
+            material_eids=frozenset({EvidenceId("E2")}),
+        )
+
+
+async def test_claim_citing_unknown_eid_fails_packet():
+    gateway = ScriptedModelGateway(replies={"claims": MATERIAL_CLAIM_REPLY})
+    analyzer = make_analyzer(gateway, RecordingPrompts())
+    with pytest.raises(PacketParseError, match="材料块"):
+        await analyzer.analyze(
+            user_input="按这份材料写", document_state="# 文档", material_eids=frozenset()
+        )
