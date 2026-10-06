@@ -80,14 +80,18 @@ async def test_the_envelope_does_not_carry_a_second_copy_of_the_raw_reply() -> N
 
 
 async def test_request_carries_purpose_schema_name_and_metadata():
-    """`purpose` 是留样归堆的键、`schema_name` 是结构化输出的名字——两者都不能丢。"""
+    """`purpose` 是留样归堆的键、`schema_name` 是结构化输出的名字——两者都不能丢。
+
+    `metadata` 这一条的口径 2026-10-05 变过一次（讨论那次漏留样之后）：调用方给的键
+    **原样转发**，另外由本层补一个中立键 `trace_id = run_id`（见下面那条测试）。
+    """
 
     gateway = ScriptedGateway('{"basis": "b"}')
     await call(gateway)
     request = gateway.requests[0]
     assert request.purpose == "seat_review"
     assert request.schema_name == "Roster"
-    assert request.metadata == {"seat_id": "seat.data_scale"}
+    assert request.metadata == {"seat_id": "seat.data_scale", "trace_id": "r-1"}
     assert request.response_schema == Roster.model_json_schema()
 
 
@@ -220,3 +224,19 @@ def test_rules_default_to_nothing_rather_than_guessing():
     bare = StructuredCall(purpose="p", kind="p", prompt="p", packet=Roster, rules=NormalizeRules())
     assert bare.rules.signatures == {}
     assert bare.rules.write_semantics_fields == frozenset()
+
+
+async def test_the_request_carries_the_run_id_as_a_neutral_trace_id():
+    """留样要的是"这一趟属于谁"——`run_id` 本来就有，但以前只进了信封、没进 metadata，
+    于是网关只能去猜上下文键（`round_id` / `exploration_id` / 讨论的 `discussion_id`…，
+    每加一种调用就得补一次，第三次已经漏过一次）。
+
+    所以中立键在**这一层**注入：谁调 `call_structured` 都自动带上了。
+    """
+
+    gateway = ScriptedGateway('{"basis": "读了 s5", "items": []}')
+    await call(gateway)
+
+    assert gateway.requests[0].metadata["trace_id"] == "r-1"
+    # 调用方自己那份不许被覆盖掉（座位/章节那些键另有用途）
+    assert gateway.requests[0].metadata["seat_id"] == "seat.data_scale"

@@ -253,7 +253,13 @@ class LiteLLMGateway:
             return
         prompt = "\n".join(message.content for message in request.messages)
         self._recorder.record(
-            trace_id=request.metadata.get("round_id") or request.metadata.get("exploration_id"),
+            trace_id=(
+                # 中立键优先（`call_structured` 注入）；后面两个是**兜底**：直接调网关时
+                # 没有这一层，于是按上下文键认——顺序：新键 → 轮次 → 探索（M8.1）。
+                request.metadata.get("trace_id")
+                or request.metadata.get("round_id")
+                or request.metadata.get("exploration_id")
+            ),
             purpose=request.purpose,
             model=model,
             prompt_sha=hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],

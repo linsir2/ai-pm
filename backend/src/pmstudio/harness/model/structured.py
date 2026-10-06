@@ -85,7 +85,11 @@ async def call_structured[P: BaseModel](
             messages=(ModelMessage(role="user", content=prompt),),
             schema_name=call.schema_name,
             response_schema=schema,
-            metadata=dict(metadata),
+            # `trace_id` 是**中立键**：留样要的是"这一趟属于谁"，而 `run_id` 本来就有。
+            # 在这一层注入，谁调 `call_structured` 都自动带上——否则网关只能去猜上下文键
+            #（`round_id` / `exploration_id` / `discussion_id`…），每加一种调用就得补一次
+            #（讨论那一种就漏过一次，留样记成 NULL）。
+            metadata={**metadata, "trace_id": run_id},
         )
     )
     # 补壳只做一次，而且要拿**补壳之后**那个对象当 payload：模型把整包回成数组时

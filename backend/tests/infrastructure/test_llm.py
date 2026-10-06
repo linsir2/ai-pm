@@ -1172,3 +1172,37 @@ def test_integrator_limits_forbid_ledger_talk_in_open_item_titles():
     assert "只写问题本身" in LIMITS_TEXT
     assert "本轮已出题" in LIMITS_TEXT
     assert "E…" in LIMITS_TEXT
+
+
+async def test_gateway_prefers_the_neutral_trace_id_key(monkeypatch):
+    """中立键优先：讨论（M9）传的是 `discussion_id`，靠上下文键兜底会漏第三次。"""
+
+    async def scripted(**kwargs):
+        class _Message:
+            content = '{"ok": true}'
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+            model = "provider-model"
+            usage = {"total_tokens": 7}
+
+        return _Response()
+
+    monkeypatch.setattr(provider_module, "acompletion", scripted)
+    recorder = _RecordingRecorder()
+    gateway = LiteLLMGateway(model="m", api_key="k", recorder=recorder)
+
+    await gateway.complete(
+        ModelRequest(
+            purpose="discussion",
+            messages=(ModelMessage(role="user", content="提示词"),),
+            schema_name="DiscussionReply",
+            response_schema={"type": "object"},
+            metadata={"discussion_id": "d-1", "trace_id": "d-1"},
+        )
+    )
+
+    assert recorder.rows[0]["trace_id"] == "d-1"
