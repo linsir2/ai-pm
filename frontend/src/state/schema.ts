@@ -31,6 +31,8 @@ export const FALLBACK_LIMITS: LimitsView = {
   max_seat_rounds: 3,
   max_questionnaires: 2,
   max_open_items_per_batch: 3,
+  max_sim_review_personas: 3,
+  max_sim_review_features: 2,
 };
 
 let current: SchemaView | null = null;

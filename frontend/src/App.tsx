@@ -56,6 +56,8 @@ export default function App() {
   const [discussionAnchor, setDiscussionAnchor] = useState<DiscussionAnchor | null>(null);
   /** 模拟抽屉开没开（M10）：artifact 在 round.sim_inquiry 里，开关只管显隐。 */
   const [simOpen, setSimOpen] = useState(false);
+  /** 评测抽屉开没开（M11）：artifact 在 round.sim_review 里，开关只管显隐。 */
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
 
@@ -363,6 +365,17 @@ export default function App() {
             }}
             simOpen={simOpen}
             simPending={data.pending === "simulation"}
+            onSimReview={() => {
+              if (round !== null) setReviewOpen(true);
+            }}
+            reviewOpen={reviewOpen}
+            reviewPending={data.pending === "sim_review"}
+            onRunReview={(personaIds, featureSlugs) => {
+              if (round !== null) {
+                void data.runSimReview(round.round_id, personaIds, featureSlugs);
+              }
+            }}
+            onCloseReview={() => setReviewOpen(false)}
             onKeepSim={(ids) => {
               if (round !== null) void data.keepSimInquiry(round.round_id, ids);
             }}

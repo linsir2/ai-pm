@@ -46,7 +46,9 @@ export type PendingAction =
   /** 讨论区上的动作（M9）：开聊 / 说 / 总结 / 收卡 / 关掉，同样串行不并发。 */
   | "discussion"
   /** 模拟抽屉上的动作（M10）：跑一趟 / 收下勾选，同样串行不并发。 */
-  | "simulation";
+  | "simulation"
+  /** 模拟评测上的动作（M11）：跑一趟——同样串行不并发。 */
+  | "sim_review";
 
 const PROJECT_PARAM = "project";
 
@@ -578,6 +580,18 @@ export function useWorkspaceData() {
     [run],
   );
 
+  /** 跑一趟模拟评测（M11）：读回的投影里带报告，抽屉靠它渲染。 */
+  const runSimReview = useCallback(
+    (roundId: string, personaIds: string[], featureSlugs: string[]) =>
+      run("sim_review", async () => {
+        dispatch({
+          type: "round",
+          round: await api.runSimReview(roundId, personaIds, featureSlugs),
+        });
+      }),
+    [run],
+  );
+
   /** 收下勾选为材料：keep 只回小结果，读回整轮刷新勾选态。 */
   const keepSimInquiry = useCallback(
     (roundId: string, chosen: string[]) =>
@@ -728,6 +742,7 @@ export function useWorkspaceData() {
     retry,
     dig,
     runSimInquiry,
+    runSimReview,
     keepSimInquiry,
     abandon,
     editEntry,

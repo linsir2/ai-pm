@@ -25,6 +25,8 @@ import { LoopPane } from "./LoopPane";
 import { OpeningCard } from "./OpeningCard";
 import { QuestionnaireDrawer } from "./QuestionnaireDrawer";
 import { SimInquiryDrawer } from "./SimInquiryDrawer";
+import { SimReviewDrawer } from "./SimReviewDrawer";
+import { reviewLimits } from "../state/simReview";
 import { RoundHistory } from "./RoundHistory";
 
 export function LoopColumn({
@@ -51,6 +53,11 @@ export function LoopColumn({
   simPending,
   onKeepSim,
   onCloseSim,
+  onSimReview,
+  reviewOpen,
+  reviewPending,
+  onRunReview,
+  onCloseReview,
   onRetry,
   onAbandon,
   onViewRound,
@@ -89,11 +96,19 @@ export function LoopColumn({
   onDig: () => void;
   /** 草案卡上的"去模拟调研"（M10）：调用方跑完打开模拟抽屉。 */
   onSimInquiry: () => void;
+  /** 草案卡上的"模拟评测"：打开选择器（M11）。 */
+  onSimReview: () => void;
   /** 模拟抽屉开没开：开关只管显隐，内容从 round.sim_inquiry 来。 */
   simOpen: boolean;
+  /** 评测抽屉开没开（M11）。 */
+  reviewOpen: boolean;
   simPending: boolean;
+  /** 评测在跑（M11）：抽屉显示等待。 */
+  reviewPending: boolean;
   onKeepSim: (ids: string[]) => void;
   onCloseSim: () => void;
+  onRunReview: (personaIds: string[], featureSlugs: string[]) => void;
+  onCloseReview: () => void;
   onRetry: () => void;
   onAbandon: () => void;
   /** 切过去只读看某一轮（复用已有的 `viewRound`）。 */
@@ -262,6 +277,7 @@ export function LoopColumn({
               onSubmit={onConfirm}
               onDig={onDig}
               onSimInquiry={onSimInquiry}
+              onSimReview={onSimReview}
               onCollapse={() => drafts.setCollapsed(true)}
             />
           )}
@@ -274,6 +290,19 @@ export function LoopColumn({
               initialChosen={round.sim_inquiry?.chosen ?? []}
               onKeep={onKeepSim}
               onClose={onCloseSim}
+            />
+          )}
+
+          {reviewOpen && round !== null && (
+            <SimReviewDrawer
+              key={`review:${round.round_id}`}
+              review={round.sim_review ?? null}
+              personas={schema?.personas ?? []}
+              document={doc}
+              limits={reviewLimits(schema?.limits)}
+              pending={reviewPending}
+              onRun={onRunReview}
+              onClose={onCloseReview}
             />
           )}
         </>

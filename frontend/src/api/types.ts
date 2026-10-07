@@ -120,6 +120,8 @@ export interface ProposalView {
   rationale: string | null;
   kind: string | null;
   warning: string | null;
+  /** 编号里有账本上的 SIMULATED（M11）：打「模拟评测依据」tag；老轮次为 undefined。 */
+  simulation_based?: boolean;
 }
 
 export interface DraftView {
@@ -215,6 +217,8 @@ export interface RoundView {
   memory_proposals?: MemoryProposalView[];
   /** 模拟调研产物（M10）：没跑过是 null/undefined；抽屉靠它决定出不出现。 */
   sim_inquiry?: SimInquiryView | null;
+  /** 模拟评测产物（M11）：没跑过是 null/undefined。 */
+  sim_review?: SimReviewView | null;
 }
 
 export interface SimSliceView {
@@ -249,6 +253,65 @@ export interface SimInquiryView {
   unknowns: SimUnknownView[];
   runs: number;
   chosen: string[];
+}
+
+export interface SimWalkStepView {
+  step_index: number;
+  step_text: string;
+  from_doc: string;
+  action: string;
+  outcome: "ok" | "stuck" | "guessed" | string;
+  need: string;
+}
+
+export interface SimFrictionView {
+  local_id: string;
+  kind: string;
+  entry_id: string;
+  field: string;
+  quote: string;
+  not_documented: boolean;
+  blocks_flow: boolean;
+  note: string;
+}
+
+export interface SimAcceptanceCheckView {
+  local_id: string;
+  entry_id: string;
+  status: "verified" | "unverified" | "contradicted" | string;
+  note: string;
+}
+
+export interface SimFeatureReviewView {
+  feature_slug: string;
+  started: boolean;
+  walkthrough: SimWalkStepView[];
+  frictions: SimFrictionView[];
+  acceptance_checks: SimAcceptanceCheckView[];
+  verdict: "smooth" | "friction" | "blocked" | string;
+  verdict_because: string[];
+}
+
+export interface SimPersonaReviewView {
+  persona_id: string;
+  title: string;
+  features: SimFeatureReviewView[];
+}
+
+/** 三档**原始计数**（按 persona×功能 对）：不给百分比、不给分数。 */
+export interface SimReviewSummaryView {
+  smooth: number;
+  friction: number;
+  blocked: number;
+}
+
+export interface SimReviewView {
+  runs: number;
+  max_runs: number;
+  evaluated_version: number | null;
+  personas: SimPersonaReviewView[];
+  summary: SimReviewSummaryView;
+  advisories: string[];
 }
 
 export interface KeepSimResult {
@@ -416,6 +479,9 @@ export interface LimitsView {
   max_seat_rounds: number;
   max_questionnaires: number;
   max_open_items_per_batch: number;
+  /** 模拟评测（M11）：选择器的勾选上限；老后端为 undefined（下游回落 3/2）。 */
+  max_sim_review_personas?: number;
+  max_sim_review_features?: number;
 }
 
 /** `GET /schema`：现行结构，不是文档内容。 */
@@ -425,6 +491,15 @@ export interface SchemaView {
   limits: LimitsView;
   /** 讨论区的三个固定角色（`dlg.*`）。**必填**：灵感区不抄一份角色表（M9）。 */
   discussion_roles: DiscussionRoleSchema[];
+  /** 五个固定模拟使用者（M11）：评测选择器读它；老后端为 undefined（回落空表）。 */
+  personas?: PersonaSchemaView[];
+}
+
+/** `GET /schema` 里的一个模拟使用者（M11）。 */
+export interface PersonaSchemaView {
+  persona_id: string;
+  title: string;
+  situation: string;
 }
 
 /** `GET /schema` 里的一个讨论角色。 */

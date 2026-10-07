@@ -387,6 +387,13 @@ export const api = {
       body: JSON.stringify({ chosen }),
     }),
 
+  /** 跑一趟模拟评测（M11）：选中的模拟使用者与功能；跑完读回最新投影。 */
+  runSimReview: (roundId: string, personaIds: string[], featureSlugs: string[]) =>
+    request<RoundView>(`/rounds/${roundId}/sim-review`, {
+      method: "POST",
+      body: JSON.stringify({ persona_ids: personaIds, feature_slugs: featureSlugs }),
+    }),
+
   /** 放弃这一轮：后端先记状态、再取消正在跑的模型调用。 */
   abandonRound: (roundId: string) =>
     request<RoundView>(`/rounds/${roundId}/abandon`, { method: "POST", body: "{}" }),

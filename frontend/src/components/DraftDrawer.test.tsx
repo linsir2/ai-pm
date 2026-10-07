@@ -66,6 +66,7 @@ function draw(over: Partial<Parameters<typeof DraftDrawer>[0]> = {}) {
     onSubmit: vi.fn(),
     onDig: vi.fn(),
     onSimInquiry: vi.fn(),
+    onSimReview: vi.fn(),
     onCollapse: vi.fn(),
     ...over,
   };
@@ -125,6 +126,23 @@ describe("DraftDrawer", () => {
 
     expect(props.onSimInquiry).toHaveBeenCalledTimes(1);
     expect(props.onSubmit).not.toHaveBeenCalled()
+  });
+
+  it("点『模拟评测』调到 onSimReview（M11：减方向的入口）", () => {
+    const props = draw();
+
+    fireEvent.click(screen.getByRole("button", { name: /模拟评测/ }));
+
+    expect(props.onSimReview).toHaveBeenCalledTimes(1);
+    expect(props.onSubmit).not.toHaveBeenCalled()
+  });
+
+  it("引用了模拟推演的提案带『模拟评测依据』tag", () => {
+    const round_ = round();
+    round_.draft!.proposals[0]!.simulation_based = true;
+    draw({ round: round_ });
+
+    expect(screen.getByText("模拟评测依据")).toBeTruthy();
   });
 
   it("正在提交时按钮不可点", () => {
@@ -215,6 +233,7 @@ it("相同的告警合并成一条并带条数（不再三句一样的话摆三�
         onSubmit={() => undefined}
         onDig={() => undefined}
         onSimInquiry={() => undefined}
+        onSimReview={() => undefined}
         onCollapse={() => undefined}
       />
     </EvidenceScope>,

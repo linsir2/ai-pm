@@ -25,6 +25,7 @@ export function DraftDrawer({
   onSubmit,
   onDig,
   onSimInquiry,
+  onSimReview,
   onCollapse,
 }: {
   round: RoundView;
@@ -41,6 +42,8 @@ export function DraftDrawer({
   onDig: () => void;
   /** 草案卡上的"去模拟调研"：轮内动作，缺需求信息时去推一轮假设（M10）。 */
   onSimInquiry: () => void;
+  /** 草案卡上的"模拟评测"：轮内动作，模拟使用者走查（M11）。 */
+  onSimReview: () => void;
   onCollapse: () => void;
 }) {
   const draft: DraftView | null = round.draft;
@@ -155,6 +158,14 @@ export function DraftDrawer({
           >
             去模拟调研
           </button>
+          <button
+            type="button"
+            className="btn btn--sm btn--ghost"
+            onClick={onSimReview}
+            disabled={pending}
+          >
+            模拟评测
+          </button>
           <button type="button" className="btn btn--primary" disabled={pending} onClick={onSubmit}>
             {pending ? "正在写入…" : `确认写入 ${accepted.length} 条`}
           </button>
@@ -239,6 +250,9 @@ function Proposal({
         <p className="prop__text">{proposal.text}</p>
         <div className="prop__foot">
           <span className="tag">{ORIGIN_TEXT[proposal.origin_type] ?? proposal.origin_type}</span>
+          {proposal.simulation_based === true && (
+            <span className="tag">模拟评测依据</span>
+          )}
           <span className="muted small">{targetText(proposal.target_label, doc?.sections)}</span>
           <EvidenceChip eids={proposal.eids} />
           {proposal.kind !== null && <span className="tag">{proposal.kind}</span>}
