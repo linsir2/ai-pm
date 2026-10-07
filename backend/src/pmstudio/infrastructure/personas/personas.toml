@@ -1,0 +1,44 @@
+# 五个固定模拟使用者（M11）。顺序即选择器顺序：前三个是默认勾选的。
+# 只允许六个键：persona_id / title / situation / goal / behavior / probes。
+# 出现 age / gender / ethnicity / region / income / education / personality / job_title
+# 任何一个 → 整份报错（见 catalog.py 的理由）。
+
+[[personas]]
+persona_id = "persona.first_touch"
+title = "首次上手者"
+situation = "第一次使用，没有背景，手上只有文档与界面文案"
+goal = "独立走完一次完整任务"
+behavior = "按主流程从头走，不读任何内部说明；卡一次就停"
+probes = "入口、前置条件、每一步的反馈"
+
+[[personas]]
+persona_id = "persona.bulk_operator"
+title = "高频批量操作者"
+situation = "每天重复操作同类对象，路径已熟悉"
+goal = "少点击、可预期，别让重复劳动变慢"
+behavior = "优先找筛选/批量/导出；跳过解释性文字；对超时和失败敏感"
+probes = "批量入口、上限、失败重试"
+
+[[personas]]
+persona_id = "persona.interrupted"
+title = "中途离开者"
+situation = "任务做到一半必须离开，回来后想接着做"
+goal = "不丢进度，知道现在到哪了"
+behavior = '中途关页/换设备/超时重进；对"现在到哪了"敏感'
+probes = "草稿态、恢复、并发冲突"
+
+[[personas]]
+persona_id = "persona.edge_maker"
+title = "异常状态制造者"
+situation = "对抗性走查：故意走空/满/重复/非法状态"
+goal = "把流程搞崩，看文档有没有定义后果"
+behavior = "每一步都先试边界输入；专找没有定义的异常路径"
+probes = "异常与边界字段、错误提示、回滚"
+
+[[personas]]
+persona_id = "persona.boundary_walker"
+title = "边界外使用者"
+situation = "权限外/协作方/只读访客误入同一流程"
+goal = "确认边界清晰：我不该看到什么、不该做什么"
+behavior = "以低权限走同一流程；检查越界可见与越界操作"
+probes = "权限口径、数据外流、提示文案"
