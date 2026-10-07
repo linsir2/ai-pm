@@ -15,6 +15,7 @@ from pmstudio.api.schemas import (
     KeepCandidateRequest,
     KeepSimInquiryRequest,
     OpeningRequest,
+    RunSimReviewRequest,
     SayRequest,
     StartDiscussionRequest,
     StartExplorationRequest,
@@ -372,6 +373,23 @@ async def run_sim_inquiry(request: Request, round_id: str):  # type: ignore[no-u
 
     view = await services_of(request).runner.run(
         RoundCommand(kind="sim_inquiry", round_id=round_id)
+    )
+    return as_json(view)
+
+
+@router.post("/rounds/{round_id}/sim-review")
+async def run_sim_review(  # type: ignore[no-untyped-def]
+    request: Request, round_id: str, body: RunSimReviewRequest
+):
+    """草案卡上的"模拟评测"（M11）：轮内动作（不碰 step），跑完界面读回最新投影。"""
+
+    view = await services_of(request).runner.run(
+        RoundCommand(
+            kind="sim_review",
+            round_id=round_id,
+            persona_ids=tuple(body.persona_ids),
+            feature_slugs=tuple(body.feature_slugs),
+        )
     )
     return as_json(view)
 

@@ -29,3 +29,6 @@ class RoundCommand:
     accepted: tuple[str, ...] = ()
     #: 用户在草案卡上勾中的**记忆提议** id（`mem#1`…）；空 = 这一轮不写记忆（M6）
     accepted_memory: tuple[str, ...] = ()
+    #: 模拟评测（M11）：选中的模拟使用者与要查的功能（不碰 step 的轮内动作）
+    persona_ids: tuple[str, ...] = ()
+    feature_slugs: tuple[str, ...] = ()

@@ -12,6 +12,7 @@ from pmstudio.application.agents.discusser import Discusser
 from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
+from pmstudio.application.agents.persona_simulator import PersonaSimulatorAgent
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
 from pmstudio.application.ports import WebFetcher
@@ -52,6 +53,7 @@ from pmstudio.application.use_cases import (
     RunInquiry,
     RunSeatRound,
     RunSimInquiry,
+    RunSimReview,
     SayToThread,
     SearchProject,
     StartDiscussion,
@@ -75,6 +77,7 @@ from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
 from pmstudio.infrastructure.discussion.roles import load_discussion_roles
 from pmstudio.infrastructure.graph.exploration_runner import ExplorationRunner
 from pmstudio.infrastructure.graph.graph import RoundRunner
+from pmstudio.infrastructure.personas.catalog import load_personas
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.materials import SqliteLikeRetriever, SqliteMaterialStore
@@ -175,6 +178,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         )
     catalog = TomlSeatCatalog(SEATS_DIR)
     discussion_roles = load_discussion_roles()
+    personas = load_personas()
     # 工具目录：`requires` 没配上的工具**直接不可用**（不是"无密钥降级"）
     tools = TomlToolCatalog(DEFINITIONS_DIR)
     available_tool_keys = settings.available_tool_keys()
@@ -185,6 +189,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     reviewer = SeatReviewer(model=gateway, prompts=prompts)
     inquirer = Inquirer(model=gateway, prompts=prompts)
     sim_inquirer = SimInquiryAgent(model=gateway, prompts=prompts)
+    persona_simulator = PersonaSimulatorAgent(model=gateway, prompts=prompts)
     discusser = Discusser(model=gateway, prompts=prompts)
     integrator = Integrator(model=gateway, prompts=prompts)
     curator = MemoryCurator(model=gateway, prompts=prompts)
@@ -303,6 +308,21 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         uow=uow,
         clock=clock,
     )
+    run_sim_review = RunSimReview(
+        rounds=rounds,
+        round_writer=rounds,
+        documents=documents,
+        evidence=evidences,
+        evidence_writer=evidences,
+        memory=memory,
+        materials=materials,
+        uow=uow,
+        personas=personas,
+        simulator=persona_simulator,
+        checker=readiness,
+        clock=clock,
+        events=bus,
+    )
     get_round = GetRound(
         rounds=rounds,
         evidence=evidences,
@@ -322,6 +342,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         dig_round=dig_round,
         get_round=get_round,
         run_sim_inquiry=run_sim_inquiry,
+        run_sim_review=run_sim_review,
     )
     run_inquiry = RunInquiry(
         documents=documents,

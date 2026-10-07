@@ -54,6 +54,17 @@ class KeepSimInquiryRequest(BaseModel):
     chosen: list[str] = Field(default_factory=list)
 
 
+class RunSimReviewRequest(BaseModel):
+    """跑一趟模拟评测：选中的模拟使用者与要查的功能。
+
+    上限（1–3 人 / 1–2 个功能）在**用例层**校验（`ShapeError` → 422）——
+    常量只有 `application/sim_review.py` 一份，api 层不抄数字（抄一份就是两处真相源）。
+    """
+
+    persona_ids: list[str] = Field(default_factory=list)
+    feature_slugs: list[str] = Field(default_factory=list)
+
+
 class QuestionRefRequest(BaseModel):
     """开聊时带的问卷题（只当开场白：题面快照进 topic，角色由前端定）。"""
 

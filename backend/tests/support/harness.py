@@ -837,6 +837,7 @@ class Harness:
                 retry_round=self.retry_round(),
                 dig_round=self.dig_round(),
                 run_sim_inquiry=self.run_sim_inquiry(),
+                run_sim_review=self.run_sim_review(),
                 get_round=GetRound(
                     rounds=self.rounds,
                     evidence=self.evidences,

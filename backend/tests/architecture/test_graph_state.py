@@ -32,6 +32,9 @@ def test_round_command_holds_no_business_state():
         "accepted",
         # 草案卡上勾中的记忆提议 id（M6）：与 accepted 同类——"本次动作的参数"
         "accepted_memory",
+        # 模拟评测（M11）选中的 persona 与功能：同样是"本次动作的参数"
+        "persona_ids",
+        "feature_slugs",
     }
 
 
@@ -47,6 +50,8 @@ def test_every_graph_node_and_router_is_async():
         "node_answers",
         "node_commit",
         "node_resume",
+        "node_sim_inquiry",
+        "node_sim_review",
         "route_by_command",
         "route_after_resume",
     ):
