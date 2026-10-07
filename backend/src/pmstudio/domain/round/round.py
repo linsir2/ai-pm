@@ -225,6 +225,8 @@ class Round:
         sim_unknowns: tuple[dict, ...] = (),
         sim_inquiry_runs: int = 0,
         sim_inquiry_chosen: tuple[str, ...] = (),
+        sim_review: dict | None = None,
+        sim_review_runs: int = 0,
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -278,6 +280,10 @@ class Round:
         self._sim_unknowns = tuple(sim_unknowns)
         self._sim_inquiry_runs = sim_inquiry_runs
         self._sim_inquiry_chosen = tuple(sim_inquiry_chosen)
+        #: 模拟评测产物（M11）：一趟 = 一个 dict（evaluated_version / personas / advisories）。
+        #: 同上，plain dict：校验住在应用层。`dig` 出新草案时随草案一起作废（每份草案 1 次）。
+        self._sim_review = dict(sim_review) if sim_review is not None else None
+        self._sim_review_runs = sim_review_runs
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -932,6 +938,45 @@ class Round:
 
         self._sim_inquiry_chosen = tuple(chosen)
 
+    @property
+    def sim_review(self) -> dict | None:
+        return self._sim_review
+
+    @property
+    def sim_review_runs(self) -> int:
+        return self._sim_review_runs
+
+    def record_sim_review(self, review: dict) -> None:
+        """记下一趟模拟评测的产物（覆盖写；`sim_review_runs` 是每份草案 ≤1 的分子）。
+
+        不校验内容：装配层落进来之前已经验过（按 persona 结构/引用/窄表三重筛），
+        这里只记数——同 `record_sim_inquiry`。
+        """
+
+        self._sim_review = dict(review)
+        self._sim_review_runs += 1
+
+    def augment_draft(
+        self,
+        *,
+        proposals: Sequence = (),
+        gaps: Sequence[str] = (),
+    ) -> None:
+        """把模拟评测的"减"提案/留痕**追加**进现有草案（不改草案身份，不覆盖整合那批）。
+
+        查重交给 `Draft.__post_init__`：撞 id 直接炸（不静默合并——两条同 id 提案
+        在确认端只会被当成一条，静默合并会把哪条被丢藏起来）。
+        没有草案直接拒：评测只在草案卡上跑，这是防"在错误的时刻调进用例"。
+        """
+
+        if self._draft is None:
+            raise ShapeError("还没有草案，模拟评测只能在草案卡上追加")
+        self._draft = replace(
+            self._draft,
+            proposals=self._draft.proposals + tuple(proposals),
+            gaps=self._draft.gaps + tuple(gaps),
+        )
+
     def dig(self) -> None:
         """从草案卡回到提问：**把这一轮没问上的那些题重新问一遍**（P14 C6）。
 
@@ -948,6 +993,10 @@ class Round:
         self._require_step(Step.AWAITING_CONFIRM)
         self._require_waiting(WaitingOn.DRAFT)
         self._draft = None
+        # 评测属于"那一份草案"：新草案出来，旧 artifact 与次数一起作废
+        # （额度语义因此是"每份草案 ≤1 次"，不是"每轮"——dig 后还能评测新草案）。
+        self._sim_review = None
+        self._sim_review_runs = 0
         self._extra_batches += 1
         self._extra_seat_rounds += 1
         self._advance_to(Step.SEATS_RUNNING)

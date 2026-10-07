@@ -651,6 +651,9 @@ def round_to_payload(round_: Round) -> dict:
         "sim_unknowns": [dict(item) for item in round_.sim_unknowns],
         "sim_inquiry_runs": round_.sim_inquiry_runs,
         "sim_inquiry_chosen": list(round_.sim_inquiry_chosen),
+        # 模拟评测产物（M11；老行没有这两把键 → None/0）
+        "sim_review": dict(round_.sim_review) if round_.sim_review is not None else None,
+        "sim_review_runs": round_.sim_review_runs,
     }
 
 
@@ -770,6 +773,9 @@ def round_from_payload(
         sim_inquiry_chosen=tuple(
             str(item) for item in payload.get("sim_inquiry_chosen") or ()
         ),
+        # 老行里没有这两把键（模拟评测是后加的，M11）：None/0——不编"它跑过评测"
+        sim_review=dict(payload["sim_review"]) if payload.get("sim_review") else None,
+        sim_review_runs=int(payload.get("sim_review_runs") or 0),
     )
 
 
