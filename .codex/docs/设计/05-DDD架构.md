@@ -238,6 +238,7 @@ domain/shared/        ids.py errors.py invariants.py target.py label.py sections
 application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py discusser.py sim_inquirer.py persona_simulator.py
 infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py model_calls.py project_factory.py
 infrastructure/seats/ catalog.py definitions/*.toml
+infrastructure/personas/ catalog.py personas.toml
 infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py
 infrastructure/graph/ graph.py exploration_runner.py
 infrastructure/discussion/ roles.py
