@@ -26,6 +26,7 @@ from pmstudio.domain.shared.ids import (
     FormId,
     ProposalId,
     QuestionId,
+    RoundId,
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
@@ -540,3 +541,139 @@ def test_inquiry_no_quantities_catches_numbers() -> None:
     round_.sim_hypotheses[0]["statement"] = "约 62% 用户会用导出"
     failure = check({"type": "inquiry_has_no_quantities"}, view_of(round_))
     assert failure is not None and "62%" in failure
+
+
+# ── M11：模拟评测的两条默认断言 ─────────────────────────────────────────────
+
+
+def _review_round() -> Round:
+    round_ = make_round()
+    round_.record_sim_review(
+        {
+            "evaluated_version": 2,
+            "personas": [
+                {
+                    "persona_id": "persona.first_touch",
+                    "title": "首次上手者",
+                    "features": [
+                        {
+                            "feature_slug": "order-export",
+                            "started": True,
+                            "walkthrough": [
+                                {
+                                    "step_index": 1,
+                                    "step_text": "进入订单列表",
+                                    "from_doc": "en-flow",
+                                    "action": "打开订单列表页",
+                                    "outcome": "stuck",
+                                    "need": "文档没写按钮在哪",
+                                }
+                            ],
+                            "frictions": [
+                                {
+                                    "local_id": "F1",
+                                    "kind": "dead_end",
+                                    "entry_id": "en-flow",
+                                    "field": "",
+                                    "quote": "",
+                                    "not_documented": True,
+                                    "blocks_flow": True,
+                                    "note": "点了导出没有反应",
+                                }
+                            ],
+                            "acceptance_checks": [],
+                            "verdict": "blocked",
+                            "verdict_because": ["F1"],
+                        }
+                    ],
+                }
+            ],
+            "advisories": [],
+        }
+    )
+    return round_
+
+
+def test_sim_review_assertions_pass_vacuously_without_review() -> None:
+    """没跑过评测：两条断言无事可查，通过（默认集加它们不炸旧用例的前提）。"""
+
+    view = view_of(make_round())
+    assert view.sim_review is None
+    assert check({"type": "sim_review_proposals_stay_proposed"}, view) is None
+    assert check({"type": "sim_review_reports_are_well_formed"}, view) is None
+
+
+def test_sim_review_reports_are_well_formed_passes_on_clean_artifact() -> None:
+    assert check({"type": "sim_review_reports_are_well_formed"}, view_of(_review_round())) is None
+
+
+def test_sim_review_reports_are_well_formed_catches_cannot_start_mismatch() -> None:
+    round_ = _review_round()
+    feature = round_.sim_review["personas"][0]["features"][0]
+    feature["started"] = False
+    feature["frictions"][0]["kind"] = "ambiguous_rule"
+
+    failure = check({"type": "sim_review_reports_are_well_formed"}, view_of(round_))
+
+    assert failure is not None and "cannot_start" in failure
+
+
+def test_sim_review_reports_are_well_formed_catches_dangling_because() -> None:
+    round_ = _review_round()
+    round_.sim_review["personas"][0]["features"][0]["verdict_because"] = ["F9"]
+
+    failure = check({"type": "sim_review_reports_are_well_formed"}, view_of(round_))
+
+    assert failure is not None and "F9" in failure
+
+
+def test_sim_review_proposals_stay_proposed_detects_derived_simulation() -> None:
+    from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
+    from pmstudio.domain.provenance.ledger import EvidenceLedger
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    sim_eid = ledger.record(
+        kind=EvidenceKind.SIMULATED,
+        text="点了导出没有反应",
+        source=EvidenceSource(
+            round_id=RoundId(ROUND_ID),
+            external_ref="simulation:review:r1#persona.first_touch@order-export#F1",
+        ),
+        now=NOW,
+    )
+
+    def view_with(origin: OriginType):  # type: ignore[no-untyped-def]
+        round_ = make_round()
+        round_.integrate(
+            draft=Draft(
+                draft_id=DraftId("d1"),
+                round_id=RoundId(ROUND_ID),
+                proposals=(
+                    Proposal(
+                        proposal_id=ProposalId("sim#1"),
+                        entry_id=EntryId("r1#02"),
+                        op=WriteOp.REMOVE,
+                        target=Target.body("s5", feature_slug="order-export"),
+                        text="进入订单列表",
+                        origin=Origin(origin, (sim_eid,), rationale="模拟评测"),
+                        kind=BlockKind.TEXT,
+                    ),
+                ),
+            )
+        )
+        return dto.round_view(round_, ledger=ledger)
+
+    good = view_with(OriginType.PROPOSED)
+    assert good.draft.proposals[0].simulation_based is True
+    assert check({"type": "sim_review_proposals_stay_proposed"}, good) is None
+
+    bad = view_with(OriginType.DERIVED)
+    failure = check({"type": "sim_review_proposals_stay_proposed"}, bad)
+    assert failure is not None and "sim#1" in failure
+
+
+def test_default_assertion_set_contains_the_two_sim_review_assertions() -> None:
+    types = {item["type"] for item in EVAL_ASSERTIONS}
+
+    assert "sim_review_proposals_stay_proposed" in types
+    assert "sim_review_reports_are_well_formed" in types

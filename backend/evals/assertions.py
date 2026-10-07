@@ -11,7 +11,7 @@ from pmstudio.application.sim_inquiry import SIM_NUMERIC
 
 EID = re.compile(r"^E\d+$")
 
-#: 跑每条用例时默认要过的十条（case 里可以覆盖）
+#: 跑每条用例时默认要过的十二条（case 里可以覆盖）
 EVAL_ASSERTIONS: list[dict] = [
     {"type": "evidence_refs_are_eids"},
     {"type": "every_proposal_has_evidence"},
@@ -23,11 +23,13 @@ EVAL_ASSERTIONS: list[dict] = [
     {"type": "inquiry_hypotheses_are_grounded"},
     {"type": "inquiry_needs_verification"},
     {"type": "inquiry_has_no_quantities"},
+    {"type": "sim_review_proposals_stay_proposed"},
+    {"type": "sim_review_reports_are_well_formed"},
 ]
 
 #: **没进默认集**的那一条：`unaccounted_at_most`。
 #:
-#: 为什么：默认集里那十条量的是**结构**（编号形状、题数、标注对齐……），而
+#: 为什么：默认集里那十二条量的是**结构**（编号形状、题数、标注对齐……），而
 #: `unaccounted` 量的是**模型行为率**——四个车道 13 个轮次实测 4–26 条/轮，
 #: 补了提示词之后 2–3 轮实测 8–23 条/轮，**没有可测的下降**（见
 #: `.codex/runs/2026-10-01/P22验证.md`）。给这种量挂一个"默认必须过"的阈值，
@@ -259,6 +261,41 @@ def check(assertion: dict, view: RoundView) -> str | None:
         ] + [item.situation for item in inquiry.slices]
         bad = sorted({text for text in texts if SIM_NUMERIC.search(text)})
         return None if not bad else f"模拟产物出现了数量断言：{bad[0][:30]}"
+
+    if kind == "sim_review_proposals_stay_proposed":
+        # M11：引用了模拟编号的提案必须是"它提议的"——防它被洗成"它替你判断的"。
+        if view.draft is None:
+            return None
+        bad = [
+            item
+            for item in view.draft.proposals
+            if item.simulation_based and item.origin_type != "proposed"
+        ]
+        if not bad:
+            return None
+        return f"引用了模拟推演的提案不是「它提议的」：{bad[0].proposal_id}"
+
+    if kind == "sim_review_reports_are_well_formed":
+        # M11：走查报告的结构一致性（与筛的判据同源；此处拦的是"真跑退化"）。
+        review = view.sim_review
+        if review is None:
+            return None
+        for persona in review.personas:
+            for feature in persona.features:
+                where = f"{persona.persona_id}·{feature.feature_slug}"
+                if not feature.started and not any(
+                    item.kind == "cannot_start" for item in feature.frictions
+                ):
+                    return f"{where}：started=false 却没有 cannot_start 摩擦"
+                if feature.started and not feature.walkthrough:
+                    return f"{where}：started=true 却没有走查步骤"
+                if feature.verdict in ("friction", "blocked") and not feature.verdict_because:
+                    return f"{where}：verdict={feature.verdict} 却没有 verdict_because"
+                known = {item.local_id for item in feature.frictions}
+                dangling = [ref for ref in feature.verdict_because if ref not in known]
+                if dangling:
+                    return f"{where}：verdict_because 指向不存在的摩擦：{dangling[0]}"
+        return None
 
     raise ValueError(f"未知断言：{kind}")
 

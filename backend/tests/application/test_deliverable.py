@@ -452,3 +452,56 @@ def test_readiness_appendix_lists_unfinished_items():
     assert f"{items[0].section_id}" in text
     assert items[0].title in text
     assert items[0].severity is Severity.BLOCKER
+
+
+# ── M11：模拟推演的诚实标注（同时补 M10 欠账） ───────────────────────────────
+
+
+def _ledger_with_simulated() -> tuple[EvidenceLedger, EvidenceId]:  # type: ignore[no-untyped-def]
+    ledger = ledger_with_two_entries()
+    eid = ledger.record(
+        kind=EvidenceKind.SIMULATED,
+        text="点了导出没有反应；文档没写失败算不算正常",
+        source=EvidenceSource(
+            round_id=RoundId("r1"),
+            external_ref="simulation:review:r1#persona.first_touch@order-export#F1",
+        ),
+        now=NOW,
+    )
+    return ledger, eid
+
+
+def test_simulated_evidence_gets_its_own_label_and_disclaimer() -> None:
+    from pmstudio.application.deliverable import SIMULATION_DISCLAIMER
+
+    ledger, eid = _ledger_with_simulated()
+    document = make_document()
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-sim",
+                entry_id=EntryId("en-sim"),
+                op=WriteOp.ADD,
+                target=Target.body("s2"),
+                text="导出失败要有反馈（模型推演，待验证）",
+                refs=(eid,),
+                kind=BlockKind.TEXT,
+            )
+        ],
+        now=NOW,
+        summary="引用一条模拟编号",
+    )
+
+    text = export(document, ledger)
+
+    assert "模拟推演（未验证）" in text, "模拟编号在附录里不能裸奔成英文原值"
+    assert SIMULATION_DISCLAIMER in text, "引用了模拟内容就必须带固定声明"
+
+
+def test_clean_export_has_no_simulation_disclaimer() -> None:
+    from pmstudio.application.deliverable import SIMULATION_DISCLAIMER
+
+    text = export(document_with_feature(), ledger_with_two_entries())
+
+    assert SIMULATION_DISCLAIMER not in text, "没引用模拟内容就不许吓人"
+    assert "模拟推演" not in text

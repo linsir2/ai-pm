@@ -40,7 +40,16 @@ KIND_LABELS = {
     EvidenceKind.SYSTEM_DEFAULT: "系统默认",
     EvidenceKind.MANUAL: "手工编辑",
     EvidenceKind.EXTERNAL: "外部材料",
+    # M11（补 M10 欠账）：模拟产物在交付物里必须自报家门，不能裸奔成英文原值
+    EvidenceKind.SIMULATED: "模拟推演（未验证）",
 }
+
+#: 引用到模拟编号时的固定声明（不可折叠、不可改写——口径红线）。
+#: 只放附录 A 末尾（按引用出现），不在正文加横幅（保持"按引用"原则）。
+SIMULATION_DISCLAIMER = (
+    "本附录含模型推演内容（模拟调研/模拟评测）：由 AI 生成，"
+    "不是真实用户数据，不能替代用户调研。"
+)
 
 TRIGGER_LABELS = {
     VersionTrigger.CONFIRM: "草案确认",
@@ -244,6 +253,11 @@ def _appendix_a(view: DocumentView, ledger: EvidenceLedger) -> str:
             f"（另有 {open_only} 条出处只被第 {chapter} 章未决清单引用，未列入本附录——"
             "它们是系统对「还没定的事」的记账，按编号仍可在系统里查）"
         )
+    if any(
+        evidence.eid in listed_ids and evidence.kind is EvidenceKind.SIMULATED
+        for evidence in ledger.evidences()
+    ):
+        lines.append(SIMULATION_DISCLAIMER)
     uncited = total - listed - open_only
     if uncited:
         lines.append(
