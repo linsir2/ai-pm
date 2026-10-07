@@ -162,9 +162,8 @@ from pmstudio.application.repair import repair_note
 from pmstudio.application.sim_inquiry import (
     ORIGIN_SIMULATION,
     duplicate_of,
+    narrow_offense,
     normalize_statement,
-    sim_demographic_hits,
-    sim_numeric_hit,
     synthesize_sim_material,
 )
 from pmstudio.domain.authoring.document import Document
@@ -4483,7 +4482,7 @@ class RunSimInquiry:
             text = " ".join(
                 (item["situation"], item["job"], item["trigger"], item["workaround"])
             )
-            hit = self._narrow_offense(f"切片 {item['local_id']}", text)
+            hit = narrow_offense(f"切片 {item['local_id']}", text)
             if hit is not None:
                 dropped_slices.add(item["local_id"])
                 drop(f"模拟切片 {item['local_id']}", hit)
@@ -4502,7 +4501,7 @@ class RunSimInquiry:
                     f"它挂的切片 {draft.slice_id} 被丢了（分组没了，挂载无意义）",
                 )
                 continue
-            hit = self._narrow_offense(f"假设 {local_id}", draft.statement)
+            hit = narrow_offense(f"假设 {local_id}", draft.statement)
             if hit is not None:
                 drop(f"模拟假设 {local_id}", hit)
                 if offense is None:
@@ -4520,7 +4519,7 @@ class RunSimInquiry:
             clean_hypotheses.append((by_id[local_id], draft.slice_id))
         clean_unknowns: list = []
         for item in outcome.unknowns:
-            hit = self._narrow_offense(f"盲区 {item['local_id']}", item["statement"])
+            hit = narrow_offense(f"盲区 {item['local_id']}", item["statement"])
             if hit is not None:
                 drop(f"模拟盲区 {item['local_id']}", hit)
                 if offense is None:
@@ -4538,21 +4537,6 @@ class RunSimInquiry:
             item for item in outcome.slices if item["local_id"] not in dropped_slices
         ]
         return (clean_slices, clean_hypotheses, clean_unknowns), tuple(drops), offense
-
-    @staticmethod
-    def _narrow_offense(where: str, text: str) -> str | None:
-        """窄表命中 → 重跑指引（只点名，不复制错串：P5d 同款纪律）。"""
-
-        hits = sim_demographic_hits(text)
-        if hits:
-            return (
-                f"{where}命中身份词（{hits[0]}）：处境与假设不许写身份属性，"
-                f"重写这条（不要复述这句指引里的原话）"
-            )
-        if sim_numeric_hit(text):
-            return f"{where}命中数量断言：模拟推演不许出数字，改成可证伪的定性陈述"
-        return None
-
 
 class KeepSimInquiry:
     """收下模拟的勾选为材料：合成一份（多块）＋同 uow 落库＋记 chosen；同选择重复收下幂等。

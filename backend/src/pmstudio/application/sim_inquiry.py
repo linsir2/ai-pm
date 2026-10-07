@@ -55,6 +55,24 @@ def sim_demographic_hits(text: str) -> tuple[str, ...]:
     return tuple(sorted(hint for hint in _SIM_IDENTITY_HINTS if hint in text))
 
 
+def narrow_offense(where: str, text: str) -> str | None:
+    """窄表命中 → 重跑指引（只点名，不复制错串：P5d 同款纪律）。
+
+    模拟调研（M10）与模拟评测（M11）共用这一处判词——两侧扫的字面集完全一致，
+    各写一份只会漂移（"身份/数字"两条窄表住在 `sim_inquiry.py`，判词跟着它们走）。
+    """
+
+    hits = sim_demographic_hits(text)
+    if hits:
+        return (
+            f"{where}命中身份词（{hits[0]}）：不许写身份属性，"
+            f"重写这条（不要复述这句指引里的原话）"
+        )
+    if sim_numeric_hit(text):
+        return f"{where}命中数量断言：模拟推演不许出数字，改成可证伪的定性陈述"
+    return None
+
+
 def normalize_statement(text: str) -> str:
     """陈述归一化：压空白 + 剥首尾标点（去重比的是"同一句话"，不是同一串字节）。"""
 

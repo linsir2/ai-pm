@@ -188,6 +188,7 @@ backend/src/pmstudio/
 │   ├── discussion.py
 │   ├── material_synthesis.py
 │   ├── sim_inquiry.py
+│   ├── sim_review.py
 │   └── agents/
 ├── infrastructure/
 │   ├── sqlite/
