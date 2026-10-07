@@ -32,11 +32,13 @@ from pmstudio.domain.shared.ids import (
     ProjectId,
     ProposalId,
     QuestionId,
+    RoundId,
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import (
     NOW,
+    PROJECT,
     ROUND_ID,
     SEAT,
     document_with_feature,
@@ -717,7 +719,11 @@ def test_schema_view_freezes_the_shape():
     ]
 
     assert view.limits == dto.LimitsView(
-        max_seat_rounds=3, max_questionnaires=2, max_open_items_per_batch=3
+        max_seat_rounds=3,
+        max_questionnaires=2,
+        max_open_items_per_batch=3,
+        max_sim_review_personas=3,
+        max_sim_review_features=2,
     )
 
 
@@ -1097,3 +1103,173 @@ def test_round_view_carries_sim_inquiry_artifact() -> None:
     assert view.slices[0].anchors == ("E1",)
     assert view.hypotheses[0].falsification.startswith("观察到运营")
     assert view.unknowns == ()
+
+
+# ── M11 模拟评测：投影与 /schema ─────────────────────────────────────────────
+
+
+def _review_payload(evaluated_version: int = 3) -> dict:
+    def feature(slug: str, verdict: str) -> dict:
+        return {
+            "feature_slug": slug,
+            "started": True,
+            "walkthrough": [
+                {
+                    "step_index": 1,
+                    "step_text": "进入订单列表",
+                    "from_doc": "en-flow",
+                    "action": "打开订单列表页",
+                    "outcome": "stuck",
+                    "need": "文档没写导出按钮在哪",
+                }
+            ],
+            "frictions": [
+                {
+                    "local_id": "F1",
+                    "kind": "dead_end",
+                    "entry_id": "en-flow",
+                    "field": "",
+                    "quote": "",
+                    "not_documented": True,
+                    "blocks_flow": True,
+                    "note": "点了导出没有反应",
+                }
+            ],
+            "acceptance_checks": [
+                {"local_id": "A1", "entry_id": "en-acc1", "status": "unverified", "note": ""}
+            ],
+            "verdict": verdict,
+            "verdict_because": ["F1"],
+        }
+
+    return {
+        "evaluated_version": evaluated_version,
+        "personas": [
+            {
+                "persona_id": "persona.first_touch",
+                "title": "首次上手者",
+                "features": [feature("order-export", "blocked")],
+            },
+            {
+                "persona_id": "persona.edge_maker",
+                "title": "异常状态制造者",
+                "features": [feature("order-export", "friction")],
+            },
+        ],
+        "advisories": ["功能 order-export：全体模拟使用者未能走通"],
+    }
+
+
+def test_round_view_carries_sim_review_artifact() -> None:
+    """RoundView.sim_review：没跑过是 None；跑过是逐 persona 报告 + 计数 + advisories。"""
+
+    from pmstudio.application.sim_review import MAX_SIM_REVIEWS_PER_DRAFT
+
+    assert dto.round_view(make_round()).sim_review is None
+
+    round_ = make_round()
+    round_.record_sim_review(_review_payload())
+
+    view = dto.round_view(round_).sim_review
+    assert view is not None
+    assert view.runs == 1
+    assert view.max_runs == MAX_SIM_REVIEWS_PER_DRAFT
+    assert view.evaluated_version == 3
+    assert [item.persona_id for item in view.personas] == [
+        "persona.first_touch",
+        "persona.edge_maker",
+    ]
+    assert [item.title for item in view.personas] == ["首次上手者", "异常状态制造者"]
+    feature = view.personas[0].features[0]
+    assert feature.feature_slug == "order-export"
+    assert feature.verdict == "blocked"
+    assert feature.walkthrough[0].outcome == "stuck"
+    assert feature.frictions[0].kind == "dead_end"
+    assert feature.frictions[0].not_documented is True
+    assert feature.acceptance_checks[0].status == "unverified"
+    assert feature.verdict_because == ("F1",)
+    assert (view.summary.smooth, view.summary.friction, view.summary.blocked) == (0, 1, 1)
+    assert view.advisories == ("功能 order-export：全体模拟使用者未能走通",)
+
+
+def test_proposal_view_marks_simulation_based_from_ledger() -> None:
+    """`simulation_based` = 提案编号里有账本上的 SIMULATED——界面 tag 与 eval 断言都读它。"""
+
+    from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
+    from pmstudio.domain.provenance.ledger import EvidenceLedger
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做一个订单导出功能",
+        source=EvidenceSource(round_id=RoundId(ROUND_ID), raw_span="想做个订单导出"),
+        now=NOW,
+    )
+    sim_eid = ledger.record(
+        kind=EvidenceKind.SIMULATED,
+        text="点了导出没有反应",
+        source=EvidenceSource(
+            round_id=RoundId(ROUND_ID),
+            external_ref="simulation:review:r1#persona.first_touch@order-export#F1",
+        ),
+        now=NOW,
+    )
+
+    round_ = make_round()
+    round_.integrate(
+        draft=Draft(
+            draft_id=DraftId("d1"),
+            round_id=RoundId(ROUND_ID),
+            proposals=(
+                Proposal(
+                    proposal_id=ProposalId("p01"),
+                    entry_id=EntryId("r1#01"),
+                    op=WriteOp.ADD,
+                    target=Target.body("s5"),
+                    text="登录页提供微信扫码入口",
+                    origin=Origin(OriginType.USER, (EvidenceId("E1"),)),
+                    kind=BlockKind.TEXT,
+                ),
+                Proposal(
+                    proposal_id=ProposalId("sim#1"),
+                    entry_id=EntryId("r1#02"),
+                    op=WriteOp.REMOVE,
+                    target=Target.body("s5", feature_slug="order-export"),
+                    text="进入订单列表",
+                    origin=Origin(OriginType.PROPOSED, (sim_eid,), rationale="模拟评测"),
+                    kind=BlockKind.TEXT,
+                ),
+            ),
+        )
+    )
+
+    view = dto.round_view(round_, ledger=ledger)
+    flags = {item.proposal_id: item.simulation_based for item in view.draft.proposals}
+    assert flags == {"p01": False, "sim#1": True}
+
+    no_ledger = dto.round_view(round_)
+    assert all(not item.simulation_based for item in no_ledger.draft.proposals), (
+        "没带账本时不瞎标"
+    )
+
+
+def test_schema_view_exposes_personas_and_review_limits() -> None:
+    from pmstudio.application.sim_review import (
+        MAX_SIM_REVIEW_FEATURES,
+        MAX_SIM_REVIEW_PERSONAS,
+    )
+
+    personas = (
+        SimpleNamespace(persona_id="persona.p1", title="P1", situation="S1"),
+        SimpleNamespace(persona_id="persona.p2", title="P2", situation="S2"),
+    )
+
+    view = dto.schema_view(personas=personas)
+
+    assert [(item.persona_id, item.title, item.situation) for item in view.personas] == [
+        ("persona.p1", "P1", "S1"),
+        ("persona.p2", "P2", "S2"),
+    ]
+    assert view.limits.max_sim_review_personas == MAX_SIM_REVIEW_PERSONAS
+    assert view.limits.max_sim_review_features == MAX_SIM_REVIEW_FEATURES
+    assert dto.schema_view().personas == ()

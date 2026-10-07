@@ -722,7 +722,7 @@ class Harness:
     def get_schema(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetSchema
 
-        return GetSchema(discussion_roles=self.discussion_roles)
+        return GetSchema(discussion_roles=self.discussion_roles, personas=self.personas)
 
     def list_rounds(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import ListRounds

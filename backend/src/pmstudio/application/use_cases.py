@@ -3080,15 +3080,18 @@ class GetSchema:
     纯函数、不注入任何仓储——"读 schema 不可能开事务"是结构上的保证，不靠纪律
     （与只读用例同源：它们拿不到写端口）。
 
-    `discussion_roles` 是**构造时注入的元组**（不是仓储）：角色表随进程加载一次，
-    读 schema 只是把它摆出来，所以这里依然拿不到任何 IO 端口。
+    `discussion_roles` 与 `personas` 都是**构造时注入的元组**（不是仓储）：
+    两张表随进程加载一次，读 schema 只是把它们摆出来，所以这里依然拿不到任何 IO 端口。
     """
 
-    def __init__(self, *, discussion_roles: tuple = ()) -> None:
+    def __init__(self, *, discussion_roles: tuple = (), personas: tuple = ()) -> None:
         self._discussion_roles = discussion_roles
+        self._personas = personas
 
     async def __call__(self) -> SchemaView:
-        return schema_view(discussion_roles=self._discussion_roles)
+        return schema_view(
+            discussion_roles=self._discussion_roles, personas=self._personas
+        )
 
 
 

@@ -14,6 +14,11 @@ from pmstudio.application.deliverable import (
     summarize_line,
 )
 from pmstudio.application.ports import SeatCatalog, SeatDefinition
+from pmstudio.application.sim_review import (
+    MAX_SIM_REVIEW_FEATURES,
+    MAX_SIM_REVIEW_PERSONAS,
+    MAX_SIM_REVIEWS_PER_DRAFT,
+)
 from pmstudio.domain.authoring.diff import diff_snapshots
 from pmstudio.domain.authoring.readiness import ReadinessItem
 from pmstudio.domain.authoring.schema import FEATURE_FIELDS
@@ -34,6 +39,7 @@ from pmstudio.domain.round.questionnaire import (
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import MAX_SEAT_ROUNDS
 from pmstudio.domain.services.scope_guard import ScopeGuard
+from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS
 
@@ -142,6 +148,8 @@ class ProposalView:
     rationale: str | None
     kind: str | None
     warning: str | None = None
+    #: 编号里有账本上的 SIMULATED（M11）：界面打「模拟评测依据」tag、eval 读它
+    simulation_based: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +273,75 @@ class SimInquiryView:
 
 
 @dataclass(frozen=True, slots=True)
+class SimWalkStepView:
+    step_index: int
+    step_text: str
+    from_doc: str
+    action: str
+    outcome: str
+    need: str
+
+
+@dataclass(frozen=True, slots=True)
+class SimFrictionView:
+    local_id: str
+    kind: str
+    entry_id: str
+    field: str
+    quote: str
+    not_documented: bool
+    blocks_flow: bool
+    note: str
+
+
+@dataclass(frozen=True, slots=True)
+class SimAcceptanceCheckView:
+    local_id: str
+    entry_id: str
+    status: str
+    note: str
+
+
+@dataclass(frozen=True, slots=True)
+class SimFeatureReviewView:
+    feature_slug: str
+    started: bool
+    walkthrough: tuple[SimWalkStepView, ...]
+    frictions: tuple[SimFrictionView, ...]
+    acceptance_checks: tuple[SimAcceptanceCheckView, ...]
+    verdict: str
+    verdict_because: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SimPersonaReviewView:
+    persona_id: str
+    title: str
+    features: tuple[SimFeatureReviewView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SimReviewSummaryView:
+    """三档**原始计数**（按 persona×功能 对）：不给百分比、不给分数（口径红线）。"""
+
+    smooth: int
+    friction: int
+    blocked: int
+
+
+@dataclass(frozen=True, slots=True)
+class SimReviewView:
+    """一趟模拟评测的投影（没跑过是 None——抽屉靠它决定出不出现）。"""
+
+    runs: int
+    max_runs: int
+    evaluated_version: int | None
+    personas: tuple[SimPersonaReviewView, ...]
+    summary: SimReviewSummaryView
+    advisories: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RoundView:
     """一轮的只读投影。"""
 
@@ -307,6 +384,8 @@ class RoundView:
     web_queries: tuple[WebQueryView, ...] = ()
     #: 模拟调研产物（没跑过是 None；抽屉与 eval 读它）
     sim_inquiry: SimInquiryView | None = None
+    #: 模拟评测产物（M11；没跑过是 None）
+    sim_review: SimReviewView | None = None
     #: 联网工具现在能不能用（没配密钥就是 False）——复述卡据此决定要不要出现那一栏
     web_search_available: bool = False
     #: 这一轮攒下的记忆提议（M6）：**提议**，默认不勾；勾了随 `/confirm` 一起生效
@@ -874,11 +953,23 @@ class FeatureFieldSchemaView:
 
 @dataclass(frozen=True, slots=True)
 class LimitsView:
-    """三处上限：界面要显示"第 2/3 轮""已答 4/5"，不该自己抄一份。"""
+    """几处上限：界面要显示"第 2/3 轮""已答 4/5"，不该自己抄一份。"""
 
     max_seat_rounds: int
     max_questionnaires: int
     max_open_items_per_batch: int
+    #: 模拟评测（M11）：选择器的勾选上限
+    max_sim_review_personas: int
+    max_sim_review_features: int
+
+
+@dataclass(frozen=True, slots=True)
+class PersonaSchemaView:
+    """选择器里的一个模拟使用者（M11）。真相源是 `personas.toml`，界面不抄。"""
+
+    persona_id: str
+    title: str
+    situation: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -904,9 +995,11 @@ class SchemaView:
     limits: LimitsView
     #: 讨论区的三个固定角色（`dlg.*`）。**必填**：没有它灵感区就没有角色可显示。
     discussion_roles: tuple[RoleSchemaView, ...]
+    #: 五个固定模拟使用者（M11）：评测选择器读它
+    personas: tuple[PersonaSchemaView, ...]
 
 
-def schema_view(*, discussion_roles: tuple = ()) -> SchemaView:
+def schema_view(*, discussion_roles: tuple = (), personas: tuple = ()) -> SchemaView:
     """把三张表、三个常量与讨论角色读出来。纯函数：无 IO、不开事务、不碰任何仓储。
 
     `discussion_roles` 按鸭子类型读 `.role_id/.title/.focus`——application 不 import
@@ -941,10 +1034,20 @@ def schema_view(*, discussion_roles: tuple = ()) -> SchemaView:
             max_seat_rounds=MAX_SEAT_ROUNDS,
             max_questionnaires=MAX_QUESTIONNAIRES,
             max_open_items_per_batch=MAX_OPEN_ITEMS_PER_BATCH,
+            max_sim_review_personas=MAX_SIM_REVIEW_PERSONAS,
+            max_sim_review_features=MAX_SIM_REVIEW_FEATURES,
         ),
         discussion_roles=tuple(
             RoleSchemaView(role_id=role.role_id, title=role.title, focus=role.focus)
             for role in discussion_roles
+        ),
+        personas=tuple(
+            PersonaSchemaView(
+                persona_id=persona.persona_id,
+                title=persona.title,
+                situation=persona.situation,
+            )
+            for persona in personas
         ),
     )
 
@@ -1036,6 +1139,16 @@ def round_view(
 ) -> RoundView:
     warnings: dict[str, str] = {}
     advisories: tuple[str, ...] = ()
+    #: 账本里的模拟编号集合：给提案打「模拟评测依据」tag（没有账本就都不标）
+    simulated_eids = (
+        frozenset(
+            str(item.eid)
+            for item in ledger.evidences()
+            if item.kind is EvidenceKind.SIMULATED
+        )
+        if ledger is not None
+        else frozenset()
+    )
     draft_view: DraftView | None = None
     if round_.draft is not None:
         violations = ScopeGuard().check(round_.draft.proposals, write_scope=round_.write_scope)
@@ -1053,7 +1166,9 @@ def round_view(
             + ignore_hint
             + tuple(f"{item.target.label()}：{item.message}" for item in violations)
         )
-        draft_view = _draft_view(round_.draft, warnings=warnings)
+        draft_view = _draft_view(
+            round_.draft, warnings=warnings, simulated_eids=simulated_eids
+        )
     questionnaire = round_.questionnaire
     nominated = _suggestions(round_, catalog=catalog, seat_titles=seat_titles)
     return RoundView(
@@ -1106,6 +1221,7 @@ def round_view(
         materials=round_material_views(round_, materials=materials),
         web_queries=_web_query_views(round_),
         sim_inquiry=_sim_inquiry_view(round_),
+        sim_review=_sim_review_view(round_),
         web_search_available=web_search_available,
         memory_proposals=tuple(
             MemoryProposalView(
@@ -1119,6 +1235,84 @@ def round_view(
             )
             for item in round_.memory_proposals
         ),
+    )
+
+
+def _sim_review_view(round_: Round) -> SimReviewView | None:
+    """轮次里的评测产物 → 抽屉投影。没跑过是 None。"""
+
+    payload = round_.sim_review
+    if payload is None:
+        return None
+    personas = tuple(
+        SimPersonaReviewView(
+            persona_id=str(item.get("persona_id", "")),
+            title=str(item.get("title", "")),
+            features=tuple(
+                _feature_review_view(feature) for feature in item.get("features", ())
+            ),
+        )
+        for item in payload.get("personas", ())
+    )
+    counts = {"smooth": 0, "friction": 0, "blocked": 0}
+    for persona in personas:
+        for feature in persona.features:
+            if feature.verdict in counts:
+                counts[feature.verdict] += 1
+    evaluated = payload.get("evaluated_version")
+    return SimReviewView(
+        runs=round_.sim_review_runs,
+        max_runs=MAX_SIM_REVIEWS_PER_DRAFT,
+        evaluated_version=None if evaluated is None else int(evaluated),
+        personas=personas,
+        summary=SimReviewSummaryView(
+            smooth=counts["smooth"],
+            friction=counts["friction"],
+            blocked=counts["blocked"],
+        ),
+        advisories=tuple(str(item) for item in payload.get("advisories", ())),
+    )
+
+
+def _feature_review_view(feature: Mapping) -> SimFeatureReviewView:
+    return SimFeatureReviewView(
+        feature_slug=str(feature.get("feature_slug", "")),
+        started=bool(feature.get("started", False)),
+        walkthrough=tuple(
+            SimWalkStepView(
+                step_index=int(step.get("step_index", 0)),
+                step_text=str(step.get("step_text", "")),
+                from_doc=str(step.get("from_doc", "")),
+                action=str(step.get("action", "")),
+                outcome=str(step.get("outcome", "")),
+                need=str(step.get("need", "")),
+            )
+            for step in feature.get("walkthrough", ())
+        ),
+        frictions=tuple(
+            SimFrictionView(
+                local_id=str(item.get("local_id", "")),
+                kind=str(item.get("kind", "")),
+                entry_id=str(item.get("entry_id", "")),
+                field=str(item.get("field", "")),
+                quote=str(item.get("quote", "")),
+                not_documented=bool(item.get("not_documented", False)),
+                blocks_flow=bool(item.get("blocks_flow", False)),
+                note=str(item.get("note", "")),
+            )
+            for item in feature.get("frictions", ())
+        ),
+        acceptance_checks=tuple(
+            SimAcceptanceCheckView(
+                local_id=str(item.get("local_id", "")),
+                entry_id=str(item.get("entry_id", "")),
+                status=str(item.get("status", "")),
+                note=str(item.get("note", "")),
+            )
+            for item in feature.get("acceptance_checks", ())
+        ),
+        verdict=str(feature.get("verdict", "")),
+        verdict_because=tuple(str(item) for item in feature.get("verdict_because", ())),
     )
 
 
@@ -1576,7 +1770,12 @@ def _asked_question_views(round_: Round) -> tuple[QuestionView, ...]:
     )
 
 
-def _proposal_view(proposal: Proposal, *, warning: str | None) -> ProposalView:
+def _proposal_view(
+    proposal: Proposal,
+    *,
+    warning: str | None,
+    simulated_eids: frozenset[str] = frozenset(),
+) -> ProposalView:
     return ProposalView(
         proposal_id=str(proposal.proposal_id),
         entry_id=str(proposal.entry_id),
@@ -1588,6 +1787,9 @@ def _proposal_view(proposal: Proposal, *, warning: str | None) -> ProposalView:
         rationale=proposal.origin.rationale,
         kind=proposal.kind.value if proposal.kind is not None else None,
         warning=warning,
+        simulation_based=any(
+            str(eid) in simulated_eids for eid in proposal.origin.refs
+        ),
     )
 
 
@@ -1747,9 +1949,18 @@ def thread_view(thread: Discussion) -> ThreadView:
     )
 
 
-def _draft_view(draft: Draft, *, warnings: Mapping[str, str]) -> DraftView:
+def _draft_view(
+    draft: Draft,
+    *,
+    warnings: Mapping[str, str],
+    simulated_eids: frozenset[str] = frozenset(),
+) -> DraftView:
     proposals = tuple(
-        _proposal_view(proposal, warning=warnings.get(str(proposal.proposal_id)))
+        _proposal_view(
+            proposal,
+            warning=warnings.get(str(proposal.proposal_id)),
+            simulated_eids=simulated_eids,
+        )
         for proposal in draft.proposals
     )
     by_id = {item.proposal_id: item for item in proposals}
