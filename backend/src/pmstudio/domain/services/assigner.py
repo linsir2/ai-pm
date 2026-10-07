@@ -51,6 +51,32 @@ class EvidenceAssigner:
             assigned.append(replace(claim, eid=eid))
         return tuple(assigned)
 
+    def assign_sim_review(
+        self,
+        items: Sequence[tuple[str, str]],
+        *,
+        ledger: EvidenceLedger,
+        round_id: RoundId,
+        now: datetime,
+    ) -> tuple[EvidenceId, ...]:
+        """模拟评测的按需发号（M11）：`items = (external_ref, text)`，返回同序编号。
+
+        与席位/主张不同：这里**不是**每个模型产出都发号——只有"被减建议引用"的
+        摩擦点/验收核查进这条通道（按需发号，账本不膨胀）。`kind=SIMULATED`
+        永不进 `TERMINAL_KINDS`：引用它的提案在装配口径里自动落"它提议的"。
+        """
+
+        eids: list[EvidenceId] = []
+        for external_ref, text in items:
+            eid = ledger.record(
+                kind=EvidenceKind.SIMULATED,
+                text=text,
+                source=EvidenceSource(round_id=round_id, external_ref=external_ref),
+                now=now,
+            )
+            eids.append(eid)
+        return tuple(eids)
+
     def assign_opinions(
         self,
         reviews: Sequence[SeatReview],

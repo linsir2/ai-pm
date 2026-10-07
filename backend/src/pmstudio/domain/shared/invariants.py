@@ -28,6 +28,7 @@ class RInvariant(StrEnum):
     R6 = "R6"  # 答案必须带 question_id，且只能答本轮的问题
     R7 = "R7"  # 席位轮只接受开场卡编制内的席位
     R8 = "R8"  # 一轮最多 2 次模拟调研（显式点击才花调用，到顶就停）
+    R9 = "R9"  # 每份草案最多 1 次模拟评测（显式点击才花调用，到顶就停；dig 出新草案重置）
 
 
 class LabelInvariant(StrEnum):

@@ -10,6 +10,7 @@ from pmstudio.application.agents.discusser import Discusser
 from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
+from pmstudio.application.agents.persona_simulator import PersonaSimulatorAgent
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
 from pmstudio.application.dto import ProjectSummaryView
@@ -23,6 +24,7 @@ from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.ids import DiscussionId, DocumentId, ProjectId
 from pmstudio.harness.model.contracts import ModelGateway
 from pmstudio.infrastructure.discussion.roles import DiscussionRole
+from pmstudio.infrastructure.personas.catalog import PersonaDefinition
 from tests.support.builders import PROJECT, make_document, make_seat
 from tests.support.doubles import (
     FixedClock,
@@ -196,12 +198,44 @@ def _default_discussion_roles() -> tuple[DiscussionRole, ...]:
     )
 
 
+def _default_personas() -> tuple[PersonaDefinition, ...]:
+    """测试默认的模拟使用者（与 `personas.toml` 同 id/title，零文件依赖）。"""
+
+    return (
+        PersonaDefinition(
+            persona_id="persona.first_touch",
+            title="首次上手者",
+            situation="第一次使用，没有背景，手上只有文档与界面文案",
+            goal="独立走完一次完整任务",
+            behavior="按主流程从头走，不读任何内部说明；卡一次就停",
+            probes="入口、前置条件、每一步的反馈",
+        ),
+        PersonaDefinition(
+            persona_id="persona.edge_maker",
+            title="异常状态制造者",
+            situation="对抗性走查：故意走空/满/重复/非法状态",
+            goal="把流程搞崩，看文档有没有定义后果",
+            behavior="每一步都先试边界输入；专找没有定义的异常路径",
+            probes="异常与边界字段、错误提示、回滚",
+        ),
+        PersonaDefinition(
+            persona_id="persona.bulk_operator",
+            title="高频批量操作者",
+            situation="每天重复操作同类对象，路径已熟悉",
+            goal="少点击、可预期，别让重复劳动变慢",
+            behavior="优先找筛选/批量/导出；跳过解释性文字；对超时和失败敏感",
+            probes="批量入口、上限、失败重试",
+        ),
+    )
+
+
 class Harness:
     def __init__(
         self,
         *,
         replies: Mapping[str, str | Sequence[str]] | None = None,
         seat_replies: Mapping[str, str | Sequence[str]] | None = None,
+        persona_replies: Mapping[str, str | Sequence[str]] | None = None,
         seats: Sequence[SeatDefinition] | None = None,
         gateway: ModelGateway | None = None,
         available_tool_keys: frozenset[str] = frozenset({"tavily_api_key"}),
@@ -230,7 +264,9 @@ class Harness:
         )
         # gateway 是给"要卡住/要乱来"的测试用的注入口；平时用脚本化网关
         self.gateway = gateway or ScriptedModelGateway(
-            replies=replies or {}, seat_replies=seat_replies or {}
+            replies=replies or {},
+            seat_replies=seat_replies or {},
+            persona_replies=persona_replies or {},
         )
         self.prompts = RecordingPrompts()
         self.clock = FixedClock()
@@ -254,6 +290,8 @@ class Harness:
         self.reviewer = SeatReviewer(model=self.gateway, prompts=self.prompts)
         self.inquirer = Inquirer(model=self.gateway, prompts=self.prompts)
         self.sim_inquirer = SimInquiryAgent(model=self.gateway, prompts=self.prompts)
+        self.persona_simulator = PersonaSimulatorAgent(model=self.gateway, prompts=self.prompts)
+        self.personas = _default_personas()
         self.discusser = Discusser(model=self.gateway, prompts=self.prompts)
         self.discussion_roles = _default_discussion_roles()
         self.integrator = Integrator(model=self.gateway, prompts=self.prompts)
@@ -452,6 +490,25 @@ class Harness:
             materials=self.materials,
             uow=self.uow,
             sim_inquirer=self.sim_inquirer,
+            checker=self.readiness,
+            clock=self.clock,
+            events=self.events,
+        )
+
+    def run_sim_review(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import RunSimReview
+
+        return RunSimReview(
+            rounds=self.rounds,
+            round_writer=self.rounds,
+            documents=self.documents,
+            evidence=self.evidences,
+            evidence_writer=self.evidences,
+            memory=self.memory,
+            materials=self.materials,
+            uow=self.uow,
+            personas=self.personas,
+            simulator=self.persona_simulator,
             checker=self.readiness,
             clock=self.clock,
             events=self.events,

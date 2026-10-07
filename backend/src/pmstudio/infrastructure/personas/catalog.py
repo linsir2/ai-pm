@@ -86,14 +86,3 @@ def load_personas(path: Path = PERSONAS_PATH) -> tuple[PersonaDefinition, ...]:
     if not personas:
         raise ShapeError("模拟使用者表为空——一个 persona 都没有就跑不了评测")
     return tuple(personas)
-
-
-def persona_by_id(
-    personas: tuple[PersonaDefinition, ...], persona_id: str
-) -> PersonaDefinition:
-    """按 id 取一个；没有 → `KeyError`（调用方转译成人话错误）。"""
-
-    for persona in personas:
-        if persona.persona_id == persona_id:
-            return persona
-    raise KeyError(persona_id)

@@ -19,7 +19,6 @@ from pmstudio.infrastructure.personas.catalog import (
     PERSONAS_PATH,
     PersonaDefinition,
     load_personas,
-    persona_by_id,
 )
 
 EXPECTED_IDS = [
@@ -104,11 +103,3 @@ def test_missing_field_is_rejected(tmp_path):
 
     with pytest.raises(ShapeError):
         load_personas(bad)
-
-
-def test_lookup_by_id_and_rejects_unknown():
-    personas = load_personas()
-
-    assert persona_by_id(personas, "persona.edge_maker").title == "异常状态制造者"
-    with pytest.raises(KeyError):
-        persona_by_id(personas, "persona.nobody")

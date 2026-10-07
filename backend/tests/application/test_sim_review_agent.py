@@ -118,7 +118,7 @@ def test_render_persona_and_targets_are_prompt_ready() -> None:
 
 async def test_agent_run_calls_model_with_persona_slots() -> None:
     payload = json.dumps(_packet(), ensure_ascii=False)
-    gateway = ScriptedModelGateway(replies={"sim_review": payload})
+    gateway = ScriptedModelGateway(persona_replies={"persona.edge_maker": payload})
     prompts = RecordingPrompts()
     agent = PersonaSimulatorAgent(model=gateway, prompts=prompts)
 

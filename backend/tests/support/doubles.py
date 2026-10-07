@@ -33,14 +33,26 @@ class ScriptedModelGateway:
         *,
         replies: Mapping[str, str | Sequence[str]] = {},
         seat_replies: Mapping[str, str | Sequence[str]] | None = None,
+        persona_replies: Mapping[str, str | Sequence[str]] | None = None,
     ) -> None:
         self._replies = {key: _script(value) for key, value in replies.items()}
         self._seat_replies = {key: _script(value) for key, value in (seat_replies or {}).items()}
+        self._persona_replies = {
+            key: _script(value) for key, value in (persona_replies or {}).items()
+        }
         self.requests: list[ModelRequest] = []
 
     @property
     def purposes(self) -> list[str]:
         return [request.purpose for request in self.requests]
+
+    @property
+    def personas(self) -> list[str]:
+        return [
+            request.metadata.get("persona_id", "")
+            for request in self.requests
+            if request.purpose == "sim_review"
+        ]
 
     async def complete(self, request: ModelRequest) -> ModelReply:
         self.requests.append(request)
@@ -49,6 +61,15 @@ class ScriptedModelGateway:
             script = self._seat_replies.get(seat_id)
             if script is None:
                 raise ModelCallFailed(f"脚本里没有席位 {seat_id} 的回复", purpose="seat_review")
+            return ModelReply(text=_next(script), model=SCRIPTED_MODEL)
+        if request.purpose == "sim_review":
+            persona_id = request.metadata.get("persona_id", "")
+            script = self._persona_replies.get(persona_id)
+            if script is None:
+                # 同一 purpose 三人并行：必须按 persona 分回复，串行脚本会乱序
+                raise ModelCallFailed(
+                    f"脚本里没有模拟使用者 {persona_id} 的回复", purpose="sim_review"
+                )
             return ModelReply(text=_next(script), model=SCRIPTED_MODEL)
         script = self._replies.get(request.purpose)
         if script is None:

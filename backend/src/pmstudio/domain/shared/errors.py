@@ -215,6 +215,17 @@ class TooManySimInquiries(InvariantViolation):
         )
 
 
+class TooManySimReviews(InvariantViolation):
+    """每份草案最多 1 次模拟评测（R9）：显式点击才花调用，到顶就停（dig 出新草案可重跑）。"""
+
+    def __init__(self, *, limit: int) -> None:
+        super().__init__(
+            f"这份草案已经评测过 {limit} 次，到上限请确认或继续深挖",
+            invariant=RInvariant.R9,
+            limit=limit,
+        )
+
+
 class ProposalWithoutRefs(InvariantViolation):
     def __init__(self, *, proposal_id: object) -> None:
         super().__init__(

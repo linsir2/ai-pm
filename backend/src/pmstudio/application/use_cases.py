@@ -16,6 +16,7 @@ from pmstudio.application.agents.discusser import Discusser
 from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import IntegrationOutcome, Integrator
 from pmstudio.application.agents.memory_curator import CuratorOutcome, MemoryCurator
+from pmstudio.application.agents.persona_simulator import PersonaSimulatorAgent
 from pmstudio.application.agents.schemas import (
     Discarded,
     DispositionsPacket,
@@ -166,6 +167,16 @@ from pmstudio.application.sim_inquiry import (
     normalize_statement,
     synthesize_sim_material,
 )
+from pmstudio.application.sim_review import (
+    MAX_SIM_REVIEW_ATTEMPTS,
+    MAX_SIM_REVIEW_FEATURES,
+    MAX_SIM_REVIEW_PERSONAS,
+    MAX_SIM_REVIEWS_PER_DRAFT,
+    document_anchors,
+    evaluate_rules,
+    review_issues,
+    review_source_ref,
+)
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
@@ -237,6 +248,7 @@ from pmstudio.domain.shared.errors import (
     ThreadClosed,
     ThreadFull,
     TooManySimInquiries,
+    TooManySimReviews,
     WaitingOnHuman,
 )
 from pmstudio.domain.shared.ids import (
@@ -4595,3 +4607,231 @@ class KeepSimInquiry:
             stored.choose_sim_inquiry(kept)
             self._round_writer.save(stored)
         return KeepSimResult(material_id=packet.material_id, kept=kept)
+
+
+class RunSimReview:
+    """跑一趟模拟评测（M11 轮内动作）：只在草案卡上跑，不碰轮次状态。
+
+    与 M10 `RunSimInquiry` 的骨架相同（门控 → 渲染四源 → 并行 → 重装环 → 事务落库），
+    三处**有意不同**（口径见 `02` §11.0.48）：
+
+    ① 产物去向不同：不产材料、无 keep——"减"提案直接追加进**本轮草案**（"它提议的"组，
+       默认不勾），随确认走唯一写路径；
+    ② 失败语义不同：任何 persona 两次仍不过 → **整趟失败**（`Draft.gaps` 一行 + 抛出），
+       不做条目级丢条——走查报告是整体，丢一条 friction 会牵连 verdict_because/R1 计数；
+    ③ 账目不同：三人并行各带 1 次重装 = 第六本账 ≤6 次调用；每份草案限 1 次（R9）。
+    """
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        documents: DocumentReader,
+        evidence: EvidenceReader,
+        evidence_writer: EvidenceWriter,
+        memory: MemoryReader,
+        materials: MaterialStore,
+        uow: UnitOfWork,
+        personas: tuple,
+        simulator: PersonaSimulatorAgent,
+        checker: ReadinessChecker,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._documents = documents
+        self._evidence = evidence
+        self._evidence_writer = evidence_writer
+        self._memory = memory
+        self._materials = materials
+        self._uow = uow
+        #: 固定 persona 表（`infrastructure/personas/personas.toml` 装载，装配层注入）。
+        #: 鸭子类型读 `.persona_id/.title`——application 不 import infrastructure。
+        self._personas = personas
+        self._simulator = simulator
+        self._checker = checker
+        self._clock = clock
+        self._events = events
+        self._assigner = EvidenceAssigner()
+
+    async def __call__(
+        self,
+        *,
+        round_id: RoundId,
+        persona_ids: tuple[str, ...],
+        feature_slugs: tuple[str, ...],
+    ) -> None:
+        round_ = self._rounds.get(round_id)
+        if round_.step is not Step.AWAITING_CONFIRM:
+            raise IllegalStepTransition(
+                current=round_.step, target=Step.AWAITING_CONFIRM
+            )
+        if round_.waiting_on is not WaitingOn.DRAFT:
+            raise WaitingOnHuman(waiting_on=round_.waiting_on)
+        if round_.sim_review_runs >= MAX_SIM_REVIEWS_PER_DRAFT:
+            raise TooManySimReviews(limit=MAX_SIM_REVIEWS_PER_DRAFT)
+        chosen = _review_personas(self._personas, persona_ids)
+        if not 1 <= len(feature_slugs) <= MAX_SIM_REVIEW_FEATURES:
+            raise ShapeError(
+                f"一次评测查 1–{MAX_SIM_REVIEW_FEATURES} 个功能，收到 {len(feature_slugs)} 个"
+            )
+        if len(set(feature_slugs)) != len(feature_slugs):
+            raise ShapeError("同一个功能点两次没有意义，去掉重复的")
+        document = self._documents.get(round_.project_id)
+        view = document.view()
+        anchors = document_anchors(view)
+        unknown = [slug for slug in feature_slugs if slug not in anchors.feature_fields]
+        if unknown:
+            raise ShapeError(f"文档里没有这些功能：{'、'.join(unknown)}")
+
+        # 接地四源（与 M10 同款；评测没有 schema_json 之外的额外上下文）
+        document_state = render_document_state(
+            view, readiness=self._checker.check(view)
+        )
+        memory_text = render_memory(self._memory.get(round_.project_id).entries)
+        claims_text = render_claims(round_.claims)
+        material_text = external_material_text(round_, store=self._materials)
+
+        results = await asyncio.gather(
+            *(
+                self._one(
+                    persona=persona,
+                    feature_slugs=feature_slugs,
+                    anchors=anchors,
+                    document_state=document_state,
+                    claims_text=claims_text,
+                    material_text=material_text,
+                    memory_text=memory_text,
+                    round_id=round_id,
+                )
+                for persona in chosen
+            ),
+            return_exceptions=True,
+        )
+        failure = next(
+            (item for item in results if isinstance(item, BaseException)), None
+        )
+        if failure is not None:
+            note = _review_failure_note(failure)
+            with self._uow:
+                stored = self._rounds.get(round_id)
+                stored.augment_draft(gaps=(f"模拟评测未完成（{note}），没有产出——可重跑",))
+                self._round_writer.save(stored)
+            raise failure
+
+        reviews = [item for item in results if isinstance(item, dict)]
+        outcome = evaluate_rules(reviews, anchors=anchors, requested=feature_slugs)
+        with self._uow:
+            stored = self._rounds.get(round_id)
+            ledger = self._evidence.get(stored.project_id)
+            citations = list(outcome.citations)
+            eids = self._assigner.assign_sim_review(
+                [(review_source_ref(str(round_id), item), item.text) for item in citations],
+                ledger=ledger,
+                round_id=round_id,
+                now=self._clock.now(),
+            )
+            self._evidence_writer.save(ledger)
+            by_key = {item.key: eid for item, eid in zip(citations, eids, strict=True)}
+            proposals = tuple(
+                Proposal(
+                    proposal_id=ProposalId(draft.proposal_id),
+                    entry_id=EntryId(draft.entry_id),
+                    op=draft.op,
+                    target=draft.target,
+                    text=draft.text,
+                    origin=Origin(
+                        OriginType.PROPOSED,
+                        tuple(by_key[key] for key in draft.ref_keys),
+                        rationale=draft.rationale,
+                    ),
+                )
+                for draft in outcome.proposals
+            )
+            stored.augment_draft(proposals=proposals)
+            stored.record_sim_review(
+                {
+                    "evaluated_version": view.version_no,
+                    "personas": reviews,
+                    "advisories": list(outcome.advisories),
+                }
+            )
+            self._round_writer.save(stored)
+        _publish(self._events, self._clock, stored)
+
+    async def _one(
+        self,
+        *,
+        persona: object,
+        feature_slugs: tuple[str, ...],
+        anchors: object,
+        document_state: str,
+        claims_text: str,
+        material_text: str,
+        memory_text: str,
+        round_id: RoundId,
+    ) -> dict:
+        """一个 persona 的重装环：调用 → 机械筛 →（有指引重装一次）→ 干净 dict 或抛出。"""
+
+        repair = ""
+        for attempt in range(1, MAX_SIM_REVIEW_ATTEMPTS + 1):
+            try:
+                outcome = await self._simulator.run(
+                    persona=persona,
+                    feature_slugs=feature_slugs,
+                    document_state=document_state,
+                    claims=claims_text,
+                    external_material=material_text,
+                    project_memory=memory_text,
+                    round_id=str(round_id),
+                    validation_error=repair,
+                    packet_slot=f"{persona.persona_id}-a{attempt}",
+                )
+            except ModelCallFailed:
+                raise
+            except (PacketParseError, ShapeError) as error:
+                if attempt == MAX_SIM_REVIEW_ATTEMPTS:
+                    raise
+                repair = (
+                    repair_note(error)
+                    if isinstance(error, PacketParseError)
+                    else f"上一次的产物没通过校验：{error.message}"
+                )
+                continue
+            issues = review_issues(
+                outcome.review, anchors=anchors, requested=feature_slugs
+            )
+            if not issues:
+                return outcome.review
+            if attempt == MAX_SIM_REVIEW_ATTEMPTS:
+                raise PacketParseError(
+                    f"{persona.persona_id} 的走查两次都没过机械筛："
+                    + "；".join(issues[:3]),
+                    purpose=PersonaSimulatorAgent.PURPOSE,
+                )
+            repair = "；".join(issues)
+        raise AssertionError("重装环必然 return 或 raise")
+
+
+def _review_personas(personas: tuple, persona_ids: tuple[str, ...]) -> tuple:
+    """按 id 取 persona（鸭子类型；application 不 import infrastructure 的装载器）。"""
+
+    if not 1 <= len(persona_ids) <= MAX_SIM_REVIEW_PERSONAS:
+        raise ShapeError(
+            f"一次评测选 1–{MAX_SIM_REVIEW_PERSONAS} 个模拟使用者，收到 {len(persona_ids)} 个"
+        )
+    if len(set(persona_ids)) != len(persona_ids):
+        raise ShapeError("同一个模拟使用者选两次没有意义，去掉重复的")
+    by_id = {item.persona_id: item for item in personas}
+    chosen = []
+    for persona_id in persona_ids:
+        if persona_id not in by_id:
+            raise ShapeError(f"没有这个模拟使用者：{persona_id}")
+        chosen.append(by_id[persona_id])
+    return tuple(chosen)
+
+
+def _review_failure_note(failure: BaseException) -> str:
+    return getattr(failure, "message", None) or str(failure)

@@ -36,6 +36,7 @@ def test_matrix_covers_every_invariant_code():
         "R6",
         "R7",
         "R8",
+        "R9",
         "LB1",
         "LB2",
         "LB3",
