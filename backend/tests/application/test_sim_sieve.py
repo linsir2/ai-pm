@@ -33,8 +33,22 @@ def test_normalize_statement_squeezes_and_strips_edges() -> None:
 
 
 def test_duplicate_of_matches_document_first() -> None:
-    assert duplicate_of("运营按客户名找单", doc_keys=frozenset({"运营按客户名找单"}), open_keys=frozenset()) == "document"
-    assert duplicate_of("没见过的话", doc_keys=frozenset({"运营按客户名找单"}), open_keys=frozenset()) is None
+    assert (
+        duplicate_of(
+            "运营按客户名找单",
+            doc_keys=frozenset({"运营按客户名找单"}),
+            open_keys=frozenset(),
+        )
+        == "document"
+    )
+    assert (
+        duplicate_of(
+            "没见过的话",
+            doc_keys=frozenset({"运营按客户名找单"}),
+            open_keys=frozenset(),
+        )
+        is None
+    )
 
 
 def test_duplicate_of_matches_open_items() -> None:

@@ -8,9 +8,9 @@ import json
 
 from pmstudio.application.commands import RoundCommand
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
-from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug
 from pmstudio.domain.round.step import Step, WaitingOn
-from tests.support.builders import PROJECT, ROUND_ID, SEAT, document_with_feature
+from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug
+from tests.support.builders import PROJECT, ROUND_ID, SEAT
 from tests.support.harness import Harness
 
 CLAIMS_REPLY = json.dumps(

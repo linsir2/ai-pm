@@ -30,6 +30,9 @@ class SimInquiryOutcome:
 
     `packet` 也带上：装配层按 draft 反查 slice 挂载（draft 才有 slice_id），
     用 `filled_local_id` 与这里同一规则对齐 local_id。
+    `ref_drops`：引用类问题（锚点/依据落不回账本、挂到不存在的切片）的 `(handle, reason)`
+    清单——**不抛**（2026-10-07 真跑：空文档时模型把 `s8` 当锚点，设计口径是
+    重装一次→仍犯丢条+留痕，不是整包判死；`02` §11.0.47）。
     """
 
     slices: list[dict]
@@ -37,6 +40,7 @@ class SimInquiryOutcome:
     unknowns: list[dict]
     packet: schemas.SimInquiryPacket
     envelope: Envelope
+    ref_drops: tuple[tuple[str, str], ...] = ()
 
     @property
     def overflow(self) -> tuple[schemas.Overflow, ...]:
@@ -59,6 +63,11 @@ class SimInquiryAgent:
     )
     PROMPT_SLOTS = (
         "document_state",
+        # 接地三源（D1 §3.3）：文档 ＋ 本轮用户的话（有 E 编号）＋ 本轮材料。
+        # 真跑抓过：只渲染文档时，空文档的项目里模型一个编号都看不见，
+        # 把章节号 s8 当锚点填进 anchors——这三段缺一不可（02 §11.0.47）。
+        "claims",
+        "external_material",
         "project_memory",
         "schema_json",
         "validation_error",
@@ -72,6 +81,8 @@ class SimInquiryAgent:
         self,
         *,
         document_state: str,
+        claims: str = "",
+        external_material: str = "",
         project_memory: str = NO_MEMORY_TEXT,
         round_id: str | None = None,
         known_eids: frozenset[EvidenceId] = frozenset(),
@@ -84,6 +95,8 @@ class SimInquiryAgent:
             prompts=self._prompts,
             slots={
                 "document_state": document_state,
+                "claims": claims,
+                "external_material": external_material,
                 "project_memory": project_memory,
                 "validation_error": validation_error,
             },
@@ -94,7 +107,7 @@ class SimInquiryAgent:
             run_id=str(round_id or "new"),
             produced_by="sim_inquirer",
         )
-        slices, hypotheses, unknowns = sim_from_packet(
+        slices, hypotheses, unknowns, ref_drops = sim_from_packet(
             outcome.packet, known_eids=known_eids
         )
         return SimInquiryOutcome(
@@ -103,17 +116,21 @@ class SimInquiryAgent:
             unknowns=unknowns,
             packet=outcome.packet,
             envelope=outcome,
+            ref_drops=ref_drops,
         )
 
 
 def sim_from_packet(
     packet: schemas.SimInquiryPacket, *, known_eids: frozenset[EvidenceId]
-) -> tuple[list[dict], tuple[Hypothesis, ...], list[dict]]:
-    """包形状 → 切片 dict + 领域对象。空结果与坏形状都抛 `PacketParseError`（走重装那一环）。
+) -> tuple[list[dict], tuple[Hypothesis, ...], list[dict], tuple[tuple[str, str], ...]]:
+    """包形状 → 切片 dict + 领域对象 + **引用问题清单**（不抛）。
 
-    切片与盲区以 dict 形态返回：它们没有领域对象（无生命周期，存 payload 即此形），
-    但每个字段都在这里验过——切片验挂载与账本，盲区验三字段非空（`why_it_matters`
-    没有领域家，用 3 行显式校验代替单测里"无声通过"的坑）。
+    引用类问题（锚点/依据落不回账本、假设挂到不存在的切片）不判死整包：
+    返回 `ref_drops`，调用方走"重装一次→仍犯丢条+留痕"（`02` §11.0.2 口径，
+    2026-10-07 真跑修正——空文档的项目里模型把 `s8` 当锚点，旧实现整包 502）。
+    结构性问题（空结果、id 重复、grounding 值非法、凭空推演带依据）仍整包抛。
+
+    切片与盲区以 dict 形态返回：无生命周期，存 payload 即此形；盲区三字段非空在这里验。
     """
 
     if not packet.hypotheses and not packet.unknowns:
@@ -121,17 +138,20 @@ def sim_from_packet(
             "模拟调研既没给假设、也没给盲区（空结果不算成功）", purpose=PURPOSE
         )
     seen: set[str] = set()
+    ref_drops: list[tuple[str, str]] = []
     slices: list[dict] = []
+    bad_slices: set[str] = set()
     for index, draft in enumerate(packet.slices, start=1):
         local_id = filled_local_id(draft.local_id, "S", index)
         _mark_unique(seen, local_id)
-        anchors = resolve_evidence_refs(
-            draft.anchors,
-            known=known_eids,
+        anchors, unknown = _resolve_refs_lenient(
+            draft.anchors, known=known_eids, local_id=local_id,
             what="切片引用了不存在的编号",
-            local_id=local_id,
-            purpose=PURPOSE,
         )
+        if unknown is not None:
+            bad_slices.add(local_id)
+            ref_drops.append((f"模拟切片 {local_id}", unknown))
+            continue
         slices.append(
             {
                 "local_id": local_id,
@@ -139,7 +159,7 @@ def sim_from_packet(
                 "job": draft.job,
                 "trigger": draft.trigger,
                 "workaround": draft.workaround,
-                "anchors": list(anchors),
+                "anchors": [str(eid) for eid in anchors or ()],
             }
         )
     slice_ids = {item["local_id"] for item in slices}
@@ -147,12 +167,19 @@ def sim_from_packet(
     for index, draft in enumerate(packet.hypotheses, start=1):
         local_id = filled_local_id(draft.local_id, "H", index)
         _mark_unique(seen, local_id)
-        if draft.slice_id not in slice_ids:
-            raise PacketParseError(
-                f"假设挂到了不存在的切片上：{draft.slice_id}",
-                purpose=PURPOSE,
-                local_id=local_id,
+        if draft.slice_id in bad_slices:
+            ref_drops.append(
+                (
+                    f"模拟假设 {local_id}",
+                    f"它挂的切片 {draft.slice_id} 被丢了（那块引用了不存在的编号）",
+                )
             )
+            continue
+        if draft.slice_id not in slice_ids:
+            ref_drops.append(
+                (f"模拟假设 {local_id}", f"挂到了不存在的切片上：{draft.slice_id}")
+            )
+            continue
         try:
             grounding = Grounding(draft.grounding)
         except ValueError as error:
@@ -161,20 +188,20 @@ def sim_from_packet(
                 purpose=PURPOSE,
                 local_id=local_id,
             ) from error
-        refs = resolve_evidence_refs(
-            draft.based_on,
-            known=known_eids,
+        refs, unknown = _resolve_refs_lenient(
+            draft.based_on, known=known_eids, local_id=local_id,
             what="假设引用了不存在的编号",
-            local_id=local_id,
-            purpose=PURPOSE,
         )
+        if unknown is not None:
+            ref_drops.append((f"模拟假设 {local_id}", unknown))
+            continue
         try:
             hypotheses.append(
                 Hypothesis(
                     local_id=local_id,
                     statement=draft.statement,
                     grounding=grounding,
-                    based_on=refs,
+                    based_on=refs or (),
                     falsification=draft.falsification,
                     evidence_needed=draft.evidence_needed,
                 )
@@ -216,7 +243,29 @@ def sim_from_packet(
                 "how_to_find_out": draft.how_to_find_out,
             }
         )
-    return slices, tuple(hypotheses), unknowns
+    return slices, tuple(hypotheses), unknowns, tuple(ref_drops)
+
+
+def _resolve_refs_lenient(
+    raw_refs: tuple[str, ...] | list[str],
+    *,
+    known: frozenset[EvidenceId],
+    local_id: str,
+    what: str,
+) -> tuple[tuple[EvidenceId, ...] | None, str | None]:
+    """解析引用：全好返回 `(编号元组, None)`；有未知返回 `(None, 人话原因)`（不抛）。
+
+    原因复用 `resolve_evidence_refs` 的报错文案（它已经会区分席位地址/提案编号那两种
+    真踩过的坑，见 `unknown_ref_message`）。
+    """
+
+    try:
+        refs = resolve_evidence_refs(
+            raw_refs, known=known, what=what, local_id=local_id, purpose=PURPOSE
+        )
+    except PacketParseError as error:
+        return None, error.message
+    return refs, None
 
 
 def filled_local_id(raw: str, prefix: str, index: int) -> str:

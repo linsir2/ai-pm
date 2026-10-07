@@ -289,6 +289,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         documents=documents,
         evidence=evidences,
         memory=memory,
+        materials=materials,
         uow=uow,
         sim_inquirer=sim_inquirer,
         checker=readiness,

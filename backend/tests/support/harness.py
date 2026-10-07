@@ -8,10 +8,10 @@ from collections.abc import Mapping, Sequence
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.discusser import Discusser
 from pmstudio.application.agents.inquirer import Inquirer
-from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.seat import SeatReviewer
+from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
 from pmstudio.application.dto import ProjectSummaryView
 from pmstudio.application.errors import UnknownDiscussion
 from pmstudio.application.ports import SeatDefinition
@@ -449,6 +449,7 @@ class Harness:
             documents=self.documents,
             evidence=self.evidences,
             memory=self.memory,
+            materials=self.materials,
             uow=self.uow,
             sim_inquirer=self.sim_inquirer,
             checker=self.readiness,

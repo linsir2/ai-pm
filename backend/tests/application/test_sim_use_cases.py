@@ -211,8 +211,7 @@ async def test_run_records_artifact() -> None:
 async def test_run_rejects_when_not_on_draft_card() -> None:
     """门错一步报一步：step 不对报 step，waiting 不对报 waiting（与 confirm/dig 同款）。"""
 
-    from pmstudio.domain.shared.errors import WaitingOnHuman
-    from pmstudio.domain.shared.errors import IllegalStepTransition
+    from pmstudio.domain.shared.errors import IllegalStepTransition, WaitingOnHuman
 
     harness = Harness(replies={"sim_inquiry": _sim_reply()})
     harness.seed_project()
@@ -420,3 +419,116 @@ def test_material_kind_maps_simulation_to_simulated() -> None:
 
     packet = make_material_packet(origin="simulation")
     assert _material_kind(packet) is EvidenceKind.SIMULATED
+
+
+def _bad_anchor_reply() -> str:
+    """切片的 anchors 写章节号（真跑 2026-10-07 的形状：空文档时模型抄 s8）。"""
+
+    obj = json.loads(_sim_reply())
+    obj["slices"][0]["anchors"] = ["s8"]
+    return json.dumps(obj, ensure_ascii=False)
+
+
+def _two_slice_reply(*, first_anchors: list[str]) -> str:
+    obj = json.loads(_sim_reply())
+    obj["slices"] = [
+        {**obj["slices"][0], "local_id": "S1", "anchors": first_anchors},
+        {
+            "local_id": "S2",
+            "situation": "财务季度审计要对账",
+            "job": "核对导出与账面",
+            "trigger": "季度审计",
+            "workaround": "人工比对两份表",
+            "anchors": ["E1"],
+        },
+    ]
+    obj["hypotheses"].append(
+        {
+            "local_id": "H2",
+            "slice_id": "S2",
+            "statement": "审计场景需要按会计期导出",
+            "grounding": "document",
+            "based_on": ["E1"],
+            "falsification": "访谈财务后发现沿用自然月",
+            "evidence_needed": "一次财务审计的对账记录",
+        }
+    )
+    return json.dumps(obj, ensure_ascii=False)
+
+
+async def test_bad_anchor_repairs_once_then_succeeds() -> None:
+    """锚点写坏（s8）：第一次带指引重跑，第二次写对 → 正常落 artifact，无丢条。"""
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": DRAFT_REPLY,
+            "sim_inquiry": [_bad_anchor_reply(), _sim_reply()],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await _round_on_draft_card(harness)
+
+    await harness.run_sim_inquiry()(round_id=round_id)
+
+    sim_calls = [
+        request
+        for request in harness.gateway.requests
+        if request.purpose == "sim_inquiry"
+    ]
+    assert len(sim_calls) == 2
+    round_ = harness.rounds.get(round_id)
+    assert [item["local_id"] for item in round_.sim_hypotheses] == ["H1"]
+    assert not [item for item in round_.dropped if item.source.value == "assembly"]
+
+
+async def test_bad_anchor_twice_drops_slice_and_keeps_the_rest() -> None:
+    """两次都写坏：坏的切片与挂在它下面的假设丢条+留痕，好的照留（不整包判死）。"""
+
+    bad = _two_slice_reply(first_anchors=["s8"])
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": DRAFT_REPLY,
+            "sim_inquiry": [bad, bad],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await _round_on_draft_card(harness)
+
+    await harness.run_sim_inquiry()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert [item["local_id"] for item in round_.sim_slices] == ["S2"]
+    assert [item["local_id"] for item in round_.sim_hypotheses] == ["H2"]
+    dropped = [item for item in round_.dropped if item.source.value == "assembly"]
+    handles = [item.handle for item in dropped]
+    assert "模拟切片 S1" in handles
+    assert any("S1" in item.reason for item in dropped), [i.reason for i in dropped]
+    assert round_.sim_inquiry_runs == 1
+
+
+async def test_all_anchors_bad_twice_fails_with_clear_reason() -> None:
+    """全坏：筛完没剩 → 动作失败（502 口径），runs 不记、artifact 不落。"""
+
+    obj = json.loads(_bad_anchor_reply())
+    obj["unknowns"] = []  # 只剩坏切片+它的假设：筛完真的一无所有
+    bad = json.dumps(obj, ensure_ascii=False)
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": DRAFT_REPLY,
+            "sim_inquiry": [bad, bad],
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+    )
+    round_id = await _round_on_draft_card(harness)
+
+    from pmstudio.harness.errors import PacketParseError
+
+    with pytest.raises(PacketParseError, match="筛完没剩"):
+        await harness.run_sim_inquiry()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.sim_inquiry_runs == 0
+    assert round_.sim_hypotheses == ()

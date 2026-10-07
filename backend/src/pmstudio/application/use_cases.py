@@ -4273,6 +4273,17 @@ class ListDiscussions:
         )
 
 
+def _sim_ref_repair_note(ref_drops: tuple[tuple[str, str], ...]) -> str:
+    """引用类问题的重跑指引（P5d 口径：点名第几条 + 要求，不给它抄错串的机会）。"""
+
+    listed = "；".join(f"{handle}：{reason}" for handle, reason in ref_drops)
+    return (
+        f"上一次的产物有引用问题：{listed}。"
+        "anchors 与 based_on 只能引用上面出现过的那种编号（形如 E1、E2）；"
+        "s8、s5 这类章节号不是编号，不许当锚点；切片引用要写 local_id（S1、S2）"
+    )
+
+
 def _hypothesis_to_json(hypothesis: Hypothesis, *, slice_id: str) -> dict:
     """领域假设 → 轮次快照 dict（与 `exploration_to_payload` 的 6 键同形 + 挂载）。
 
@@ -4302,8 +4313,10 @@ class RunSimInquiry:
     """跑一趟模拟调研（M10 轮内动作）：只在草案卡上跑，不碰轮次状态。
 
     与 M8 `execute` 同款两段式：报文不合格重装 1 次；网关失败直接抛（轮次不动、
-    不记 runs）。条目级违规（身份词 / 数字 / 重复）不整包重装：窄表命中给一次
-    重跑机会，第二次仍犯或命中重复就丢条 + `ASSEMBLY` 留痕。
+    不记 runs）。条目级违规（引用落空 / 身份词 / 数字 / 重复）不整包判死：
+    给一次重跑机会（带指引），第二次仍犯或命中重复就丢条 + `ASSEMBLY` 留痕
+    （2026-10-07 真跑修正：空文档时模型把 `s8` 当锚点，旧实现整包 502，与
+    `02` §11.0.2 / §11.0.47 的"丢条＋留痕"口径不符）。
     """
 
     def __init__(
@@ -4314,6 +4327,7 @@ class RunSimInquiry:
         documents: DocumentReader,
         evidence: EvidenceReader,
         memory: MemoryReader,
+        materials: MaterialStore,
         uow: UnitOfWork,
         sim_inquirer: SimInquiryAgent,
         checker: ReadinessChecker,
@@ -4325,6 +4339,7 @@ class RunSimInquiry:
         self._documents = documents
         self._evidence = evidence
         self._memory = memory
+        self._materials = materials
         self._uow = uow
         self._sim_inquirer = sim_inquirer
         self._checker = checker
@@ -4347,6 +4362,10 @@ class RunSimInquiry:
             view, readiness=self._checker.check(view)
         )
         memory_text = render_memory(self._memory.get(round_.project_id).entries)
+        # 接地三源（`02` §11.0.47）：文档 ＋ 本轮用户的话（带 E 编号）＋ 本轮材料。
+        # 只渲染文档时，空文档的项目里模型看不见任何编号——真跑把 s8 当锚点了。
+        claims_text = render_claims(round_.claims)
+        material_text = external_material_text(round_, store=self._materials)
         ledger = self._evidence.get(round_.project_id)
         known_eids = frozenset(item.eid for item in ledger.evidences())
         doc_keys = frozenset(
@@ -4358,10 +4377,13 @@ class RunSimInquiry:
 
         repair = ""
         accepted: tuple | None = None
+        pass_index = round_.sim_inquiry_runs + 1
         for attempt in range(1, MAX_SIM_INQUIRY_ATTEMPTS + 1):
             try:
                 outcome = await self._sim_inquirer.run(
                     document_state=document_state,
+                    claims=claims_text,
+                    external_material=material_text,
                     project_memory=memory_text,
                     round_id=str(round_id),
                     known_eids=known_eids,
@@ -4383,20 +4405,35 @@ class RunSimInquiry:
                 outcome,
                 doc_keys=doc_keys,
                 open_keys=open_keys,
-                pass_index=round_.sim_inquiry_runs + 1,
+                pass_index=pass_index,
             )
-            if offense is not None and attempt < MAX_SIM_INQUIRY_ATTEMPTS:
-                repair = offense
+            guidance: list[str] = []
+            if outcome.ref_drops:
+                guidance.append(_sim_ref_repair_note(outcome.ref_drops))
+            if offense is not None:
+                guidance.append(offense)
+            if guidance and attempt < MAX_SIM_INQUIRY_ATTEMPTS:
+                repair = "；".join(guidance)
                 continue
-            accepted = (clean, drops)
+            accepted = (clean, drops, outcome.ref_drops)
             break
         assert accepted is not None  # 循环只会 break 或 raise
-        (clean_slices, clean_hypotheses, clean_unknowns), drops = accepted
+        (clean_slices, clean_hypotheses, clean_unknowns), drops, ref_drops = accepted
         if not clean_hypotheses and not clean_unknowns:
             raise PacketParseError(
-                "模拟筛完没剩可用的假设与盲区（重复的、带身份词与数字的全被丢了）",
+                "模拟筛完没剩可用的假设与盲区（引用落空 / 重复 / 身份词数字全被丢了）",
                 purpose=SimInquiryAgent.PURPOSE,
             )
+        ref_items = tuple(
+            DroppedItem(
+                handle=handle,
+                reason=reason,
+                source=DropSource.ASSEMBLY,
+                seat_id=None,
+                pass_index=pass_index,
+            )
+            for handle, reason in ref_drops
+        )
         with self._uow:
             stored = self._rounds.get(round_id)
             stored.record_sim_inquiry(
@@ -4407,7 +4444,7 @@ class RunSimInquiry:
                 ],
                 unknowns=clean_unknowns,
             )
-            stored.note_dropped(drops)
+            stored.note_dropped(ref_items + drops)
             self._round_writer.save(stored)
         _publish(self._events, self._clock, stored)
 
@@ -4455,6 +4492,10 @@ class RunSimInquiry:
         clean_hypotheses: list[tuple[Hypothesis, str]] = []
         for index, draft in enumerate(outcome.packet.hypotheses, start=1):
             local_id = filled_local_id(draft.local_id, "H", index)
+            if local_id not in by_id:
+                # 装配层已把它丢了（引用落空/挂载失败），原因在 `outcome.ref_drops` 里；
+                # 这里跳过，不重复记账。
+                continue
             if draft.slice_id in dropped_slices:
                 drop(
                     f"模拟假设 {local_id}",

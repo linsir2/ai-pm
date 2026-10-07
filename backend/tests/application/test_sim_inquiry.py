@@ -53,22 +53,89 @@ def test_sim_from_packet_empty_is_failure() -> None:
         sim_from_packet(packet, known_eids=frozenset({"E1"}))
 
 
-def test_sim_from_packet_unknown_slice_is_failure() -> None:
-    """假设挂到不存在的切片上：丢整包（重装指引会点名是哪个 slice_id）。"""
+def test_sim_from_packet_unknown_slice_is_reported_not_raised() -> None:
+    """假设挂到不存在的切片上：不判死，进 ref_drops（重装一次仍犯才丢条，用例层管）。
+
+    2026-10-07 真跑修正：设计口径是"丢条+留痕"（`02` §11.0.47），
+    此前的实现把整包抛出——测试跟着实现写歪了，这里改回设计契约。
+    """
 
     packet = _packet()
     packet.hypotheses[0].slice_id = "S9"
-    with pytest.raises(PacketParseError, match="S9"):
-        sim_from_packet(packet, known_eids=frozenset({"E1"}))
+    slices, hypotheses, unknowns, ref_drops = sim_from_packet(
+        packet, known_eids=frozenset({"E1"})
+    )
+    assert hypotheses == (), "挂不上的假设不产出领域对象"
+    assert slices != (), "切片本身没问题，照常产出"
+    assert any("S9" in reason for _handle, reason in ref_drops)
 
 
-def test_sim_from_packet_unknown_anchor_is_failure() -> None:
-    """切片锚点落不回账本：整包失败（调用方传 known_eids，与 inquirer 同形状）。"""
+def test_sim_from_packet_unknown_anchor_is_reported_and_cascades() -> None:
+    """切片锚点落不回账本：切片被丢，挂在它下面的假设连带丢（各带一条原因）。"""
 
     packet = _packet()
     packet.slices[0].anchors = ["E99"]
-    with pytest.raises(PacketParseError, match="E99"):
-        sim_from_packet(packet, known_eids=frozenset({"E1"}))
+    slices, hypotheses, unknowns, ref_drops = sim_from_packet(
+        packet, known_eids=frozenset({"E1"})
+    )
+    assert slices == []
+    assert hypotheses == ()
+    assert unknowns != (), "盲区不挂切片，不受连累"
+    reasons = [reason for _handle, reason in ref_drops]
+    assert any("E99" in reason for reason in reasons), reasons
+    assert any("切片 S1" in handle for handle, _reason in ref_drops)
+
+
+def test_sim_from_packet_keeps_good_items_beside_bad_ones() -> None:
+    """坏的和好的一起出现：坏的丢、好的留（丢条不是连坐，是逐条判）。"""
+
+    packet = _packet(
+        slices=[
+            {
+                "local_id": "S1",
+                "situation": "锚点坏的切片",
+                "job": "x",
+                "trigger": "x",
+                "workaround": "x",
+                "anchors": ["s8"],
+            },
+            {
+                "local_id": "S2",
+                "situation": "锚点好的切片",
+                "job": "x",
+                "trigger": "x",
+                "workaround": "x",
+                "anchors": ["E1"],
+            },
+        ],
+        hypotheses=[
+            {
+                "local_id": "H1",
+                "slice_id": "S1",
+                "statement": "挂坏切片",
+                "grounding": "document",
+                "based_on": ["E1"],
+                "falsification": "x",
+                "evidence_needed": "x",
+            },
+            {
+                "local_id": "H2",
+                "slice_id": "S2",
+                "statement": "挂好切片",
+                "grounding": "document",
+                "based_on": ["E1"],
+                "falsification": "x",
+                "evidence_needed": "x",
+            },
+        ],
+        unknowns=[],
+    )
+    slices, hypotheses, unknowns, ref_drops = sim_from_packet(
+        packet, known_eids=frozenset({"E1"})
+    )
+    assert [item["local_id"] for item in slices] == ["S2"]
+    assert [item.local_id for item in hypotheses] == ["H2"]
+    assert [handle for handle, _reason in ref_drops] == ["模拟切片 S1", "模拟假设 H1"]
 
 
 def test_sim_from_packet_invented_with_refs_is_failure() -> None:
@@ -88,7 +155,9 @@ def test_sim_from_packet_fills_blank_local_ids() -> None:
     packet.slices[0].local_id = ""
     packet.hypotheses[0].local_id = ""
     packet.unknowns[0].local_id = ""
-    slices, hypotheses, unknowns = sim_from_packet(packet, known_eids=frozenset({"E1"}))
+    slices, hypotheses, unknowns, _drops = sim_from_packet(
+        packet, known_eids=frozenset({"E1"})
+    )
     assert slices[0]["local_id"] == "S1"
     assert hypotheses[0].local_id == "H1"
     assert unknowns[0]["local_id"] == "U1"
@@ -104,7 +173,8 @@ def test_sim_from_packet_duplicate_id_is_failure() -> None:
 
 
 def test_sim_inquiry_agent_call_binding() -> None:
-    """装配声明：purpose/kind/prompt/packet 四件套，purpose 与 M8 的 inquiry 必须不同。"""
+    """装配声明：purpose/kind/prompt/packet 四件套，purpose 与 M8 的 inquiry 必须不同；
+    接地三源（文档 + 主张 + 材料）都在槽位里（真跑抓过只渲染文档的坑）。"""
 
     from pmstudio.application.agents.inquirer import Inquirer
     from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
@@ -113,3 +183,6 @@ def test_sim_inquiry_agent_call_binding() -> None:
     assert SimInquiryAgent.CALL.purpose == "sim_inquiry"
     assert SimInquiryAgent.CALL.purpose != Inquirer.CALL.purpose
     assert SimInquiryAgent.PROMPT == "sim_inquiry"
+    assert {"document_state", "claims", "external_material"} <= set(
+        SimInquiryAgent.PROMPT_SLOTS
+    )
