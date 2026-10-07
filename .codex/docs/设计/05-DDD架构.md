@@ -192,6 +192,7 @@ backend/src/pmstudio/
 ├── infrastructure/
 │   ├── sqlite/
 │   ├── seats/
+│   ├── personas/
 │   ├── tools/
 │   ├── graph/
 │   └── discussion/
