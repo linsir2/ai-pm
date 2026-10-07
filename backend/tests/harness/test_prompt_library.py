@@ -28,6 +28,7 @@ EXPECTED_PROMPTS = (
     "opinion_dispositions",
     "seat_review",
     "sim_inquiry",
+    "sim_review",
 )
 
 

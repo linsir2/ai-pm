@@ -251,6 +251,105 @@ class SimInquiryPacket(BaseModel):
     )
 
 
+# ── 模拟评测（M11）：一个 persona 一趟文本走查 ──────────────────────────────
+
+#: 每功能走查步骤上限：防输出膨胀（`02` 输出侧教训，同 M10 的 3/6/3 口径）。
+MAX_SIM_REVIEW_WALKTHROUGH_STEPS = 12
+
+#: 每功能摩擦点上限。
+MAX_SIM_REVIEW_FRICTIONS = 6
+
+#: 每功能验收核对上限：正常功能 2–6 条 acceptance；超过这个数的功能 v1 评测不出来
+#: （覆盖率筛会判"没核完"→ 重装 → 整趟失败，是如实的"机器没走完"）。
+MAX_SIM_REVIEW_CHECKS = 12
+
+
+class SimWalkStepDraft(BaseModel):
+    """一步走查：我在这一步做什么、文档支不支持、卡在缺什么。"""
+
+    step_index: int = Field(description="对齐文档 main_flow 的步骤序号（从 1 起）")
+    step_text: str = Field(description="文档里的原步骤文字（抄写，不改写）")
+    from_doc: str = Field(
+        default="", description="这一步从文档哪儿读来的（entry_id，或章节#字段）"
+    )
+    action: str = Field(description="你（模拟使用者）这一步要做什么")
+    outcome: Literal["ok", "stuck", "guessed"] = Field(
+        description="ok=文档支持我走完；stuck=走不下去；guessed=只能猜"
+    )
+    need: str = Field(default="", description="outcome 不是 ok 时必须写：缺什么信息")
+
+
+class SimFrictionDraft(BaseModel):
+    """一个摩擦点：**要么引原文、要么明确标"文档没写"**（二选一，机械判）。"""
+
+    local_id: str = Field(default="", description="本功能内唯一，如 F1；留空由系统补")
+    kind: Literal[
+        "missing_entry",
+        "missing_feedback",
+        "ambiguous_rule",
+        "dead_end",
+        "extra_work",
+        "trust_gap",
+        "edge_break",
+        "cannot_start",
+    ] = Field(description="摩擦分类；机械规则只消费 dead_end 与 cannot_start")
+    entry_id: str = Field(default="", description="指向文档条目（优先用这个）")
+    field: str = Field(default="", description="没有条目时指向功能字段名（如 rules）")
+    quote: str = Field(default="", description="文档原文（与 not_documented 二选一）")
+    not_documented: bool = Field(
+        default=False, description="文档确实没写（与 quote 二选一）"
+    )
+    blocks_flow: bool = Field(default=False, description="这一步是不是被彻底堵住")
+    note: str = Field(description="摩擦是什么样的（不许写身份属性、不许编数量）")
+
+
+class SimAcceptanceDraft(BaseModel):
+    """一条验收标准的核对：浅到"文档有没有说清它"，不预测真实行为。"""
+
+    local_id: str = Field(default="", description="本功能内唯一，如 A1；留空由系统补")
+    entry_id: str = Field(description="对应文档里的那条 acceptance 条目")
+    status: Literal["verified", "unverified", "contradicted"] = Field(
+        description="verified=照文档能核对；unverified=文档没说清；contradicted=与文档其它内容打架"
+    )
+    note: str = Field(default="", description="为什么是这个状态（可空）")
+
+
+class SimFeatureReviewDraft(BaseModel):
+    """一个功能的走查报告：走查 + 摩擦 + 验收核对 + 三档结论。"""
+
+    feature_slug: str = Field(description="必须是本次被点名的功能之一")
+    started: bool = Field(description="false=照文档根本开不了头（要么文档没有，要么进不去）")
+    walkthrough: list[SimWalkStepDraft] = Field(
+        default_factory=list, max_length=MAX_SIM_REVIEW_WALKTHROUGH_STEPS
+    )
+    frictions: list[SimFrictionDraft] = Field(
+        default_factory=list, max_length=MAX_SIM_REVIEW_FRICTIONS
+    )
+    acceptance_checks: list[SimAcceptanceDraft] = Field(
+        default_factory=list, max_length=MAX_SIM_REVIEW_CHECKS
+    )
+    verdict: Literal["smooth", "friction", "blocked"] = Field(
+        description="三档，不打分：smooth / friction / blocked"
+    )
+    verdict_because: list[str] = Field(
+        default_factory=list, description="结论文号（引本功能的 friction local_id）"
+    )
+
+
+class SimReviewPacket(BaseModel):
+    """模拟评测回包：一个 persona 对全部被点名功能的走查（M11）。
+
+    不叫 SimulationPacket 之外的名字是为了和 `SimInquiryPacket` 成对：
+    同一个 `simulated` 编号体系、同一条"默认不勾"的降级链，但产物形状不同
+    （评测=走查报告+减提案，调研=处境切片+假设）。
+    """
+
+    basis: str = Field(description="你读了文档里的哪些内容才走出这些")
+    features: list[SimFeatureReviewDraft] = Field(
+        min_length=1, description="被点名的每个功能一份报告"
+    )
+
+
 class DiscussionReply(BaseModel):
     """讨论里的一轮回答：全文 + 引用的 E 编号；空串不算成功。"""
 

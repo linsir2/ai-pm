@@ -338,3 +338,133 @@ def test_sim_inquiry_packet_rejects_zero_slices():
 
     with pytest.raises(ValidationError):
         schemas.SimInquiryPacket.model_validate({"basis": "读了 E1", "slices": []})
+
+
+# ── 模拟评测包（M11-T3）──────────────────────────────────────────────────
+
+
+def _sim_review_feature(*, frictions: list[dict] | None = None) -> dict:
+    return {
+        "feature_slug": "order-export",
+        "started": True,
+        "walkthrough": [
+            {
+                "step_index": 1,
+                "step_text": "进入订单列表",
+                "from_doc": "r1#01",
+                "action": "打开订单列表页",
+                "outcome": "ok",
+                "need": "",
+            }
+        ],
+        "frictions": frictions or [],
+        "acceptance_checks": [
+            {"local_id": "A1", "entry_id": "r1#09", "status": "unverified", "note": ""}
+        ],
+        "verdict": "friction",
+        "verdict_because": ["F1"],
+    }
+
+
+def _sim_review_friction(i: int) -> dict:
+    return {
+        "local_id": f"F{i}",
+        "kind": "ambiguous_rule",
+        "entry_id": "r1#01",
+        "field": "",
+        "quote": "筛选为空导出全部",
+        "not_documented": False,
+        "blocks_flow": False,
+        "note": "不知道筛选口径按创建时间还是支付时间",
+    }
+
+
+def test_sim_review_packet_caps_and_shape():
+    """模拟评测包：功能 ≥1；每功能走查 ≤12 步 / 摩擦 ≤6 / 验收核对 ≤12。"""
+
+    packet = schemas.SimReviewPacket.model_validate(
+        {"basis": "读了 main_flow", "features": [_sim_review_feature()]}
+    )
+    assert packet.features[0].verdict == "friction"
+
+    with pytest.raises(ValidationError):
+        schemas.SimReviewPacket.model_validate({"basis": "x", "features": []})
+
+    steps = _sim_review_feature()
+    steps["walkthrough"] = [
+        {
+            "step_index": i,
+            "step_text": "走一步",
+            "from_doc": "",
+            "action": "做",
+            "outcome": "ok",
+            "need": "",
+        }
+        for i in range(schemas.MAX_SIM_REVIEW_WALKTHROUGH_STEPS + 1)
+    ]
+    with pytest.raises(ValidationError):
+        schemas.SimReviewPacket.model_validate({"basis": "x", "features": [steps]})
+
+    too_many = _sim_review_feature(
+        frictions=[_sim_review_friction(i) for i in range(schemas.MAX_SIM_REVIEW_FRICTIONS + 1)]
+    )
+    with pytest.raises(ValidationError):
+        schemas.SimReviewPacket.model_validate({"basis": "x", "features": [too_many]})
+
+
+def test_sim_review_schema_field_sets_are_locked():
+    """字段集锁死：多一个就说明又有人加"配置"。"""
+
+    assert set(schemas.SimWalkStepDraft.model_fields) == {
+        "step_index",
+        "step_text",
+        "from_doc",
+        "action",
+        "outcome",
+        "need",
+    }
+    assert set(schemas.SimFrictionDraft.model_fields) == {
+        "local_id",
+        "kind",
+        "entry_id",
+        "field",
+        "quote",
+        "not_documented",
+        "blocks_flow",
+        "note",
+    }
+    assert set(schemas.SimAcceptanceDraft.model_fields) == {
+        "local_id",
+        "entry_id",
+        "status",
+        "note",
+    }
+    assert set(schemas.SimFeatureReviewDraft.model_fields) == {
+        "feature_slug",
+        "started",
+        "walkthrough",
+        "frictions",
+        "acceptance_checks",
+        "verdict",
+        "verdict_because",
+    }
+    assert set(schemas.SimReviewPacket.model_fields) == {"basis", "features"}
+
+
+def test_sim_review_schema_has_no_demographic_or_numeric_fields():
+    """与 M10 同口径：schema 里没有可填人口学/分数/百分比的位置。"""
+
+    banned = {
+        "age", "gender", "sex", "region", "income", "education", "ethnicity",
+        "score", "confidence", "percentage", "ratio", "satisfaction",
+        "would_use_again",  # B1 砍掉：态度预测，与"不预测个体态度"的学术前提冲突
+        "abandon_trigger",  # B1 砍掉：与 blocks_flow / verdict_because 重复
+    }
+    for model in (
+        schemas.SimWalkStepDraft,
+        schemas.SimFrictionDraft,
+        schemas.SimAcceptanceDraft,
+        schemas.SimFeatureReviewDraft,
+        schemas.SimReviewPacket,
+    ):
+        assert not (set(model.model_fields) & banned), model.__name__
