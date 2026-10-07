@@ -12,6 +12,9 @@ PMSTUDIO_DB=/tmp/pmstudio-m11.db PMSTUDIO_TRACE_MODEL=1 \
 # 迭代时续跑已有草案轮（不重开整轮，省十几分钟）：
 PMSTUDIO_DB=/tmp/pmstudio-m11.db PMSTUDIO_TRACE_MODEL=1 \
   python3 scripts/sim_review_smoke.py --resume r-xxxx
+# 只驱动到草案卡就停（供界面拍照；与 discussion_round_smoke 的 --stop-after 同款）：
+PMSTUDIO_DB=/tmp/pmstudio-m11.db python3 scripts/sim_review_smoke.py \
+  --project p-851a63a6 --stop-after draft
 ```
 
 退出码非 0 表示失败，打印哪一步、什么原因。
@@ -151,6 +154,14 @@ async def run(client: httpx.AsyncClient, db_path: str, args) -> int:
         round_id, _ = await drive_to_draft(client, project_id)
         show("project", project_id)
 
+    if args.stop_after == "draft":
+        show("stop", f"停在草案卡（round_id={round_id}，供拍照）")
+        print(f"STOPPED round={round_id} waiting_on=draft_card", flush=True)
+        return 0
+    if args.stop_after not in (None, "draft"):
+        show("boot", f"--stop-after 只认 draft，收到 {args.stop_after}")
+        return 2
+
     # 评测对象：当前已确认文档里的功能（前 2 个）＋ 目录前 3 个 persona
     document = await client.get(f"/api/projects/{project_id}/document")
     if document.status_code != 200:
@@ -226,6 +237,7 @@ async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", default=None, help="有功能子树的项目 id（新开一轮到草案卡）")
     parser.add_argument("--resume", default=None, help="已有草案轮 id（跳过起轮）")
+    parser.add_argument("--stop-after", default=None, help="draft = 到草案卡停下（供拍照）")
     args = parser.parse_args()
 
     settings = Settings.from_env()

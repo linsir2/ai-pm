@@ -161,6 +161,14 @@ describe("SimReviewDrawer · 选择器", () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("空文档：提示先去写功能，且开始按钮禁用", () => {
+    draw({ document: null });
+
+    expect(screen.getByText(/文档里还没有功能/)).toBeTruthy();
+    const button = screen.getByRole("button", { name: /开始评测/ });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("运行中显示等待文案，不给开始按钮", () => {
     draw({ pending: true });
 
