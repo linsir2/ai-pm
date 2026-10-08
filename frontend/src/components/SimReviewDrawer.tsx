@@ -112,39 +112,49 @@ export function SimReviewDrawer({
             </p>
             <section className="loop__group">
               <p className="loop__label">模拟使用者（1–{limits.personas} 个）</p>
-              {personas.map((persona) => (
-                <label className="entry" key={persona.persona_id}>
-                  <input
-                    type="checkbox"
-                    name={persona.persona_id}
-                    checked={personaIds.includes(persona.persona_id)}
-                    onChange={() =>
-                      toggle(personaIds, setPersonaIds, persona.persona_id)
-                    }
-                  />{" "}
-                  <span className="entry__text">
-                    {persona.title}
-                    <span className="muted small">（{persona.situation}）</span>
-                  </span>
-                </label>
-              ))}
+              {personas.map((persona) => {
+                // 勾选行复用开跑卡的 `.seat` 模式（复选框 flex:none + 两行文字）——
+                // 文档行的 `.entry` 是 grid，长文本会把复选框那一列压成 0 宽（真 DOM 量到过）
+                const on = personaIds.includes(persona.persona_id);
+                return (
+                  <label className={on ? "seat seat--on" : "seat"} key={persona.persona_id}>
+                    <input
+                      type="checkbox"
+                      name={persona.persona_id}
+                      checked={on}
+                      onChange={() =>
+                        toggle(personaIds, setPersonaIds, persona.persona_id)
+                      }
+                    />
+                    <span>
+                      <span className="seat__title">{persona.title}</span>
+                      <span className="seat__why">{persona.situation}</span>
+                    </span>
+                  </label>
+                );
+              })}
             </section>
             <section className="loop__group">
               <p className="loop__label">要查的功能（1–{limits.features} 个）</p>
               {features.length === 0 && (
                 <p className="input__hint">文档里还没有功能——先去草案卡写出一棵功能子树。</p>
               )}
-              {features.map((slug) => (
-                <label className="entry" key={slug}>
-                  <input
-                    type="checkbox"
-                    name={slug}
-                    checked={featureSlugs.includes(slug)}
-                    onChange={() => toggle(featureSlugs, setFeatureSlugs, slug)}
-                  />{" "}
-                  <span className="entry__text">feature#{slug}</span>
-                </label>
-              ))}
+              {features.map((slug) => {
+                const on = featureSlugs.includes(slug);
+                return (
+                  <label className={on ? "seat seat--on" : "seat"} key={slug}>
+                    <input
+                      type="checkbox"
+                      name={slug}
+                      checked={on}
+                      onChange={() => toggle(featureSlugs, setFeatureSlugs, slug)}
+                    />
+                    <span>
+                      <span className="seat__title">feature#{slug}</span>
+                    </span>
+                  </label>
+                );
+              })}
             </section>
             <footer className="drawer__foot">
               <button
@@ -194,8 +204,10 @@ function ReviewBody({ review }: { review: SimReviewView }) {
 }
 
 function FeatureReport({ feature }: { feature: SimFeatureReviewView }) {
+  // 注意：**不要**复用 `.entry`——它是"一条条目一行"的 grid（1fr auto），
+  // 多段落进去会被逐行摆成两列（真跑截图里挤成窄列叠字过）。这里是普通块流。
   return (
-    <section className="entry" key={feature.feature_slug}>
+    <section key={feature.feature_slug}>
       <p className="loop__label">
         feature#{feature.feature_slug} · {VERDICT_TEXT[feature.verdict] ?? feature.verdict}
         {!feature.started && "（照文档开不了头）"}
