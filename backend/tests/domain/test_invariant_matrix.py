@@ -50,4 +50,5 @@ def test_matrix_covers_every_invariant_code():
         "T2",
         "T3",
         "T4",
+        "T5",
     }

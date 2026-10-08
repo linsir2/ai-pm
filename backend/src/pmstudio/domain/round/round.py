@@ -75,23 +75,26 @@ class MaterialRef:
 
 @dataclass(frozen=True, slots=True)
 class SeedRef:
-    """这一轮从过目台带进来的调研产物（种子）：**只引用，不复制内容**。
+    """这一轮带进来的过目产物（种子）：**只引用，不复制内容**。
 
-    本地 id（`H1`/`B1`）只有趟内唯一，所以必须连 `exploration_id` 一起记——
-    单靠本地 id 会跨趟撞名（与留痕必须带 `pass_index` 是同一条理由）。
+    条目本地 id（`H1`/`B1`/`C1`）只在趟内/线程内唯一，所以必须连来源 id 一起记——
+    单靠本地 id 会跨来源撞名（与留痕必须带 `pass_index` 是同一条理由）。
 
     它只是回链：主张的出处仍然是 `user_input`（用户编辑后提交的那段话），
-    种子回答的是"这段输入是从哪条调研产物来的"。
+    种子回答的是"这段输入是从哪条过目产物来的"。
     """
 
-    exploration_id: str
-    candidate_id: str
+    origin: str  # "exploration"（调研趟）| "discussion"（讨论线程）
+    ref_id: str  # exploration_id / discussion_id
+    item_id: str  # candidate_id / card_id
 
     def __post_init__(self) -> None:
-        if not self.exploration_id.strip():
-            raise ShapeError("种子必须带 exploration_id")
-        if not self.candidate_id.strip():
-            raise ShapeError("种子必须带 candidate_id")
+        if self.origin not in ("exploration", "discussion"):
+            raise ShapeError(f"种子来源只能是 exploration 或 discussion：{self.origin}")
+        if not self.ref_id.strip():
+            raise ShapeError("种子必须带来源 id")
+        if not self.item_id.strip():
+            raise ShapeError("种子必须带条目 id")
 
 
 class DropSource(StrEnum):
@@ -262,7 +265,7 @@ class Round:
         self._extra_seat_rounds = extra_seat_rounds
         self._integration_seq = integration_seq
         self._materials = tuple(materials)
-        #: 这一轮从过目台带进来的调研产物（M8 种子）；空 = 不是从探索来的
+        #: 这一轮带进来的过目产物（M8 调研种子 / M12 灵感箱）；空 = 不是从过目产物来的
         self._seeds = tuple(seeds)
         #: 分析者提名的检索词（它只提名，查不查由用户在复述卡上定）
         self._web_queries = tuple(web_queries)

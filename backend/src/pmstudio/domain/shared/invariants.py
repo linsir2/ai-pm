@@ -57,6 +57,7 @@ class TInvariant(StrEnum):
     T2 = "T2"  # turns 原子成对、user 开头交替；失败不记轮
     T3 = "T3"  # close 终态幂等
     T4 = "T4"  # turns≤12、cards≤6
+    T5 = "T5"  # 卡只能被过目一次：new → kept|dismissed，单向、幂等
 
 
 ALL_INVARIANTS: tuple[StrEnum, ...] = (

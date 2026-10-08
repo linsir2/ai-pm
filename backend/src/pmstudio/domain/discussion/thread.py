@@ -7,8 +7,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from pmstudio.domain.discussion.card import MAX_CARDS_PER_THREAD, Card
-from pmstudio.domain.shared.errors import ShapeError, ThreadClosed, ThreadFull
+from pmstudio.domain.discussion.card import MAX_CARDS_PER_THREAD, Card, CardState
+from pmstudio.domain.shared.errors import (
+    CardNotReviewable,
+    ShapeError,
+    ThreadClosed,
+    ThreadFull,
+)
 from pmstudio.domain.shared.ids import DiscussionId, EvidenceId, ProjectId
 
 MAX_DISCUSSION_TURNS = 12
@@ -168,18 +173,71 @@ class Discussion:
             return
         self._status = ThreadStatus.CLOSED
 
-    def keep_card(self, card_id: str, material_id: str) -> None:
+    def keep_card(
+        self, card_id: str, *, as_: str, material_id: str | None = None
+    ) -> None:
+        """收下一张卡：幂等（同去向重复收下什么都不做），但**不许改去向**（T5）。
+
+        `as_` 决定回流路径：`seed` = 预填下一轮输入；`material` = 落成材料（必须带 id，
+        因为材料已经先落库了才盖这个章）。与候选的 `Exploration.keep` 同一套法条。
+        """
         # 收下是回流不是聊天，只读的是 turns——所以不判 open（关掉的线程还能收卡）。
-        known = {card.card_id for card in self._cards}
-        if card_id not in known:
-            raise ShapeError(f"这个线程没有卡片 {card_id}", card_id=card_id)
+        card = self._card_of(card_id)
+        if as_ not in ("seed", "material"):
+            raise ShapeError("收下的去向只能是 seed 或 material", as_=as_)
+        if card.state is CardState.DISMISSED:
+            raise CardNotReviewable(
+                card_id=card_id, state="已忽略", action="收下"
+            )
+        if card.state is CardState.KEPT:
+            if card.kept_as == as_:
+                return
+            raise CardNotReviewable(
+                card_id=card_id,
+                state=f"已收下为{'种子' if card.kept_as == 'seed' else '材料'}",
+                action=f"改成{'种子' if as_ == 'seed' else '材料'}",
+            )
+        if as_ == "material" and not (material_id or "").strip():
+            raise ShapeError("收下为材料必须带 material_id", card_id=card_id)
+        self._replace(
+            card_id,
+            state=CardState.KEPT,
+            kept_as=as_,
+            kept_ref=material_id if as_ == "material" else None,
+        )
+
+    def dismiss_card(self, card_id: str) -> None:
+        """忽略一张卡：已收下的不许忽略；重复忽略幂等（T5）。"""
+
+        card = self._card_of(card_id)
+        if card.state is CardState.KEPT:
+            raise CardNotReviewable(card_id=card_id, state="已收下", action="忽略")
+        self._replace(card_id, state=CardState.DISMISSED)
+
+    # —— 内部 ——
+    def _card_of(self, card_id: str) -> Card:
+        for card in self._cards:
+            if card.card_id == card_id:
+                return card
+        raise ShapeError(f"这个线程没有卡片 {card_id}", card_id=card_id)
+
+    def _replace(
+        self,
+        card_id: str,
+        *,
+        state: CardState,
+        kept_as: str | None = None,
+        kept_ref: str | None = None,
+    ) -> None:
         self._cards = tuple(
             Card(
                 card_id=card.card_id,
                 statement=card.statement,
                 grounding=card.grounding,
                 based_on=card.based_on,
-                kept_ref=material_id,
+                kept_ref=kept_ref,
+                state=state,
+                kept_as=kept_as,
             )
             if card.card_id == card_id
             else card

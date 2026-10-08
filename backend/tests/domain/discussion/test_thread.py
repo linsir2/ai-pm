@@ -1,20 +1,31 @@
-"""讨论线程 Thread＋Card 的不变量 T1–T4 与领域行为。
+"""讨论线程 Thread＋Card 的不变量 T1–T5 与领域行为。
 
-T1 open 门；T2 turns 原子成对；T3 close 终态幂等；T4 turns≤12、cards≤6。
+T1 open 门；T2 turns 原子成对；T3 close 终态幂等；T4 turns≤12、cards≤6；
+T5 卡只能被过目一次：new → kept|dismissed，单向、幂等（收种子/收材料/忽略）。
 """
 
 from datetime import UTC, datetime
 
 import pytest
 
-from pmstudio.domain.discussion.card import MAX_CARDS_PER_THREAD, Card, Grounding
+from pmstudio.domain.discussion.card import (
+    MAX_CARDS_PER_THREAD,
+    Card,
+    CardState,
+    Grounding,
+)
 from pmstudio.domain.discussion.thread import (
     MAX_DISCUSSION_TURNS,
     Discussion,
     QuestionSnapshot,
     ThreadStatus,
 )
-from pmstudio.domain.shared.errors import ShapeError, ThreadClosed, ThreadFull
+from pmstudio.domain.shared.errors import (
+    CardNotReviewable,
+    ShapeError,
+    ThreadClosed,
+    ThreadFull,
+)
 from pmstudio.domain.shared.ids import DiscussionId, EvidenceId, ProjectId
 
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
@@ -168,24 +179,96 @@ def test_cards_bad_invented_with_refs_raises() -> None:
         )
 
 
-# —— 收卡回流 ——
+# —— T5：卡只能被过目一次（收种子 / 收材料 / 忽略） ——
 
 
-def test_keep_ok_marks_card_and_is_idempotent() -> None:
+def test_T5_ok_keep_seed_then_idempotent() -> None:
     thread = start_thread()
     thread.append_cards((doc_card("C1"),))
     thread.close()  # 收下是回流不是聊天：关掉的线程还能收卡
 
-    thread.keep_card("C1", "m-1")
-    thread.keep_card("C1", "m-1")
+    thread.keep_card("C1", as_="seed")
+    thread.keep_card("C1", as_="seed")  # 同去向重复收下幂等静默
 
-    assert thread.cards[0].kept_ref == "m-1"
+    card = thread.cards[0]
+    assert card.state is CardState.KEPT
+    assert card.kept_as == "seed"
+    assert card.kept_ref is None
+
+
+def test_T5_ok_keep_material_records_ref_and_dismiss_is_idempotent() -> None:
+    thread = start_thread()
+    thread.append_cards((doc_card("C1"), doc_card("C2")))
+
+    thread.keep_card("C1", as_="material", material_id="m-1")
+    thread.keep_card("C1", as_="material", material_id="m-1")  # 幂等
+    thread.dismiss_card("C2")
+    thread.dismiss_card("C2")  # 幂等
+
+    kept, dismissed = thread.cards
+    assert (kept.state, kept.kept_as, kept.kept_ref) == (
+        CardState.KEPT,
+        "material",
+        "m-1",
+    )
+    assert dismissed.state is CardState.DISMISSED
+
+
+def test_T5_bad_keep_after_dismiss_raises() -> None:
+    thread = start_thread()
+    thread.append_cards((doc_card("C1"),))
+    thread.dismiss_card("C1")
+
+    with pytest.raises(CardNotReviewable) as exc_info:
+        thread.keep_card("C1", as_="seed")
+    assert exc_info.value.invariant == "T5"
+
+
+def test_T5_bad_keep_other_destination_raises() -> None:
+    thread = start_thread()
+    thread.append_cards((doc_card("C1"),))
+    thread.keep_card("C1", as_="seed")
+
+    with pytest.raises(CardNotReviewable) as exc_info:
+        thread.keep_card("C1", as_="material", material_id="m-1")
+    assert exc_info.value.invariant == "T5"
+    assert thread.cards[0].kept_as == "seed"  # 拒了就原样，不改去向
+
+
+def test_T5_bad_dismiss_kept_card_raises() -> None:
+    thread = start_thread()
+    thread.append_cards((doc_card("C1"),))
+    thread.keep_card("C1", as_="material", material_id="m-1")
+
+    with pytest.raises(CardNotReviewable) as exc_info:
+        thread.dismiss_card("C1")
+    assert exc_info.value.invariant == "T5"
+    assert thread.cards[0].state is CardState.KEPT
+
+
+# —— 收卡：形状错误（不是"过目一次"的问题） ——
 
 
 def test_keep_bad_unknown_card_raises() -> None:
     thread = start_thread()
     with pytest.raises(ShapeError):
-        thread.keep_card("CX", "m-1")
+        thread.keep_card("CX", as_="seed")
+
+
+def test_keep_bad_unknown_destination_raises() -> None:
+    thread = start_thread()
+    thread.append_cards((doc_card("C1"),))
+
+    with pytest.raises(ShapeError):
+        thread.keep_card("C1", as_="gift")
+
+
+def test_keep_bad_material_without_id_raises() -> None:
+    thread = start_thread()
+    thread.append_cards((doc_card("C1"),))
+
+    with pytest.raises(ShapeError):
+        thread.keep_card("C1", as_="material")
 
 
 # —— 开场 ——

@@ -390,6 +390,23 @@ class DuplicateCandidateId(ShapeError):
 
 
 # —— discussion ——
+class CardNotReviewable(InvariantViolation):
+    """卡片只能过一次目：忽略过的不能再收，收过的不能改去向。
+
+    `state` 是它现在在哪一步（已经收下为种子/材料 / 已经忽略），写进消息里，
+    用户看到的是"为什么不行"而不是一句"不允许"。
+    """
+
+    def __init__(self, *, card_id: object, state: object, action: str) -> None:
+        super().__init__(
+            f"卡片 {card_id} 已经是「{state}」，不能再{action}",
+            invariant=TInvariant.T5,
+            card_id=str(card_id),
+            state=str(state),
+            action=action,
+        )
+
+
 class ThreadClosed(InvariantViolation):
     def __init__(self, *, discussion_id: object) -> None:
         super().__init__(

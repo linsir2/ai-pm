@@ -10,11 +10,15 @@ from datetime import UTC, datetime
 import pytest
 
 from pmstudio.application.errors import UnknownDiscussion
-from pmstudio.domain.discussion.card import Card, Grounding
+from pmstudio.domain.discussion.card import Card, CardState, Grounding
 from pmstudio.domain.discussion.thread import Discussion, QuestionSnapshot
 from pmstudio.domain.shared.ids import DiscussionId, EvidenceId, ProjectId
 from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.repositories import SqliteDiscussionRepository
+from pmstudio.infrastructure.sqlite.serialization import (
+    discussion_from_payload,
+    discussion_to_payload,
+)
 
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 
@@ -53,13 +57,21 @@ def _thread() -> Discussion:
                 statement="凭空一个点子",
                 grounding=Grounding.INVENTED,
             ),
+            Card(
+                card_id="C3",
+                statement="第三条：收成下一轮输入",
+                grounding=Grounding.DOCUMENT,
+                based_on=(EvidenceId("E1"),),
+            ),
         )
     )
-    thread.keep_card("C1", "m-1")
+    thread.keep_card("C1", as_="material", material_id="m-1")
+    thread.dismiss_card("C2")
+    thread.keep_card("C3", as_="seed")
     return thread
 
 
-def test_thread_round_trips_with_turns_cards_and_kept_ref(store) -> None:  # type: ignore[no-untyped-def]
+def test_thread_round_trips_with_turns_cards_and_state(store) -> None:  # type: ignore[no-untyped-def]
     repo, _ = store
     repo.save(_thread())
     restored = repo.get(DiscussionId("d-1"))
@@ -79,11 +91,86 @@ def test_thread_round_trips_with_turns_cards_and_kept_ref(store) -> None:  # typ
     assert [(card.card_id, card.grounding.value) for card in restored.cards] == [
         ("C1", "document"),
         ("C2", "invented"),
+        ("C3", "document"),
     ]
     assert restored.cards[0].statement == "先记下来再说"
     assert restored.cards[0].based_on == (EvidenceId("E1"),)
-    assert restored.cards[0].kept_ref == "m-1"
-    assert restored.cards[1].kept_ref is None
+    # 三种过目状态各回各的形状（T5）：材料带 ref、忽略、种子不带 ref
+    assert (restored.cards[0].state, restored.cards[0].kept_as, restored.cards[0].kept_ref) == (
+        CardState.KEPT,
+        "material",
+        "m-1",
+    )
+    assert (restored.cards[1].state, restored.cards[1].kept_as) == (
+        CardState.DISMISSED,
+        None,
+    )
+    assert (restored.cards[2].state, restored.cards[2].kept_as, restored.cards[2].kept_ref) == (
+        CardState.KEPT,
+        "seed",
+        None,
+    )
+
+
+def test_payload_keeps_sparse_state_maps_and_drops_legacy_kept_key() -> None:
+    """状态只存非默认的（照探索的 `states` 口径）；老 `kept` 键不再写。"""
+
+    payload = discussion_to_payload(_thread())
+
+    assert payload["states"] == {"C1": "kept", "C2": "dismissed", "C3": "kept"}
+    assert payload["kept_as"] == {"C1": "material", "C3": "seed"}
+    assert payload["kept_ref"] == {"C1": "m-1"}
+    assert "kept" not in payload
+
+
+def test_legacy_kept_map_reads_back_as_material(store) -> None:  # type: ignore[no-untyped-def]
+    """老行（M9 的 `kept` map：card_id → material_id）读回来就是"已收下为材料"。"""
+
+    thread = Discussion.start(
+        discussion_id=DiscussionId("d-1"),
+        project_id=ProjectId("p1"),
+        topic="旧行",
+        role_id="dlg.challenger",
+        role_title="反方",
+        question=None,
+        now=NOW,
+    )
+    thread.append_cards(
+        (
+            Card(
+                card_id="C1",
+                statement="旧行里收过的卡",
+                grounding=Grounding.DOCUMENT,
+                based_on=(EvidenceId("E1"),),
+            ),
+            Card(
+                card_id="C2",
+                statement="旧行里没收的卡",
+                grounding=Grounding.INVENTED,
+            ),
+        )
+    )
+    old = discussion_to_payload(thread)
+    old.pop("states", None)
+    old.pop("kept_as", None)
+    old.pop("kept_ref", None)
+    old["kept"] = {"C1": "m-old"}
+
+    restored = discussion_from_payload(
+        old, discussion_id=DiscussionId("d-1"), project_id=ProjectId("p1"),
+        status=thread.status, created_at=NOW,
+    )
+
+    assert (restored.cards[0].state, restored.cards[0].kept_as, restored.cards[0].kept_ref) == (
+        CardState.KEPT,
+        "material",
+        "m-old",
+    )
+    assert (restored.cards[1].state, restored.cards[1].kept_as, restored.cards[1].kept_ref) == (
+        CardState.NEW,
+        None,
+        None,
+    )
 
 
 def test_list_returns_newest_first_and_skips_bad_rows(store) -> None:  # type: ignore[no-untyped-def]

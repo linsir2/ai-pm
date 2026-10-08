@@ -9,7 +9,7 @@ from datetime import datetime
 from pmstudio.domain.authoring.blocks import Block, Entry
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.version import Snapshot, Version, VersionTrigger
-from pmstudio.domain.discussion.card import Card
+from pmstudio.domain.discussion.card import Card, CardState
 from pmstudio.domain.discussion.card import Grounding as DiscussionGrounding
 from pmstudio.domain.discussion.thread import (
     Discussion,
@@ -627,9 +627,10 @@ def round_to_payload(round_: Round) -> dict:
             }
             for item in round_.materials
         ],
-        # 这一轮从过目台带进来的调研产物（老行没有这把键 → 读侧回落空，M8）
+        # 这一轮带进来的过目产物（老行没有这把键 → 读侧回落空；老行的两键形状
+        # 读回来就是探索来源，M12 起两种来源共用 origin/ref_id/item_id）
         "seeds": [
-            {"exploration_id": item.exploration_id, "candidate_id": item.candidate_id}
+            {"origin": item.origin, "ref_id": item.ref_id, "item_id": item.item_id}
             for item in round_.seeds
         ],
         # 分析者提名的检索词（老行没有这把键 → 读侧回落空）
@@ -724,11 +725,13 @@ def round_from_payload(
             )
             for item in payload.get("materials") or ()
         ),
-        # 老行里没有这把键（调研种子是后加的，M8）：空——不编"它从探索来过"
+        # 老行里没有这把键（调研种子是后加的，M8）：空——不编"它从探索来过"。
+        # 老行里的种子只有探索两键（exploration_id/candidate_id）→ 回落成探索来源。
         seeds=tuple(
             SeedRef(
-                exploration_id=str(item["exploration_id"]),
-                candidate_id=str(item["candidate_id"]),
+                origin=str(item.get("origin") or "exploration"),
+                ref_id=str(item.get("ref_id") or item.get("exploration_id") or ""),
+                item_id=str(item.get("item_id") or item.get("candidate_id") or ""),
             )
             for item in payload.get("seeds") or ()
         ),
@@ -1084,8 +1087,19 @@ def discussion_to_payload(discussion: Discussion) -> dict:
             }
             for card in discussion.cards
         ],
-        # 收下记录只存"已收下"的（kept_ref 是 None 就是没收下，存了只是噪声）
-        "kept": {
+        # 过目状态只存"非 new"的（new 是默认值，存了只是噪声）——照探索的稀疏映射口径。
+        # 老键 `kept`（card_id → material_id）自 M12 起不再写，只在读侧兼容老行。
+        "states": {
+            card.card_id: card.state.value
+            for card in discussion.cards
+            if card.state is not CardState.NEW
+        },
+        "kept_as": {
+            card.card_id: card.kept_as
+            for card in discussion.cards
+            if card.kept_as is not None
+        },
+        "kept_ref": {
             card.card_id: card.kept_ref
             for card in discussion.cards
             if card.kept_ref is not None
@@ -1102,7 +1116,37 @@ def discussion_from_payload(
     created_at: datetime,
 ) -> Discussion:
     question_data = payload.get("question")
-    kept = payload.get("kept") or {}
+    # 过目状态的两种存储形状（M12）：新行有 states/kept_as/kept_ref 三张稀疏映射；
+    # 老行（M9）只有 `kept`（card_id → material_id）——读回来就是"已收下为材料"。
+    new_state_shape = any(
+        key in payload for key in ("states", "kept_as", "kept_ref")
+    )
+    states = payload.get("states") or {}
+    kept_as = payload.get("kept_as") or {}
+    kept_refs = payload.get("kept_ref") or {}
+    legacy_kept = payload.get("kept") or {}
+    cards: list[Card] = []
+    for item in payload.get("cards") or ():
+        card_id = str(item["card_id"])
+        if new_state_shape:
+            state = CardState(str(states.get(card_id) or CardState.NEW.value))
+            kept = kept_as.get(card_id)
+            ref = kept_refs.get(card_id)
+        else:
+            ref = legacy_kept.get(card_id)
+            state = CardState.KEPT if ref is not None else CardState.NEW
+            kept = "material" if ref is not None else None
+        cards.append(
+            Card(
+                card_id=card_id,
+                statement=str(item["statement"]),
+                grounding=DiscussionGrounding(str(item["grounding"])),
+                based_on=tuple(EvidenceId(str(eid)) for eid in item.get("based_on") or ()),
+                kept_ref=ref,
+                state=state,
+                kept_as=kept,
+            )
+        )
     return Discussion(
         discussion_id=discussion_id,
         project_id=project_id,
@@ -1128,14 +1172,5 @@ def discussion_from_payload(
             )
             for item in payload.get("turns") or ()
         ),
-        cards=tuple(
-            Card(
-                card_id=str(item["card_id"]),
-                statement=str(item["statement"]),
-                grounding=DiscussionGrounding(str(item["grounding"])),
-                based_on=tuple(EvidenceId(str(eid)) for eid in item.get("based_on") or ()),
-                kept_ref=kept.get(str(item["card_id"])),
-            )
-            for item in payload.get("cards") or ()
-        ),
+        cards=tuple(cards),
     )
