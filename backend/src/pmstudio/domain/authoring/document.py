@@ -505,12 +505,17 @@ class _WorkingTree:
             entry_id=instruction.entry_id, text=instruction.text, refs=instruction.refs
         )
         if target.feature_slug is None and target.field is None:
+            kind = instruction.kind or BlockKind.TEXT
+            existing = self._find_section_content_block(target.section_id, kind)
+            if existing is not None:
+                self._replace(existing.with_entries(existing.entries + (entry,)))
+                return existing.block_id
             block_id = self._next_section_block_id(target.section_id)
             self._add(
                 Block.section_content(
                     block_id=block_id,
                     section_id=target.section_id,
-                    kind=instruction.kind or BlockKind.TEXT,
+                    kind=kind,
                     entries=(entry,),
                 )
             )
@@ -658,6 +663,27 @@ class _WorkingTree:
         while f"{prefix}{number}" in used:
             number += 1
         return BlockId(f"{prefix}{number}")
+
+    def _find_section_content_block(
+        self, section_id: SectionId, kind: BlockKind
+    ) -> Block | None:
+        """找同章节、同类型、无 feature、无手改的最后一个章节内容块（F8）。
+
+        找不到返回 None，由调用方走"新建"路径。不碰手改块——AI 不 append 到人写过的块。
+        """
+        section_str = str(section_id)
+        candidates = [
+            block
+            for block in self._blocks.values()
+            if str(block.parent_id) == section_str
+            and block.feature_slug is None
+            and block.field is None
+            and block.kind == kind
+            and not block.manually_edited
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda b: str(b.block_id))
 
     def _free_id(self, base: BlockId) -> BlockId:
         if base not in self._blocks and base not in self._tombstone_ids:

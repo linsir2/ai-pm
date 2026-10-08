@@ -1655,6 +1655,13 @@ class IntegrateRound:
             if questionnaire is not None:
                 # 记住这一批问回来的 s11 未决条目（键带 form_id：question_id 每批都从 q1 重排）
                 round_.remember_carried(form_id, questionnaire.questions)
+                round_.note_unreferenced_materials(
+                    _unreferenced_materials_for(
+                        round_,
+                        proposals=proposals,
+                        questions=assembled.questions + assembled.deferred,
+                    )
+                )
                 round_.integrate(questionnaire=questionnaire, dropped=dropped)
             else:
                 # C4：出草案那一刻算一次"连续几轮没采用席位提议"（只读投影 + 纯函数）
@@ -1667,6 +1674,13 @@ class IntegrateRound:
                 draft = draft_of(round_id, DraftId(self._ids.new("d")), proposals, gaps)
                 if draft is None:
                     raise ShapeError("整合既没有给出题目也没有给出提案")
+                round_.note_unreferenced_materials(
+                    _unreferenced_materials_for(
+                        round_,
+                        proposals=proposals,
+                        questions=assembled.questions + assembled.deferred,
+                    )
+                )
                 round_.integrate(draft=draft, dropped=dropped)
             self._evidence_writer.save(ledger)
             self._round_writer.save(round_)
@@ -2185,6 +2199,29 @@ def _unaccounted_for(
             for item in assembled.dropped
             if item.source is DropSource.INTEGRATOR
         ),
+    )
+
+
+def _unreferenced_materials_for(
+    round_: Round,
+    *,
+    proposals: Sequence[Proposal],
+    questions: Sequence[Question],
+) -> tuple[str, ...]:
+    """本轮带进提示词但未被任何提案/题目引用的材料块出处编号（F35）。
+
+    核算口径与席位意见的 `_accounted` 同一份：提案 origin.refs ∪ 题目 evidence_refs。
+    差集 = 零引用。只计算"本轮带进来的"（Round.materials），不算账本里其他编号。
+    """
+    accounted: frozenset[str] = frozenset(
+        eid for proposal in proposals for eid in proposal.origin.refs
+    ) | frozenset(
+        eid for question in questions for eid in question.evidence_refs
+    )
+    return tuple(
+        ref.eid
+        for ref in round_.materials
+        if ref.eid not in accounted
     )
 
 

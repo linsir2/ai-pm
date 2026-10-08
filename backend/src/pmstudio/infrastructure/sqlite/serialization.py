@@ -622,12 +622,13 @@ def round_to_payload(round_: Round) -> dict:
         # 这一轮带进提示词的材料块（老行没有这把键 → 空）
         "materials": [
             {
-                "material_id": item.material_id,
-                "chunk_id": item.chunk_id,
-                "eid": str(item.eid),
+                "material_id": ref.material_id,
+                "chunk_id": ref.chunk_id,
+                "eid": str(ref.eid),
             }
-            for item in round_.materials
+            for ref in round_.materials
         ],
+        "unreferenced_materials": list(round_.unreferenced_materials),
         # 这一轮带进来的过目产物（老行没有这把键 → 读侧回落空；老行的两键形状
         # 读回来就是探索来源，M12 起两种来源共用 origin/ref_id/item_id）
         "seeds": [
@@ -725,6 +726,9 @@ def round_from_payload(
                 eid=EvidenceId(item["eid"]),
             )
             for item in payload.get("materials") or ()
+        ),
+        unreferenced_materials=tuple(
+            str(item) for item in payload.get("unreferenced_materials") or ()
         ),
         # 老行里没有这把键（调研种子是后加的，M8）：空——不编"它从探索来过"。
         # 老行里的种子只有探索两键（exploration_id/candidate_id）→ 回落成探索来源。

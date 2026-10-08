@@ -218,6 +218,7 @@ class Round:
         extra_seat_rounds: int = 0,
         integration_seq: int = 0,
         materials: tuple[MaterialRef, ...] = (),
+        unreferenced_materials: tuple[str, ...] = (),
         seeds: tuple[SeedRef, ...] = (),
         web_queries: tuple[WebQuery, ...] = (),
         web_queries_chosen: tuple[str, ...] = (),
@@ -265,6 +266,7 @@ class Round:
         self._extra_seat_rounds = extra_seat_rounds
         self._integration_seq = integration_seq
         self._materials = tuple(materials)
+        self._unreferenced_materials = tuple(unreferenced_materials)
         #: 这一轮带进来的过目产物（M8 调研种子 / M12 灵感箱）；空 = 不是从过目产物来的
         self._seeds = tuple(seeds)
         #: 分析者提名的检索词（它只提名，查不查由用户在复述卡上定）
@@ -882,10 +884,20 @@ class Round:
         return self._materials
 
     @property
+    def unreferenced_materials(self) -> tuple[str, ...]:
+        """本轮带进提示词但零引用的材料块出处编号（F35）。只读——由整合那一刻写一次。"""
+
+        return self._unreferenced_materials
+
+    @property
     def seeds(self) -> tuple[SeedRef, ...]:
         """这一轮带进来的调研产物（M8）：只是回链，不是第二份内容。"""
 
         return self._seeds
+
+    def note_unreferenced_materials(self, eids: tuple[str, ...]) -> None:
+        """整合那一刻记一笔：哪些材料块零引用（F35）。只写一次，重复调用追加。"""
+        self._unreferenced_materials = self._unreferenced_materials + tuple(eids)
 
     def add_materials(self, refs: tuple[MaterialRef, ...] | list[MaterialRef]) -> None:
         """记下这一轮带进来的材料块。不能为空（空就不是"带进来了"）；同一块只留一次。"""

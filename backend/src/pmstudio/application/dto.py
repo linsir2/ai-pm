@@ -380,6 +380,8 @@ class RoundView:
     answer_sets: tuple[AnswerBatchView, ...] = ()
     #: 这一轮**带进提示词**的材料块（工具层 C-2）：界面据此显示材料卡并支持跳转。
     materials: tuple[RoundMaterialView, ...] = ()
+    #: 本轮带进提示词但零引用的材料块出处编号（F35）：先量不修，只留数据。
+    unreferenced_materials: tuple[str, ...] = ()
     #: 分析者提名的检索词（**只是提名**；勾了才会真去查）
     web_queries: tuple[WebQueryView, ...] = ()
     #: 模拟调研产物（没跑过是 None；抽屉与 eval 读它）
@@ -1222,6 +1224,7 @@ def round_view(
         form_id=None if questionnaire is None else str(questionnaire.form_id),
         answer_sets=answer_batches(round_),
         materials=round_material_views(round_, materials=materials),
+        unreferenced_materials=tuple(round_.unreferenced_materials),
         web_queries=_web_query_views(round_),
         sim_inquiry=_sim_inquiry_view(round_),
         sim_review=_sim_review_view(round_),
