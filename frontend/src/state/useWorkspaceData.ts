@@ -358,6 +358,22 @@ export function useWorkspaceData() {
     [replaceExploration, run],
   );
 
+  /** 拿去验证（M13）：拿一张灵感卡的原话起一趟聚焦调研（整份文档 + 补充说明），候选进灵感箱。 */
+  const verifyCard = useCallback(
+    (statement: string) =>
+      run("exploration", async () => {
+        const projectId = selected.current;
+        if (projectId === null) return;
+        replaceExploration(
+          await api.startExploration(
+            projectId,
+            buildExplorationBody({ kind: "document", focus: statement }),
+          ),
+        );
+      }),
+    [replaceExploration, run],
+  );
+
   const retryExploration = useCallback(
     (explorationId: string) =>
       run("exploration", async () => {
@@ -408,21 +424,43 @@ export function useWorkspaceData() {
     );
   }, []);
 
-  /** 开一条讨论（M9）：主题与角色都已由界面算好（`resolveRoleId` 兜过底）。 */
+  /**
+   * 开一条讨论（M9）：主题与角色都已由界面算好（`resolveRoleId` 兜过底）。
+   *
+   * `runInquiry`（M13「先跑一轮调研」）：先同步跑一趟聚焦调研（焦点 = 主题）→
+   * 候选进灵感箱照常过目；跑成了才开线程，并把趟次 id 当开题底稿带上。
+   * 失败不开线程（banner 说原因）——不假装带上了底稿。
+   */
   const startDiscussion = useCallback(
-    (anchor: DiscussionAnchor) =>
+    (anchor: DiscussionAnchor, runInquiry = false) =>
       run("discussion", async () => {
         const projectId = selected.current;
         if (projectId === null) return;
+        let findingExplorationId: string | null = null;
+        if (runInquiry) {
+          const view = await api.startExploration(
+            projectId,
+            buildExplorationBody({ kind: "document", focus: anchor.topic }),
+          );
+          replaceExploration(view);
+          if (view.status !== "done") {
+            throw new ApiError(
+              "exploration_failed",
+              `开题调研失败了：${view.failure_reason?.trim() || "后端没留下原因"}`,
+            );
+          }
+          findingExplorationId = view.exploration_id;
+        }
         replaceThread(
           await api.startDiscussion(projectId, {
             topic: anchor.topic,
             role_id: resolveRoleId(anchor.role_id),
-            question: null,
+            question: anchor.question ?? null,
+            finding_exploration_id: findingExplorationId,
           }),
         );
       }),
-    [replaceThread, run],
+    [replaceExploration, replaceThread, run],
   );
 
   /** 追问一轮：后端成对写入，返回的就是最新的那条线程。 */
@@ -726,6 +764,7 @@ export function useWorkspaceData() {
     explorations,
     explorationsPending: pending === "exploration",
     research,
+    verifyCard,
     retryExploration,
     abandonExploration,
     keepCandidate,

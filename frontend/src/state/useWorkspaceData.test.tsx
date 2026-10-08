@@ -9,7 +9,10 @@ import { useWorkspaceData } from "./useWorkspaceData";
 // 全仓首个 vi.mock：factory 会被 hoist 到文件顶，顶层变量一律用 vi.hoisted 包
 //（inline 的 vi.fn() / import 进来的 ApiError 在 factory 里直接引用会炸）。
 // 其余导出走 importOriginal 原样透出，只换掉 api 单例。
-const { keepCandidate } = vi.hoisted(() => ({ keepCandidate: vi.fn() }));
+const { keepCandidate, startExploration } = vi.hoisted(() => ({
+  keepCandidate: vi.fn(),
+  startExploration: vi.fn(),
+}));
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
@@ -18,6 +21,7 @@ vi.mock("../api/client", async (importOriginal) => {
       listProjects: async () => [],
       schema: async () => null,
       keepCandidate,
+      startExploration,
     },
   };
 });
@@ -80,4 +84,38 @@ it("keep 失败：输入框与 pendingSeeds 原样不动（毒种子进不来）
   });
   expect(result.current.roundInput).toBe("");
   expect(result.current.pendingSeeds).toEqual([]);
+});
+
+it("拿去验证（M13）：拿卡片原话起一趟聚焦调研，结果替换进探索列表", async () => {
+  startExploration.mockResolvedValue(exploration());
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+  await act(async () => {
+    result.current.selectProject("p1");
+  });
+  await act(async () => {
+    await result.current.verifyCard("导出按客户名筛会不会被滥用");
+  });
+
+  expect(startExploration).toHaveBeenCalledWith("p1", {
+    kind: "inquiry",
+    scope: { kind: "document", ref: null, text: "导出按客户名筛会不会被滥用" },
+  });
+  expect(result.current.explorations.map((item) => item.exploration_id)).toEqual(["x-1"]);
+  expect(result.current.state.error).toBeNull();
+});
+
+it("拿去验证失败：探索列表原样，错误可见（不假装跑过）", async () => {
+  startExploration.mockRejectedValueOnce(new ApiError("exploration_busy", "同一项目同时只允许一趟调研"));
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+  await act(async () => {
+    result.current.selectProject("p1");
+  });
+  await act(async () => {
+    await result.current.verifyCard("导出按客户名筛会不会被滥用");
+  });
+
+  expect(result.current.explorations).toEqual([]);
+  expect(result.current.state.error).toContain("同一项目同时只允许一趟调研");
 });

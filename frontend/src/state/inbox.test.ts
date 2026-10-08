@@ -30,6 +30,7 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
     status: "open",
     turns: [],
     cards: [],
+    findings_count: 0,
     created_at: "2026-10-05T10:00:00+00:00",
     ...over,
   };

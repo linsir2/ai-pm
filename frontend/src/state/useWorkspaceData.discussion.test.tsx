@@ -11,11 +11,14 @@ import { ApiError } from "../api/client";
 import type { CardView, ThreadView } from "../api/types";
 import { useWorkspaceData } from "./useWorkspaceData";
 
-const { sayToThread, keepDiscussionCard, dismissDiscussionCard } = vi.hoisted(() => ({
-  sayToThread: vi.fn(),
-  keepDiscussionCard: vi.fn(),
-  dismissDiscussionCard: vi.fn(),
-}));
+const { sayToThread, keepDiscussionCard, dismissDiscussionCard, startDiscussion, startExploration } =
+  vi.hoisted(() => ({
+    sayToThread: vi.fn(),
+    keepDiscussionCard: vi.fn(),
+    dismissDiscussionCard: vi.fn(),
+    startDiscussion: vi.fn(),
+    startExploration: vi.fn(),
+  }));
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -27,6 +30,8 @@ vi.mock("../api/client", async (importOriginal) => {
       sayToThread,
       keepDiscussionCard,
       dismissDiscussionCard,
+      startDiscussion,
+      startExploration,
     },
   };
 });
@@ -43,6 +48,7 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
     status: "open",
     turns: [],
     cards: [],
+    findings_count: 0,
     created_at: "2026-10-05T10:00:00+00:00",
     ...over,
   };
@@ -174,4 +180,104 @@ it("忽略成功：卡片 state=dismissed 替换进线程", async () => {
 
   expect(result.current.discussions[0]?.cards[0]?.state).toBe("dismissed");
   expect(result.current.state.error).toBeNull();
+});
+
+it("开聊：body 带 question 快照与 finding_exploration_id=null（M13 起字段显式）", async () => {
+  startDiscussion.mockResolvedValue(thread());
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+  await act(async () => {
+    result.current.selectProject("p1");
+  });
+
+  await act(async () => {
+    await result.current.startDiscussion(
+      { topic: "导出优化", role_id: "dlg.challenger", question: { title: "导出优化", why: "合规" } },
+      false,
+    );
+  });
+
+  expect(startDiscussion).toHaveBeenCalledWith("p1", {
+    topic: "导出优化",
+    role_id: "dlg.challenger",
+    question: { title: "导出优化", why: "合规" },
+    finding_exploration_id: null,
+  });
+  expect(startExploration).not.toHaveBeenCalled();
+});
+
+it("先跑一轮调研（M13）：先起探索（焦点=主题），成功后再开聊并带趟次 id", async () => {
+  const done = {
+    exploration_id: "x-9",
+    project_id: "p1",
+    kind: "inquiry",
+    status: "done",
+    scope_kind: "document",
+    scope_ref: null,
+    scope_text: "导出优化",
+    created_at: "2026-10-08T00:00:00",
+    failure_reason: null,
+    abandon_reason: null,
+    overflow_count: 0,
+    candidates: [],
+  };
+  startExploration.mockResolvedValue(done);
+  startDiscussion.mockResolvedValue(thread({ findings_count: 2 }));
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+  await act(async () => {
+    result.current.selectProject("p1");
+  });
+
+  await act(async () => {
+    await result.current.startDiscussion(
+      { topic: "导出优化", role_id: "dlg.challenger" },
+      true,
+    );
+  });
+
+  expect(startExploration).toHaveBeenCalledWith("p1", {
+    kind: "inquiry",
+    scope: { kind: "document", ref: null, text: "导出优化" },
+  });
+  expect(startDiscussion).toHaveBeenCalledWith("p1", {
+    topic: "导出优化",
+    role_id: "dlg.challenger",
+    question: null,
+    finding_exploration_id: "x-9",
+  });
+  expect(result.current.discussions[0]?.findings_count).toBe(2);
+});
+
+it("先跑调研失败：不开线程，错误可见（不假装带上了底稿）", async () => {
+  startExploration.mockResolvedValue({
+    exploration_id: "x-9",
+    project_id: "p1",
+    kind: "inquiry",
+    status: "failed",
+    scope_kind: "document",
+    scope_ref: null,
+    scope_text: "导出优化",
+    created_at: "2026-10-08T00:00:00",
+    failure_reason: "模型调用失败：超时",
+    abandon_reason: null,
+    overflow_count: 0,
+    candidates: [],
+  });
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+  await act(async () => {
+    result.current.selectProject("p1");
+  });
+
+  await act(async () => {
+    await result.current.startDiscussion(
+      { topic: "导出优化", role_id: "dlg.challenger" },
+      true,
+    );
+  });
+
+  expect(startDiscussion).not.toHaveBeenCalled();
+  expect(result.current.discussions).toEqual([]);
+  expect(result.current.state.error).toContain("开题调研失败了");
 });
