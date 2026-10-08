@@ -440,3 +440,23 @@ async def test_model_failure_fails_the_run_with_a_gap_line() -> None:
     assert round_.draft is not None
     assert round_.draft.gaps[-1].startswith("模拟评测未完成")
     assert "persona.bulk_operator" in round_.draft.gaps[-1]
+
+
+async def test_review_proposals_carry_the_manual_override_permission() -> None:
+    """M11 的 D5 例外：评测提案带 `allow_manual_override`；整合提案不带（权限只给评测）。"""
+
+    harness = _harness({}, _all_good())
+    round_id = await _round_on_draft_card(harness)
+
+    await _run(harness)(
+        round_id=round_id, persona_ids=PERSONAS, feature_slugs=("order-export",)
+    )
+
+    round_ = harness.rounds.get(round_id)
+    draft = round_.draft
+    assert draft is not None
+    flags = {str(p.proposal_id): p.allow_manual_override for p in draft.proposals}
+    assert flags["sim#1"] is True
+    for proposal_id, flag in flags.items():
+        if not proposal_id.startswith("sim#"):
+            assert flag is False, f"{proposal_id} 不该带 D5 例外位"

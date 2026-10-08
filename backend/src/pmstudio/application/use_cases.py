@@ -4750,6 +4750,10 @@ class RunSimReview:
                         tuple(by_key[key] for key in draft.ref_keys),
                         rationale=draft.rationale,
                     ),
+                    # D5 例外（M11）：评测提案是用户逐条勾选的"减"动作——
+                    # 确认时允许改动被手改过的块；但不给它盖"手改"章
+                    # （放行与留痕分工不同，见 `02` §11.0.48）。
+                    allow_manual_override=True,
                 )
                 for draft in outcome.proposals
             )
