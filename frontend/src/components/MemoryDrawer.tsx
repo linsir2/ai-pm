@@ -61,16 +61,16 @@ export function MemoryDrawer({
                   <div className="prop__foot">
                     <span className="tag">{entry.memory_id}</span>
                     <EvidenceChip eids={entry.refs} />
+                    <button
+                      type="button"
+                      className="btn btn--ghost btn--sm"
+                      disabled={pending}
+                      onClick={() => onDelete(entry.memory_id)}
+                    >
+                      删掉这条
+                    </button>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm"
-                  disabled={pending}
-                  onClick={() => onDelete(entry.memory_id)}
-                >
-                  删掉这条
-                </button>
               </article>
             ))}
           </section>

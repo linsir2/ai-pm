@@ -141,3 +141,31 @@ describe("QuestionnaireDrawer", () => {
     expect(props.onSubmit).not.toHaveBeenCalled();
   });
 });
+
+describe("问卷题的「聊聊」（M13 补上快照上线）", () => {
+  it("只有某个席位问的题才有按钮；点它把题面、问的人、快照（题面+为什么问）一起交出去", () => {
+    const base = round();
+    const asked = {
+      ...base.questions[0]!,
+      asked_by: ["seat.data_scale"],
+    };
+    const props = draw({
+      round: { ...base, questions: [asked] },
+      onDiscuss: vi.fn(),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "聊聊" }));
+
+    expect(props.onDiscuss).toHaveBeenCalledWith({
+      topic: "保存几年？",
+      role_id: "seat.data_scale",
+      question: { title: "保存几年？", why: "合规要求" },
+    });
+  });
+
+  it("没有出题人的题不给按钮（没有'谁'可请）", () => {
+    draw({ onDiscuss: vi.fn() });
+
+    expect(screen.queryByRole("button", { name: "聊聊" })).toBeNull();
+  });
+});

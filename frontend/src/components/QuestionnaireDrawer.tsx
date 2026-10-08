@@ -194,7 +194,11 @@ function Question({
             type="button"
             className="btn btn--ghost btn--sm"
             onClick={() =>
-              onDiscuss({ topic: question.title, role_id: question.asked_by[0] ?? null })
+              onDiscuss({
+                topic: question.title,
+                role_id: question.asked_by[0] ?? null,
+                question: { title: question.title, why: question.why },
+              })
             }
           >
             聊聊

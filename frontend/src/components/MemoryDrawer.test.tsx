@@ -64,6 +64,21 @@ describe("MemoryDrawer", () => {
     expect(props.onDelete).toHaveBeenCalledWith("mem1");
   });
 
+  it("每条是单子元素的 .prop（52px 两列网格只给有侧栏的卡用，L23）", () => {
+    const { container } = render(
+      <EvidenceScope index={new Map()} onJump={() => undefined}>
+        <MemoryDrawer memory={entries} pending={false} onDelete={() => undefined} onCollapse={() => undefined} />
+      </EvidenceScope>,
+    );
+
+    const articles = container.querySelectorAll("article.prop");
+    expect(articles.length).toBe(2);
+    for (const article of Array.from(articles)) {
+      // 单一子元素 → 命中 `.prop > :only-child { grid-column: 1/-1 }`，正文才占满整行
+      expect(article.children.length).toBe(1);
+    }
+  });
+
   it("没有记忆时说人话，不留空白", () => {
     draw({ memory: [] });
 
