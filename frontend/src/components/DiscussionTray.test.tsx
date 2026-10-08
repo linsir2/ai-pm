@@ -40,6 +40,7 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
     status: "open",
     turns: [],
     cards: [],
+    findings_count: 0,
     created_at: "2026-10-05T10:00:00+00:00",
     ...over,
   };
@@ -55,6 +56,7 @@ function draw(over: Partial<Parameters<typeof DiscussionTray>[0]> = {}) {
   const props = {
     threads: [] as ThreadView[],
     roles: ROLES,
+    turnLimit: 12,
     anchor: null,
     pending: false,
     onStart: vi.fn(),
@@ -62,6 +64,7 @@ function draw(over: Partial<Parameters<typeof DiscussionTray>[0]> = {}) {
     onCards: vi.fn(),
     onKeep: vi.fn(),
     onDismiss: vi.fn(),
+    onVerify: vi.fn(),
     onClose: vi.fn(),
     ...over,
   };
@@ -87,7 +90,29 @@ describe("DiscussionTray", () => {
     fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "导出要不要做筛选" } });
     fireEvent.click(screen.getByRole("button", { name: "开聊" }));
 
-    expect(props.onStart).toHaveBeenCalledWith({ topic: "导出要不要做筛选", role_id: "dlg.analogist" });
+    expect(props.onStart).toHaveBeenCalledWith(
+      { topic: "导出要不要做筛选", role_id: "dlg.analogist" },
+      false,
+    );
+  });
+
+  it("勾选「先跑一轮调研」：开聊时把 runInquiry=true 交出去（M13）", () => {
+    const props = draw();
+
+    fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "导出要不要做筛选" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /先跑一轮调研/ }));
+    fireEvent.click(screen.getByRole("button", { name: "开聊" }));
+
+    expect(props.onStart).toHaveBeenCalledWith(
+      { topic: "导出要不要做筛选", role_id: "dlg.challenger" },
+      true,
+    );
+  });
+
+  it("带底稿的线程：头上写「开题调研底稿 N 条」（M13）", () => {
+    draw({ threads: [thread({ findings_count: 3 })] });
+
+    expect(screen.getByText(/开题调研底稿 3 条/)).toBeTruthy();
   });
 
   it("主题留空时不发请求（后端 topic 必填，界面不点亮一个必然 422 的按钮）", () => {
@@ -106,7 +131,10 @@ describe("DiscussionTray", () => {
       true,
     );
     fireEvent.click(screen.getByRole("button", { name: "开聊" }));
-    expect(props.onStart).toHaveBeenCalledWith({ topic: "保存几年？", role_id: "seat.data_scale" });
+    expect(props.onStart).toHaveBeenCalledWith(
+      { topic: "保存几年？", role_id: "seat.data_scale" },
+      false,
+    );
   });
 
   it("线程 inline 展开：一对轮次按「你／反方」标出来", () => {
@@ -164,6 +192,14 @@ describe("DiscussionTray", () => {
 
     fireEvent.click(within(first).getByRole("button", { name: "忽略" }));
     expect(props.onDismiss).toHaveBeenCalledWith("d-1", "C1");
+  });
+
+  it("新卡还能「拿去验证」（M13）：把原话交给上层起聚焦调研", () => {
+    const props = draw({ threads: [thread({ cards: [card()] })] });
+
+    fireEvent.click(screen.getByRole("button", { name: "拿去验证" }));
+
+    expect(props.onVerify).toHaveBeenCalledWith("导出先只做全量，筛选等有人骂再加");
   });
 
   it("已处理的卡不再给按钮，只显示各状态的文案", () => {

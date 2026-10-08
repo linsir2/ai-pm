@@ -42,6 +42,8 @@ export interface DiscussionBody {
   role_id: string;
   /** 问卷题快照：只当开场白，**可空**（讨论 tab 自由开聊时不带）。 */
   question: { title: string; why: string | null } | null;
+  /** 「先跑一轮调研」的底稿趟次（M13）：不传 = 无底稿。 */
+  finding_exploration_id: string | null;
 }
 
 /** 真模型一轮要跑几十秒；给一个宽上限，避免请求永远挂着没人管。 */

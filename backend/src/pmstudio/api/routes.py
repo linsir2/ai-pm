@@ -507,6 +507,7 @@ async def start_discussion(  # type: ignore[no-untyped-def]
                 if body.question is None
                 else QuestionSnapshot(title=body.question.title, why=body.question.why)
             ),
+            finding_exploration_id=body.finding_exploration_id,
         )
     )
 

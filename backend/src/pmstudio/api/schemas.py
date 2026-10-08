@@ -74,11 +74,13 @@ class QuestionRefRequest(BaseModel):
 
 
 class StartDiscussionRequest(BaseModel):
-    """开一条讨论线程：主题＋角色必填，问卷题可选（只当开场白）。"""
+    """开一条讨论线程：主题＋角色必填，问卷题可选（只当开场白），开题调研底稿可选（M13）。"""
 
     topic: str = Field(min_length=1, max_length=200)
     role_id: str = Field(min_length=1)
     question: QuestionRefRequest | None = None
+    #: 「先跑一轮调研」：那一趟探索的全部候选快照成开题底稿（只引用；不传 = 无底稿）
+    finding_exploration_id: str | None = None
 
 
 class SayRequest(BaseModel):

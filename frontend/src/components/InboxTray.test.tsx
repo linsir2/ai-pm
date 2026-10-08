@@ -35,6 +35,7 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
     status: "open",
     turns: [],
     cards: [],
+    findings_count: 0,
     created_at: "2026-10-05T10:00:00+00:00",
     ...over,
   };
@@ -88,6 +89,7 @@ function draw(over: Partial<Parameters<typeof InboxTray>[0]> = {}) {
     onKeepCard: vi.fn(),
     onDismissCard: vi.fn(),
     onDiscuss: vi.fn(),
+    onVerify: vi.fn(),
     onStartDocument: vi.fn(),
     ...over,
   };
@@ -168,6 +170,31 @@ describe("InboxTray", () => {
     expect(props.onDiscuss).toHaveBeenCalledWith("导出要支持按状态筛选");
   });
 
+  it("讨论卡「拿去验证」（M13）：把卡片原话交给上层去起聚焦调研", () => {
+    const props = draw({
+      explorations: [],
+      threads: [thread({ cards: [card()] })],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "拿去验证" }));
+
+    expect(props.onVerify).toHaveBeenCalledWith("导出先只做全量，筛选等有人骂再加");
+  });
+
+  it("调研范围带焦点说明时显示出来（认得出这趟是验证谁）", () => {
+    draw({
+      explorations: [
+        exploration({
+          scope_kind: "document",
+          scope_ref: null,
+          scope_text: "导出按客户名筛会不会被滥用",
+        }),
+      ],
+    });
+
+    expect(screen.getByText(/整份文档 · 导出按客户名筛会不会被滥用/)).toBeTruthy();
+  });
+
   it("已处理的条目不再上台：收下/忽略的卡、已收/已删的候选都没有", () => {
     draw({
       threads: [
@@ -246,6 +273,9 @@ describe("InboxTray", () => {
     expect(
       (screen.getByRole("button", { name: "收下为下一轮输入" }) as HTMLButtonElement).disabled,
     ).toBe(true);
+    expect((screen.getByRole("button", { name: "拿去验证" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
     expect(props.onAbandon).not.toHaveBeenCalled();
   });
 });

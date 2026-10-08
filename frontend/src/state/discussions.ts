@@ -1,14 +1,29 @@
 /* 讨论区的判断（M9）：纯函数。组件只负责把这里的结果画出来。
    数据一律来自后端的 `ThreadView` 投影，这里不拼、不猜。 */
 
-import type { CardView, QuestionView, SchemaView, ThreadView } from "../api/types";
+import type { CardView, LimitsView, QuestionView, SchemaView, ThreadView } from "../api/types";
 
 /**
- * 一条线程最多几条轮次。**离线写死**：后端 `domain/discussion/thread.py` 的
- * `MAX_DISCUSSION_TURNS`（M9-T1）没有端点露出来——同 `state/schema.ts`
- * `FALLBACK_LIMITS` 的做法：后端不变时它就是同一份值。改这里之前先改那边。
+ * 一条线程最多几条轮次。**离线回落值**：真相源是 `/schema.limits.max_discussion_turns`
+ * （后端 `domain/discussion/thread.py` 的 `MAX_DISCUSSION_TURNS`，M13 起随 schema 下发）。
+ * 拿不到 schema 时用它——同 `FALLBACK_LIMITS` 的纪律：后端不变时它就是同一份值。
  */
-export const DISCUSSION_TURN_LIMIT = 12;
+export const FALLBACK_DISCUSSION_TURNS = 12;
+
+/** 讨论轮上限：schema 有就用后端的，没有回落（与 `reviewLimits` 同一形状）。 */
+export function discussionTurnLimit(limits: LimitsView | null | undefined): number {
+  return limits?.max_discussion_turns ?? FALLBACK_DISCUSSION_TURNS;
+}
+
+/**
+ * 开聊主题的归一化：与后端 `" ".join(topic.split())` 同式；超长截到 200
+ * （后端 `StartDiscussionRequest.topic` 的 `max_length=200`）——文档全文仍在原文里，
+ * 这里只是把"选一段来聊"送进讨论的标签。
+ */
+export function discussionTopic(text: string): string {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  return normalized.length <= 200 ? normalized : `${normalized.slice(0, 199)}…`;
+}
 
 /** 开聊卡上的一个固定角色（M9-T2）。真相源是后端
  *  `infrastructure/discussion/roles.toml`，随 `GET /schema` 的 `discussion_roles` 下来。 */
@@ -90,6 +105,11 @@ export interface DiscussionAnchor {
   topic: string;
   /** 问这题的那个 id（`seat.*` 或 `dlg.*`）；null = 交给默认（反方）。 */
   role_id: string | null;
+  /**
+   * 问卷题快照（M13 上线）：题面 + 为什么问——后端存进线程（"从问卷来"靠它）。
+   * 自由开聊 / 选区 / 条目入口都不带（undefined = 不是从问卷来）。
+   */
+  question?: { title: string; why: string | null } | null;
 }
 
 /** 卡上的过目动作（与后端 keep/dismiss 两个端点一一对应；M12）。 */
@@ -125,14 +145,14 @@ export function cardSeedText(card: CardView): string {
  * 一说就是一**对**（user＋assistant 两条），所以 10 轮是最后一说，11 轮就塞不下了。
  * 计划里原写的 `turns < 12` 是错的（会亮一个必然 409 的按钮），已按 T4 实码改正。
  */
-export function canDiscuss(thread: ThreadView): boolean {
-  return thread.status === "open" && thread.turns.length + 2 <= DISCUSSION_TURN_LIMIT;
+export function canDiscuss(thread: ThreadView, limit: number): boolean {
+  return thread.status === "open" && thread.turns.length + 2 <= limit;
 }
 
 /** 还剩几轮可说（界面显示用；0 就是聊满了）。 */
-export function turnsLeft(thread: ThreadView): number {
+export function turnsLeft(thread: ThreadView, limit: number): number {
   if (thread.status !== "open") return 0;
-  return Math.max(0, Math.floor((DISCUSSION_TURN_LIMIT - thread.turns.length) / 2));
+  return Math.max(0, Math.floor((limit - thread.turns.length) / 2));
 }
 
 /**

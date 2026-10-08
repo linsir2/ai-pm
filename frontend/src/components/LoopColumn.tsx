@@ -1,9 +1,7 @@
-/* 闭环栏（右栏）：上半是「本轮 / 过目台 / 讨论」三个页签。
+/* 闭环栏（右栏）：上半是「本轮 / 灵感箱 / 讨论」三个页签。
    本轮讨论流里，到了要你决定的时候，问卷/草案从右侧滑出盖住这一栏。
    复述卡是特例——它不是抽屉，它就是这一轮的开场，所以占满整栏、且不显示页签
    （显示会把复述卡藏到「过目台」后面）。 */
-
-import { useState } from "react";
 
 import type { AwaitingMode } from "../api/payload";
 import type {
@@ -16,7 +14,7 @@ import type {
   ThreadView,
 } from "../api/types";
 import type { DiscussionAnchor } from "../state/discussions";
-import { roleOptions } from "../state/discussions";
+import { discussionTurnLimit, roleOptions } from "../state/discussions";
 import { inboxCount } from "../state/inbox";
 import type { RoundDrafts } from "../state/useRoundDrafts";
 import { DiscussionTray } from "./DiscussionTray";
@@ -30,7 +28,11 @@ import { SimReviewDrawer } from "./SimReviewDrawer";
 import { reviewLimits } from "../state/simReview";
 import { RoundHistory } from "./RoundHistory";
 
+export type LoopTab = "round" | "tray" | "discussion";
+
 export function LoopColumn({
+  tab,
+  onTabChange,
   round,
   doc,
   schema,
@@ -70,6 +72,7 @@ export function LoopColumn({
   onDismissCandidate,
   onKeepCard,
   onDismissCard,
+  onVerifyCard,
   onStartDiscussion,
   onSayToThread,
   onAssembleCards,
@@ -84,6 +87,9 @@ export function LoopColumn({
   schema: SchemaView | null;
   /** 这个项目走过的轮次（最新在前）：跨轮的入口（F4）。 */
   rounds?: RoundHeadView[];
+  /** 当前页签（M13 起由 App 持有：文档区的「讨论」入口要能跨栏切过来）。 */
+  tab: LoopTab;
+  onTabChange: (tab: LoopTab) => void;
   /** null = 只看不算数（正在看历史轮：不出开场卡、不出抽屉）。 */
   mode: AwaitingMode | null;
   pending: string | null;
@@ -127,12 +133,14 @@ export function LoopColumn({
   /** 箱里收下讨论卡：`seed` = 预填下一轮输入；`material` = 落材料。 */
   onKeepCard: (threadId: string, cardId: string, as: "seed" | "material") => void;
   onDismissCard: (threadId: string, cardId: string) => void;
+  /** 拿去验证（M13）：拿卡片原话起一趟聚焦调研（箱与讨论 tab 双处同动作）。 */
+  onVerifyCard: (statement: string) => void;
   /** 讨论 tab 的数据源（M9）：这个项目开过的线程（最新在前）。 */
   discussions?: ThreadView[];
   discussionsPending?: boolean;
   /** 问卷里点「聊聊」带过来的题面与问的人（null = 自由开聊）。 */
   discussionAnchor?: DiscussionAnchor | null;
-  onStartDiscussion: (anchor: { topic: string; role_id: string }) => void;
+  onStartDiscussion: (anchor: { topic: string; role_id: string }, runInquiry: boolean) => void;
   onSayToThread: (threadId: string, text: string) => void;
   onAssembleCards: (threadId: string) => void;
   onKeepDiscussionCard: (threadId: string, cardId: string, as: "seed" | "material") => void;
@@ -141,7 +149,6 @@ export function LoopColumn({
   /** 问卷题行上的「聊聊」：只把锚点交上去（不直接发请求）。 */
   onDiscussQuestion: (anchor: DiscussionAnchor) => void;
 }) {
-  const [tab, setTab] = useState<"round" | "tray" | "discussion">("round");
   const showTabs = mode !== "opening";
   const onTray = tab === "tray" && showTabs;
   const onDiscussion = tab === "discussion" && showTabs;
@@ -161,7 +168,7 @@ export function LoopColumn({
             role="tab"
             aria-selected={onRound}
             className={onRound ? "loop__tab loop__tab--on" : "loop__tab"}
-            onClick={() => setTab("round")}
+            onClick={() => onTabChange("round")}
           >
             本轮
           </button>
@@ -170,7 +177,7 @@ export function LoopColumn({
             role="tab"
             aria-selected={onTray}
             className={onTray ? "loop__tab loop__tab--on" : "loop__tab"}
-            onClick={() => setTab("tray")}
+            onClick={() => onTabChange("tray")}
           >
             灵感箱
             {inbox > 0 && (
@@ -185,7 +192,7 @@ export function LoopColumn({
             role="tab"
             aria-selected={onDiscussion}
             className={onDiscussion ? "loop__tab loop__tab--on" : "loop__tab"}
-            onClick={() => setTab("discussion")}
+            onClick={() => onTabChange("discussion")}
           >
             讨论
           </button>
@@ -196,6 +203,7 @@ export function LoopColumn({
         <DiscussionTray
           threads={discussions}
           roles={roleOptions(schema)}
+          turnLimit={discussionTurnLimit(schema?.limits)}
           anchor={discussionAnchor}
           pending={discussionsPending}
           onStart={onStartDiscussion}
@@ -203,6 +211,7 @@ export function LoopColumn({
           onCards={onAssembleCards}
           onKeep={onKeepDiscussionCard}
           onDismiss={onDismissDiscussionCard}
+          onVerify={onVerifyCard}
           onClose={onCloseDiscussion}
         />
       ) : onTray ? (
@@ -217,9 +226,10 @@ export function LoopColumn({
           onDismiss={onDismissCandidate}
           onKeepCard={onKeepCard}
           onDismissCard={onDismissCard}
+          onVerify={onVerifyCard}
           onDiscuss={(topic) => {
             onDiscussQuestion({ topic, role_id: null });
-            setTab("discussion");
+            onTabChange("discussion");
           }}
           onStartDocument={onStartResearch}
         />

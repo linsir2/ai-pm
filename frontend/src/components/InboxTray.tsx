@@ -18,8 +18,15 @@ import {
 import { EvidenceChip } from "./EvidenceChip";
 
 function scopeLabel(exploration: ExplorationView): string {
-  if (exploration.scope_kind !== "entry") return "整份文档";
-  return exploration.scope_ref === null ? "条目" : `条目 ${exploration.scope_ref}`;
+  const base =
+    exploration.scope_kind !== "entry"
+      ? "整份文档"
+      : exploration.scope_ref === null
+        ? "条目"
+        : `条目 ${exploration.scope_ref}`;
+  // 「拿去验证」（M13）来的趟次带焦点说明：显示出来才认得出它在验证谁
+  const focus = exploration.scope_text?.trim() ?? "";
+  return focus === "" ? base : `${base} · ${focus}`;
 }
 
 function cardGroundingText(card: CardView): string {
@@ -38,6 +45,7 @@ export function InboxTray({
   onKeepCard,
   onDismissCard,
   onDiscuss,
+  onVerify,
   onStartDocument,
 }: {
   /** 讨论卡的数据源（state=new 的卡进箱）：全部线程，最新在前。 */
@@ -54,6 +62,8 @@ export function InboxTray({
   onDismissCard: (threadId: string, cardId: string) => void;
   /** 就这条聊聊：把原话交出去（上层设锚点并切到讨论 tab）。 */
   onDiscuss: (topic: string) => void;
+  /** 拿去验证（M13）：拿卡片原话起一趟聚焦调研（候选照常回这个箱）。 */
+  onVerify: (statement: string) => void;
   onStartDocument: () => void;
 }) {
   const running = explorations.filter((item) => item.status === "running");
@@ -153,6 +163,14 @@ export function InboxTray({
                       {REVIEW_ACTION_TEXT[action]}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    disabled={busy}
+                    onClick={() => onVerify(card.statement)}
+                  >
+                    拿去验证
+                  </button>
                   <button
                     type="button"
                     className="btn btn--ghost btn--sm"

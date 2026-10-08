@@ -24,7 +24,7 @@ from pmstudio.domain.authoring.readiness import ReadinessItem
 from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.version import Version
 from pmstudio.domain.authoring.views import BlockView, DocumentView
-from pmstudio.domain.discussion.thread import Discussion
+from pmstudio.domain.discussion.thread import MAX_DISCUSSION_TURNS, Discussion
 from pmstudio.domain.exploration.exploration import Exploration
 from pmstudio.domain.memory.memory import MemoryEntry
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -961,6 +961,8 @@ class LimitsView:
     #: 模拟评测（M11）：选择器的勾选上限
     max_sim_review_personas: int
     max_sim_review_features: int
+    #: 讨论线程的 turn 上限（M13）：讨论 tab 的"还能说几轮"读这里，不再离线抄
+    max_discussion_turns: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1036,6 +1038,7 @@ def schema_view(*, discussion_roles: tuple = (), personas: tuple = ()) -> Schema
             max_open_items_per_batch=MAX_OPEN_ITEMS_PER_BATCH,
             max_sim_review_personas=MAX_SIM_REVIEW_PERSONAS,
             max_sim_review_features=MAX_SIM_REVIEW_FEATURES,
+            max_discussion_turns=MAX_DISCUSSION_TURNS,
         ),
         discussion_roles=tuple(
             RoleSchemaView(role_id=role.role_id, title=role.title, focus=role.focus)
@@ -1909,6 +1912,8 @@ class ThreadView:
     status: str
     turns: tuple[TurnView, ...]
     cards: tuple[CardView, ...]
+    #: 开题调研底稿条数（M13）：真身在探索表，界面只要数（"开题调研底稿 N 条"）
+    findings_count: int
     created_at: datetime
 
 
@@ -1949,6 +1954,7 @@ def thread_view(thread: Discussion) -> ThreadView:
             )
             for card in thread.cards
         ),
+        findings_count=len(thread.findings),
         created_at=thread.created_at,
     )
 

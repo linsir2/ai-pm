@@ -12,7 +12,6 @@ import {
   canDiscuss,
   cardActions,
   cardStatusText,
-  DISCUSSION_TURN_LIMIT,
   resolveRoleId,
   roleChoices,
   roleOptionOf,
@@ -26,6 +25,8 @@ export function DiscussionTray({
   threads,
   /** 开聊卡上的角色选项：由 `roleOptions(schema)` 派生（真相源在后端 roles.toml）。 */
   roles: roleOptionsProp,
+  /** 线程 turn 上限（`/schema.limits.max_discussion_turns` 或离线回落，M13）。 */
+  turnLimit,
   anchor = null,
   pending,
   onStart,
@@ -33,20 +34,25 @@ export function DiscussionTray({
   onCards,
   onKeep,
   onDismiss,
+  onVerify,
   onClose,
 }: {
   threads: ThreadView[];
   /** 角色选项（`/schema` 的 `discussion_roles`，或离线回落那一条）。 */
   roles: DiscussionRoleOption[];
+  /** 线程 turn 上限（LoopColumn 从 `schema?.limits` 算好传进来；不在这里再抄一份）。 */
+  turnLimit: number;
   /** 问卷里点「聊聊」带过来的题面与问的人（讨论 tab 自由开聊时为 null）。 */
   anchor?: DiscussionAnchor | null;
   /** 有讨论动作在途（开聊 / 说 / 总结 / 收卡 / 关掉）：按钮先禁掉，防连点。 */
   pending: boolean;
-  onStart: (anchor: { topic: string; role_id: string }) => void;
+  onStart: (anchor: { topic: string; role_id: string }, runInquiry: boolean) => void;
   onSay: (threadId: string, text: string) => void;
   onCards: (threadId: string) => void;
   onKeep: (threadId: string, cardId: string, as: "seed" | "material") => void;
   onDismiss: (threadId: string, cardId: string) => void;
+  /** 拿去验证（M13）：拿卡片原话起一趟聚焦调研；候选进灵感箱。 */
+  onVerify: (statement: string) => void;
   onClose: (threadId: string) => void;
 }) {
   const anchorTopic = anchor?.topic ?? "";
@@ -60,6 +66,8 @@ export function DiscussionTray({
   }, [anchorTopic, anchorRole]);
   // 追问的话按线程分别存（一条线程的草稿不该串到另一条上）。
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // 「先跑一轮调研」（M13）：勾了就先起一趟聚焦调研，假设当开题底稿带进讨论
+  const [runInquiry, setRunInquiry] = useState(false);
 
   const roles = roleChoices(anchorRole, roleOptionsProp);
   const trimmed = topic.trim();
@@ -109,12 +117,25 @@ export function DiscussionTray({
             </label>
           ))}
         </fieldset>
+        <label className={runInquiry ? "seat seat--on" : "seat"}>
+          <input
+            type="checkbox"
+            checked={runInquiry}
+            onChange={() => setRunInquiry((on) => !on)}
+          />
+          <span>
+            <span className="seat__title">先跑一轮调研</span>
+            <span className="seat__focus">
+              围绕主题先出一趟假设与盲区（进灵感箱过目），当这次讨论的开题底稿
+            </span>
+          </span>
+        </label>
         <div className="prop__foot">
           <button
             type="button"
             className="btn"
             disabled={pending || trimmed === ""}
-            onClick={() => onStart({ topic: trimmed, role_id: resolveRoleId(roleId) })}
+            onClick={() => onStart({ topic: trimmed, role_id: resolveRoleId(roleId) }, runInquiry)}
           >
             开聊
           </button>
@@ -140,6 +161,9 @@ export function DiscussionTray({
               {thread.question !== null && (
                 <span className="muted small">从问卷来：{thread.question.title}</span>
               )}
+              {thread.findings_count > 0 && (
+                <span className="muted small">开题调研底稿 {thread.findings_count} 条</span>
+              )}
             </div>
 
             {thread.turns.length > 0 && (
@@ -155,7 +179,7 @@ export function DiscussionTray({
               </div>
             )}
 
-            {canDiscuss(thread) ? (
+            {canDiscuss(thread, turnLimit) ? (
               <>
                 <label className="sr-only" htmlFor={`say-${thread.thread_id}`}>
                   说这一轮
@@ -164,7 +188,7 @@ export function DiscussionTray({
                   id={`say-${thread.thread_id}`}
                   className="q__text"
                   value={draft}
-                  placeholder={`跟${thread.role_title}再说一句（还能说 ${turnsLeft(thread)} 轮）`}
+                  placeholder={`跟${thread.role_title}再说一句（还能说 ${turnsLeft(thread, turnLimit)} 轮）`}
                   onChange={(event) =>
                     setDrafts((all) => ({ ...all, [thread.thread_id]: event.target.value }))
                   }
@@ -183,7 +207,7 @@ export function DiscussionTray({
             ) : (
               open && (
                 <p className="prop__warn">
-                  已经聊满（上限 {DISCUSSION_TURN_LIMIT} 条，一说是一对）：可以「总结成卡」，也可以关掉它。
+                  已经聊满（上限 {turnLimit} 条，一说是一对）：可以「总结成卡」，也可以关掉它。
                 </p>
               )
             )}
@@ -245,6 +269,16 @@ export function DiscussionTray({
                             {REVIEW_ACTION_TEXT[action]}
                           </button>
                         ))}
+                        {cardActions(card).length > 0 && (
+                          <button
+                            type="button"
+                            className="btn btn--ghost btn--sm"
+                            disabled={pending}
+                            onClick={() => onVerify(card.statement)}
+                          >
+                            拿去验证
+                          </button>
+                        )}
                         {cardStatusText(card) !== null && (
                           <span className="muted small">{cardStatusText(card)}</span>
                         )}

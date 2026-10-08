@@ -48,6 +48,24 @@ class QuestionSnapshot:
             raise ShapeError("问卷开场必须带题面")
 
 
+@dataclass(frozen=True, slots=True)
+class FindingRef:
+    """开题调研底稿的一条引用（M13）：**只引用，不复制**。
+
+    条目本地 id（`H1`/`B1`）只在趟内唯一，所以必须连 `exploration_id` 一起记——
+    与轮次种子（`SeedRef`）同一条理由。文本在探索表里，说的时候读回来。
+    """
+
+    exploration_id: str
+    local_id: str
+
+    def __post_init__(self) -> None:
+        if not self.exploration_id.strip():
+            raise ShapeError("底稿引用必须带 exploration_id")
+        if not self.local_id.strip():
+            raise ShapeError("底稿引用必须带 local_id")
+
+
 class Discussion:
     def __init__(
         self,
@@ -62,6 +80,7 @@ class Discussion:
         status: ThreadStatus = ThreadStatus.OPEN,
         turns: tuple[Turn, ...] = (),
         cards: tuple[Card, ...] = (),
+        findings: tuple[FindingRef, ...] = (),
     ) -> None:
         self._discussion_id = discussion_id
         self._project_id = project_id
@@ -73,6 +92,7 @@ class Discussion:
         self._status = status
         self._turns = tuple(turns)
         self._cards = tuple(cards)
+        self._findings = tuple(findings)
 
     @classmethod
     def start(
@@ -85,6 +105,7 @@ class Discussion:
         role_title: str,
         question: QuestionSnapshot | None,
         now: datetime,
+        findings: tuple[FindingRef, ...] = (),
     ) -> "Discussion":
         if not topic.strip():
             raise ShapeError("开聊必须带主题")
@@ -96,6 +117,7 @@ class Discussion:
             role_title=role_title,
             created_at=now,
             question=question,
+            findings=findings,
         )
 
     # —— 只读 ——
@@ -138,6 +160,11 @@ class Discussion:
     @property
     def cards(self) -> tuple[Card, ...]:
         return self._cards
+
+    @property
+    def findings(self) -> tuple[FindingRef, ...]:
+        """开题调研底稿的引用（M13）：文本在探索表，这里只记回链。"""
+        return self._findings
 
     # —— 推进 ——
     def say_pair(

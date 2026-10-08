@@ -17,6 +17,7 @@ from pmstudio.domain.discussion.card import (
 from pmstudio.domain.discussion.thread import (
     MAX_DISCUSSION_TURNS,
     Discussion,
+    FindingRef,
     QuestionSnapshot,
     ThreadStatus,
 )
@@ -269,6 +270,34 @@ def test_keep_bad_material_without_id_raises() -> None:
 
     with pytest.raises(ShapeError):
         thread.keep_card("C1", as_="material")
+
+
+# —— 开题调研（M13）：findings 只引用，不复制 ——
+
+
+def test_start_ok_records_finding_refs() -> None:
+    thread = start_thread(
+        findings=(
+            FindingRef(exploration_id="x-1", local_id="H1"),
+            FindingRef(exploration_id="x-1", local_id="B1"),
+        )
+    )
+
+    assert [(ref.exploration_id, ref.local_id) for ref in thread.findings] == [
+        ("x-1", "H1"),
+        ("x-1", "B1"),
+    ]
+
+
+def test_start_without_findings_has_none() -> None:
+    assert start_thread().findings == ()
+
+
+def test_finding_ref_needs_both_ids() -> None:
+    with pytest.raises(ShapeError):
+        FindingRef(exploration_id="  ", local_id="H1")
+    with pytest.raises(ShapeError):
+        FindingRef(exploration_id="x-1", local_id=" ")
 
 
 # —— 开场 ——

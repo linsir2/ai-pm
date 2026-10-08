@@ -4,11 +4,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { CardView, QuestionView, SchemaView, ThreadView } from "../api/types";
+import { FALLBACK_LIMITS } from "./schema";
 import {
   canDiscuss,
   cardActions,
   cardSeedText,
   cardStatusText,
+  discussionTopic,
+  discussionTurnLimit,
+  FALLBACK_DISCUSSION_TURNS,
   resolveRoleId,
   roleChoices,
   roleOptionOf,
@@ -51,6 +55,7 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
     status: "open",
     turns: [],
     cards: [],
+    findings_count: 0,
     created_at: "2026-10-05T10:00:00+00:00",
     ...over,
   };
@@ -198,24 +203,61 @@ describe("cardSeedText", () => {
 
 describe("canDiscuss", () => {
   it("open 且下一说还塞得进一对就能追问", () => {
-    expect(canDiscuss(thread())).toBe(true);
+    expect(canDiscuss(thread(), 12)).toBe(true);
     expect(
-      canDiscuss(thread({ turns: Array.from({ length: 10 }, (_, i) => turn(i, "user")) })),
+      canDiscuss(thread({ turns: Array.from({ length: 10 }, (_, i) => turn(i, "user")) }), 12),
     ).toBe(true);
   });
 
   it("只剩 11 轮时不能再追问（一说就是一**对**，塞不下就是 T4 拒）", () => {
-    // 后端口径是 `len(turns) + 2 > 12` 才拒（`thread.py:149`）：11 轮时再说要凑到 13 > 12。
+    // 后端口径是 `len(turns) + 2 > 上限` 才拒（`thread.py`）：11 轮时再说要凑到 13。
     // 界面门必须与它同口径，否则会点亮一个必然被拒的按钮。
     expect(
-      canDiscuss(thread({ turns: Array.from({ length: 11 }, (_, i) => turn(i, "user")) })),
+      canDiscuss(thread({ turns: Array.from({ length: 11 }, (_, i) => turn(i, "user")) }), 12),
     ).toBe(false);
     expect(
-      canDiscuss(thread({ turns: Array.from({ length: 12 }, (_, i) => turn(i, "user")) })),
+      canDiscuss(thread({ turns: Array.from({ length: 12 }, (_, i) => turn(i, "user")) }), 12),
     ).toBe(false);
   });
 
+  it("上限是参数：同一个线程换上限，门跟着变（M13 起真相源在 /schema.limits）", () => {
+    const six = thread({ turns: Array.from({ length: 6 }, (_, i) => turn(i, "user")) });
+
+    expect(canDiscuss(six, 8)).toBe(true); // 6 + 2 = 8，塞得下
+    expect(canDiscuss(six, 6)).toBe(false); // 6 + 2 > 6，塞不下
+  });
+
   it("关掉的线程不能追问", () => {
-    expect(canDiscuss(thread({ status: "closed" }))).toBe(false);
+    expect(canDiscuss(thread({ status: "closed" }), 12)).toBe(false);
+  });
+});
+
+describe("discussionTurnLimit", () => {
+  it("有 schema.limits 就用后端值", () => {
+    expect(discussionTurnLimit({ ...FALLBACK_LIMITS, max_discussion_turns: 16 })).toBe(16);
+  });
+
+  it("拿不到就回落（回落是同一份值的离线抄本，不是第二真相源）", () => {
+    expect(discussionTurnLimit(null)).toBe(FALLBACK_DISCUSSION_TURNS);
+    expect(discussionTurnLimit(undefined)).toBe(FALLBACK_DISCUSSION_TURNS);
+  });
+});
+
+describe("discussionTopic", () => {
+  it("归一化空白（与后端 join(split()) 同式）", () => {
+    expect(discussionTopic("  导出   要不要按 客户名筛  ")).toBe("导出 要不要按 客户名筛");
+  });
+
+  it("超长截到 200 且以省略号收尾（后端 topic max_length=200）", () => {
+    const long = "啊".repeat(260);
+    const topic = discussionTopic(long);
+
+    expect(topic.length).toBe(200);
+    expect(topic.endsWith("…")).toBe(true);
+  });
+
+  it("恰好 200 不动刀", () => {
+    const exact = "啊".repeat(200);
+    expect(discussionTopic(exact)).toBe(exact);
   });
 });

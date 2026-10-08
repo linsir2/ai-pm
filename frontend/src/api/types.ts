@@ -482,6 +482,8 @@ export interface LimitsView {
   /** 模拟评测（M11）：选择器的勾选上限；老后端为 undefined（下游回落 3/2）。 */
   max_sim_review_personas?: number;
   max_sim_review_features?: number;
+  /** 讨论线程的 turn 上限（M13）；老后端为 undefined（下游回落 12）。 */
+  max_discussion_turns?: number;
 }
 
 /** `GET /schema`：现行结构，不是文档内容。 */
@@ -633,6 +635,8 @@ export interface ThreadView {
   status: "open" | "closed" | string;
   turns: TurnView[];
   cards: CardView[];
+  /** 开题调研底稿条数（M13）：真身在探索表，这里只给数。 */
+  findings_count: number;
   created_at: string;
 }
 

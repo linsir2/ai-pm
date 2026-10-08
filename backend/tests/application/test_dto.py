@@ -724,6 +724,7 @@ def test_schema_view_freezes_the_shape():
         max_open_items_per_batch=3,
         max_sim_review_personas=3,
         max_sim_review_features=2,
+        max_discussion_turns=12,
     )
 
 
@@ -1273,3 +1274,11 @@ def test_schema_view_exposes_personas_and_review_limits() -> None:
     assert view.limits.max_sim_review_personas == MAX_SIM_REVIEW_PERSONAS
     assert view.limits.max_sim_review_features == MAX_SIM_REVIEW_FEATURES
     assert dto.schema_view().personas == ()
+
+
+def test_schema_view_exposes_discussion_turn_limit() -> None:
+    """讨论轮上限进 schema.limits（M13）：界面不再离线抄一份（M9 的有意留白收口）。"""
+
+    from pmstudio.domain.discussion.thread import MAX_DISCUSSION_TURNS
+
+    assert dto.schema_view().limits.max_discussion_turns == MAX_DISCUSSION_TURNS
