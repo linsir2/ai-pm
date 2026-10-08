@@ -80,6 +80,7 @@ from pmstudio.application.deliverable import (
 from pmstudio.application.discussion import (
     ORIGIN_DISCUSSION,
     discussion_material,
+    render_findings,
     render_thread_history,
     validate_ledger_refs,
 )
@@ -120,6 +121,7 @@ from pmstudio.application.errors import (
     MaterialTooLarge,
     UnknownEntryId,
     UnknownEvidenceId,
+    UnknownExploration,
     UnknownMaterial,
     UnknownRole,
     UnsupportedMaterial,
@@ -186,6 +188,7 @@ from pmstudio.domain.discussion.card import Card, CardState
 from pmstudio.domain.discussion.thread import (
     MAX_DISCUSSION_TURNS,
     Discussion,
+    FindingRef,
     QuestionSnapshot,
     ThreadStatus,
 )
@@ -195,7 +198,7 @@ from pmstudio.domain.exploration.exploration import (
     ExplorationStatus,
     ScopeKind,
 )
-from pmstudio.domain.exploration.item import CandidateState, Hypothesis
+from pmstudio.domain.exploration.item import BlindSpot, CandidateState, Hypothesis
 from pmstudio.domain.memory.memory import screen_changes
 from pmstudio.domain.ports import (
     DiscussionReader,
@@ -3952,6 +3955,43 @@ def _discussion_role_of(
     raise UnknownRole(role_id)
 
 
+def _render_thread_findings(
+    refs: tuple[FindingRef, ...], *, explorations: ExplorationReader
+) -> str:
+    """按引用把开题底稿读回来渲染（M13）：找不到的不静默，附一行实话。"""
+
+    if not refs:
+        return ""
+    cache: dict[str, Exploration | None] = {}
+    items: list[Hypothesis | BlindSpot] = []
+    missing = 0
+    for ref in refs:
+        if ref.exploration_id not in cache:
+            try:
+                cache[ref.exploration_id] = explorations.get(
+                    ExplorationId(ref.exploration_id)
+                )
+            except UnknownExploration:
+                cache[ref.exploration_id] = None
+        exploration = cache[ref.exploration_id]
+        if exploration is None:
+            missing += 1
+            continue
+        found = next(
+            (
+                item
+                for item in (*exploration.hypotheses, *exploration.blind_spots)
+                if item.local_id == ref.local_id
+            ),
+            None,
+        )
+        if found is None:
+            missing += 1
+        else:
+            items.append(found)
+    return render_findings(items, missing=missing)
+
+
 def _question_text(question: QuestionSnapshot | None) -> str:
     if question is None:
         return ""
@@ -3968,7 +4008,11 @@ def _card_of(thread: Discussion, card_id: str) -> Card:
 
 
 class StartDiscussion:
-    """开一条讨论线程：角色双查＋同（项目，归一化主题，角色）的 open 线程幂等返。"""
+    """开一条讨论线程：角色双查＋同（项目，归一化主题，角色）的 open 线程幂等返。
+
+    `finding_exploration_id`（M13「先跑一轮调研」）：把那一趟调研的**全部候选**快照成
+    开题底稿（只存引用）；候选文本在说的时候读回来注入提示词。
+    """
 
     def __init__(
         self,
@@ -3976,6 +4020,7 @@ class StartDiscussion:
         documents: DocumentReader,
         discussions: DiscussionReader,
         discussion_writer: DiscussionWriter,
+        explorations: ExplorationReader,
         uow: UnitOfWork,
         clock: Clock,
         ids: IdGenerator,
@@ -3986,12 +4031,28 @@ class StartDiscussion:
         self._documents = documents
         self._discussions = discussions
         self._discussion_writer = discussion_writer
+        self._explorations = explorations
         self._uow = uow
         self._clock = clock
         self._ids = ids
         self._events = events
         self._catalog = catalog
         self._discussion_roles = discussion_roles
+
+    def _finding_refs(
+        self, project_id: ProjectId, exploration_id: str | None
+    ) -> tuple[FindingRef, ...]:
+        if exploration_id is None:
+            return ()
+        exploration = self._explorations.get(ExplorationId(exploration_id))
+        if str(exploration.project_id) != str(project_id):
+            raise ShapeError("这趟调研不属于这个项目")
+        if exploration.status is not ExplorationStatus.DONE:
+            raise ShapeError("这趟调研还没跑完，不能当开题底稿")
+        return tuple(
+            FindingRef(exploration_id=str(exploration.exploration_id), local_id=item.candidate_id)
+            for item in exploration.candidates()
+        )
 
     async def __call__(
         self,
@@ -4000,6 +4061,7 @@ class StartDiscussion:
         topic: str,
         role_id: str,
         question: QuestionSnapshot | None,
+        finding_exploration_id: str | None = None,
     ) -> ThreadView:
         self._documents.get(project_id)  # 存在性；空文档不拒（与 M8 create 的接地判据差在这里）
         if not role_id.strip():
@@ -4010,6 +4072,7 @@ class StartDiscussion:
         role_title, _ = _discussion_role_of(
             role_id, catalog=self._catalog, discussion_roles=self._discussion_roles
         )
+        findings = self._finding_refs(project_id, finding_exploration_id)
         for existing in self._discussions.list_for_project(
             project_id, limit=MAX_DISCUSSION_LIST
         ):
@@ -4018,6 +4081,7 @@ class StartDiscussion:
                 and " ".join(existing.topic.split()) == normalized
                 and existing.role_id == role_id
             ):
+                # 幂等返已有线程：底稿不追挂（它属于"这次新开的线程"的起手式）
                 return thread_view(existing)
         discussion_id = DiscussionId(self._ids.new("d"))
         with self._uow:
@@ -4029,6 +4093,7 @@ class StartDiscussion:
                 role_title=role_title,
                 question=question,
                 now=self._clock.now(),
+                findings=findings,
             )
             self._discussion_writer.save(thread)
         _publish_discussion(self._events, self._clock, thread)
@@ -4036,7 +4101,11 @@ class StartDiscussion:
 
 
 class SayToThread:
-    """追问一轮：模型跑完、校验通过才原子记一对；失败线程不动。"""
+    """追问一轮：模型跑完、校验通过才原子记一对；失败线程不动。
+
+    线程带开题底稿（M13）时，按引用把候选文本读回来，渲染进提示词（**未经验证**，
+    不是依据——硬规矩第 6 条管引用）。
+    """
 
     def __init__(
         self,
@@ -4045,6 +4114,7 @@ class SayToThread:
         discussions: DiscussionReader,
         discussion_writer: DiscussionWriter,
         evidence: EvidenceReader,
+        explorations: ExplorationReader,
         uow: UnitOfWork,
         discusser: Discusser,
         checker: ReadinessChecker,
@@ -4057,6 +4127,7 @@ class SayToThread:
         self._discussions = discussions
         self._discussion_writer = discussion_writer
         self._evidence = evidence
+        self._explorations = explorations
         self._uow = uow
         self._discusser = discusser
         self._checker = checker
@@ -4088,6 +4159,9 @@ class SayToThread:
         known_eids = frozenset(item.eid for item in ledger.evidences())
         history = render_thread_history(thread.turns)
         question = _question_text(thread.question)
+        findings = _render_thread_findings(
+            thread.findings, explorations=self._explorations
+        )
         base = len(thread.turns)
         try:
             outcome = await self._discusser.say(
@@ -4097,6 +4171,7 @@ class SayToThread:
                 question=question,
                 history=history,
                 document_state=document_state,
+                related_findings=findings,
                 discussion_id=str(discussion_id),
                 turn_slot=f"s{base}",
                 known_eids=known_eids,
@@ -4118,6 +4193,7 @@ class SayToThread:
                 question=question,
                 history=history,
                 document_state=document_state,
+                related_findings=findings,
                 discussion_id=str(discussion_id),
                 turn_slot=f"s{base + 1}",
                 known_eids=known_eids,

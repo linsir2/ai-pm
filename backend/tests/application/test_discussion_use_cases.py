@@ -15,11 +15,12 @@ from pmstudio.application.use_cases import (
     _material_kind,
 )
 from pmstudio.domain.discussion.thread import QuestionSnapshot
+from pmstudio.domain.exploration.exploration import ExplorationScope, ScopeKind
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.shared.errors import CardNotReviewable, ShapeError
 from pmstudio.domain.shared.ids import DiscussionId
 from pmstudio.harness.errors import PacketParseError
-from tests.support.builders import PROJECT, ROUND_ID, make_material_packet
+from tests.support.builders import PROJECT, ROUND_ID, document_with_feature, make_material_packet
 from tests.support.harness import Harness
 
 SAY_TEXT = "先把导出范围收窄到本店本月，再谈全量。"
@@ -366,6 +367,112 @@ async def test_start_round_resolves_discussion_card_seed_and_rejects_the_rest() 
         await starter.create(
             project_id=PROJECT, user_input="再试一次", seed_ids=[f"discussion:{did}#C2"]
         )
+
+
+_INQUIRY_REPLY = json.dumps(
+    {
+        "basis": "读了文档",
+        "hypotheses": [
+            {
+                "local_id": "H1",
+                "statement": "运营做日报时按客户名找单",
+                "grounding": "invented",
+                "based_on": [],
+                "falsification": "访谈后若没人这么找单即被推翻",
+                "evidence_needed": "两个真实运营的访谈记录",
+            }
+        ],
+        "blind_spots": [
+            {
+                "local_id": "B1",
+                "statement": "客户合并后的订单归属未知",
+                "next_step": "去问数据组",
+            }
+        ],
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_start_with_finding_exploration_snapshots_candidates() -> None:
+    """先跑一轮调研（M13）：把该趟全部候选快照成 findings 引用；线程上带得到计数。"""
+
+    harness = Harness(replies={"inquiry": _INQUIRY_REPLY})
+    harness.seed_project()
+    harness.documents.seed(document_with_feature())
+    use = harness.run_inquiry()
+    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    await use.execute(xid)
+
+    view = await harness.start_discussion()(
+        project_id=PROJECT,
+        topic="带底稿聊导出",
+        role_id="dlg.challenger",
+        question=None,
+        finding_exploration_id=str(xid),
+    )
+
+    assert view.findings_count == 2
+    stored = harness.discussions.get(DiscussionId(view.thread_id))
+    assert [(ref.exploration_id, ref.local_id) for ref in stored.findings] == [
+        (str(xid), "H1"),
+        (str(xid), "B1"),
+    ]
+
+
+async def test_start_rejects_bad_finding_exploration() -> None:
+    from pmstudio.application.errors import UnknownExploration
+
+    harness = Harness(replies={"inquiry": _INQUIRY_REPLY})
+    harness.seed_project()
+    harness.documents.seed(document_with_feature())
+
+    with pytest.raises(UnknownExploration):  # 不存在 → 404
+        await harness.start_discussion()(
+            project_id=PROJECT,
+            topic="x",
+            role_id="dlg.challenger",
+            question=None,
+            finding_exploration_id="x-nope",
+        )
+
+    use = harness.run_inquiry()
+    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    with pytest.raises(ShapeError):  # 还没跑完，不能当底稿
+        await harness.start_discussion()(
+            project_id=PROJECT,
+            topic="y",
+            role_id="dlg.challenger",
+            question=None,
+            finding_exploration_id=str(xid),
+        )
+
+
+async def test_say_renders_findings_into_the_prompt() -> None:
+    """底稿要真的进说这一轮的提示词（不是只存了没人读）。"""
+
+    harness = Harness(replies={"inquiry": _INQUIRY_REPLY, "discussion": _say_reply()})
+    harness.seed_project()
+    harness.documents.seed(document_with_feature())
+    use = harness.run_inquiry()
+    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    await use.execute(xid)
+    started = await harness.start_discussion()(
+        project_id=PROJECT,
+        topic="带底稿聊导出",
+        role_id="dlg.challenger",
+        question=None,
+        finding_exploration_id=str(xid),
+    )
+
+    await harness.say_to_thread()(
+        discussion_id=DiscussionId(started.thread_id), text="先只做全量？"
+    )
+
+    prompt = "\n".join(message.content for message in harness.gateway.requests[-1].messages)
+    # 留样记的是槽位值（模板头不在 messages 里）：断言语义——假设与盲区的原文都进了提示词
+    assert "运营做日报时按客户名找单" in prompt
+    assert "客户合并后的订单归属未知" in prompt
 
 
 async def test_discussion_material_sorts_to_simulated() -> None:

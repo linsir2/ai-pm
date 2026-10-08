@@ -4,7 +4,7 @@ import json
 
 from pmstudio.api.app import create_app
 from tests.support.api_client import async_client
-from tests.support.builders import PROJECT
+from tests.support.builders import PROJECT, document_with_feature
 from tests.support.harness import Harness
 
 SAY_TEXT = "先把导出范围收窄到本店本月，再谈全量。"
@@ -146,6 +146,65 @@ async def test_dismiss_card_over_http_is_idempotent_and_unknown_cards_are_422() 
             f"/api/discussions/{did}/cards/C1/keep", json={"as": "gift"}
         )
         assert bad_body.status_code == 422  # 去向只能是 seed/material（pydantic 拦）
+
+
+async def test_start_discussion_with_finding_exploration_over_http() -> None:
+    """「先跑一轮调研」（M13）穿过 HTTP：先起一趟探索，再带它的 id 开聊 → findings 快照。"""
+
+    inquiry = json.dumps(
+        {
+            "basis": "读了文档",
+            "hypotheses": [
+                {
+                    "local_id": "H1",
+                    "statement": "运营按客户名找单",
+                    "grounding": "invented",
+                    "based_on": [],
+                    "falsification": "访谈没人这么找",
+                    "evidence_needed": "两个访谈",
+                }
+            ],
+            "blind_spots": [
+                {"local_id": "B1", "statement": "归属未知", "next_step": "问数据组"}
+            ],
+        },
+        ensure_ascii=False,
+    )
+    harness = Harness(
+        replies={"inquiry": inquiry, "discussion": _say_reply()}, seat_replies={}
+    )
+    harness.seed_project()
+    harness.documents.seed(document_with_feature())
+    app = create_app(harness.api_services(model_name="m"))
+    async with async_client(app) as client:
+        started = await client.post(
+            f"/api/projects/{PROJECT}/explorations",
+            json={"kind": "inquiry", "scope": {"kind": "document"}},
+        )
+        assert started.status_code == 200, started.text
+        xid = started.json()["exploration_id"]
+
+        opened = await client.post(
+            f"/api/projects/{PROJECT}/discussions",
+            json={
+                "topic": "带底稿聊导出",
+                "role_id": "dlg.challenger",
+                "finding_exploration_id": xid,
+            },
+        )
+        assert opened.status_code == 200, opened.text
+        assert opened.json()["findings_count"] == 2
+
+        missing = await client.post(
+            f"/api/projects/{PROJECT}/discussions",
+            json={
+                "topic": "坏底稿",
+                "role_id": "dlg.challenger",
+                "finding_exploration_id": "x-nope",
+            },
+        )
+        assert missing.status_code == 404
+        assert missing.json()["code"] == "unknown_exploration"
 
 
 async def test_say_to_closed_thread_is_409() -> None:

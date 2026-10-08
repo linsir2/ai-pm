@@ -10,6 +10,7 @@ from pmstudio.application.dto import ParsedMaterial
 from pmstudio.application.material_synthesis import synthesize_text_material
 from pmstudio.domain.discussion.card import Card
 from pmstudio.domain.discussion.thread import Turn
+from pmstudio.domain.exploration.item import BlindSpot, Hypothesis
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import EvidenceId
 
@@ -20,6 +21,31 @@ PARSER_VERSION_DISCUSSION = "1"
 
 #: say 一次最多带几条历史（与线程上限 12 解耦：带多了提示词只变长不变好）
 MAX_SAY_HISTORY = 6
+
+
+def render_findings(
+    items: Sequence[Hypothesis | BlindSpot], *, missing: int = 0
+) -> str:
+    """开题调研底稿的提示词段（M13）：一条一行；空 → 空串（提示词那节自带"如果下面不是空的"）。
+
+    **未经验证**——渲染进提示词只是给席位当讨论对象，不是依据（硬规矩第 6 条管引用）。
+    找不到的引用不静默：附一行实话。
+    """
+
+    lines: list[str] = []
+    for item in items:
+        if isinstance(item, Hypothesis):
+            lines.append(
+                f"- 假设 {item.local_id}：{item.statement}"
+                f"（证伪它：{item.falsification}；需要证据：{item.evidence_needed}）"
+            )
+        else:
+            lines.append(
+                f"- 盲区 {item.local_id}：{item.statement}（下一步：{item.next_step}）"
+            )
+    if missing > 0:
+        lines.append(f"（有 {missing} 条底稿已经找不到了）")
+    return "\n".join(lines)
 
 
 def validate_ledger_refs(

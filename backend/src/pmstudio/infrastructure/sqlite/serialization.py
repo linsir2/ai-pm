@@ -13,6 +13,7 @@ from pmstudio.domain.discussion.card import Card, CardState
 from pmstudio.domain.discussion.card import Grounding as DiscussionGrounding
 from pmstudio.domain.discussion.thread import (
     Discussion,
+    FindingRef,
     QuestionSnapshot,
     ThreadStatus,
     Turn,
@@ -1069,6 +1070,11 @@ def discussion_to_payload(discussion: Discussion) -> dict:
             if question is None
             else {"title": question.title, "why": question.why}
         ),
+        # 开题调研底稿（M13）：只存引用；老行没有这把键 → 读侧回落空
+        "findings": [
+            {"exploration_id": ref.exploration_id, "local_id": ref.local_id}
+            for ref in discussion.findings
+        ],
         "turns": [
             {
                 "index": turn.index,
@@ -1173,4 +1179,12 @@ def discussion_from_payload(
             for item in payload.get("turns") or ()
         ),
         cards=tuple(cards),
+        # 老行里没有这把键（开题调研底稿是后加的，M13）：空——不编"它带过底稿"
+        findings=tuple(
+            FindingRef(
+                exploration_id=str(item["exploration_id"]),
+                local_id=str(item["local_id"]),
+            )
+            for item in payload.get("findings") or ()
+        ),
     )

@@ -11,7 +11,7 @@ import pytest
 
 from pmstudio.application.errors import UnknownDiscussion
 from pmstudio.domain.discussion.card import Card, CardState, Grounding
-from pmstudio.domain.discussion.thread import Discussion, QuestionSnapshot
+from pmstudio.domain.discussion.thread import Discussion, FindingRef, QuestionSnapshot
 from pmstudio.domain.shared.ids import DiscussionId, EvidenceId, ProjectId
 from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.repositories import SqliteDiscussionRepository
@@ -171,6 +171,40 @@ def test_legacy_kept_map_reads_back_as_material(store) -> None:  # type: ignore[
         None,
         None,
     )
+
+
+def test_findings_round_trip_and_old_rows_fall_back(store) -> None:  # type: ignore[no-untyped-def]
+    """开题调研底稿（M13）：只引用；老行缺 `findings` 键 → 空。"""
+
+    repo, _ = store
+    thread = Discussion.start(
+        discussion_id=DiscussionId("d-f"),
+        project_id=ProjectId("p1"),
+        topic="带底稿的线程",
+        role_id="dlg.challenger",
+        role_title="反方",
+        question=None,
+        now=NOW,
+        findings=(
+            FindingRef(exploration_id="x-1", local_id="H1"),
+            FindingRef(exploration_id="x-1", local_id="B1"),
+        ),
+    )
+    repo.save(thread)
+
+    restored = repo.get(DiscussionId("d-f"))
+    assert [(ref.exploration_id, ref.local_id) for ref in restored.findings] == [
+        ("x-1", "H1"),
+        ("x-1", "B1"),
+    ]
+
+    payload = discussion_to_payload(thread)
+    payload.pop("findings")  # 老行：没有这把键
+    restored_old = discussion_from_payload(
+        payload, discussion_id=DiscussionId("d-f"), project_id=ProjectId("p1"),
+        status=thread.status, created_at=NOW,
+    )
+    assert restored_old.findings == ()
 
 
 def test_list_returns_newest_first_and_skips_bad_rows(store) -> None:  # type: ignore[no-untyped-def]
