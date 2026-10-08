@@ -62,7 +62,7 @@ def main() -> int:
         except json.JSONDecodeError:
             fail(broken, f"{did}：payload 不是 JSON")
             continue
-        for key in ("topic", "role_id", "role_title", "turns", "cards", "kept"):
+        for key in ("topic", "role_id", "role_title", "turns", "cards"):
             if key not in thread:
                 fail(broken, f"{did}：payload 缺键 {key}")
         turns = thread.get("turns", [])
@@ -85,7 +85,10 @@ def main() -> int:
             for ref in card.get("based_on", []):
                 if ref not in known:
                     fail(broken, f"{did}：{card.get('card_id')} 引了账本外的编号 {ref}")
-        for card_id, material_id in thread.get("kept", {}).items():
+        # 收下为材料的卡片：新行（M12）在 kept_ref 稀疏映射里；老行在 `kept` map 里。
+        new_shape = any(key in thread for key in ("states", "kept_as", "kept_ref"))
+        kept_refs = thread.get("kept_ref") if new_shape else thread.get("kept")
+        for card_id, material_id in (kept_refs or {}).items():
             if material_id not in materials:
                 fail(broken, f"{did}：{card_id} 的 kept_ref {material_id} 在材料库里没有")
             want_ref = f"discussion:{did}#{card_id}"

@@ -124,7 +124,10 @@ async def run(client: httpx.AsyncClient, project_id: str) -> int:
             return 1
         show("cards", f"  · {card['card_id']} [{card['grounding']}] {card['statement'][:70]}")
 
-    kept = await client.post(f"/api/discussions/{did}/cards/{cards[0]['card_id']}/keep")
+    kept = await client.post(
+        f"/api/discussions/{did}/cards/{cards[0]['card_id']}/keep",
+        json={"as": "material"},
+    )
     if kept.status_code != 200:
         show("keep", f"失败 {kept.status_code} {kept.text[:300]}")
         return 1
