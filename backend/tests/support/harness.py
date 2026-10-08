@@ -334,6 +334,7 @@ class Harness:
             events=self.events,
             materials=self.materials,
             explorations=self.explorations,
+            discussions=self.discussions,
         )
 
     # —— 探索（M8）——
@@ -476,6 +477,15 @@ class Harness:
             materials=self.materials,
             uow=self.uow,
             clock=self.clock,
+        )
+
+    def dismiss_discussion_card(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import DismissDiscussionCard
+
+        return DismissDiscussionCard(
+            discussions=self.discussions,
+            discussion_writer=self.discussions,
+            uow=self.uow,
         )
 
     def run_sim_inquiry(self):  # type: ignore[no-untyped-def]
@@ -879,6 +889,7 @@ class Harness:
             say_to_thread=self.say_to_thread(),
             assemble_cards=self.assemble_cards(),
             keep_card=self.keep_discussion_card(),
+            dismiss_card=self.dismiss_discussion_card(),
             keep_sim_inquiry=self.keep_sim_inquiry(),
             close_discussion=self.close_discussion(),
             list_discussions=self.list_discussions(),

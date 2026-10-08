@@ -17,6 +17,7 @@ from pmstudio.application.use_cases import (
     DeleteMaterial,
     DigRound,
     DismissCandidate,
+    DismissDiscussionCard,
     EditEntry,
     ExportMarkdown,
     FetchMaterial,
@@ -62,6 +63,7 @@ class ApiServices:
     say_to_thread: SayToThread
     assemble_cards: AssembleCards
     keep_card: KeepDiscussionCard
+    dismiss_card: DismissDiscussionCard
     keep_sim_inquiry: KeepSimInquiry
     close_discussion: CloseDiscussion
     list_discussions: ListDiscussions

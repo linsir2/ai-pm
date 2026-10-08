@@ -26,6 +26,7 @@ from pmstudio.application.use_cases import (
     DeleteMaterial,
     DigRound,
     DismissCandidate,
+    DismissDiscussionCard,
     EditEntry,
     ExportMarkdown,
     FetchMaterial,
@@ -210,6 +211,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         events=bus,
         materials=materials,
         explorations=explorations,
+        discussions=discussions,
     )
     submit_opening = SubmitOpening(
         rounds=rounds,
@@ -448,6 +450,11 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             materials=materials,
             uow=uow,
             clock=clock,
+        ),
+        dismiss_card=DismissDiscussionCard(
+            discussions=discussions,
+            discussion_writer=discussions,
+            uow=uow,
         ),
         keep_sim_inquiry=keep_sim_inquiry,
         close_discussion=CloseDiscussion(

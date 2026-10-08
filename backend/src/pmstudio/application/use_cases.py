@@ -182,7 +182,7 @@ from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS
 from pmstudio.domain.authoring.views import DocumentView
-from pmstudio.domain.discussion.card import Card
+from pmstudio.domain.discussion.card import Card, CardState
 from pmstudio.domain.discussion.thread import (
     MAX_DISCUSSION_TURNS,
     Discussion,
@@ -318,6 +318,7 @@ class StartRound:
         events: EventPublisher,
         materials: MaterialStore,
         explorations: ExplorationReader,
+        discussions: DiscussionReader,
     ) -> None:
         self._documents = documents
         self._rounds = rounds
@@ -333,6 +334,7 @@ class StartRound:
         self._events = events
         self._materials = materials
         self._explorations = explorations
+        self._discussions = discussions
 
     async def create(
         self,
@@ -400,38 +402,68 @@ class StartRound:
     def _resolve_seeds(
         self, project_id: ProjectId, seed_ids: Sequence[str]
     ) -> tuple[SeedRef, ...]:
-        """解析 `"x-xxxx#H1"`：必须存在、同项目、已跑完、且被收下为 seed——缺一条就拒。"""
+        """解析 `"origin:id#条目id"`（如 `exploration:x-1#H1` / `discussion:d-1#C1`）。
+
+        每条都必须存在、同项目、且被收下为「下一轮输入」——缺一条就拒（人话给出哪条、为什么）。
+        """
 
         refs: list[SeedRef] = []
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[str, str, str]] = set()
         for raw in seed_ids:
-            exploration_id, _, candidate_id = raw.partition("#")
-            if not exploration_id or not candidate_id:
-                raise ShapeError(f"种子格式必须是 exploration_id#候选id：{raw}", seed=raw)
-            key = (exploration_id, candidate_id)
+            origin, sep, rest = raw.partition(":")
+            ref_id, hash_sep, item_id = rest.partition("#")
+            if (
+                not sep
+                or not hash_sep
+                or not origin
+                or not ref_id
+                or not item_id
+            ):
+                raise ShapeError(
+                    "种子格式必须是 来源:id#条目id（如 exploration:x-1#H1 /"
+                    f" discussion:d-1#C1）：{raw}",
+                    seed=raw,
+                )
+            key = (origin, ref_id, item_id)
             if key in seen:
                 continue
             seen.add(key)
-            exploration = self._explorations.get(ExplorationId(exploration_id))
-            if str(exploration.project_id) != str(project_id):
-                raise ShapeError("种子不属于这个项目", seed=raw)
-            if exploration.status is not ExplorationStatus.DONE:
-                raise ShapeError("这趟探索还没跑完，不能用它的产物", seed=raw)
-            candidate = next(
-                (
-                    item
-                    for item in exploration.candidates()
-                    if item.candidate_id == candidate_id
-                ),
-                None,
-            )
-            if (
-                candidate is None
-                or candidate.state is not CandidateState.KEPT
-                or candidate.kept_as != "seed"
-            ):
-                raise ShapeError("这条候选没有被收下为「下一轮输入」", seed=raw)
-            refs.append(SeedRef(exploration_id=exploration_id, candidate_id=candidate_id))
+            if origin == "exploration":
+                exploration = self._explorations.get(ExplorationId(ref_id))
+                if str(exploration.project_id) != str(project_id):
+                    raise ShapeError("种子不属于这个项目", seed=raw)
+                if exploration.status is not ExplorationStatus.DONE:
+                    raise ShapeError("这趟探索还没跑完，不能用它的产物", seed=raw)
+                candidate = next(
+                    (
+                        item
+                        for item in exploration.candidates()
+                        if item.candidate_id == item_id
+                    ),
+                    None,
+                )
+                if (
+                    candidate is None
+                    or candidate.state is not CandidateState.KEPT
+                    or candidate.kept_as != "seed"
+                ):
+                    raise ShapeError("这条候选没有被收下为「下一轮输入」", seed=raw)
+            elif origin == "discussion":
+                thread = self._discussions.get(DiscussionId(ref_id))
+                if str(thread.project_id) != str(project_id):
+                    raise ShapeError("种子不属于这个项目", seed=raw)
+                card = next(
+                    (item for item in thread.cards if item.card_id == item_id), None
+                )
+                if (
+                    card is None
+                    or card.state is not CardState.KEPT
+                    or card.kept_as != "seed"
+                ):
+                    raise ShapeError("这张卡没有被收下为「下一轮输入」", seed=raw)
+            else:
+                raise ShapeError(f"不认识的种子来源：{origin}", seed=raw)
+            refs.append(SeedRef(origin=origin, ref_id=ref_id, item_id=item_id))
         return tuple(refs)
 
     async def analyze(self, *, round_id: RoundId) -> None:
@@ -4200,7 +4232,11 @@ class AssembleCards:
 
 
 class KeepDiscussionCard:
-    """收下一张卡为材料：合成＋同 uow 落库＋记 ref；同卡重复收下幂等返。"""
+    """收下一张卡：`seed` 只记账；`material` 还会合成一份材料（同 sha 幂等）。
+
+    同去向重复收下幂等返（不再合成/写信）；换去向由领域拒（T5）。不发事件——
+    响应体就是真身，与收候选同一个口径。
+    """
 
     def __init__(
         self,
@@ -4218,27 +4254,59 @@ class KeepDiscussionCard:
         self._clock = clock
 
     async def __call__(
-        self, *, discussion_id: DiscussionId, card_id: str
+        self, *, discussion_id: DiscussionId, card_id: str, as_: str
     ) -> ThreadView:
         thread = self._discussions.get(discussion_id)
         card = _card_of(thread, card_id)
-        if card.kept_ref is not None:
+        if card.state is CardState.KEPT and card.kept_as == as_:
             return thread_view(thread)
-        parsed, content = discussion_material(card, thread_id=str(discussion_id))
+        if as_ == "material":
+            parsed, content = discussion_material(card, thread_id=str(discussion_id))
+            with self._uow:
+                packet = self._materials.put(
+                    project_id=thread.project_id,
+                    parsed=parsed,
+                    sha256=namespaced_material_sha(
+                        "discussion-material", parsed.source_ref
+                    ),
+                    content=content,
+                    now=self._clock.now(),
+                )
+                stored = self._discussions.get(discussion_id)
+                stored.keep_card(
+                    card_id, as_="material", material_id=packet.material_id
+                )
+                self._discussion_writer.save(stored)
+            return thread_view(stored)
         with self._uow:
-            packet = self._materials.put(
-                project_id=thread.project_id,
-                parsed=parsed,
-                sha256=namespaced_material_sha(
-                    "discussion-material", parsed.source_ref
-                ),
-                content=content,
-                now=self._clock.now(),
-            )
             stored = self._discussions.get(discussion_id)
-            stored.keep_card(card_id, packet.material_id)
+            stored.keep_card(card_id, as_="seed")
             self._discussion_writer.save(stored)
-        return thread_view(self._discussions.get(discussion_id))
+        return thread_view(stored)
+
+
+class DismissDiscussionCard:
+    """忽略一张卡：终态——不进灵感箱、不回流（T5）。已收下的由领域拒。"""
+
+    def __init__(
+        self,
+        *,
+        discussions: DiscussionReader,
+        discussion_writer: DiscussionWriter,
+        uow: UnitOfWork,
+    ) -> None:
+        self._discussions = discussions
+        self._discussion_writer = discussion_writer
+        self._uow = uow
+
+    async def __call__(
+        self, *, discussion_id: DiscussionId, card_id: str
+    ) -> ThreadView:
+        with self._uow:
+            stored = self._discussions.get(discussion_id)
+            stored.dismiss_card(card_id)
+            self._discussion_writer.save(stored)
+        return thread_view(stored)
 
 
 class CloseDiscussion:

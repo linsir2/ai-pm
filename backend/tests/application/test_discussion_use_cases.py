@@ -16,7 +16,7 @@ from pmstudio.application.use_cases import (
 )
 from pmstudio.domain.discussion.thread import QuestionSnapshot
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
-from pmstudio.domain.shared.errors import ShapeError
+from pmstudio.domain.shared.errors import CardNotReviewable, ShapeError
 from pmstudio.domain.shared.ids import DiscussionId
 from pmstudio.harness.errors import PacketParseError
 from tests.support.builders import PROJECT, ROUND_ID, make_material_packet
@@ -240,14 +240,34 @@ async def test_keep_card_puts_material_and_records_ref() -> None:
     did = DiscussionId(started.thread_id)
     await harness.assemble_cards()(discussion_id=did)
 
-    view = await harness.keep_discussion_card()(discussion_id=did, card_id="C1")
+    view = await harness.keep_discussion_card()(
+        discussion_id=did, card_id="C1", as_="material"
+    )
     kept = next(card for card in view.cards if card.card_id == "C1")
     assert kept.kept_ref
+    assert (kept.state, kept.kept_as) == ("kept", "material")
 
     packet = harness.materials.get(kept.kept_ref or "")
     assert packet is not None
     assert packet.parsed.origin == "discussion"
     assert packet.parsed.source_ref == f"discussion:{did}#C1"
+
+
+async def test_keep_card_as_seed_writes_no_material() -> None:
+    harness = Harness(replies={"discussion_cards": _cards_reply_2()})
+    harness.seed_project()
+    _seed_e1(harness)
+    started = await _start(harness)
+    did = DiscussionId(started.thread_id)
+    await harness.assemble_cards()(discussion_id=did)
+
+    view = await harness.keep_discussion_card()(
+        discussion_id=did, card_id="C1", as_="seed"
+    )
+    kept = next(card for card in view.cards if card.card_id == "C1")
+    assert (kept.state, kept.kept_as, kept.kept_ref) == ("kept", "seed", None)
+    # 收种子不回流材料：材料库一份都没多
+    assert harness.materials.list_for_project(PROJECT, current=frozenset()) == ()
 
 
 async def test_keep_same_card_twice_returns_same_material() -> None:
@@ -258,12 +278,94 @@ async def test_keep_same_card_twice_returns_same_material() -> None:
     did = DiscussionId(started.thread_id)
     await harness.assemble_cards()(discussion_id=did)
 
-    first = await harness.keep_discussion_card()(discussion_id=did, card_id="C1")
+    first = await harness.keep_discussion_card()(
+        discussion_id=did, card_id="C1", as_="material"
+    )
     ref = next(card for card in first.cards if card.card_id == "C1").kept_ref
-    second = await harness.keep_discussion_card()(discussion_id=did, card_id="C1")
+    second = await harness.keep_discussion_card()(
+        discussion_id=did, card_id="C1", as_="material"
+    )
     again = next(card for card in second.cards if card.card_id == "C1").kept_ref
     assert again == ref
     assert len(harness.materials.list_for_project(PROJECT, current=frozenset())) == 1
+
+
+async def test_keep_card_bad_same_card_other_destination_raises() -> None:
+    harness = Harness(replies={"discussion_cards": _cards_reply_2()})
+    harness.seed_project()
+    _seed_e1(harness)
+    started = await _start(harness)
+    did = DiscussionId(started.thread_id)
+    await harness.assemble_cards()(discussion_id=did)
+    await harness.keep_discussion_card()(discussion_id=did, card_id="C1", as_="seed")
+
+    with pytest.raises(CardNotReviewable) as caught:
+        await harness.keep_discussion_card()(
+            discussion_id=did, card_id="C1", as_="material"
+        )
+    assert caught.value.code == "invariant:T5"
+
+
+async def test_dismiss_card_marks_it_and_blocks_keep() -> None:
+    harness = Harness(replies={"discussion_cards": _cards_reply_2()})
+    harness.seed_project()
+    _seed_e1(harness)
+    started = await _start(harness)
+    did = DiscussionId(started.thread_id)
+    await harness.assemble_cards()(discussion_id=did)
+
+    view = await harness.dismiss_discussion_card()(discussion_id=did, card_id="C1")
+    dismissed = next(card for card in view.cards if card.card_id == "C1")
+    assert (dismissed.state, dismissed.kept_as, dismissed.kept_ref) == (
+        "dismissed",
+        None,
+        None,
+    )
+    # 重复忽略幂等
+    again = await harness.dismiss_discussion_card()(discussion_id=did, card_id="C1")
+    assert next(card for card in again.cards if card.card_id == "C1").state == "dismissed"
+
+    with pytest.raises(CardNotReviewable) as caught:
+        await harness.keep_discussion_card()(
+            discussion_id=did, card_id="C1", as_="seed"
+        )
+    assert caught.value.code == "invariant:T5"
+
+
+async def test_start_round_resolves_discussion_card_seed_and_rejects_the_rest() -> None:
+    """起轮认讨论卡种子（M12）：收下为 seed 的能带进轮，其余路径全拒。"""
+
+    harness = Harness(replies={"discussion_cards": _cards_reply_2()})
+    harness.seed_project()
+    _seed_e1(harness)
+    started = await _start(harness)
+    did = DiscussionId(started.thread_id)
+    await harness.assemble_cards()(discussion_id=did)
+    await harness.keep_discussion_card()(discussion_id=did, card_id="C1", as_="seed")
+
+    starter = harness.start_round()
+    round_id = await starter.create(
+        project_id=PROJECT,
+        user_input="把 C1 记下来",
+        seed_ids=[f"discussion:{did}#C1"],
+    )
+    seeds = [
+        (ref.origin, ref.ref_id, ref.item_id)
+        for ref in harness.rounds.get(round_id).seeds
+    ]
+    assert seeds == [("discussion", str(did), "C1")]
+
+    with pytest.raises(ShapeError):  # C2 还没收下
+        await starter.create(
+            project_id=PROJECT, user_input="再试一次", seed_ids=[f"discussion:{did}#C2"]
+        )
+    with pytest.raises(ShapeError):  # 收成材料的也不能当「下一轮输入」
+        await harness.keep_discussion_card()(
+            discussion_id=did, card_id="C2", as_="material"
+        )
+        await starter.create(
+            project_id=PROJECT, user_input="再试一次", seed_ids=[f"discussion:{did}#C2"]
+        )
 
 
 async def test_discussion_material_sorts_to_simulated() -> None:

@@ -274,20 +274,28 @@ async def test_start_round_records_kept_seeds_and_rejects_bad_ones() -> None:
 
     starter = harness.start_round()
     round_id = await starter.create(
-        project_id=PROJECT, user_input="按调研说的去问数据组", seed_ids=[f"{xid}#H1"]
+        project_id=PROJECT,
+        user_input="按调研说的去问数据组",
+        seed_ids=[f"exploration:{xid}#H1"],
     )
     seeds = [
-        (ref.exploration_id, ref.candidate_id)
+        (ref.origin, ref.ref_id, ref.item_id)
         for ref in harness.rounds.get(round_id).seeds
     ]
-    assert seeds == [(str(xid), "H1")]
+    assert seeds == [("exploration", str(xid), "H1")]
 
     with pytest.raises(ShapeError):  # 没被收下的候选不能当种子
         await starter.create(
-            project_id=PROJECT, user_input="再试一次", seed_ids=[f"{xid}#H2"]
+            project_id=PROJECT,
+            user_input="再试一次",
+            seed_ids=[f"exploration:{xid}#H2"],
         )
-    with pytest.raises(ShapeError):  # 形状不对
+    with pytest.raises(ShapeError):  # 形状不对（老格式没有来源前缀）
         await starter.create(project_id=PROJECT, user_input="再试一次", seed_ids=["nope"])
+    with pytest.raises(ShapeError):  # 不认识的来源
+        await starter.create(
+            project_id=PROJECT, user_input="再试一次", seed_ids=[f"gap:{xid}#H1"]
+        )
 
 
 @dataclass

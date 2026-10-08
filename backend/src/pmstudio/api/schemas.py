@@ -26,8 +26,9 @@ class StartRoundRequest(BaseModel):
     input: str = Field(min_length=1)
     #: 这一轮带进来的材料 id（工具层 C-2）；不传 = 不带材料
     material_ids: list[str] = Field(default_factory=list)
-    #: 这一轮带进来的调研种子（M8.1：`探索id#候选id`；不传 = 不带种子）——
-    #: 缺了它前端发的种子会被静默丢掉（M8 的教训），所以这里必须显式声明。
+    #: 这一轮带进来的过目产物种子（M12 统一格式：`来源:id#条目id`，如
+    #: `exploration:x-1#H1` / `discussion:d-1#C1`；不传 = 不带种子）——
+    #: 缺了它前端发的种子会被静默丢掉（M8.1 的教训），所以这里必须显式声明。
     seed_ids: list[str] = Field(default_factory=list)
 
 
@@ -42,8 +43,8 @@ class StartExplorationRequest(BaseModel):
     scope: ExplorationScopeRequest
 
 
-class KeepCandidateRequest(BaseModel):
-    """收下一条候选。JSON 键是 `as`——Python 关键字只能用别名接。"""
+class KeepRequest(BaseModel):
+    """收下一条过目产物（调研候选 / 讨论卡同形）。JSON 键是 `as`——Python 关键字只能用别名接。"""
 
     as_: Literal["seed", "material"] = Field(alias="as")
 

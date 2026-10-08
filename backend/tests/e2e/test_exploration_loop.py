@@ -108,11 +108,11 @@ async def test_kept_seed_is_recorded_on_the_next_round() -> None:
             kind="start",
             project_id=str(PROJECT),
             user_input="调研说运营按客户名找单；顺便去问数据组客户合并的归属",
-            seed_ids=(f"{started.exploration_id}#B1",),
+            seed_ids=(f"exploration:{started.exploration_id}#B1",),
         )
     )
 
     round_ = harness.rounds.get(RoundId(view.round_id))
     assert [
-        (ref.exploration_id, ref.candidate_id) for ref in round_.seeds
-    ] == [(str(started.exploration_id), "B1")]
+        (ref.origin, ref.ref_id, ref.item_id) for ref in round_.seeds
+    ] == [("exploration", str(started.exploration_id), "B1")]

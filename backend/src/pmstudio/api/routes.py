@@ -12,7 +12,7 @@ from pmstudio.api.schemas import (
     CreateProjectRequest,
     EditEntryRequest,
     FetchRequest,
-    KeepCandidateRequest,
+    KeepRequest,
     KeepSimInquiryRequest,
     OpeningRequest,
     RunSimReviewRequest,
@@ -467,7 +467,7 @@ async def abandon_exploration(request: Request, exploration_id: str):  # type: i
 
 @router.post("/explorations/{exploration_id}/candidates/{candidate_id}/keep")
 async def keep_candidate(  # type: ignore[no-untyped-def]
-    request: Request, exploration_id: str, candidate_id: str, body: KeepCandidateRequest
+    request: Request, exploration_id: str, candidate_id: str, body: KeepRequest
 ):
     """收下一条候选：`seed` = 预填下一轮输入；`material` = 落一份材料（幂等）。"""
 
@@ -546,12 +546,25 @@ async def assemble_cards(request: Request, discussion_id: str):  # type: ignore[
 
 @router.post("/discussions/{discussion_id}/cards/{card_id}/keep")
 async def keep_discussion_card(  # type: ignore[no-untyped-def]
-    request: Request, discussion_id: str, card_id: str
+    request: Request, discussion_id: str, card_id: str, body: KeepRequest
 ):
-    """收下一张卡为材料（无 body：收下即默认回流口径 SIMULATED；同卡重复收下幂等）。"""
+    """收下一张卡：`seed` = 预填下一轮输入；`material` = 落一份材料（幂等）。"""
 
     return as_json(
         await services_of(request).keep_card(
+            discussion_id=DiscussionId(discussion_id), card_id=card_id, as_=body.as_
+        )
+    )
+
+
+@router.post("/discussions/{discussion_id}/cards/{card_id}/dismiss")
+async def dismiss_discussion_card(  # type: ignore[no-untyped-def]
+    request: Request, discussion_id: str, card_id: str
+):
+    """忽略一张卡：终态——不进灵感箱、不回流（同卡重复忽略幂等）。"""
+
+    return as_json(
+        await services_of(request).dismiss_card(
             discussion_id=DiscussionId(discussion_id), card_id=card_id
         )
     )

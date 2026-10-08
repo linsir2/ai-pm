@@ -86,7 +86,7 @@ async def test_free_topic_thread_to_kept_card_flows_into_a_round_as_simulated() 
     assert [card.card_id for card in assembled.cards] == ["C1"]
 
     kept = await harness.keep_discussion_card()(
-        discussion_id=DiscussionId(did), card_id="C1"
+        discussion_id=DiscussionId(did), card_id="C1", as_="material"
     )
     card = next(item for item in kept.cards if item.card_id == "C1")
     assert card.kept_ref

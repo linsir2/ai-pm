@@ -1868,7 +1868,7 @@ def exploration_view(exploration: Exploration) -> ExplorationView:
 # ── 讨论（M9-T3）：线程与卡片的投影 ────────────────────────────────────────────
 # 字段名冻结（T6 前端逐字对）：thread_id/project_id/topic/question/role_id/role_title/
 # status/turns/cards/created_at；TurnView{index,role,text,based_on}；
-# CardView{card_id,statement,grounding,based_on,kept_ref}。
+# CardView{card_id,statement,grounding,based_on,kept_ref,state,kept_as}（M12 加过目状态）。
 
 
 @dataclass(frozen=True, slots=True)
@@ -1894,6 +1894,8 @@ class CardView:
     grounding: str
     based_on: tuple[str, ...] = ()
     kept_ref: str | None = None
+    state: str = "new"
+    kept_as: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1942,6 +1944,8 @@ def thread_view(thread: Discussion) -> ThreadView:
                 grounding=card.grounding.value,
                 based_on=tuple(str(eid) for eid in card.based_on),
                 kept_ref=card.kept_ref,
+                state=card.state.value,
+                kept_as=card.kept_as,
             )
             for card in thread.cards
         ),

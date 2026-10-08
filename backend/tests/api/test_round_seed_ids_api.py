@@ -51,10 +51,33 @@ CLAIMS_REPLY = json.dumps(
     ensure_ascii=False,
 )
 
+SAY_REPLY = json.dumps(
+    {"text": "我来挑个刺：先把范围想清楚。", "based_on": []}, ensure_ascii=False
+)
+
+CARDS_REPLY = json.dumps(
+    {
+        "cards": [
+            {
+                "statement": "给导出加一个按客户名找单的快捷入口",
+                "grounding": "invented",
+                "based_on": [],
+            }
+        ]
+    },
+    ensure_ascii=False,
+)
+
 
 def _app() -> Harness:
     harness = Harness(
-        replies={"inquiry": INQUIRY_REPLY, "claims": CLAIMS_REPLY}, seat_replies={}
+        replies={
+            "inquiry": INQUIRY_REPLY,
+            "claims": CLAIMS_REPLY,
+            "discussion": SAY_REPLY,
+            "discussion_cards": CARDS_REPLY,
+        },
+        seat_replies={},
     )
     harness.seed_project()
     harness.documents.seed(document_with_feature())
@@ -85,15 +108,56 @@ async def test_start_round_carries_seed_ids() -> None:
             json={
                 "input": "调研说运营按客户名找单，先记下来",
                 "material_ids": [],
-                "seed_ids": [f"{xid}#H1"],
+                "seed_ids": [f"exploration:{xid}#H1"],
             },
         )
         assert response.status_code == 200, response.text
         round_id = response.json()["round_id"]
 
     round_ = harness.rounds.get(RoundId(round_id))
-    assert [(ref.exploration_id, ref.candidate_id) for ref in round_.seeds] == [
-        (xid, "H1")
+    assert [(ref.origin, ref.ref_id, ref.item_id) for ref in round_.seeds] == [
+        ("exploration", xid, "H1")
+    ]
+
+
+async def test_start_round_carries_discussion_card_seed_ids() -> None:
+    """讨论卡种子也要穿过 HTTP 边界（M12）：收下为 seed 的卡 → 起轮 → Round 上有回链。"""
+
+    harness = _app()
+    app = create_app(harness.api_services(model_name="m"))
+    async with async_client(app) as client:
+        started = await client.post(
+            f"/api/projects/{PROJECT}/discussions",
+            json={"topic": "导出优化", "role_id": "dlg.challenger"},
+        )
+        assert started.status_code == 200, started.text
+        did = started.json()["thread_id"]
+        said = await client.post(
+            f"/api/discussions/{did}/say", json={"text": "我想做导出"}
+        )
+        assert said.status_code == 200, said.text
+        cards = await client.post(f"/api/discussions/{did}/cards")
+        assert cards.status_code == 200, cards.text
+        card_id = cards.json()["cards"][0]["card_id"]
+        kept = await client.post(
+            f"/api/discussions/{did}/cards/{card_id}/keep", json={"as": "seed"}
+        )
+        assert kept.status_code == 200, kept.text
+
+        response = await client.post(
+            f"/api/projects/{PROJECT}/rounds",
+            json={
+                "input": "调研说运营按客户名找单，先记下来",
+                "material_ids": [],
+                "seed_ids": [f"discussion:{did}#{card_id}"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        round_id = response.json()["round_id"]
+
+    round_ = harness.rounds.get(RoundId(round_id))
+    assert [(ref.origin, ref.ref_id, ref.item_id) for ref in round_.seeds] == [
+        ("discussion", did, card_id)
     ]
 
 
@@ -106,8 +170,26 @@ async def test_start_round_rejects_unknown_seed() -> None:
             json={
                 "input": "带一条不存在的种子",
                 "material_ids": [],
-                "seed_ids": ["x-nope#H1"],
+                "seed_ids": ["exploration:x-nope#H1"],
             },
         )
     assert response.status_code == 404
     assert response.json()["code"] == "unknown_exploration"
+
+
+async def test_start_round_rejects_legacy_seed_format_with_human_message() -> None:
+    """老格式（没有来源前缀）现在给 422 人话——格式换了就得说清换成了什么。"""
+
+    harness = _app()
+    app = create_app(harness.api_services(model_name="m"))
+    async with async_client(app) as client:
+        response = await client.post(
+            f"/api/projects/{PROJECT}/rounds",
+            json={
+                "input": "带一条老格式的种子",
+                "material_ids": [],
+                "seed_ids": ["x-1#H1"],
+            },
+        )
+    assert response.status_code == 422
+    assert "来源:id#条目id" in response.json()["message"]
