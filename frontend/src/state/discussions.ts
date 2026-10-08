@@ -92,15 +92,30 @@ export interface DiscussionAnchor {
   role_id: string | null;
 }
 
+/** 卡上的过目动作（与后端 keep/dismiss 两个端点一一对应；M12）。 */
+export type CardAction = "keep-seed" | "keep-material" | "dismiss";
+
 /**
- * 这张卡现在能不能收下：**只看还没收（`kept_ref` 空）**。
+ * 这张卡现在能做什么：只有 `new` 三条路都通；收下/忽略之后后端也会拒（T5），
+ * 界面先不画按钮。
  *
- * **不看线程开没开**：后端 `thread.py::keep_card` 收下是回流动作，判据只读 `turns`
- * （只读的是 turns，不是 status）——关掉的线程照样能收下那张卡。这里藏掉按钮，
- * 后端那个分支就没有消费者了。
+ * **不看线程开没开**：后端 `thread.py::keep_card` 收下是回流动作，不判 status——
+ * 关掉的线程照样能收下/忽略那张卡。这里藏掉按钮，后端那个分支就没有消费者了。
  */
-export function cardKeepable(card: CardView): boolean {
-  return card.kept_ref === null;
+export function cardActions(card: CardView): CardAction[] {
+  return card.state === "new" ? ["keep-seed", "keep-material", "dismiss"] : [];
+}
+
+/** 已处理卡片的状态文案；`new` 没有文案（状态由动作按钮表达）。 */
+export function cardStatusText(card: CardView): string | null {
+  if (card.state === "new") return null;
+  if (card.state === "dismissed") return "已忽略";
+  return card.kept_as === "seed" ? "已收下为下一轮输入" : "已收下为材料";
+}
+
+/** 收下为「下一轮输入」时往输入框里写的话：卡片原话，不替模型补字。 */
+export function cardSeedText(card: CardView): string {
+  return card.statement;
 }
 
 /**

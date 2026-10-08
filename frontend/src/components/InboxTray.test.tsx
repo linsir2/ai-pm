@@ -1,14 +1,44 @@
 // @vitest-environment jsdom
-/* 过目台（M8）：进行中 / 失败（重试、放弃）/ 候选卡三个动作 / 超限提示。
-   动作按钮的参数按"探索 id + 整条候选"给，上层拿它直连后端。 */
+/* 灵感箱（M12）：讨论卡 + 调研候选统一过目。
+   进行中 / 失败（重试、放弃）/ 候选卡三动作 / 卡三动作 + 聊聊 / 超限提示。
+   动作按钮的参数按"来源 id + 整条条目"给，上层拿它直连后端。 */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { CandidateView, ExplorationView } from "../api/types";
-import { ExplorationTray } from "./ExplorationTray";
+import type { CardView, CandidateView, ExplorationView, ThreadView } from "../api/types";
+import { InboxTray } from "./InboxTray";
 
 afterEach(cleanup);
+
+function card(over: Partial<CardView> = {}): CardView {
+  return {
+    card_id: "C1",
+    statement: "导出先只做全量，筛选等有人骂再加",
+    grounding: "invented",
+    based_on: [],
+    kept_ref: null,
+    state: "new",
+    kept_as: null,
+    ...over,
+  };
+}
+
+function thread(over: Partial<ThreadView> = {}): ThreadView {
+  return {
+    thread_id: "d-1",
+    project_id: "p1",
+    topic: "导出要不要做筛选",
+    question: null,
+    role_id: "dlg.challenger",
+    role_title: "反方",
+    status: "open",
+    turns: [],
+    cards: [],
+    created_at: "2026-10-05T10:00:00+00:00",
+    ...over,
+  };
+}
 
 function candidate(over: Partial<CandidateView> = {}): CandidateView {
   return {
@@ -45,8 +75,9 @@ function exploration(over: Partial<ExplorationView> = {}): ExplorationView {
   };
 }
 
-function draw(over: Partial<Parameters<typeof ExplorationTray>[0]> = {}) {
+function draw(over: Partial<Parameters<typeof InboxTray>[0]> = {}) {
   const props = {
+    threads: [] as ThreadView[],
     explorations: [exploration()],
     pending: false,
     onRetry: vi.fn(),
@@ -54,14 +85,17 @@ function draw(over: Partial<Parameters<typeof ExplorationTray>[0]> = {}) {
     onKeepSeed: vi.fn(),
     onKeepMaterial: vi.fn(),
     onDismiss: vi.fn(),
+    onKeepCard: vi.fn(),
+    onDismissCard: vi.fn(),
+    onDiscuss: vi.fn(),
     onStartDocument: vi.fn(),
     ...over,
   };
-  render(<ExplorationTray {...props} />);
+  render(<InboxTray {...props} />);
   return props;
 }
 
-describe("ExplorationTray", () => {
+describe("InboxTray", () => {
   it("空态说人话", () => {
     draw({ explorations: [] });
 
@@ -76,7 +110,7 @@ describe("ExplorationTray", () => {
     expect(screen.getByText(/证伪它：如果用户只导全量/)).toBeTruthy();
   });
 
-  it("三个动作各自把探索 id 与整条候选交出去", () => {
+  it("候选三个动作各自把探索 id 与整条候选交出去（忽略不再叫删掉）", () => {
     const props = draw();
     const item = exploration();
 
@@ -86,16 +120,68 @@ describe("ExplorationTray", () => {
     fireEvent.click(screen.getByRole("button", { name: "收下为材料" }));
     expect(props.onKeepMaterial).toHaveBeenCalledWith("x-1", item.candidates[0]);
 
-    fireEvent.click(screen.getByRole("button", { name: "删掉" }));
+    fireEvent.click(screen.getByRole("button", { name: "忽略" }));
     expect(props.onDismiss).toHaveBeenCalledWith("x-1", item.candidates[0]);
   });
 
-  it("已收下 / 已删掉的候选不再上台（也没有动作按钮）", () => {
+  it("讨论卡：原文、接地标签、来自哪条讨论都摆出来，三动作 + 聊聊各交各的", () => {
+    const props = draw({
+      explorations: [],
+      threads: [
+        thread({
+          cards: [
+            card({ card_id: "C1", grounding: "invented" }),
+            card({
+              card_id: "C2",
+              statement: "有据的一条",
+              grounding: "document",
+              based_on: ["E1"],
+            }),
+          ],
+        }),
+      ],
+    });
+
+    expect(screen.getByText("凭空推演")).toBeTruthy();
+    expect(screen.getByText("文档里有据")).toBeTruthy();
+    expect(screen.getAllByText(/来自讨论：导出要不要做筛选/)).toHaveLength(2);
+
+    const first = screen.getAllByRole("article")[0]!;
+    fireEvent.click(within(first).getByRole("button", { name: "收下为下一轮输入" }));
+    expect(props.onKeepCard).toHaveBeenLastCalledWith("d-1", "C1", "seed");
+
+    fireEvent.click(within(first).getByRole("button", { name: "收下为材料" }));
+    expect(props.onKeepCard).toHaveBeenLastCalledWith("d-1", "C1", "material");
+
+    fireEvent.click(within(first).getByRole("button", { name: "忽略" }));
+    expect(props.onDismissCard).toHaveBeenCalledWith("d-1", "C1");
+
+    fireEvent.click(within(first).getByRole("button", { name: "聊聊" }));
+    expect(props.onDiscuss).toHaveBeenCalledWith("导出先只做全量，筛选等有人骂再加");
+  });
+
+  it("候选也要能「聊聊」（带着它的原话开线程）", () => {
+    const props = draw();
+
+    fireEvent.click(screen.getByRole("button", { name: "聊聊" }));
+
+    expect(props.onDiscuss).toHaveBeenCalledWith("导出要支持按状态筛选");
+  });
+
+  it("已处理的条目不再上台：收下/忽略的卡、已收/已删的候选都没有", () => {
     draw({
+      threads: [
+        thread({
+          cards: [
+            card({ card_id: "C1", state: "kept", kept_as: "seed" }),
+            card({ card_id: "C2", state: "dismissed" }),
+          ],
+        }),
+      ],
       explorations: [
         exploration({
           candidates: [
-            candidate({ candidate_id: "H1", state: "kept", kept_as: "seed" }),
+            candidate({ candidate_id: "H1", state: "kept", kept_as: "material", kept_ref: "m-1" }),
             candidate({ candidate_id: "B1", state: "dismissed" }),
           ],
         }),
@@ -146,19 +232,19 @@ describe("ExplorationTray", () => {
     expect(props.onStartDocument).toHaveBeenCalledTimes(1);
   });
 
-  it("有动作在途时重试 / 放弃点不下去（跑中放弃走不进后端）", () => {
+  it("有动作在途时全部点不动（防连点）", () => {
     const props = draw({
+      threads: [thread({ cards: [card()] })],
       explorations: [
         exploration({ status: "failed", failure_reason: "模型调用超时", candidates: [] }),
       ],
       pending: true,
     });
 
+    expect((screen.getByRole("button", { name: "重试" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "放弃" }) as HTMLButtonElement).disabled).toBe(true);
     expect(
-      (screen.getByRole("button", { name: "重试" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-    expect(
-      (screen.getByRole("button", { name: "放弃" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "收下为下一轮输入" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(props.onAbandon).not.toHaveBeenCalled();
   });

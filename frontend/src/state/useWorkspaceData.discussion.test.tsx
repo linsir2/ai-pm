@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-/* 讨论区接进数据编排（M9-T6）：说一轮成对落、失败成对不落、收卡标上 kept_ref。
+/* 讨论区接进数据编排（M9/M12）：说一轮成对落、失败成对不落、
+   收卡（种子/材料）与忽略都替换线程，种子成功才预填输入框。
    范式照 `useWorkspaceData.test.tsx`（M8.1 已验证的 `vi.hoisted`）：全仓唯一一处
    `vi.mock` 在那边，这里照它的形状再开一处——每个测试文件各 mock 各的，模块缓存互不干扰。 */
 
@@ -7,12 +8,13 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 
 import { ApiError } from "../api/client";
-import type { ThreadView } from "../api/types";
+import type { CardView, ThreadView } from "../api/types";
 import { useWorkspaceData } from "./useWorkspaceData";
 
-const { sayToThread, keepDiscussionCard } = vi.hoisted(() => ({
+const { sayToThread, keepDiscussionCard, dismissDiscussionCard } = vi.hoisted(() => ({
   sayToThread: vi.fn(),
   keepDiscussionCard: vi.fn(),
+  dismissDiscussionCard: vi.fn(),
 }));
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -24,6 +26,7 @@ vi.mock("../api/client", async (importOriginal) => {
       schema: async () => null,
       sayToThread,
       keepDiscussionCard,
+      dismissDiscussionCard,
     },
   };
 });
@@ -41,6 +44,19 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
     turns: [],
     cards: [],
     created_at: "2026-10-05T10:00:00+00:00",
+    ...over,
+  };
+}
+
+function card(over: Partial<CardView> = {}): CardView {
+  return {
+    card_id: "C1",
+    statement: "导出先只做全量，筛选等有人骂再加",
+    grounding: "invented",
+    based_on: [],
+    kept_ref: null,
+    state: "new",
+    kept_as: null,
     ...over,
   };
 }
@@ -91,39 +107,71 @@ it("说一轮失败：成对都不落，线程原样（模型坏包时后端一�
   expect(result.current.state.error).toContain("两次都没解析出来");
 });
 
-it("收下卡片成功：那一张的 kept_ref 标上材料 id", async () => {
+it("收下为材料成功：state/kept_as/kept_ref 落进线程，不动输入框", async () => {
   keepDiscussionCard.mockResolvedValue(
     afterOneSay({
-      cards: [
-        {
-          card_id: "C1",
-          statement: "导出先只做全量，筛选等有人骂再加",
-          grounding: "invented",
-          based_on: [],
-          kept_ref: "m-1",
-        },
-      ],
+      cards: [card({ state: "kept", kept_as: "material", kept_ref: "m-1" })],
     }),
   );
   const { result } = renderHook(() => useWorkspaceData());
   await act(async () => {});
 
   await act(async () => {
-    await result.current.keepDiscussionCard("d-1", "C1");
+    await result.current.keepDiscussionCard("d-1", "C1", "material");
   });
 
-  expect(result.current.discussions[0]?.cards[0]?.kept_ref).toBe("m-1");
+  const kept = result.current.discussions[0]?.cards[0];
+  expect([kept?.state, kept?.kept_as, kept?.kept_ref]).toEqual([
+    "kept",
+    "material",
+    "m-1",
+  ]);
+  expect(result.current.roundInput).toBe("");
+  expect(result.current.pendingSeeds).toEqual([]);
 });
 
-it("收卡失败：kept_ref 仍是空（界面不会自己给一张卡盖上已收下）", async () => {
-  keepDiscussionCard.mockRejectedValueOnce(new ApiError("invariant:ThreadClosed", "线程已关闭"));
+it("收下为种子成功：预填输入框并记下 `discussion:线程#卡` 种子 id", async () => {
+  keepDiscussionCard.mockResolvedValue(
+    afterOneSay({ cards: [card({ state: "kept", kept_as: "seed" })] }),
+  );
   const { result } = renderHook(() => useWorkspaceData());
   await act(async () => {});
 
   await act(async () => {
-    await result.current.keepDiscussionCard("d-1", "C1");
+    await result.current.keepDiscussionCard("d-1", "C1", "seed");
   });
 
-  expect(result.current.discussions[0]?.cards[0]?.kept_ref).toBeUndefined();
-  expect(result.current.state.error).toContain("线程已关闭");
+  expect(result.current.roundInput).toContain("导出先只做全量，筛选等有人骂再加");
+  expect(result.current.pendingSeeds).toEqual(["discussion:d-1#C1"]);
+});
+
+it("收种子失败：输入框与 pendingSeeds 原样不动（毒种子进不来）", async () => {
+  keepDiscussionCard.mockRejectedValueOnce(
+    new ApiError("invariant:T5", "卡片 C1 已经是「已忽略」，不能再收下"),
+  );
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+
+  await act(async () => {
+    await result.current.keepDiscussionCard("d-1", "C1", "seed");
+  });
+
+  expect(result.current.roundInput).toBe("");
+  expect(result.current.pendingSeeds).toEqual([]);
+  expect(result.current.state.error).toContain("已忽略");
+});
+
+it("忽略成功：卡片 state=dismissed 替换进线程", async () => {
+  dismissDiscussionCard.mockResolvedValue(
+    afterOneSay({ cards: [card({ state: "dismissed" })] }),
+  );
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+
+  await act(async () => {
+    await result.current.dismissDiscussionCard("d-1", "C1");
+  });
+
+  expect(result.current.discussions[0]?.cards[0]?.state).toBe("dismissed");
+  expect(result.current.state.error).toBeNull();
 });

@@ -7,13 +7,18 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { ApiError, api } from "../api/client";
 import type { AnswersBody, EditBody, OpeningBody } from "../api/client";
-import { appendSeedText, buildExplorationBody, buildStart } from "../api/payload";
+import {
+  appendSeedText,
+  buildExplorationBody,
+  buildStart,
+  discussionSeedId,
+  explorationSeedId,
+} from "../api/payload";
 import type { ExplorationAnchor } from "../api/payload";
-import { resolveRoleId } from "./discussions";
+import { cardSeedText, resolveRoleId } from "./discussions";
 import type { DiscussionAnchor } from "./discussions";
 import { seedText } from "./explorations";
 import type {
-  CandidateView,
   EditResult,
   ExplorationView,
   MaterialSummaryView,
@@ -325,10 +330,9 @@ export function useWorkspaceData() {
     [run, roundInput, pendingMaterials, pendingSeeds],
   );
 
-  /** 收下一条候选为"下一轮输入"：把话并进输入框，并记下种子 id（去重）。 */
-  const addSeed = useCallback((candidate: CandidateView, explorationId: string) => {
-    const seedId = `${explorationId}#${candidate.candidate_id}`;
-    setRoundInput((text) => appendSeedText(text, seedText(candidate)));
+  /** 收下一条"下一轮输入"：把话并进输入框，并记下种子 id（去重）。候选与卡片共用。 */
+  const addSeed = useCallback((seedId: string, text: string) => {
+    setRoundInput((current) => appendSeedText(current, text));
     setPendingSeeds((list) => (list.includes(seedId) ? list : [...list, seedId]));
   }, []);
 
@@ -379,7 +383,9 @@ export function useWorkspaceData() {
         // 否则框里有话、后端没收下，下次起轮整轮 422 且种子删不掉（无删除 UI）。
         if (as === "seed") {
           const kept = view.candidates.find((item) => item.candidate_id === candidateId);
-          if (kept !== undefined) addSeed(kept, explorationId);
+          if (kept !== undefined) {
+            addSeed(explorationSeedId(explorationId, kept.candidate_id), seedText(kept));
+          }
         }
       }),
     [replaceExploration, run, addSeed],
@@ -437,11 +443,30 @@ export function useWorkspaceData() {
     [replaceThread, run],
   );
 
-  /** 收下一张卡为材料：返回的线程里那张卡的 kept_ref 有值了。 */
+  /**
+   * 收下一张卡：`seed` = 预填下一轮输入、`material` = 落材料。
+   * 成功才预填（同候选的 M8.1 教训）；失败走 `run()` 的 banner，本地状态不动。
+   */
   const keepDiscussionCard = useCallback(
+    (discussionId: string, cardId: string, as: "seed" | "material") =>
+      run("discussion", async () => {
+        const view = await api.keepDiscussionCard(discussionId, cardId, as);
+        replaceThread(view);
+        if (as === "seed") {
+          const kept = view.cards.find((item) => item.card_id === cardId);
+          if (kept !== undefined) {
+            addSeed(discussionSeedId(discussionId, kept.card_id), cardSeedText(kept));
+          }
+        }
+      }),
+    [replaceThread, run, addSeed],
+  );
+
+  /** 忽略一张卡：终态——不进灵感箱、不回流。 */
+  const dismissDiscussionCard = useCallback(
     (discussionId: string, cardId: string) =>
       run("discussion", async () => {
-        replaceThread(await api.keepDiscussionCard(discussionId, cardId));
+        replaceThread(await api.dismissDiscussionCard(discussionId, cardId));
       }),
     [replaceThread, run],
   );
@@ -711,6 +736,7 @@ export function useWorkspaceData() {
     sayToThread,
     assembleCards,
     keepDiscussionCard,
+    dismissDiscussionCard,
     closeDiscussion,
     roundInput,
     setRoundInput,

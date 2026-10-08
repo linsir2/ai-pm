@@ -17,10 +17,11 @@ import type {
 } from "../api/types";
 import type { DiscussionAnchor } from "../state/discussions";
 import { roleOptions } from "../state/discussions";
+import { inboxCount } from "../state/inbox";
 import type { RoundDrafts } from "../state/useRoundDrafts";
 import { DiscussionTray } from "./DiscussionTray";
 import { DraftDrawer } from "./DraftDrawer";
-import { ExplorationTray } from "./ExplorationTray";
+import { InboxTray } from "./InboxTray";
 import { LoopPane } from "./LoopPane";
 import { OpeningCard } from "./OpeningCard";
 import { QuestionnaireDrawer } from "./QuestionnaireDrawer";
@@ -67,10 +68,13 @@ export function LoopColumn({
   onKeepSeed,
   onKeepMaterial,
   onDismissCandidate,
+  onKeepCard,
+  onDismissCard,
   onStartDiscussion,
   onSayToThread,
   onAssembleCards,
   onKeepDiscussionCard,
+  onDismissDiscussionCard,
   onCloseDiscussion,
   onDiscussQuestion,
 }: {
@@ -120,6 +124,9 @@ export function LoopColumn({
   onKeepSeed: (explorationId: string, candidate: CandidateView) => void;
   onKeepMaterial: (explorationId: string, candidate: CandidateView) => void;
   onDismissCandidate: (explorationId: string, candidate: CandidateView) => void;
+  /** 箱里收下讨论卡：`seed` = 预填下一轮输入；`material` = 落材料。 */
+  onKeepCard: (threadId: string, cardId: string, as: "seed" | "material") => void;
+  onDismissCard: (threadId: string, cardId: string) => void;
   /** 讨论 tab 的数据源（M9）：这个项目开过的线程（最新在前）。 */
   discussions?: ThreadView[];
   discussionsPending?: boolean;
@@ -128,7 +135,8 @@ export function LoopColumn({
   onStartDiscussion: (anchor: { topic: string; role_id: string }) => void;
   onSayToThread: (threadId: string, text: string) => void;
   onAssembleCards: (threadId: string) => void;
-  onKeepDiscussionCard: (threadId: string, cardId: string) => void;
+  onKeepDiscussionCard: (threadId: string, cardId: string, as: "seed" | "material") => void;
+  onDismissDiscussionCard: (threadId: string, cardId: string) => void;
   onCloseDiscussion: (threadId: string) => void;
   /** 问卷题行上的「聊聊」：只把锚点交上去（不直接发请求）。 */
   onDiscussQuestion: (anchor: DiscussionAnchor) => void;
@@ -138,6 +146,8 @@ export function LoopColumn({
   const onTray = tab === "tray" && showTabs;
   const onDiscussion = tab === "discussion" && showTabs;
   const onRound = !onTray && !onDiscussion;
+  // 灵感箱的未处理数：新卡 + 待过目候选（0 条不渲染徽标）
+  const inbox = inboxCount(discussions, explorations);
   const drawerOpen =
     history == null &&
     !drafts.collapsed && (mode === "questionnaire" || mode === "draft") && round !== null;
@@ -162,7 +172,13 @@ export function LoopColumn({
             className={onTray ? "loop__tab loop__tab--on" : "loop__tab"}
             onClick={() => setTab("tray")}
           >
-            过目台
+            灵感箱
+            {inbox > 0 && (
+              <span className="loop__tabbadge" aria-hidden="true">
+                {inbox}
+              </span>
+            )}
+            {inbox > 0 && <span className="sr-only">，有 {inbox} 条待过目</span>}
           </button>
           <button
             type="button"
@@ -186,17 +202,25 @@ export function LoopColumn({
           onSay={onSayToThread}
           onCards={onAssembleCards}
           onKeep={onKeepDiscussionCard}
+          onDismiss={onDismissDiscussionCard}
           onClose={onCloseDiscussion}
         />
       ) : onTray ? (
-        <ExplorationTray
+        <InboxTray
+          threads={discussions}
           explorations={explorations}
-          pending={explorationsPending}
+          pending={explorationsPending || discussionsPending}
           onRetry={onRetryExploration}
           onAbandon={onAbandonExploration}
           onKeepSeed={onKeepSeed}
           onKeepMaterial={onKeepMaterial}
           onDismiss={onDismissCandidate}
+          onKeepCard={onKeepCard}
+          onDismissCard={onDismissCard}
+          onDiscuss={(topic) => {
+            onDiscussQuestion({ topic, role_id: null });
+            setTab("discussion");
+          }}
           onStartDocument={onStartResearch}
         />
       ) : (

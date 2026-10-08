@@ -609,14 +609,17 @@ export interface TurnView {
   based_on: string[];
 }
 
-/** 讨论总结出的一张灵感卡（M9）。`kept_ref` 非空 = 已收下为材料。 */
+/** 讨论总结出的一张灵感卡（M9）。过目状态在 `state`/`kept_as`（M12，与候选同构）。 */
 export interface CardView {
   card_id: string;
   statement: string;
   /** `document` = 文档里有据的（必带 E 编号）；`invented` = 凭空推演（收下默认不勾）。 */
   grounding: "document" | "invented" | string;
   based_on: string[];
+  /** 收下为材料时的 material_id；收种子/忽略时空。 */
   kept_ref: string | null;
+  state: "new" | "kept" | "dismissed" | string;
+  kept_as: "seed" | "material" | null;
 }
 
 /** 一条讨论线程（M9）：列表与展开共用它；真身在后端。 */

@@ -209,3 +209,27 @@ describe("探索端点的路径与请求体（M8）", () => {
     expect(calls[0]!.init.method).toBe("POST");
   });
 });
+
+describe("讨论卡端点的路径与请求体（M12）", () => {
+  it("收卡：POST 带上 `as`（种子 / 材料）", async () => {
+    const calls = captureFetch({ thread_id: "d-1" });
+
+    await api.keepDiscussionCard("d-1", "C1", "seed");
+    await api.keepDiscussionCard("d-1", "C2", "material");
+
+    expect(calls[0]!.url).toBe("/api/discussions/d-1/cards/C1/keep");
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ as: "seed" });
+    expect(calls[1]!.url).toBe("/api/discussions/d-1/cards/C2/keep");
+    expect(JSON.parse(String(calls[1]!.init.body))).toEqual({ as: "material" });
+  });
+
+  it("忽略：POST 到卡的 dismiss（无 body）", async () => {
+    const calls = captureFetch({ thread_id: "d-1" });
+
+    await api.dismissDiscussionCard("d-1", "C1");
+
+    expect(calls[0]!.url).toBe("/api/discussions/d-1/cards/C1/dismiss");
+    expect(calls[0]!.init.method).toBe("POST");
+  });
+});

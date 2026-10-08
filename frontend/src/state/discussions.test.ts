@@ -1,4 +1,4 @@
-/* 讨论区的纯函数（M9）：角色解析、收卡门控、追问门控。
+/* 讨论区的纯函数（M9/M12）：角色解析、卡的过目动作与状态、追问门控。
    组件不许做这些判断——它只按这里的结果画。 */
 
 import { describe, expect, it } from "vitest";
@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import type { CardView, QuestionView, SchemaView, ThreadView } from "../api/types";
 import {
   canDiscuss,
-  cardKeepable,
+  cardActions,
+  cardSeedText,
+  cardStatusText,
   resolveRoleId,
   roleChoices,
   roleOptionOf,
@@ -61,6 +63,8 @@ function card(over: Partial<CardView> = {}): CardView {
     grounding: "invented",
     based_on: [],
     kept_ref: null,
+    state: "new",
+    kept_as: null,
     ...over,
   };
 }
@@ -144,21 +148,51 @@ describe("roleChoices", () => {
   });
 });
 
-describe("cardKeepable", () => {
-  it("还没收下的卡可以收", () => {
-    expect(cardKeepable(card())).toBe(true);
+describe("cardActions", () => {
+  it("新卡三条路都通：收种子 / 收材料 / 忽略", () => {
+    expect(cardActions(card())).toEqual(["keep-seed", "keep-material", "dismiss"]);
   });
 
-  it("已经收下的卡不能再收", () => {
-    expect(cardKeepable(card({ kept_ref: "m-1" }))).toBe(false);
+  it("收下过的卡（种子或材料）不再给动作", () => {
+    expect(cardActions(card({ state: "kept", kept_as: "seed" }))).toEqual([]);
+    expect(cardActions(card({ state: "kept", kept_as: "material", kept_ref: "m-1" })))
+      .toEqual([]);
   });
 
-  it("关掉的线程也能收：收下是回流不是聊天（后端 keep_card 只读 turns，不看 status）", () => {
+  it("忽略过的卡不再给动作", () => {
+    expect(cardActions(card({ state: "dismissed" }))).toEqual([]);
+  });
+
+  it("关掉的线程也能收：收下是回流不是聊天（后端 keep_card 不判 status）", () => {
     const closed = thread({ status: "closed", cards: [card()] });
     const kept = closed.cards.at(0);
 
     expect(kept).toBeDefined();
-    expect(cardKeepable(kept!)).toBe(true);
+    expect(cardActions(kept!)).toEqual(["keep-seed", "keep-material", "dismiss"]);
+  });
+});
+
+describe("cardStatusText", () => {
+  it("新卡没有状态文案（状态由动作按钮表达）", () => {
+    expect(cardStatusText(card())).toBeNull();
+  });
+
+  it("三种已处理状态各说各的话", () => {
+    expect(cardStatusText(card({ state: "kept", kept_as: "seed" }))).toBe(
+      "已收下为下一轮输入",
+    );
+    expect(
+      cardStatusText(card({ state: "kept", kept_as: "material", kept_ref: "m-1" })),
+    ).toBe("已收下为材料");
+    expect(cardStatusText(card({ state: "dismissed" }))).toBe("已忽略");
+  });
+});
+
+describe("cardSeedText", () => {
+  it("收下为下一轮输入时预填的就是卡片原话", () => {
+    expect(cardSeedText(card({ statement: "按客户名筛最直观" }))).toBe(
+      "按客户名筛最直观",
+    );
   });
 });
 

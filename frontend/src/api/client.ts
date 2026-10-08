@@ -22,11 +22,11 @@ import type {
 
 const BASE = "/api";
 
-/** 起轮的请求体（工具层 C-2 起带材料 id；M8 起带调研种子）。 */
+/** 起轮的请求体（工具层 C-2 起带材料 id；M12 起种子是 `来源:id#条目id`）。 */
 export interface StartBody {
   input: string;
   material_ids: string[];
-  /** 过目台收下的候选：`探索id#候选id`。缺省 = 这一轮不带种子。 */
+  /** 过目产物收下的种子：`exploration:id#候选id` / `discussion:id#卡id`。缺省 = 不带。 */
   seed_ids: string[];
 }
 
@@ -332,11 +332,21 @@ export const api = {
       body: "{}",
     }),
 
-  /** 收下一张卡为材料：收下即回流（默认按"它提议的"不勾选）。同卡重复收下幂等。 */
-  keepDiscussionCard: (discussionId: string, cardId: string) =>
+  /**
+   * 收下一张卡：`seed` = 预填下一轮输入；`material` = 落一份材料（回流口径 SIMULATED）。
+   * 同卡重复收下幂等；换去向 409（T5）。
+   */
+  keepDiscussionCard: (discussionId: string, cardId: string, as: "seed" | "material") =>
     request<ThreadView>(
       `/discussions/${encodeURIComponent(discussionId)}/cards/${encodeURIComponent(cardId)}/keep`,
-      { method: "POST", body: "{}" },
+      { method: "POST", body: JSON.stringify({ as }) },
+    ),
+
+  /** 忽略一张卡：终态——不进灵感箱、不回流（同卡重复忽略幂等）。 */
+  dismissDiscussionCard: (discussionId: string, cardId: string) =>
+    request<ThreadView>(
+      `/discussions/${encodeURIComponent(discussionId)}/cards/${encodeURIComponent(cardId)}/dismiss`,
+      { method: "POST" },
     ),
 
   /** 关掉一条线程：终态幂等（无 body）。 */

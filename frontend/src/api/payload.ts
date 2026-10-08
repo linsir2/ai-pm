@@ -255,12 +255,22 @@ export function integrationSummary(round: RoundView): string {
   return parts.length === 0 ? "整合完成" : `整合：${parts.join(" · ")}`;
 }
 
-/** 起轮的请求体：一句话 + 这一轮带进来的材料 id（工具层 C-2）+ 调研种子（M8）。 */
+/** 起轮的请求体：一句话 + 这一轮带进来的材料 id（工具层 C-2）+ 过目产物种子（M12）。 */
 export interface StartBody {
   input: string;
   material_ids: string[];
-  /** 过目台上"收下为下一轮输入"的那些候选：`探索id#候选id`。 */
+  /** "收下为下一轮输入"的那些过目产物：`来源:id#条目id`（构造器见下）。 */
   seed_ids: string[];
+}
+
+/** 种子 id 的唯一产出点（M12 统一格式，与后端 `_resolve_seeds` 的解析口径一字对齐）。 */
+
+export function explorationSeedId(explorationId: string, candidateId: string): string {
+  return `exploration:${explorationId}#${candidateId}`;
+}
+
+export function discussionSeedId(threadId: string, cardId: string): string {
+  return `discussion:${threadId}#${cardId}`;
 }
 
 export function buildStart(

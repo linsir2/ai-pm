@@ -1002,12 +1002,25 @@ a {
   padding: var(--space-4) var(--space-4) var(--space-5);
 }
 
-/* 「本轮 / 过目台」页签：复述卡阶段不显示（见 LoopColumn） */
+/* 「本轮 / 灵感箱 / 讨论」页签：复述卡阶段不显示（见 LoopColumn） */
 .loop__tabs {
   display: flex;
   gap: var(--space-1);
   padding: var(--space-2) var(--space-4) 0;
   border-bottom: var(--hairline);
+}
+
+/* 灵感箱的未处理数：小数字 chip（0 条不渲染；不用红点——那是矛盾语义） */
+.loop__tabbadge {
+  display: inline-block;
+  margin-left: var(--space-1);
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--tint-primary);
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: var(--step-1);
+  line-height: 1.6;
 }
 
 .loop__tab {
@@ -1831,6 +1844,12 @@ a {
   gap: var(--space-3);
   padding: var(--space-3) 0;
   border-top: var(--hairline);
+}
+
+/* 没有 52px 侧栏的用法（动作按钮在卡内，M8 起的候选/卡/失败卡）：内容占满两列。
+   没有这条，单一子元素会落进 52px 那一列，正文被压成一字一行。 */
+.prop > :only-child {
+  grid-column: 1 / -1;
 }
 
 .prop:first-child {

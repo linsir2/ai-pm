@@ -6,10 +6,12 @@
 import { useEffect, useState } from "react";
 
 import type { ThreadView } from "../api/types";
+import { REVIEW_ACTION_TEXT } from "../labels";
 import {
   canAssemble,
   canDiscuss,
-  cardKeepable,
+  cardActions,
+  cardStatusText,
   DISCUSSION_TURN_LIMIT,
   resolveRoleId,
   roleChoices,
@@ -30,6 +32,7 @@ export function DiscussionTray({
   onSay,
   onCards,
   onKeep,
+  onDismiss,
   onClose,
 }: {
   threads: ThreadView[];
@@ -42,7 +45,8 @@ export function DiscussionTray({
   onStart: (anchor: { topic: string; role_id: string }) => void;
   onSay: (threadId: string, text: string) => void;
   onCards: (threadId: string) => void;
-  onKeep: (threadId: string, cardId: string) => void;
+  onKeep: (threadId: string, cardId: string, as: "seed" | "material") => void;
+  onDismiss: (threadId: string, cardId: string) => void;
   onClose: (threadId: string) => void;
 }) {
   const anchorTopic = anchor?.topic ?? "";
@@ -218,17 +222,31 @@ export function DiscussionTray({
                         <EvidenceChip eids={card.based_on} />
                       </div>
                       <div className="prop__foot">
-                        {cardKeepable(card) ? (
+                        {cardActions(card).map((action) => (
                           <button
+                            key={action}
                             type="button"
-                            className="btn btn--sm"
+                            className={
+                              action === "dismiss" ? "btn btn--ghost btn--sm" : "btn btn--sm"
+                            }
                             disabled={pending}
-                            onClick={() => onKeep(thread.thread_id, card.card_id)}
+                            onClick={() => {
+                              if (action === "dismiss") {
+                                onDismiss(thread.thread_id, card.card_id);
+                              } else {
+                                onKeep(
+                                  thread.thread_id,
+                                  card.card_id,
+                                  action === "keep-seed" ? "seed" : "material",
+                                );
+                              }
+                            }}
                           >
-                            收下为材料
+                            {REVIEW_ACTION_TEXT[action]}
                           </button>
-                        ) : (
-                          <span className="muted small">已收下为材料</span>
+                        ))}
+                        {cardStatusText(card) !== null && (
+                          <span className="muted small">{cardStatusText(card)}</span>
                         )}
                       </div>
                     </div>

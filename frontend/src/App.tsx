@@ -310,14 +310,23 @@ export default function App() {
             onDismissCandidate={(explorationId, candidate) =>
               void data.dismissCandidate(explorationId, candidate.candidate_id)
             }
+            onKeepCard={(threadId, cardId, as) =>
+              void data.keepDiscussionCard(threadId, cardId, as)
+            }
+            onDismissCard={(threadId, cardId) =>
+              void data.dismissDiscussionCard(threadId, cardId)
+            }
             discussions={data.discussions}
             discussionsPending={data.discussionsPending}
             discussionAnchor={discussionAnchor}
             onStartDiscussion={(anchor) => void data.startDiscussion(anchor)}
             onSayToThread={(threadId, text) => void data.sayToThread(threadId, text)}
             onAssembleCards={(threadId) => void data.assembleCards(threadId)}
-            onKeepDiscussionCard={(threadId, cardId) =>
-              void data.keepDiscussionCard(threadId, cardId)
+            onKeepDiscussionCard={(threadId, cardId, as) =>
+              void data.keepDiscussionCard(threadId, cardId, as)
+            }
+            onDismissDiscussionCard={(threadId, cardId) =>
+              void data.dismissDiscussionCard(threadId, cardId)
             }
             onCloseDiscussion={(threadId) => void data.closeDiscussion(threadId)}
             onDiscussQuestion={setDiscussionAnchor}

@@ -68,7 +68,7 @@ it("keep 成功才把种子文本与 id 落进输入框", async () => {
     await result.current.keepCandidate("x-1", "H1", "seed");
   });
   expect(result.current.roundInput).toContain("运营按客户名找单");
-  expect(result.current.pendingSeeds).toEqual(["x-1#H1"]);
+  expect(result.current.pendingSeeds).toEqual(["exploration:x-1#H1"]);
 });
 
 it("keep 失败：输入框与 pendingSeeds 原样不动（毒种子进不来）", async () => {

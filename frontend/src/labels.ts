@@ -92,6 +92,13 @@ export const CANDIDATE_KIND_TEXT: Record<string, string> = {
   blind_spot: "盲区",
 };
 
+/** 过目动作的词（调研候选与讨论卡共用一套——同一箱里同一动作只有一个说法）。 */
+export const REVIEW_ACTION_TEXT: Record<string, string> = {
+  "keep-seed": "收下为下一轮输入",
+  "keep-material": "收下为材料",
+  dismiss: "忽略",
+};
+
 export function stepText(step: string): string {
   return STEP_TEXT[step] ?? step;
 }

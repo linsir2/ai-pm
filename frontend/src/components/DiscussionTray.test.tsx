@@ -19,6 +19,8 @@ function card(over: Partial<CardView> = {}): CardView {
     grounding: "invented",
     based_on: [],
     kept_ref: null,
+    state: "new",
+    kept_as: null,
     ...over,
   };
 }
@@ -59,6 +61,7 @@ function draw(over: Partial<Parameters<typeof DiscussionTray>[0]> = {}) {
     onSay: vi.fn(),
     onCards: vi.fn(),
     onKeep: vi.fn(),
+    onDismiss: vi.fn(),
     onClose: vi.fn(),
     ...over,
   };
@@ -149,24 +152,48 @@ describe("DiscussionTray", () => {
     expect(props.onClose).toHaveBeenCalledWith("d-1");
   });
 
-  it("收卡：还没收的卡能收，已经收下的只显示已收下", () => {
-    const props = draw({
-      threads: [thread({ cards: [card(), card({ card_id: "C2", kept_ref: "m-9" })] })],
-    });
+  it("新卡三条路都通：收种子 / 收材料 / 忽略各把 `as` 交出去", () => {
+    const props = draw({ threads: [thread({ cards: [card()] })] });
+    const first = screen.getByRole("article");
 
-    fireEvent.click(screen.getByRole("button", { name: /收下为材料/ }));
-    expect(props.onKeep).toHaveBeenCalledWith("d-1", "C1");
-    expect(screen.getByText(/已收下为材料/)).toBeTruthy();
+    fireEvent.click(within(first).getByRole("button", { name: "收下为下一轮输入" }));
+    expect(props.onKeep).toHaveBeenLastCalledWith("d-1", "C1", "seed");
+
+    fireEvent.click(within(first).getByRole("button", { name: "收下为材料" }));
+    expect(props.onKeep).toHaveBeenLastCalledWith("d-1", "C1", "material");
+
+    fireEvent.click(within(first).getByRole("button", { name: "忽略" }));
+    expect(props.onDismiss).toHaveBeenCalledWith("d-1", "C1");
   });
 
-  it("关掉的线程：不能追问、不给「关掉」，但还能收卡（后端 keep_card 只读 turns）", () => {
+  it("已处理的卡不再给按钮，只显示各状态的文案", () => {
+    draw({
+      threads: [
+        thread({
+          cards: [
+            card({ card_id: "C1", state: "kept", kept_as: "seed" }),
+            card({ card_id: "C2", state: "kept", kept_as: "material", kept_ref: "m-9" }),
+            card({ card_id: "C3", state: "dismissed" }),
+          ],
+        }),
+      ],
+    });
+
+    expect(screen.queryByRole("button", { name: "收下为下一轮输入" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "忽略" })).toBeNull();
+    expect(screen.getByText("已收下为下一轮输入")).toBeTruthy();
+    expect(screen.getByText("已收下为材料")).toBeTruthy();
+    expect(screen.getByText("已忽略")).toBeTruthy();
+  });
+
+  it("关掉的线程：不能追问、不给「关掉」，但还能收卡（后端 keep_card 不判 status）", () => {
     const props = draw({ threads: [thread({ status: "closed", cards: [card()] })] });
 
     expect(screen.getByText("已关掉")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "说这一轮" })).toBeNull();
     expect(screen.queryByRole("button", { name: "关掉这条" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /收下为材料/ }));
-    expect(props.onKeep).toHaveBeenCalledWith("d-1", "C1");
+    fireEvent.click(screen.getByRole("button", { name: "收下为下一轮输入" }));
+    expect(props.onKeep).toHaveBeenCalledWith("d-1", "C1", "seed");
     expect(props.onClose).not.toHaveBeenCalled();
   });
 
@@ -202,7 +229,10 @@ describe("DiscussionTray", () => {
     expect((screen.getByRole("button", { name: "关掉这条" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    expect((screen.getByRole("button", { name: /收下为材料/ }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole("button", { name: "收下为材料" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole("button", { name: "忽略" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
     expect(props.onClose).not.toHaveBeenCalled();

@@ -12,6 +12,8 @@ import {
   buildStart,
   defaultAccepted,
   defaultSeats,
+  discussionSeedId,
+  explorationSeedId,
   groupAdvisories,
   initialClaimEdits,
   integrationSummary,
@@ -419,12 +421,24 @@ describe("buildStart", () => {
     });
   });
 
-  it("收下的调研产物按顺序带上种子 id（M8：`探索id#候选id`）", () => {
-    expect(buildStart("接着调研的结论写", [], ["x-1#H1", "x-1#B2"])).toEqual({
+  it("收下的过目产物按顺序带上种子 id（M12：`来源:id#条目id`）", () => {
+    expect(
+      buildStart("接着调研的结论写", [], ["exploration:x-1#H1", "discussion:d-1#C2"]),
+    ).toEqual({
       input: "接着调研的结论写",
       material_ids: [],
-      seed_ids: ["x-1#H1", "x-1#B2"],
+      seed_ids: ["exploration:x-1#H1", "discussion:d-1#C2"],
     });
+  });
+});
+
+describe("种子 id 构造器（M12 统一格式的唯一产出点）", () => {
+  it("调研候选：exploration:探索id#候选id", () => {
+    expect(explorationSeedId("x-1", "B2")).toBe("exploration:x-1#B2");
+  });
+
+  it("讨论卡：discussion:线程id#卡id", () => {
+    expect(discussionSeedId("d-1", "C1")).toBe("discussion:d-1#C1");
   });
 });
 

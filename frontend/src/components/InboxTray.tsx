@@ -1,32 +1,33 @@
-/* 过目台（M8）：右栏「本轮 / 过目台」的后一半。
-   调研只出候选；这里只做三件事——把结果摆出来、把收下/删掉递出去、给失败与在跑一个出口。
-   判断全在 `state/explorations.ts` 的纯函数里，组件不做业务决定。 */
+/* 灵感箱（M12）：讨论聊出来的卡与调研带回来的候选，统一在这过目。
+   不写文档、不回流——「收下」是唯一的回流路径；忽略与聊聊都不动文档。
+   判断全在 `state/inbox.ts` / `state/explorations.ts` / `state/discussions.ts`
+   的纯函数里，组件只把结果画出来、把动作递出去。 */
 
-import type { CandidateView, ExplorationView } from "../api/types";
-import { CANDIDATE_KIND_TEXT, EXPLORATION_STATUS_TEXT } from "../labels";
+import type { CardView, CandidateView, ExplorationView, ThreadView } from "../api/types";
+import { CANDIDATE_KIND_TEXT, EXPLORATION_STATUS_TEXT, REVIEW_ACTION_TEXT } from "../labels";
+import { cardActions } from "../state/discussions";
+import { inboxCards } from "../state/inbox";
 import {
   candidateActions,
   failureText,
   isRunning,
   overflowNote,
-  trayCandidates,
-  trayExplorations,
+  reviewCandidates,
+  reviewExplorations,
 } from "../state/explorations";
-import type { CandidateAction } from "../state/explorations";
 import { EvidenceChip } from "./EvidenceChip";
-
-const ACTION_TEXT: Record<CandidateAction, string> = {
-  "keep-seed": "收下为下一轮输入",
-  "keep-material": "收下为材料",
-  dismiss: "删掉",
-};
 
 function scopeLabel(exploration: ExplorationView): string {
   if (exploration.scope_kind !== "entry") return "整份文档";
   return exploration.scope_ref === null ? "条目" : `条目 ${exploration.scope_ref}`;
 }
 
-export function ExplorationTray({
+function cardGroundingText(card: CardView): string {
+  return card.grounding === "document" ? "文档里有据" : "凭空推演";
+}
+
+export function InboxTray({
+  threads,
   explorations,
   pending,
   onRetry,
@@ -34,37 +35,48 @@ export function ExplorationTray({
   onKeepSeed,
   onKeepMaterial,
   onDismiss,
+  onKeepCard,
+  onDismissCard,
+  onDiscuss,
   onStartDocument,
 }: {
+  /** 讨论卡的数据源（state=new 的卡进箱）：全部线程，最新在前。 */
+  threads: ThreadView[];
   explorations: ExplorationView[];
-  /** 有探索动作在跑（重试 / 放弃 / 收下 / 删掉）：按钮先禁掉，防连点。 */
+  /** 有动作在跑（重试 / 放弃 / 收下 / 忽略）：按钮先禁掉，防连点。 */
   pending: boolean;
   onRetry: (explorationId: string) => void;
   onAbandon: (explorationId: string) => void;
   onKeepSeed: (explorationId: string, candidate: CandidateView) => void;
   onKeepMaterial: (explorationId: string, candidate: CandidateView) => void;
   onDismiss: (explorationId: string, candidate: CandidateView) => void;
+  onKeepCard: (threadId: string, cardId: string, as: "seed" | "material") => void;
+  onDismissCard: (threadId: string, cardId: string) => void;
+  /** 就这条聊聊：把原话交出去（上层设锚点并切到讨论 tab）。 */
+  onDiscuss: (topic: string) => void;
   onStartDocument: () => void;
 }) {
   const running = explorations.filter((item) => item.status === "running");
   const failed = explorations.filter((item) => item.status === "failed");
-  const review = trayExplorations(explorations);
+  const review = reviewExplorations(explorations);
   const reviewIds = new Set(review.map((item) => item.exploration_id));
   const recent = explorations.filter(
     (item) =>
       (item.status === "done" || item.status === "abandoned") &&
       !reviewIds.has(item.exploration_id),
   );
-  const empty = running.length === 0 && failed.length === 0 && review.length === 0;
+  const cards = inboxCards(threads);
+  const empty =
+    running.length === 0 && failed.length === 0 && review.length === 0 && cards.length === 0;
   const busy = pending || isRunning(explorations);
 
   return (
     <div className="loop__scroll">
       <div className="loop__head">
-        <h2 className="loop__title">过目台</h2>
+        <h2 className="loop__title">灵感箱</h2>
       </div>
       <p className="muted small">
-        调研只出候选（假设 / 盲区）；「收下」是唯一的回流路径，其余什么都不动文档。
+        讨论聊出来的卡与调研带回来的候选都在这；「收下」是唯一的回流路径，其余什么都不动文档。
       </p>
 
       {empty && <p className="muted small">还没有可过目的东西</p>}
@@ -112,11 +124,55 @@ export function ExplorationTray({
         </section>
       )}
 
+      {cards.length > 0 && (
+        <section className="loop__group">
+          <p className="loop__label">讨论里聊出来的</p>
+          {cards.map(({ thread, card }) => (
+            <article className="prop" key={`${thread.thread_id}:${card.card_id}`}>
+              <div>
+                <p className="prop__text">{card.statement}</p>
+                <div className="prop__foot">
+                  <span className="tag">{cardGroundingText(card)}</span>
+                  <EvidenceChip eids={card.based_on} />
+                  <span className="muted small">来自讨论：{thread.topic}</span>
+                </div>
+                <div className="prop__foot">
+                  {cardActions(card).map((action) => (
+                    <button
+                      key={action}
+                      type="button"
+                      className={action === "dismiss" ? "btn btn--ghost btn--sm" : "btn btn--sm"}
+                      disabled={pending}
+                      onClick={() => {
+                        if (action === "keep-seed") onKeepCard(thread.thread_id, card.card_id, "seed");
+                        else if (action === "keep-material")
+                          onKeepCard(thread.thread_id, card.card_id, "material");
+                        else onDismissCard(thread.thread_id, card.card_id);
+                      }}
+                    >
+                      {REVIEW_ACTION_TEXT[action]}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    disabled={pending}
+                    onClick={() => onDiscuss(card.statement)}
+                  >
+                    聊聊
+                  </button>
+                </div>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+
       {review.map((item) => (
         <section className="loop__group" key={item.exploration_id}>
-          <p className="loop__label">{scopeLabel(item)}</p>
+          <p className="loop__label">调研带回来的 · {scopeLabel(item)}</p>
           {overflowNote(item) !== null && <p className="prop__warn">{overflowNote(item)}</p>}
-          {trayCandidates(item).map((candidate) => (
+          {reviewCandidates(item).map((candidate) => (
             <article className="prop" key={candidate.candidate_id}>
               <div>
                 <p className="prop__text">{candidate.statement}</p>
@@ -151,9 +207,17 @@ export function ExplorationTray({
                         else onDismiss(item.exploration_id, candidate);
                       }}
                     >
-                      {ACTION_TEXT[action]}
+                      {REVIEW_ACTION_TEXT[action]}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    disabled={pending}
+                    onClick={() => onDiscuss(candidate.statement)}
+                  >
+                    聊聊
+                  </button>
                 </div>
               </div>
             </article>

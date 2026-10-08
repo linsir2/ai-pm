@@ -1,4 +1,4 @@
-/* 过目台的判断（M8）：纯函数。组件只负责把这里的结果画出来。
+/* 调研候选的过目判断（M8；M12 起归灵感箱）：纯函数。组件只负责把这里的结果画出来。
    数据一律来自后端的 `ExplorationView` 投影，这里不拼、不猜。 */
 
 import type { CandidateView, ExplorationView } from "../api/types";
@@ -7,12 +7,12 @@ import type { CandidateView, ExplorationView } from "../api/types";
 export type CandidateAction = "keep-seed" | "keep-material" | "dismiss";
 
 /** 还有东西要过目的探索：有 `new` 候选的那些（进来的顺序已是后端的最新在前）。 */
-export function trayExplorations(list: ExplorationView[]): ExplorationView[] {
+export function reviewExplorations(list: ExplorationView[]): ExplorationView[] {
   return list.filter((item) => item.candidates.some((candidate) => candidate.state === "new"));
 }
 
 /** 还没过目的候选（按后端给的顺序）。 */
-export function trayCandidates(exploration: ExplorationView): CandidateView[] {
+export function reviewCandidates(exploration: ExplorationView): CandidateView[] {
   return exploration.candidates.filter((candidate) => candidate.state === "new");
 }
 

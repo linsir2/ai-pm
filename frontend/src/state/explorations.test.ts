@@ -10,8 +10,8 @@ import {
   isRunning,
   overflowNote,
   seedText,
-  trayCandidates,
-  trayExplorations,
+  reviewCandidates,
+  reviewExplorations,
 } from "./explorations";
 
 function candidate(over: Partial<CandidateView> = {}): CandidateView {
@@ -49,7 +49,7 @@ function exploration(over: Partial<ExplorationView> = {}): ExplorationView {
   };
 }
 
-describe("trayExplorations", () => {
+describe("reviewExplorations", () => {
   it("只挑还有 new 候选的探索，最新在前（进来的顺序就是后端的最新在前）", () => {
     const newer = exploration({ exploration_id: "x-new" });
     const older = exploration({ exploration_id: "x-old" });
@@ -59,7 +59,7 @@ describe("trayExplorations", () => {
     });
     const running = exploration({ exploration_id: "x-run", status: "running", candidates: [] });
 
-    expect(trayExplorations([newer, settled, running, older]).map((item) => item.exploration_id)).toEqual(
+    expect(reviewExplorations([newer, settled, running, older]).map((item) => item.exploration_id)).toEqual(
       ["x-new", "x-old"],
     );
   });
@@ -68,18 +68,18 @@ describe("trayExplorations", () => {
     const failed = exploration({ exploration_id: "x-fail", status: "failed", candidates: [] });
     const empty = exploration({ exploration_id: "x-empty", candidates: [] });
 
-    expect(trayExplorations([failed, empty])).toEqual([]);
+    expect(reviewExplorations([failed, empty])).toEqual([]);
   });
 });
 
-describe("trayCandidates", () => {
+describe("reviewCandidates", () => {
   it("只回还没过目的（new），保持原顺序", () => {
     const kept = candidate({ candidate_id: "H1", state: "kept", kept_as: "material" });
     const fresh = candidate({ candidate_id: "B1", kind: "blind_spot" });
     const dismissed = candidate({ candidate_id: "H2", state: "dismissed" });
 
     expect(
-      trayCandidates(exploration({ candidates: [kept, fresh, dismissed] })).map(
+      reviewCandidates(exploration({ candidates: [kept, fresh, dismissed] })).map(
         (item) => item.candidate_id,
       ),
     ).toEqual(["B1"]);
