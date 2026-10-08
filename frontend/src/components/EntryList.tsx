@@ -5,6 +5,7 @@
 import { useId, useState } from "react";
 
 import type { Entry } from "../api/types";
+import { useDiscussion } from "./DiscussionContext";
 import { useEdit } from "./EditContext";
 import { useExploration } from "./ExplorationContext";
 import { EvidenceChip } from "./EvidenceChip";
@@ -100,6 +101,7 @@ function EntryRow({
 }) {
   const edit = useEdit();
   const research = useExploration();
+  const discussion = useDiscussion();
   const [armed, setArmed] = useState(false);
 
   if (editing) {
@@ -124,8 +126,19 @@ function EntryRow({
     <li className="entry" id={`entry-${entry.entry_id}`}>
       <span className="entry__text">{entry.text}</span>
       <span className="entry__refs">
-        {(canEdit || research.canStart) && (
+        {(canEdit || research.canStart || discussion.canStart) && (
           <span className="entry__tools">
+            {discussion.canStart && (
+              <button
+                type="button"
+                className="iconbtn"
+                onClick={() => discussion.start(entry.text)}
+                aria-label="讨论这一条"
+                title="就这一条开一条讨论（切到讨论页签）"
+              >
+                讨论
+              </button>
+            )}
             {research.canStart && (
               <button
                 type="button"

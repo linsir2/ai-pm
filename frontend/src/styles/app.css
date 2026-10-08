@@ -364,6 +364,7 @@ a {
 }
 
 .doc__inner {
+  position: relative; /* 选区把手的定位上下文（M13）：绝对定位在栏内，跟着内容滚 */
   max-width: 34em;
   margin-inline: auto;
   min-height: 100%;
@@ -371,6 +372,33 @@ a {
   background: var(--paper);
   border: var(--hairline);
   border-radius: var(--radius-card);
+}
+
+/* 选区把手（M13，D2 设计 A）：贴着选区的临时工具条。无阴影（DESIGN.md 禁堆叠）、
+   指针专属（键盘入口在条目工具行）、窄屏不出现。 */
+.discuss-handle {
+  position: absolute;
+  z-index: 30;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: var(--hairline);
+  border-radius: var(--radius-input);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: opacity 80ms ease;
+}
+
+.discuss-handle[hidden] {
+  display: none;
+}
+
+@media (max-width: 979px) {
+  .discuss-handle {
+    display: none;
+  }
 }
 
 /* 章节头 */

@@ -291,7 +291,8 @@ export function buildStart(
  */
 export type ExplorationAnchor =
   | { kind: "entry"; ref: string; focus: string }
-  | { kind: "document" };
+  //: `focus` = 整份文档之上的聚焦说明（M13「拿去验证」：拿一张卡的原话去调研）
+  | { kind: "document"; focus?: string };
 
 /** `POST /projects/{id}/explorations` 的请求体（与后端 `StartExplorationRequest` 一一对应）。 */
 export interface ExplorationBody {
@@ -303,7 +304,10 @@ export function buildExplorationBody(anchor: ExplorationAnchor): ExplorationBody
   if (anchor.kind === "entry") {
     return { kind: "inquiry", scope: { kind: "entry", ref: anchor.ref, text: anchor.focus } };
   }
-  return { kind: "inquiry", scope: { kind: "document", ref: null, text: null } };
+  return {
+    kind: "inquiry",
+    scope: { kind: "document", ref: null, text: anchor.focus ?? null },
+  };
 }
 
 /**

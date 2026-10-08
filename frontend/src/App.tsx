@@ -14,15 +14,18 @@ import {
   materialHitTarget,
 } from "./api/payload";
 import type { ExplorationAnchor } from "./api/payload";
+import { discussionTopic } from "./state/discussions";
 import type { DiscussionAnchor } from "./state/discussions";
 import { BottomStrip } from "./components/BottomStrip";
 import { DocumentPane } from "./components/DocumentPane";
 import { EditScope } from "./components/EditContext";
 import { EvidenceScope } from "./components/EvidenceContext";
+import { DiscussionScope } from "./components/DiscussionContext";
 import { ExplorationScope } from "./components/ExplorationContext";
 import { jumpToChunk, jumpToEntry, jumpToEvidence } from "./components/jump";
 import { sectionOfEntry } from "./document/structure";
 import { LoopColumn } from "./components/LoopColumn";
+import type { LoopTab } from "./components/LoopColumn";
 import { MaterialLibrary } from "./components/MaterialLibrary";
 import { MemoryDrawer } from "./components/MemoryDrawer";
 import { Onboarding } from "./components/Onboarding";
@@ -54,6 +57,8 @@ export default function App() {
   const [researchAnchor, setResearchAnchor] = useState<ExplorationAnchor | null>(null);
   // 问卷题行上的「聊聊」（M9）：点一下只把题面与"问的人"放这儿，切到讨论 tab 才开聊。
   const [discussionAnchor, setDiscussionAnchor] = useState<DiscussionAnchor | null>(null);
+  // 闭环栏页签（M13 从 LoopColumn 上提到这里）：文档区的「讨论」入口要能跨栏切过去
+  const [loopTab, setLoopTab] = useState<LoopTab>("round");
   /** 模拟抽屉开没开（M10）：artifact 在 round.sim_inquiry 里，开关只管显隐。 */
   const [simOpen, setSimOpen] = useState(false);
   /** 评测抽屉开没开（M11）：artifact 在 round.sim_review 里，开关只管显隐。 */
@@ -200,6 +205,19 @@ export default function App() {
     [project, data.pending],
   );
 
+  // 讨论的入口（M13）：选区把手 / 条目工具行只把**原文**交上来——
+  // 归一化与超长截断在这里做一次（`discussionTopic`），然后设锚点并切到讨论页签。
+  const discussionApi = useMemo(
+    () => ({
+      canStart: project !== null && data.pending === null,
+      start: (text: string) => {
+        setDiscussionAnchor({ topic: discussionTopic(text), role_id: null });
+        setLoopTab("discussion");
+      },
+    }),
+    [project, data.pending],
+  );
+
   if (project === null) {
     return (
       <div className="shell shell--plain">
@@ -236,6 +254,7 @@ export default function App() {
     <EvidenceScope index={evidence} onJump={jumpToEvidenceById}>
       <EditScope value={editApi}>
         <ExplorationScope value={researchApi}>
+        <DiscussionScope value={discussionApi}>
         <div className="shell">
           <TopBar
             projects={projects}
@@ -286,6 +305,8 @@ export default function App() {
           />
 
           <LoopColumn
+            tab={loopTab}
+            onTabChange={setLoopTab}
             round={shownRound}
             doc={doc}
             schema={data.schema}
@@ -316,10 +337,13 @@ export default function App() {
             onDismissCard={(threadId, cardId) =>
               void data.dismissDiscussionCard(threadId, cardId)
             }
+            onVerifyCard={(statement) => void data.verifyCard(statement)}
             discussions={data.discussions}
             discussionsPending={data.discussionsPending}
             discussionAnchor={discussionAnchor}
-            onStartDiscussion={(anchor) => void data.startDiscussion(anchor)}
+            onStartDiscussion={(anchor, runInquiry) =>
+              void data.startDiscussion(anchor, runInquiry)
+            }
             onSayToThread={(threadId, text) => void data.sayToThread(threadId, text)}
             onAssembleCards={(threadId) => void data.assembleCards(threadId)}
             onKeepDiscussionCard={(threadId, cardId, as) =>
@@ -501,6 +525,7 @@ export default function App() {
             </Banner>
           </div>
         )}
+        </DiscussionScope>
         </ExplorationScope>
       </EditScope>
     </EvidenceScope>

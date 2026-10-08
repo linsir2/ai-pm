@@ -8,6 +8,7 @@ import { STATUS_TEXT, sectionStatus, statusClass } from "../document/status";
 import { chapterAnchors } from "../document/structure";
 import { sectionPurpose } from "../state/schema";
 import { BlockTree } from "./BlockTree";
+import { DiscussHandle } from "./DiscussHandle";
 import { EntryList } from "./EntryList";
 import { FeatureBlock } from "./FeatureBlock";
 import { Skeleton } from "./States";
@@ -55,6 +56,7 @@ export function DocumentPane({
               kind="bullet_list"
             />
           </section>
+          <DiscussHandle sectionKey="preference" />
         </div>
       </main>
     );
@@ -104,6 +106,7 @@ export function DocumentPane({
             </ul>
           )}
 
+          <DiscussHandle sectionKey={section.section_id} />
           <div className="chapter__body">
             {section.blocks.length === 0 ? (
               <div className="chapter__empty">

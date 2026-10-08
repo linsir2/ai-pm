@@ -481,6 +481,15 @@ describe("buildExplorationBody", () => {
       scope: { kind: "document", ref: null, text: null },
     });
   });
+
+  it("整份文档 + 焦点（M13「拿去验证」）：焦点落进 scope.text 的补充说明", () => {
+    expect(
+      buildExplorationBody({ kind: "document", focus: "导出按客户名筛会不会被滥用" }),
+    ).toEqual({
+      kind: "inquiry",
+      scope: { kind: "document", ref: null, text: "导出按客户名筛会不会被滥用" },
+    });
+  });
 });
 
 describe("materialHitTarget", () => {
