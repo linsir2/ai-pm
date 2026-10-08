@@ -39,6 +39,9 @@ class Proposal:
     text: str
     origin: Origin
     kind: BlockKind | None = None
+    #: 模拟评测的"减"提案（M11）：用户勾选确认后允许改动被手改过的块（D5 例外，
+    #: `02` §11.0.48）。它不是"手改"——确认落笔**不会**给块盖手改章，只放行这一次。
+    allow_manual_override: bool = False
 
     def __post_init__(self) -> None:
         if not self.text.strip():
@@ -106,14 +109,21 @@ def merge_duplicate_removes(
     要可断言的地方在写入端（`CommitResult.merged_removes`）。
     """
 
+    from dataclasses import replace
+
     kept: list[Proposal] = []
     merged: list[ProposalId] = []
-    removed_entries: set[EntryId] = set()
+    removed_entries: dict[EntryId, int] = {}
     for proposal in proposals:
         if proposal.op is WriteOp.REMOVE:
-            if proposal.entry_id in removed_entries:
+            index = removed_entries.get(proposal.entry_id)
+            if index is not None:
                 merged.append(proposal.proposal_id)
+                # 被合并的这条带着 D5 例外位（用户勾过评测的那次删除）→ 并给保留的那条，
+                # 否则"两条都勾"反而写不进去（M11；权限是用户的确认，不该被合并吃掉）。
+                if proposal.allow_manual_override and not kept[index].allow_manual_override:
+                    kept[index] = replace(kept[index], allow_manual_override=True)
                 continue
-            removed_entries.add(proposal.entry_id)
+            removed_entries[proposal.entry_id] = len(kept)
         kept.append(proposal)
     return tuple(kept), tuple(merged)

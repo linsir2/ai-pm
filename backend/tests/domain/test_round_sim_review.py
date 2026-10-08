@@ -20,7 +20,12 @@ from pmstudio.domain.shared.errors import DuplicateProposalId, ShapeError
 from pmstudio.domain.shared.ids import DraftId, EntryId, EvidenceId, ProposalId, RoundId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
+from pmstudio.infrastructure.sqlite.serialization import (
+    proposal_from_json,
+    proposal_to_json,
+    round_from_payload,
+    round_to_payload,
+)
 from tests.support.builders import PROJECT, ROUND_ID, make_round
 
 
@@ -172,3 +177,19 @@ def test_payload_roundtrip_keeps_sim_review_and_old_rows_fall_back() -> None:
     )
     assert restored_old.sim_review is None
     assert restored_old.sim_review_runs == 0
+
+
+def test_proposal_allow_manual_override_survives_roundtrip_and_old_rows_default_false() -> None:
+    """D5 例外（M11）的权限位必须随草案持久化；老行没有这把键 → False（行为与今天一致）。"""
+
+    from dataclasses import replace as _replace
+
+    proposal = _proposal()
+    flagged = _replace(proposal, allow_manual_override=True)
+
+    assert proposal_from_json(proposal_to_json(flagged)).allow_manual_override is True
+    assert proposal_from_json(proposal_to_json(proposal)).allow_manual_override is False
+
+    old = proposal_to_json(flagged)
+    del old["allow_manual_override"]  # 老行：没有这把键
+    assert proposal_from_json(old).allow_manual_override is False

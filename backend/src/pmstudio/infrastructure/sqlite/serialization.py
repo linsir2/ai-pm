@@ -496,6 +496,8 @@ def proposal_to_json(proposal: Proposal) -> dict:
             "rationale": proposal.origin.rationale,
         },
         "kind": None if proposal.kind is None else proposal.kind.value,
+        # D5 例外位（M11）：老行没有这把键 → False（行为与今天一致）
+        "allow_manual_override": proposal.allow_manual_override,
     }
 
 
@@ -513,6 +515,7 @@ def proposal_from_json(data: dict) -> Proposal:
             rationale=origin["rationale"],
         ),
         kind=None if data["kind"] is None else BlockKind(data["kind"]),
+        allow_manual_override=bool(data.get("allow_manual_override", False)),
     )
 
 

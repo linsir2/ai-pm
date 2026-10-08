@@ -448,3 +448,24 @@ def test_commit_bad_round_is_not_awaiting_confirm():
         fixture.committer().commit(round_id=ROUND_ID, accepted=(ProposalId("p1"),), now=NOW)
     assert fixture.documents.get(PROJECT).current_version.version_no == 1
     assert fixture.transaction.rollbacks == 1
+
+
+def test_to_write_instruction_maps_allow_manual_override():
+    """Proposal → WriteInstruction 1:1 带上 D5 例外位（M11）。"""
+
+    from dataclasses import replace as _replace
+
+    from pmstudio.domain.services.committer import to_write_instruction
+
+    proposal = Proposal(
+        proposal_id=ProposalId("sim#1"),
+        entry_id=EntryId("en1"),
+        op=WriteOp.REPLACE,
+        target=Target.body("s5", feature_slug="order-export", field="priority"),
+        text="待复核（模拟评测：2/3 个模拟使用者未能走通）",
+        origin=Origin(OriginType.PROPOSED, (EvidenceId("E8"),), rationale="模拟评测"),
+    )
+
+    assert to_write_instruction(proposal).allow_manual_override is False
+    flagged = _replace(proposal, allow_manual_override=True)
+    assert to_write_instruction(flagged).allow_manual_override is True

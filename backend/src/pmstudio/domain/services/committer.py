@@ -272,4 +272,5 @@ def to_write_instruction(proposal: Proposal) -> WriteInstruction:
         text=proposal.text,
         refs=proposal.origin.refs,
         kind=proposal.kind,
+        allow_manual_override=proposal.allow_manual_override,
     )

@@ -28,6 +28,7 @@ def proposal(
     op: WriteOp = WriteOp.REMOVE,
     text: str = "撤下这条未决项",
     origin: OriginType = OriginType.SYSTEM_DEFAULT,
+    allow_manual_override: bool = False,
 ) -> Proposal:
     return Proposal(
         proposal_id=ProposalId(proposal_id),
@@ -36,6 +37,7 @@ def proposal(
         target=Target.body("s11"),
         text=text,
         origin=Origin(origin, (EvidenceId("E1"),), None),
+        allow_manual_override=allow_manual_override,
     )
 
 
@@ -97,3 +99,29 @@ def test_three_removes_on_the_same_entry_merge_all_but_the_first():
 
     assert [item.proposal_id for item in kept] == [ProposalId("p1")]
     assert merged == (ProposalId("p2"), ProposalId("p3"))
+
+
+def test_merged_away_flagged_remove_passes_its_permission_to_the_kept_one():
+    """整合的 remove 在前、评测的 remove 在后（评测提案追加在草案尾）：
+
+    只勾评测那条 → 保留的**只有**它，本就带权限；两条都勾 → 保留的是整合那条——
+    用户对"删掉这条"的这次确认来自评测，权限必须跟着并到保留的那条上，否则仍撞 D5。
+    """
+
+    integration = proposal("p1", entry="r1#28", text="[未决] 编号规则")
+    review = proposal("p2", entry="r1#28", text="[未决] 编号规则", allow_manual_override=True)
+
+    kept, merged = merge_duplicate_removes((integration, review))
+
+    assert merged == (ProposalId("p2"),)
+    assert kept[0].proposal_id == ProposalId("p1")
+    assert kept[0].allow_manual_override is True, "用户勾过评测那次删除，权限并到保留条目上"
+
+
+def test_merge_does_not_invent_permission_when_nobody_had_it():
+    first = proposal("p1", entry="r1#28")
+    second = proposal("p2", entry="r1#28")
+
+    kept, _ = merge_duplicate_removes((first, second))
+
+    assert kept[0].allow_manual_override is False
