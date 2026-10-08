@@ -524,8 +524,14 @@ class _WorkingTree:
             multiple = True
         else:
             multiple = field_spec(target.field).multiple
-        # D5 的意思是"不许被**静默**覆盖"：AI 动不了人写过的块，人自己可以接着改。
-        if parent.manually_edited and not multiple and not instruction.manual:
+        # D5 的意思是"不许被**静默**覆盖"：AI 动不了人写过的块，人自己可以接着改；
+        # 用户显式确认过的评测提案（`allow_manual_override`）也算"人自己"的决定。
+        if (
+            parent.manually_edited
+            and not multiple
+            and not instruction.manual
+            and not instruction.allow_manual_override
+        ):
             raise BlockManuallyEdited(block_id=parent.block_id)
         entries = parent.entries + (entry,) if multiple else (entry,)
         self._replace(parent.with_entries(entries))
@@ -534,7 +540,11 @@ class _WorkingTree:
     def _apply_replace(self, instruction: WriteInstruction) -> BlockId:
         block_id, index = self._locate_entry(instruction.entry_id)
         block = self._blocks[block_id]
-        if block.manually_edited and not instruction.manual:
+        if (
+            block.manually_edited
+            and not instruction.manual
+            and not instruction.allow_manual_override
+        ):
             raise BlockManuallyEdited(block_id=block.block_id)
         entries = list(block.entries)
         entries[index] = Entry(
@@ -550,7 +560,11 @@ class _WorkingTree:
             return block_id
         found_block_id, index = self._locate_entry(instruction.entry_id)
         block = self._blocks[found_block_id]
-        if block.manually_edited and not instruction.manual:
+        if (
+            block.manually_edited
+            and not instruction.manual
+            and not instruction.allow_manual_override
+        ):
             raise BlockManuallyEdited(block_id=block.block_id)
         entries = list(block.entries)
         entries.pop(index)

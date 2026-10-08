@@ -116,6 +116,7 @@ def instruction(
     op: WriteOp = WriteOp.ADD,
     kind: BlockKind | None = None,
     refs: tuple[EvidenceId, ...] = (REF,),
+    allow_manual_override: bool = False,
 ) -> WriteInstruction:
     return WriteInstruction(
         instruction_id=f"i-{entry_id}",
@@ -125,6 +126,7 @@ def instruction(
         text=text,
         refs=refs,
         kind=kind,
+        allow_manual_override=allow_manual_override,
     )
 
 
@@ -134,6 +136,23 @@ def apply(document: Document, *instructions: WriteInstruction, authorized: tuple
         now=NOW,
         summary="测试写入",
         authorized_new_features=frozenset(FeatureSlug(slug) for slug in authorized),
+    )
+
+
+def _flag_manual(document: Document, block_id: BlockId) -> Document:
+    """把一个块标成"手改过"（与 `test_D5_bad_*` 同款做法：重建一份带标记的文档）。"""
+
+    blocks = tuple(
+        replace(block, manually_edited=True) if block.block_id == block_id else block
+        for block in document.blocks
+    )
+    return Document(
+        document_id=document.document_id,
+        project_id=document.project_id,
+        title=document.title,
+        blocks=blocks,
+        versions=document.versions,
+        created_at=NOW,
     )
 
 
@@ -284,6 +303,100 @@ def test_D5_bad_replace_manually_edited_block():
         )
     assert exc.value.invariant == DInvariant.D5
     assert manually_edited.block(BlockId("s1.b1")).entries[0].text == "用户写的内容"
+
+
+def test_allow_manual_override_replaces_manually_edited_block():
+    """D5 的例外（M11）：用户显式勾选的评测提案带 `allow_manual_override`，可以改手改块；
+    覆盖后该块**仍是**"手改过"（评测确认不该抹掉既有的手改留痕）。"""
+
+    document = new_document()
+    apply(document, instruction(target=Target.body("s1"), entry_id="en1", text="用户写的内容"))
+    document = _flag_manual(document, BlockId("s1.b1"))
+
+    apply(
+        document,
+        instruction(
+            target=Target.body("s1"),
+            entry_id="en1",
+            text="待复核（模拟评测：2/3 个模拟使用者未能走通）",
+            op=WriteOp.REPLACE,
+            allow_manual_override=True,
+        ),
+    )
+
+    block = document.block(BlockId("s1.b1"))
+    assert [entry.text for entry in block.entries] == [
+        "待复核（模拟评测：2/3 个模拟使用者未能走通）"
+    ]
+    assert block.manually_edited is True
+
+
+def test_allow_manual_override_removes_from_manually_edited_block():
+    document = new_document()
+    apply(document, instruction(target=Target.body("s1"), entry_id="en1", text="用户写的内容"))
+    document = _flag_manual(document, BlockId("s1.b1"))
+
+    apply(
+        document,
+        instruction(
+            target=Target.body("s1"),
+            entry_id="en1",
+            text="（remove 的正文由调用方补）",
+            op=WriteOp.REMOVE,
+            allow_manual_override=True,
+        ),
+    )
+
+    block = document.block(BlockId("s1.b1"))
+    assert block.entries == ()
+    assert block.manually_edited is True
+
+
+def test_allow_manual_override_adds_to_manually_edited_single_value_field():
+    document = new_document()
+    target = Target.feature_field("order-export", "one_liner")
+    apply(
+        document,
+        instruction(target=target, entry_id="en1", text="用户写的简介"),
+        authorized=("order-export",),
+    )
+    document = _flag_manual(document, BlockId("feat-order-export.one_liner"))
+
+    apply(
+        document,
+        instruction(
+            target=target,
+            entry_id="en2",
+            text="评测想改写",
+            allow_manual_override=True,
+        ),
+        authorized=("order-export",),
+    )
+
+    block = document.field_block(FeatureSlug("order-export"), "one_liner")
+    assert block is not None
+    assert [entry.text for entry in block.entries] == ["评测想改写"]
+
+
+def test_allow_manual_override_does_not_stamp_manual_on_untouched_block():
+    """例外只是"放行"：覆盖一个**非手改块**后，不许把块盖成"手改过"——
+    那会让这块从此再也不能被 AI 提案碰（搭车改变未来轮次的行为，不做）。"""
+
+    document = new_document()
+    apply(document, instruction(target=Target.body("s1"), entry_id="en1", text="AI 写的第一版"))
+
+    apply(
+        document,
+        instruction(
+            target=Target.body("s1"),
+            entry_id="en1",
+            text="评测建议的改写",
+            op=WriteOp.REPLACE,
+            allow_manual_override=True,
+        ),
+    )
+
+    assert document.block(BlockId("s1.b1")).manually_edited is False
 
 
 def test_D6_ok_apply_creates_one_version():

@@ -23,6 +23,9 @@ class WriteInstruction:
     kind: BlockKind | None = None
     # 这条指令是人写的（手改文档）：落到的块要留痕，之后 AI 不能静默覆盖它。
     manual: bool = False
+    #: 用户显式确认过的写入（M11 的评测提案）：放行 D5，但**不**给块盖"手改"章——
+    #: 例外只关于"这次允许写"，不改变这块以后算谁的（与 `manual` 分工不同）。
+    allow_manual_override: bool = False
 
     def __post_init__(self) -> None:
         if not self.text.strip():
