@@ -16,6 +16,7 @@ import {
 import type { ExplorationAnchor } from "./api/payload";
 import { discussionTopic } from "./state/discussions";
 import type { DiscussionAnchor } from "./state/discussions";
+import { inboxCount } from "./state/inbox";
 import { BottomStrip } from "./components/BottomStrip";
 import { DocumentPane } from "./components/DocumentPane";
 import { EditScope } from "./components/EditContext";
@@ -224,9 +225,6 @@ export default function App() {
         <TopBar
           projects={projects}
           project={null}
-          document={null}
-          readiness={[]}
-          roundStep={null}
           connection={state.connection}
           onSelectProject={data.selectProject}
           onExport={() => void data.exportMarkdown()}
@@ -259,16 +257,13 @@ export default function App() {
           <TopBar
             projects={projects}
             project={project}
-            document={doc}
-            readiness={state.readiness}
-            roundStep={round?.step ?? null}
             connection={state.connection}
             onSelectProject={data.selectProject}
             onExport={() => void data.exportMarkdown()}
-            onOpenVersions={() => setVersionsOpen(true)}
-            onOpenReadiness={() => setReadinessOpen(true)}
-            memoryCount={(state.memory ?? []).length}
-            onOpenMemory={() => setMemoryOpen(true)}
+            libraryCount={data.materials.length}
+            onOpenLibrary={() => setLibraryOpen(true)}
+            inboxCount={inboxCount(data.discussions, data.explorations)}
+            onOpenInbox={() => setLoopTab("tray")}
             theme={theme}
             onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
             search={
@@ -285,23 +280,26 @@ export default function App() {
           />
 
           <SideRail
-            projects={projects}
-            project={project}
             document={doc}
             round={round}
+            readiness={state.readiness}
             activeSection={activeSection}
-            onSelectProject={data.selectProject}
             onSelectSection={setActiveSection}
             onSelectNode={openNode}
           />
 
           <DocumentPane
             document={doc}
+            project={project}
             round={round}
             justWritten={state.justWritten}
             activeSection={activeSection}
             readiness={state.readiness}
+            memoryCount={(state.memory ?? []).length}
             schema={data.schema}
+            onOpenVersions={() => setVersionsOpen(true)}
+            onOpenReadiness={() => setReadinessOpen(true)}
+            onOpenMemory={() => setMemoryOpen(true)}
           />
 
           <LoopColumn

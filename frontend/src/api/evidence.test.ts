@@ -25,9 +25,42 @@ describe("buildEvidenceIndex", () => {
   it("主张与已经拿到编号的判断都能查到", () => {
     const index = buildEvidenceIndex(round);
     expect(index.get("E1")?.kind).toBe("claim");
+    expect(index.get("E1")?.kindLabel).toBe("用户主张");
     expect(index.get("E1")?.source).toContain("运营每天都要用");
     expect(index.get("E5")?.kind).toBe("opinion");
+    expect(index.get("E5")?.kindLabel).toBe("数据规模");
     expect(index.get("E5")?.source).toBe("数据规模 的判断");
+  });
+
+  it("材料块也进索引（证据链要能追到材料名）", () => {
+    const withMaterial = {
+      ...round,
+      materials: [
+        {
+          material_id: "m1",
+          title: "上传材料.pdf",
+          chunks: [{ chunk_id: "c1", eid: "E9", anchor: "第 2 段", text: "合同要求…" }],
+        },
+      ],
+    } as unknown as RoundView;
+    const index = buildEvidenceIndex(withMaterial);
+    expect(index.get("E9")?.kind).toBe("material");
+    expect(index.get("E9")?.kindLabel).toBe("上传材料.pdf");
+    expect(index.get("E9")?.source).toContain("材料「上传材料.pdf」");
+  });
+
+  it("同号不重复：主张与材料块撞号时主张优先", () => {
+    const withMaterial = {
+      ...round,
+      materials: [
+        {
+          material_id: "m1",
+          title: "上传材料.pdf",
+          chunks: [{ chunk_id: "c1", eid: "E1", anchor: "第 1 段", text: "撞号的块" }],
+        },
+      ],
+    } as unknown as RoundView;
+    expect(buildEvidenceIndex(withMaterial).get("E1")?.kind).toBe("claim");
   });
 
   it("还没编号的判断不进索引（汇合点才发号）", () => {

@@ -2,7 +2,14 @@
    章节头那行"这一章是干什么的"来自 `/schema`（后端 `SectionSpec.purpose` 的唯一一份），
    界面不编一句；拿不到 schema 就不显示。 */
 
-import type { DocumentView, ReadinessItemView, RoundView, SchemaView } from "../api/types";
+import type {
+  BlockView,
+  DocumentView,
+  ProjectSummaryView,
+  ReadinessItemView,
+  RoundView,
+  SchemaView,
+} from "../api/types";
 import { readinessItemsFor } from "../document/readiness";
 import { STATUS_TEXT, sectionStatus, statusClass } from "../document/status";
 import { chapterAnchors } from "../document/structure";
@@ -12,24 +19,37 @@ import { DiscussHandle } from "./DiscussHandle";
 import { EntryList } from "./EntryList";
 import { FeatureBlock } from "./FeatureBlock";
 import { Skeleton } from "./States";
+import { VersionBar } from "./VersionBar";
 
 export const PREFERENCE_AREA = "preference-area";
 
 export function DocumentPane({
   document: doc,
+  project = null,
   round,
   justWritten,
   activeSection,
   readiness = [],
+  memoryCount = 0,
   schema = null,
+  onOpenVersions,
+  onOpenReadiness,
+  onOpenMemory,
 }: {
   document: DocumentView | null;
+  /** 面包屑第一格用项目名。 */
+  project?: ProjectSummaryView | null;
   round: RoundView | null;
   justWritten: string[];
   activeSection: string;
   readiness?: ReadinessItemView[];
+  /** 已确认记忆条数（版本条上的入口）。 */
+  memoryCount?: number;
   /** `GET /schema`：章节说明从这儿取。 */
   schema?: SchemaView | null;
+  onOpenVersions?: () => void;
+  onOpenReadiness?: () => void;
+  onOpenMemory?: () => void;
 }) {
   if (doc === null) {
     return (
@@ -72,6 +92,31 @@ export function DocumentPane({
   return (
     <main className="doc" aria-label="产品文档">
       <div className="doc__inner">
+        <div className="doc__crumb">
+          <span className="doc__crumb-path">
+            {project !== null && (
+              <>
+                <span className="muted">{project.title}</span>
+                <span className="doc__crumb-sep">/</span>
+              </>
+            )}
+            <span className="muted">产品文档</span>
+            <span className="doc__crumb-sep">/</span>
+            <span className="mono">{section.section_id}</span>
+            <span>{section.title}</span>
+          </span>
+          <span className="topbar__spacer" />
+          <VersionBar
+            project={project}
+            document={doc}
+            readiness={readiness}
+            memoryCount={memoryCount}
+            onOpenVersions={onOpenVersions}
+            onOpenReadiness={onOpenReadiness}
+            onOpenMemory={onOpenMemory}
+          />
+        </div>
+
         <section className="chapter">
           <header className="chapter__head">
             <div className="chapter__kicker">
@@ -122,9 +167,15 @@ export function DocumentPane({
                 )}
               </div>
             ) : (
-              section.blocks.map((block) =>
+              section.blocks.map((block, order) =>
                 block.kind === "feature" ? (
-                  <FeatureBlock feature={block} justWritten={justWritten} key={block.block_id} />
+                  <FeatureBlock
+                    feature={block}
+                    justWritten={justWritten}
+                    index={featureOrder(section.blocks, order)}
+                    round={round}
+                    key={block.block_id}
+                  />
                 ) : (
                   <BlockTree block={block} justWritten={justWritten} key={block.block_id} />
                 ),
@@ -137,8 +188,16 @@ export function DocumentPane({
   );
 }
 
-/** 空章节上说一句"本轮有东西落在这儿"，比干说"还没写"有用。 */
-function pendingNote(round: RoundView | null, sectionId: string): string | null {
+/** 第 order 个块在"功能序列"里的展示序号（只数 feature 块，给 FR-NN 用）。 */
+function featureOrder(blocks: readonly BlockView[], order: number): number {
+  let count = 0;
+  for (let i = 0; i < order; i += 1) {
+    if (blocks[i]?.kind === "feature") count += 1;
+  }
+  return count;
+}
+
+/** 空章节上说一句"本轮有东西落在这儿"，比干说"还没写"有用。 */function pendingNote(round: RoundView | null, sectionId: string): string | null {
   if (round === null) return null;
   const inSection = (target: string) => target.split(/[/.]/)[0] === sectionId;
   const questions = round.questions.filter((question) => inSection(question.target_label)).length;

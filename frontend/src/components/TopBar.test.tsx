@@ -23,9 +23,6 @@ function draw(connection: "open" | "lost" | "idle" = "open") {
     <TopBar
       projects={[project]}
       project={project}
-      document={null}
-      readiness={[]}
-      roundStep="seats_running"
       connection={connection}
       theme="light"
       {...props}

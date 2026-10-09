@@ -11,15 +11,39 @@ SEAT = "seat.data_scale"
 SEAT_REPLY = json.dumps({
     "basis": "数据规模视角",
     "opinions": [
-        {"local_id": "O1", "form": "judgment", "about": "SKU", "claim": "200-500个SKU", "because": "过多增加损耗"},
-        {"local_id": "O2", "form": "question", "about": "周转", "claim": "库存周转目标？", "because": "影响损耗率"},
+        {
+            "local_id": "O1",
+            "form": "judgment",
+            "about": "SKU",
+            "claim": "200-500个SKU",
+            "because": "过多增加损耗",
+        },
+        {
+            "local_id": "O2",
+            "form": "question",
+            "about": "周转",
+            "claim": "库存周转目标？",
+            "because": "影响损耗率",
+        },
     ],
 })
 CLAIMS_REPLY = json.dumps({
     "basis": "读了全文",
     "claims": [
-        {"text": "社区团购平台", "raw_span": "社区团购", "label": "fact", "zone": "body", "section_id": "s1"},
-        {"text": "团长负责配送", "raw_span": "配送", "label": "fact", "zone": "body", "section_id": "s5"},
+        {
+            "text": "社区团购平台",
+            "raw_span": "社区团购",
+            "label": "fact",
+            "zone": "body",
+            "section_id": "s1",
+        },
+        {
+            "text": "团长负责配送",
+            "raw_span": "配送",
+            "label": "fact",
+            "zone": "body",
+            "section_id": "s5",
+        },
     ],
     "seats": [
         {"seat_id": SEAT, "why": "量级评估"},
@@ -28,8 +52,18 @@ CLAIMS_REPLY = json.dumps({
 INTEGRATION_REPLY = json.dumps({
     "basis": "综合意见",
     "proposals": [
-        {"op": "add", "target": {"zone": "body", "section_id": "s5", "feature_slug": "group-buying", "field": "one_liner"},
-         "text": "社区团购平台", "evidence_refs": ["E1"], "rationale": "定位"},
+        {
+            "op": "add",
+            "target": {
+                "zone": "body",
+                "section_id": "s5",
+                "feature_slug": "group-buying",
+                "field": "one_liner",
+            },
+            "text": "社区团购平台",
+            "evidence_refs": ["E1"],
+            "rationale": "定位",
+        },
     ],
     "questions": [],
     "list_items": [],
@@ -60,7 +94,7 @@ async def _run_full_round(harness, project_id, user_input):
     await harness.run_seat_round()(round_id=round_id)
     # 授权功能
     round_obj = harness.rounds.get(round_id)
-    from pmstudio.domain.shared.ids import FeatureSlug, EvidenceId
+    from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug
     if "group-buying" not in [str(f) for f in round_obj.authorized_new_features]:
         round_obj.authorize_new_feature(FeatureSlug("group-buying"), basis=EvidenceId("E1"))
         harness.rounds.save(round_obj)
@@ -78,7 +112,7 @@ async def _run_full_round(harness, project_id, user_input):
 async def test_l2_observations_stored_after_seat_round(harness):
     """L2: 席位轮后观察被提取并存储。"""
     pid = harness.seed_project(title="社区团购平台")
-    round_id = await _run_full_round(harness, pid, "社区团购平台，团长配送")
+    await _run_full_round(harness, pid, "社区团购平台，团长配送")
 
     # 检查 observations 存储
     recent = harness.observations.recent(str(pid))
@@ -163,7 +197,13 @@ async def test_content_aware_seat_selection():
     export_claims = json.dumps({
         "basis": "读了全文",
         "claims": [
-            {"text": "导出Excel报表", "raw_span": "导出Excel", "label": "need", "zone": "body", "section_id": "s5"},
+            {
+                "text": "导出Excel报表",
+                "raw_span": "导出Excel",
+                "label": "need",
+                "zone": "body",
+                "section_id": "s5",
+            },
         ],
         "seats": [
             {"seat_id": "seat.export_import", "why": "导出关键词命中"},
@@ -207,7 +247,7 @@ async def test_conflict_detection_in_integration(harness):
 async def test_l2_dedup_by_source_ref(harness):
     """L2 去重：同 source_ref 只保留最新一条。"""
     pid = harness.seed_project(title="社区团购平台")
-    round_id = await _run_full_round(harness, pid, "社区团购平台，团长配送")
+    await _run_full_round(harness, pid, "社区团购平台，团长配送")
 
     # 检查观察的 source_ref
     recent = harness.observations.recent(str(pid))

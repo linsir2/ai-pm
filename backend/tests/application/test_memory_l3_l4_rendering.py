@@ -1,6 +1,5 @@
 """L4 + L3 应用层：build_round_digest、render_digests、render_inspirations_index。"""
 
-import pytest
 
 from pmstudio.application.context import (
     build_round_digest,
@@ -44,7 +43,12 @@ class TestBuildRoundDigest:
     def test_extracts_sections(self):
         proposals = [
             _proposal(section_id="s1", feature_slug=None, field=None, text="背景"),
-            _proposal(section_id="s5", feature_slug="group-buying", field="one_liner", text="社区团购"),
+            _proposal(
+                section_id="s5",
+                feature_slug="group-buying",
+                field="one_liner",
+                text="社区团购",
+            ),
         ]
         digest = build_round_digest(proposals, "r1", "p1")
         assert set(digest.sections_touched) == {"s1", "s5"}

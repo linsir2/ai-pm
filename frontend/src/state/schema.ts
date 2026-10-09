@@ -27,6 +27,16 @@ export const FALLBACK_FIELD_TITLES: Record<string, string> = {
   dependencies: "依赖",
 };
 
+/** 必填字段（离线回落；与后端 `REQUIRED_FEATURE_FIELDS` 同一份口径）。 */
+export const FALLBACK_REQUIRED_FIELDS: ReadonlySet<string> = new Set([
+  "name",
+  "one_liner",
+  "goal",
+  "audience",
+  "exceptions",
+  "acceptance",
+]);
+
 export const FALLBACK_LIMITS: LimitsView = {
   max_seat_rounds: 3,
   max_questionnaires: 2,
@@ -65,11 +75,19 @@ export function fieldTitle(
 /** 12 个功能字段（顺序就是后端字段表的顺序）：建"还不存在的字段块"时用。 */
 export function featureFields(
   schema: SchemaView | null = current,
-): { name: string; title: string }[] {
+): { name: string; title: string; required: boolean }[] {
   if (schema !== null) {
-    return schema.feature_fields.map((item) => ({ name: item.name, title: item.title }));
+    return schema.feature_fields.map((item) => ({
+      name: item.name,
+      title: item.title,
+      required: item.required,
+    }));
   }
-  return Object.entries(FALLBACK_FIELD_TITLES).map(([name, title]) => ({ name, title }));
+  return Object.entries(FALLBACK_FIELD_TITLES).map(([name, title]) => ({
+    name,
+    title,
+    required: FALLBACK_REQUIRED_FIELDS.has(name),
+  }));
 }
 
 /** 这一章是干什么的（拿不到 schema 就是 null：宁可不显示，也不编一句）。 */

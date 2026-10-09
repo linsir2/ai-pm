@@ -145,7 +145,13 @@ def harness():
          ("驳回要能修改重提", "驳回修改重提", "need")],
         "order-approval", ["seat.state_machine", "seat.business_rules"])
     r3_seat_sm = _make_seat_reply([
-        ("O1", "judgment", "审批状态", "订单需经历提交、审批中、已通过、已驳回四个状态", "覆盖完整审批生命周期"),
+        (
+            "O1",
+            "judgment",
+            "审批状态",
+            "订单需经历提交、审批中、已通过、已驳回四个状态",
+            "覆盖完整审批生命周期",
+        ),
         ("O2", "judgment", "非法流转", "已发货订单不可回退到审批中", "防止状态混乱"),
     ])
     r3_seat_br = _make_seat_reply([
@@ -237,7 +243,13 @@ def harness():
          ("支持短信和站内信两种渠道", "支持短信和站内信", "need")],
         "notification", ["seat.notification", "seat.frontend_interaction"])
     r6_seat_not = _make_seat_reply([
-        ("O1", "judgment", "触达渠道", "短信用于重要状态变更，站内信用于普通通知", "成本与用户体验平衡"),
+        (
+            "O1",
+            "judgment",
+            "触达渠道",
+            "短信用于重要状态变更，站内信用于普通通知",
+            "成本与用户体验平衡",
+        ),
         ("O2", "judgment", "退订机制", "用户可退订非关键通知", "避免打扰用户"),
     ])
     r6_seat_fi = _make_seat_reply([
@@ -404,7 +416,7 @@ async def test_6_rounds_full_pipeline(harness):
     print(f"  轮次数: {round_count} ✓")
 
     # 逐轮详情
-    print(f"\n  逐轮详情:")
+    print("\n  逐轮详情:")
     for r in results:
         print(f"    R{r['round']}: claims={r['claims']}, "
               f"seats={r['seats']}, "
@@ -412,4 +424,4 @@ async def test_6_rounds_full_pipeline(harness):
               f"proposals={r['proposals']}, "
               f"obs={r['observations']}")
 
-    print(f"\n  ✓ 6 轮完整主闭环验证通过")
+    print("\n  ✓ 6 轮完整主闭环验证通过")

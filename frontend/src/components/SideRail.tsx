@@ -8,29 +8,36 @@
 
 import { useEffect, useState } from "react";
 
-import type { DocumentView, ProjectSummaryView, RoundView } from "../api/types";
+import type { BlockView, DocumentView, ReadinessItemView, RoundView } from "../api/types";
 import { STATUS_TEXT, sectionStatus, statusClass } from "../document/status";
+import { readinessPercent, readinessSummary } from "../document/readiness";
 import { listFeatures } from "../document/structure";
 import { fieldTitle } from "../state/schema";
+import { ReadinessRing } from "./ReadinessRing";
 
 const PREFERENCE = "preference";
 
+/** 文档里的条目总数（递归数到功能子块）：文档里的条目都是用户确认过的。 */
+function countEntries(blocks: readonly BlockView[]): number {
+  return blocks.reduce(
+    (sum, block) => sum + block.entries.length + countEntries(block.children),
+    0,
+  );
+}
+
 export function SideRail({
-  projects,
-  project,
   document: doc,
   round,
+  readiness = [],
   activeSection,
-  onSelectProject,
   onSelectSection,
   onSelectNode,
 }: {
-  projects: ProjectSummaryView[];
-  project: ProjectSummaryView | null;
   document: DocumentView | null;
   round: RoundView | null;
+  /** 后端就绪度判据（阻塞 / 提示）：环形图与摘要从这儿算。 */
+  readiness?: ReadinessItemView[];
   activeSection: string;
-  onSelectProject: (projectId: string) => void;
   onSelectSection: (sectionId: string) => void;
   onSelectNode: (sectionId: string, blockId: string) => void;
 }) {
@@ -47,29 +54,40 @@ export function SideRail({
   const toggle = (id: string) =>
     setOpen((current) => ({ ...current, [id]: current[id] !== true }));
 
+  // 就绪度环形图：按章算——有阻塞的章算"未就绪"，其余算"已就绪"（算法与文档区共享）。
+  const { blockers, warns } = readinessSummary(readiness);
+  const readinessRatio = readinessPercent(readiness, doc?.sections ?? []);
+  const entryCount = doc === null ? 0 : countEntries(doc.sections.flatMap((s) => s.blocks));
+  const hasDoc = doc !== null && entryCount > 0;
+
   return (
     <nav className="rail" aria-label="文档结构">
-      <p className="rail__head">我的项目</p>
-      <ul className="rail__list">
-        {projects.map((item) => {
-          const on = project?.project_id === item.project_id;
-          return (
-            <li key={item.project_id}>
-              <button
-                type="button"
-                className={on ? "rail__item rail__item--on" : "rail__item"}
-                onClick={() => onSelectProject(item.project_id)}
-                aria-current={on}
-              >
-                <span className="rail__label">{item.title}</span>
-                <span className="rail__meta mono">v{item.version_no}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+      <div className="rail__doc-header">
+        <span className="rail__doc-title">产品文档</span>
+        <button type="button" className="iconbtn" aria-label="编辑文档" title="编辑文档">
+          ✎
+        </button>
+      </div>
 
-      <p className="rail__head rail__head--gap">文档结构</p>
+      {hasDoc && (
+        <div className="rail__readiness">
+          <ReadinessRing percent={readinessRatio} />
+          <div className="rail__readiness-text">
+            <span className="rail__readiness-label">
+              整体进度 {blockers === 0 ? "良好" : "待补"}
+            </span>
+            <span className="rail__readiness-count">
+              已确认 {entryCount} 条
+              {blockers > 0 && ` · 阻塞 ${blockers} 项`}
+              {blockers === 0 && warns > 0 && ` · 提示 ${warns} 项`}
+            </span>
+          </div>
+        </div>
+      )}
+
+      <p className="rail__head">
+        章节导航 <span className="rail__head-count">{doc?.sections.length ?? 0}</span>
+      </p>
       <ul className="rail__list rail__tree" role="tree">
         {doc?.sections.map((section) => {
           const status = sectionStatus(section, round);

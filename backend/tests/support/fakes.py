@@ -393,7 +393,8 @@ class InMemoryInspirationRepository:
     def search(self, project_id: str, query: str, limit: int = 10):
         results = [
             item for item in self._items.values()
-            if item.project_id == project_id and (query in item.statement or (item.context and query in item.context))
+            if item.project_id == project_id
+            and (query in item.statement or (item.context and query in item.context))
         ]
         return tuple(results[:limit])
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RoundView } from "../api/types";
-import { labelCounts, rewritesOf, roundProgress } from "./progress";
+import { labelCounts, rewritesOf, roundOrdinal, roundProgress } from "./progress";
 
 const empty = {
   round_id: "r1",
@@ -107,6 +107,26 @@ describe("roundProgress", () => {
     } as unknown as RoundView;
     expect(stepOf(round, "confirm").state).toBe("done");
     expect(stepOf(round, "confirm").detail).toBe("v2");
+  });
+});
+
+describe("roundOrdinal", () => {
+  const rounds = [{ round_id: "r3" }, { round_id: "r2" }, { round_id: "r1" }];
+
+  it("最新在前：第 1 轮在最前面，序号 = 总数 − 位置", () => {
+    expect(roundOrdinal(rounds, "r3")).toBe(3);
+    expect(roundOrdinal(rounds, "r2")).toBe(2);
+    expect(roundOrdinal(rounds, "r1")).toBe(1);
+  });
+
+  it("看历史轮也算得出它是第几轮", () => {
+    expect(roundOrdinal(rounds, "r1")).toBe(1);
+  });
+
+  it("不在列表里 / 没有轮次就是 null（界面回落，不编号）", () => {
+    expect(roundOrdinal(rounds, "r9")).toBeNull();
+    expect(roundOrdinal(rounds, null)).toBeNull();
+    expect(roundOrdinal([], "r1")).toBeNull();
   });
 });
 

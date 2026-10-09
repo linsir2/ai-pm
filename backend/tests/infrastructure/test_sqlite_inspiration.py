@@ -12,7 +12,11 @@ from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRep
 NOW = datetime(2026, 10, 8, 10, 0, 0)
 
 
-def _item(item_id: str, origin: InspirationOrigin = InspirationOrigin.DISCUSSION, statement: str = "灵感") -> InspirationItem:
+def _item(
+    item_id: str,
+    origin: InspirationOrigin = InspirationOrigin.DISCUSSION,
+    statement: str = "灵感",
+) -> InspirationItem:
     return InspirationItem(
         item_id=item_id,
         project_id="p1",
@@ -64,6 +68,13 @@ class TestSqliteInspirationRepository:
 
     def test_recent_filters_by_project(self, repo):
         repo.save(_item("ins-1", statement="A"))
-        repo.save(InspirationItem(item_id="ins-other", project_id="p-other", origin=InspirationOrigin.DISCUSSION, statement="Other"))
+        repo.save(
+            InspirationItem(
+                item_id="ins-other",
+                project_id="p-other",
+                origin=InspirationOrigin.DISCUSSION,
+                statement="Other",
+            )
+        )
         recent = repo.recent("p1")
         assert all(i.project_id == "p1" for i in recent)

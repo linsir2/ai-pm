@@ -16,6 +16,7 @@ import type {
 import type { DiscussionAnchor } from "../state/discussions";
 import { discussionTurnLimit, roleOptions } from "../state/discussions";
 import { inboxCount } from "../state/inbox";
+import { roundOrdinal } from "../state/progress";
 import type { RoundDrafts } from "../state/useRoundDrafts";
 import { DiscussionTray } from "./DiscussionTray";
 import { DraftDrawer } from "./DraftDrawer";
@@ -277,6 +278,7 @@ export function LoopColumn({
               round={round}
               pending={pending}
               limits={schema?.limits ?? null}
+              ordinal={roundOrdinal(rounds, round.round_id)}
               onRetry={onRetry}
               onAbandon={onAbandon}
               onOpenQuestionnaire={() => drafts.setCollapsed(false)}

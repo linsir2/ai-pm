@@ -1,45 +1,65 @@
-import type {
-  DocumentView,
-  ProjectSummaryView,
-  ReadinessItemView,
-  SearchHitView,
-  SearchResultsView,
-} from "../api/types";
-import { stepText } from "../labels";
+import type { ProjectSummaryView, SearchHitView, SearchResultsView } from "../api/types";
 import { Logo } from "./Logo";
 import { SearchBox } from "./SearchBox";
-import { VersionBar } from "./VersionBar";
+
+function FolderIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      aria-hidden="true"
+    >
+      <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12V4.5Z" />
+    </svg>
+  );
+}
+
+function BulbIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      aria-hidden="true"
+    >
+      <path d="M8 1.5a4.5 4.5 0 0 1 2.5 8.24V11h-5V9.74A4.5 4.5 0 0 1 8 1.5Z" />
+      <path d="M6.5 13.5h3" />
+    </svg>
+  );
+}
 
 export function TopBar({
   projects,
   project,
-  document: doc,
-  readiness,
-  roundStep,
   connection,
   onSelectProject,
   onExport,
-  onOpenVersions,
-  onOpenReadiness,
-  memoryCount,
-  onOpenMemory,
+  libraryCount = 0,
+  onOpenLibrary,
+  inboxCount = 0,
+  onOpenInbox,
   theme,
   onToggleTheme,
   search = null,
 }: {
   projects: ProjectSummaryView[];
   project: ProjectSummaryView | null;
-  document: DocumentView | null;
-  readiness: ReadinessItemView[];
-  roundStep: string | null;
   connection: "idle" | "open" | "lost";
   onSelectProject: (projectId: string) => void;
   onExport: () => void;
-  onOpenVersions?: () => void;
-  onOpenReadiness?: () => void;
-  /** 已确认的记忆条数 + 打开记忆抽屉（M6）：0 条时不显示入口。 */
-  memoryCount?: number;
-  onOpenMemory?: () => void;
+  /** 材料库入口（顶栏）：显示库里有几份，点开抽屉。 */
+  libraryCount?: number;
+  onOpenLibrary?: () => void;
+  /** 灵感箱入口（顶栏）：未处理数徽标，点开切到灵感箱页签。 */
+  inboxCount?: number;
+  onOpenInbox?: () => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
   /** 搜索框（F6）：有项目才有；没项目时传 null，顶栏就不显示它。 */
@@ -63,51 +83,71 @@ export function TopBar({
       <span className="wordmark">
         <Logo />
         <span className="wordmark__name">PM Studio</span>
-        <span className="wordmark__sub">产品文档工作台</span>
       </span>
-      <span className="topbar__divider" />
-
-      {search !== null && <SearchBox {...search} />}
 
       {project !== null && (
         <>
           <label className="sr-only" htmlFor="project-switch">
             切换项目
           </label>
-          <select
-            id="project-switch"
-            className="project-switch"
-            value={project.project_id}
-            onChange={(event) => onSelectProject(event.target.value)}
-          >
-            {projects.map((item) => (
-              <option key={item.project_id} value={item.project_id}>
-                {item.title}
-              </option>
-            ))}
-          </select>
-          <VersionBar
-            project={project}
-            document={doc}
-            readiness={readiness}
-            onOpenVersions={onOpenVersions}
-            onOpenReadiness={onOpenReadiness}
-            memoryCount={memoryCount}
-            onOpenMemory={onOpenMemory}
-          />
-          {roundStep !== null && <span className="pill-step">{stepText(roundStep)}</span>}
+          <span className="project-switch__wrap">
+            <select
+              id="project-switch"
+              className="project-switch"
+              value={project.project_id}
+              onChange={(event) => onSelectProject(event.target.value)}
+            >
+              {projects.map((item) => (
+                <option key={item.project_id} value={item.project_id}>
+                  {item.title}
+                </option>
+              ))}
+            </select>
+            <span className="project-switch__caret" aria-hidden="true">
+              ▾
+            </span>
+          </span>
+        </>
+      )}
+
+      <span className="topbar__spacer" />
+      {search !== null && <SearchBox {...search} />}
+      <span className="topbar__spacer" />
+
+      {project !== null && (
+        <>
+          {onOpenLibrary !== undefined && (
+            <button
+              type="button"
+              className="topbar__action"
+              onClick={onOpenLibrary}
+              title="项目里的全部材料"
+            >
+              <FolderIcon />
+              材料库
+              {libraryCount > 0 && <span className="topbar__action-count">{libraryCount}</span>}
+            </button>
+          )}
+          {onOpenInbox !== undefined && (
+            <button
+              type="button"
+              className="topbar__action"
+              onClick={onOpenInbox}
+              title="讨论卡与调研候选统一过目"
+            >
+              <BulbIcon />
+              灵感箱
+              {inboxCount > 0 && <span className="topbar__badge">{inboxCount}</span>}
+            </button>
+          )}
           <button type="button" className="btn btn--sm" onClick={onExport}>
             导出
           </button>
         </>
       )}
 
-      <span className="topbar__spacer" />
-
       <span className={`conn conn--${connection}`}>
         <span className="conn__dot" aria-hidden="true" />
-        {/* 窄屏时这一行文字会被视觉隐藏（CSS），`role=status` 与文本都留着——
-            读屏用户照样听得到连接状态（P29 F7）。 */}
         <span className="muted small conn__label" role="status">
           {connectionText}
         </span>

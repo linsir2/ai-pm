@@ -93,6 +93,20 @@ function isCompleted(packet: { status: string }): boolean {
   return packet.status === "completed";
 }
 
+/**
+ * 第几轮（展示序号）：`rounds` 最新在前，序号 = 总数 − 位置。
+ * 查不到（列表还没到 / 不在列表里）就是 null——界面回落成"本轮"，不编一个数。
+ */
+export function roundOrdinal(
+  rounds: readonly { round_id: string }[],
+  roundId: string | null,
+): number | null {
+  if (roundId === null) return null;
+  const index = rounds.findIndex((item) => item.round_id === roundId);
+  if (index < 0) return null;
+  return rounds.length - index;
+}
+
 /** 主张的标签分布（分析者那一格要显示的"3 种标签"）。 */
 export function labelCounts(round: RoundView): [string, number][] {
   const counts = new Map<string, number>();

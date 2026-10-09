@@ -40,6 +40,25 @@ export function readinessHeadline(items: readonly ReadinessItemView[]): string {
   return "就绪";
 }
 
+/**
+ * 就绪度百分比：**无阻塞章节 / 参与判定的章节**。
+ *
+ * s13 不参与（与后端判据一致：版本历史不是人写的正文）；
+ * 左栏环形图与文档区「就绪度 N%」用同一个算法，这里算一次两处用。
+ */
+export function readinessPercent(
+  items: readonly ReadinessItemView[],
+  sections: readonly { section_id: string }[],
+): number {
+  const { bySection } = readinessSummary(items);
+  const graded = sections.filter((section) => section.section_id !== "s13");
+  if (graded.length === 0) return 0;
+  const ready = graded.filter((section) =>
+    (bySection.get(section.section_id) ?? []).every((item) => item.severity !== "blocker"),
+  ).length;
+  return Math.round((ready / graded.length) * 100);
+}
+
 export interface SectionReadiness {
   sectionId: string;
   title: string;

@@ -5,16 +5,13 @@
 
 from datetime import datetime
 
-import pytest
-
-from pmstudio.domain.authoring.readiness import ReadinessChecker, Severity
+from pmstudio.application.context import build_project_context, render_project_context
 from pmstudio.domain.authoring.views import (
     BlockView,
     DocumentView,
     SectionView,
 )
 from pmstudio.domain.memory.context import ProjectContext
-from pmstudio.application.context import build_project_context, render_project_context
 from pmstudio.domain.memory.memory import MemoryEntry, MemoryKind
 from pmstudio.domain.shared.ids import (
     EvidenceId,
@@ -39,7 +36,9 @@ def _entry(text: str, kind: MemoryKind = MemoryKind.DECISION, refs=("E1",)) -> M
 
 
 def _section(section_id: str, *entries: str) -> SectionView:
-    blocks = tuple(BlockView(block_id=f"b-{i}", kind="text", entries=(e,)) for i, e in enumerate(entries))
+    blocks = tuple(
+        BlockView(block_id=f"b-{i}", kind="text", entries=(e,)) for i, e in enumerate(entries)
+    )
     return SectionView(section_id=SectionId(section_id), title=f"{section_id} 标题", blocks=blocks)
 
 
@@ -89,8 +88,18 @@ class TestBuildProjectContext:
             section_id=SectionId("s5"),
             title="功能需求",
             blocks=(
-                BlockView(block_id="b1", kind="feature", entries=("功能A",), feature_slug="feature-a"),
-                BlockView(block_id="b2", kind="feature", entries=("功能B",), feature_slug="feature-b"),
+                BlockView(
+                    block_id="b1",
+                    kind="feature",
+                    entries=("功能A",),
+                    feature_slug="feature-a",
+                ),
+                BlockView(
+                    block_id="b2",
+                    kind="feature",
+                    entries=("功能B",),
+                    feature_slug="feature-b",
+                ),
             ),
         )
         doc = _document(s5)
@@ -120,7 +129,11 @@ class TestBuildProjectContext:
             section_id=SectionId("s11"),
             title="风险与开放问题",
             blocks=(
-                BlockView(block_id="b-oq", kind="open_questions", entries=("退还周期多长？", "老年用户如何使用？")),
+                BlockView(
+                    block_id="b-oq",
+                    kind="open_questions",
+                    entries=("退还周期多长？", "老年用户如何使用？"),
+                ),
             ),
         )
         doc = _document(s11)

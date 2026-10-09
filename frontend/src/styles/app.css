@@ -1,9 +1,3 @@
-/* ============================================================================
-   PM Studio · 界面样式
-   骨架：三栏（200 / 1fr / 380）+ 顶栏；抽屉只覆盖闭环区。
-   视觉不在这里发明：色板、字号、圆角、动效上限全部来自 DESIGN.md。
-   ========================================================================== */
-
 * {
   box-sizing: border-box;
 }
@@ -26,9 +20,9 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--primary) 65%, transparent);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 button,
@@ -43,7 +37,6 @@ a {
   color: var(--primary);
 }
 
-/* ── 排版工具类 ───────────────────────────────────────────── */
 .mono {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -77,17 +70,14 @@ a {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  /* 抽屉只有 380px：动作按钮多了必须换行，否则最后一个（"确认写入 N 条"）
-     会被推到视口外面裁掉（P29 眼睛检查 F3 同族，实测 right 1540 > 1440）。 */
   flex-wrap: wrap;
   min-width: 0;
 }
 
-/* ── 外壳 ─────────────────────────────────────────────────── */
 .shell {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr) 380px;
-  grid-template-rows: 48px minmax(0, 1fr) auto;
+  grid-template-columns: 240px minmax(0, 1fr) 400px;
+  grid-template-rows: 56px minmax(0, 1fr) auto;
   grid-template-areas:
     "top top top"
     "nav doc loop"
@@ -97,20 +87,19 @@ a {
 
 .shell--plain {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-rows: 56px minmax(0, 1fr);
   grid-template-areas:
     "top"
     "doc";
 }
 
-/* ── 顶栏 ─────────────────────────────────────────────────── */
 .topbar {
   grid-area: top;
   display: flex;
   align-items: center;
   gap: var(--space-3);
   padding: 0 var(--space-4);
-  background: var(--app-bg);
+  background: var(--surface);
   border-bottom: var(--hairline);
   min-width: 0;
 }
@@ -125,57 +114,88 @@ a {
 .logo {
   display: block;
   flex: none;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
 }
 
 .wordmark__name {
-  font-family: var(--font-doc);
+  font-family: var(--font-ui);
   font-size: var(--step-4);
+  font-weight: 600;
   letter-spacing: 0.02em;
-}
-
-.wordmark__sub {
-  font-size: var(--step-1);
-  color: var(--empty);
-  letter-spacing: 0.06em;
-}
-
-.topbar__divider {
-  width: 1px;
-  height: 20px;
-  background: var(--border);
 }
 
 .topbar__spacer {
   flex: 1;
 }
 
-.topbar__meta {
-  display: flex;
+.project-switch__wrap {
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
-  font-size: var(--step-1);
-  color: var(--open);
-  white-space: nowrap;
 }
 
 .project-switch {
   appearance: none;
-  border: var(--hairline);
-  border-radius: var(--radius-input);
-  background: var(--surface);
-  padding: 5px var(--space-3) 5px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 5px 22px 5px var(--space-2);
   font-size: var(--step-2);
-  max-width: 240px;
+  font-weight: 500;
+  max-width: 260px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.pill-step {
-  font-size: var(--step-1);
-  padding: 1px var(--space-2);
-  border-radius: var(--radius-tag);
-  background: var(--tint-primary);
-  color: var(--primary);
+.project-switch:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+
+.project-switch__caret {
+  position: absolute;
+  right: 7px;
+  pointer-events: none;
+  color: var(--empty);
+  font-size: 10px;
+}
+
+.topbar__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--open);
+  font-size: var(--step-2);
+  cursor: pointer;
   white-space: nowrap;
+}
+
+.topbar__action:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  color: var(--ink);
+}
+
+.topbar__badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+
+.topbar__action-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--empty);
 }
 
 .conn {
@@ -200,13 +220,54 @@ a {
   background: var(--gap);
 }
 
-/* ── 左栏：项目 / 文档结构 / 功能子树 ─────────────────────── */
 .rail {
   grid-area: nav;
   overflow: auto;
   padding: var(--space-4) var(--space-2) var(--space-6) var(--space-3);
   border-right: var(--hairline);
-  background: var(--app-bg);
+  background: var(--surface);
+}
+
+.rail__doc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.rail__doc-title {
+  font-size: var(--step-4);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.rail__readiness {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  margin-bottom: var(--space-4);
+}
+
+.rail__readiness-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rail__readiness-label {
+  font-size: var(--step-2);
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.rail__readiness-count {
+  font-size: var(--step-1);
+  color: var(--open);
 }
 
 .rail__head {
@@ -214,6 +275,12 @@ a {
   letter-spacing: 0.08em;
   color: var(--empty);
   margin: 0 0 var(--space-2) 6px;
+}
+
+.rail__head-count {
+  font-family: var(--font-mono);
+  margin-left: 4px;
+  color: var(--empty);
 }
 
 .rail__head--gap {
@@ -235,7 +302,7 @@ a {
   padding: 5px 6px;
   border: 0;
   background: none;
-  border-radius: var(--radius-tag);
+  border-radius: var(--radius-sm);
   text-align: left;
   cursor: pointer;
   color: var(--open);
@@ -248,9 +315,8 @@ a {
 }
 
 .rail__item--on {
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--border);
+  background: var(--tint-primary);
+  color: var(--primary);
 }
 
 .rail__num {
@@ -263,8 +329,6 @@ a {
 
 .rail__label {
   flex: 1;
-  /* flex 子项默认 min-width:auto：不加这一句，长名字会顶破 200px 的栏，
-     下面那套 ellipsis 根本不生效（P29 F9 实测 scrollWidth 297 > 199） */
   min-width: 0;
   font-size: var(--step-2);
   overflow: hidden;
@@ -284,8 +348,6 @@ a {
   padding-block: var(--space-2);
 }
 
-/* 功能在一个 200px 的栏里：slug 那一行长（`feature#warehouse-operations`），
-   不许把整栏撑出横向滚动（P29 F9，实拍 `rail.scrollWidth 297 > 199`）。 */
 .rail__item--feature .feature__slug {
   max-width: 100%;
   overflow: hidden;
@@ -293,14 +355,11 @@ a {
   white-space: nowrap;
 }
 
-/* 列向 flex + `align-items: flex-start` 的子项是按**内容宽度**撑开的（不是容器宽度），
-   所以还要让它 stretch —— 否则 `text-overflow: ellipsis` 永远不生效（P29 F9）。 */
 .rail__item--feature .rail__label,
 .rail__item--feature .feature__slug {
   align-self: stretch;
 }
 
-/* 树：一层一层缩进，小三角只管展开收起 */
 .rail__row {
   display: flex;
   align-items: center;
@@ -308,9 +367,8 @@ a {
 }
 
 .rail__row--on {
-  background: var(--surface);
-  border-radius: var(--radius-tag);
-  box-shadow: inset 0 0 0 1px var(--border);
+  background: var(--tint-primary);
+  border-radius: var(--radius-sm);
 }
 
 .rail__twisty {
@@ -354,7 +412,6 @@ a {
   font-size: var(--step-1);
 }
 
-/* ── 文档区 ───────────────────────────────────────────────── */
 .doc {
   grid-area: doc;
   overflow: auto;
@@ -364,25 +421,47 @@ a {
 }
 
 .doc__inner {
-  position: relative; /* 选区把手的定位上下文（M13）：绝对定位在栏内，跟着内容滚 */
-  max-width: 34em;
+  position: relative;
+  max-width: 60em;
   margin-inline: auto;
   min-height: 100%;
-  padding: var(--space-5) var(--space-5) var(--space-7);
+  padding: var(--space-5) var(--space-6) var(--space-7);
   background: var(--paper);
   border: var(--hairline);
-  border-radius: var(--radius-card);
+  border-radius: var(--radius-lg);
 }
 
-/* 选区把手（M13，D2 设计 A）：贴着选区的临时工具条。无阴影（DESIGN.md 禁堆叠）、
-   指针专属（键盘入口在条目工具行）、窄屏不出现。 */
+.doc__crumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--step-2);
+  margin-bottom: var(--space-4);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.doc__crumb-path {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc__crumb-sep {
+  color: var(--empty);
+}
+
 .discuss-handle {
   position: absolute;
   z-index: 30;
   height: 28px;
   padding: 0 var(--space-2);
   border: var(--hairline);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
@@ -401,7 +480,6 @@ a {
   }
 }
 
-/* 章节头 */
 .chapter__kicker {
   display: flex;
   align-items: center;
@@ -419,13 +497,11 @@ a {
   letter-spacing: 0.01em;
 }
 
-/* 这一章是干什么的：后端 /schema 给的那一句，安静地放在标题下面 */
 .chapter__purpose {
   margin: var(--space-2) 0 0;
   max-width: 68ch;
 }
 
-/* 问卷抽屉里"本轮前几批答过的" */
 .drawer__history {
   border-bottom: var(--hairline);
   padding-bottom: var(--space-3);
@@ -449,7 +525,6 @@ a {
   color: var(--muted);
 }
 
-/* 功能子树末尾"补一个还没写的字段"（F8-①） */
 .feature__add {
   padding-top: var(--space-3);
 }
@@ -461,7 +536,6 @@ a {
   align-items: center;
 }
 
-/* 闭环区顶上"这个项目走过哪几轮"（F4） */
 .rounds {
   border-bottom: var(--hairline);
   padding: var(--space-2) var(--space-4);
@@ -511,21 +585,25 @@ a {
   color: var(--muted);
 }
 
-/* 顶栏搜索（F6） */
 .search {
   position: relative;
   flex: 1;
-  max-width: 320px;
+  max-width: 460px;
 }
 
 .search__input {
   width: 100%;
-  padding: 4px var(--space-2);
+  padding: 7px var(--space-4);
   border: var(--hairline);
-  border-radius: 6px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--app-bg);
   color: inherit;
-  font-size: var(--step-1);
+  font-size: var(--step-2);
+}
+
+.search__input:focus-visible {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
 }
 
 .search__panel {
@@ -538,8 +616,8 @@ a {
   overflow: auto;
   background: var(--surface);
   border: var(--hairline);
-  border-radius: 8px;
-  box-shadow: var(--shadow, 0 8px 24px rgb(0 0 0 / 12%));
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
   padding: var(--space-2);
 }
 
@@ -572,7 +650,6 @@ a {
   margin: var(--space-1) 0 0;
 }
 
-/* 材料（工具层 C-2）：输入框旁边的选择器 + 闭环区/复述卡里的"本轮材料" */
 .materials {
   display: grid;
   gap: var(--space-1);
@@ -586,7 +663,7 @@ a {
 }
 
 .materials__error {
-  color: var(--danger, #b42318);
+  color: var(--conflict);
   margin: 0;
 }
 
@@ -600,8 +677,6 @@ a {
 }
 
 .materials__item {
-  /* 堆叠而不是一行五列：材料卡在 380px 的抽屉里，一行塞不下标题 + 来源 + 编号 + 三个动作，
-     挤到最后每个字都竖着排（P29 眼睛检查 F5 的同一族问题）。 */
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 2px;
@@ -647,7 +722,6 @@ a {
   margin-top: var(--space-4);
 }
 
-/* 页内结构（功能 / 字段） */
 .anchors {
   display: flex;
   flex-wrap: wrap;
@@ -669,40 +743,221 @@ a {
   border-bottom-color: color-mix(in srgb, var(--primary) 45%, transparent);
 }
 
-/* 功能子树 */
-.feature {
-  margin-top: var(--space-6);
+/* 功能卡片（FR-NN）：名称 + 状态 + 字段 + 证据链 */
+.fcard {
+  border: var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  padding: var(--space-4) var(--space-5);
+  margin-top: var(--space-4);
+  scroll-margin-top: var(--space-6);
 }
 
-.feature:first-child {
+.fcard:first-child {
   margin-top: 0;
 }
 
-.feature__head {
+.fcard--new {
+  animation: flash var(--dur-mid) var(--ease-out) both;
+}
+
+.fcard__head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
-  scroll-margin-top: var(--space-6);
 }
 
-.feature__slug {
-  font-family: var(--font-mono);
+.fcard__num {
   font-size: var(--step-1);
   color: var(--primary);
   background: var(--tint-primary);
-  border-radius: var(--radius-tag);
-  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+  font-weight: 500;
 }
 
-.feature__name {
+.fcard__name {
   font-family: var(--font-doc);
   font-size: var(--step-5);
   margin: 0;
   line-height: 1.35;
 }
 
-/* 字段：整段文字与步骤 */
+.fcard__status {
+  margin-left: auto;
+  font-size: var(--step-1);
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.fcard__status--ok {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.fcard__status--todo {
+  color: var(--gap);
+  background: var(--tint-warn);
+}
+
+/* 证据链：[来源] → [编号] → [材料] → [当前条目] */
+.chain {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--app-bg);
+  font-size: var(--step-1);
+}
+
+.chain__label {
+  color: var(--empty);
+  letter-spacing: 0.06em;
+  flex: none;
+}
+
+.chain__items {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.chain__kind,
+.chain__material,
+.chain__end {
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: var(--hairline);
+  color: var(--open);
+  white-space: nowrap;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chain__end {
+  border-style: dashed;
+  color: var(--empty);
+}
+
+.chain__eid {
+  border: var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--primary);
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 0 6px;
+  cursor: pointer;
+  transition: border-color var(--dur-micro) var(--ease-out);
+}
+
+.chain__eid:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.chain__arrow {
+  color: var(--empty);
+}
+
+.chain__more {
+  color: var(--empty);
+}
+
+/* 版本条：vN + 版本历史 + 就绪度 + 记忆 */
+.vbar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.vbar__version {
+  font-size: var(--step-1);
+  color: var(--empty);
+}
+
+.vbar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px var(--space-2);
+  border: var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--step-1);
+  cursor: pointer;
+  transition: border-color var(--dur-micro) var(--ease-out);
+}
+
+.vbar__btn:hover {
+  border-color: color-mix(in srgb, var(--ink) 25%, var(--border));
+}
+
+.vbar__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+  font-size: var(--step-1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.vbar__chip--warn {
+  background: var(--tint-warn);
+  color: var(--gap);
+}
+
+.vbar__link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--open);
+  font: inherit;
+  font-size: var(--step-1);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 非功能章节的条目：卡片化（功能卡里的字段条目保持轻量） */
+.chapter__body .block .entries > .entry {
+  padding: var(--space-3) var(--space-4);
+  border: var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  margin-bottom: var(--space-2);
+}
+
+.chapter__body .block .entries > .entry--add {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* 功能 slug 胶囊（左栏树与功能卡共用） */
+.feature__slug {
+  font-family: var(--font-mono);
+  font-size: var(--step-1);
+  color: var(--primary);
+  background: var(--tint-primary);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+}
+
 .fields {
   list-style: none;
   margin: var(--space-5) 0 0;
@@ -741,19 +996,17 @@ a {
   line-height: 1.75;
 }
 
-/* 字段：清单与验收标准 */
 .keygrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   margin-top: var(--space-5);
   border: var(--hairline);
-  border-radius: var(--radius-tag);
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
 .keygrid__cell {
   padding: var(--space-3);
-  /* 分隔线画在格子上、往外压 1px 与容器边框重合：末行不满时也不会留下灰块 */
   border-right: var(--hairline);
   border-bottom: var(--hairline);
   margin: 0 -1px -1px 0;
@@ -768,15 +1021,23 @@ a {
 
 .keygrid__item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
-  align-items: baseline;
   font-size: var(--step-2);
   line-height: 1.65;
   padding: 2px 0;
 }
 
-/* ── 章节与块 ─────────────────────────────────────────────── */
+/* 窄格子里的条目：正文一行、胶囊另起一行（159px 的格子放不下并排） */
+.keygrid .entry {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.keygrid .entry__refs {
+  max-width: 100%;
+  justify-self: start;
+}
+
 .section__blank {
   color: var(--empty);
   font-size: var(--step-2);
@@ -807,6 +1068,13 @@ a {
   padding: 3px 0;
 }
 
+/* 出处胶囊不许把正文挤没：refs 列最多占一半，装不下就在自己的列里换行
+   （实测：6 个胶囊的 max-content 能把 159px 的格子正文挤成 0 宽——一字一行）。 */
+.entry__refs {
+  min-width: 0;
+  max-width: 50%;
+}
+
 .entry__text {
   line-height: 1.75;
   white-space: pre-wrap;
@@ -826,7 +1094,6 @@ a {
   margin-left: 6px;
 }
 
-/* 条目的改 / 加 / 删：平时不显眼，鼠标进来或键盘走到才亮 */
 .entry__tools {
   display: inline-flex;
   gap: 2px;
@@ -845,7 +1112,7 @@ a {
   color: var(--empty);
   font-size: 11px;
   padding: 1px 4px;
-  border-radius: var(--radius-tag);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -874,7 +1141,7 @@ a {
   min-height: 58px;
   padding: var(--space-2) var(--space-3);
   border: var(--hairline);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-sm);
   background: var(--paper);
   font-size: var(--step-3);
   line-height: 1.7;
@@ -891,7 +1158,7 @@ a {
 
 .entry-add {
   border: 1px dashed var(--border);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--empty);
   font-size: var(--step-1);
@@ -914,7 +1181,6 @@ a {
   margin-top: 3px;
 }
 
-/* 偏好区：不进正文、不进交付 */
 .prefs {
   margin-top: var(--space-7);
   border-top: var(--hairline);
@@ -935,7 +1201,6 @@ a {
   margin: 0 0 var(--space-3);
 }
 
-/* ── 出处胶囊（产品唯一的信任机制，别藏进 tooltip）────────── */
 .chips {
   display: inline-flex;
   flex-wrap: wrap;
@@ -949,7 +1214,7 @@ a {
   line-height: 1.7;
   padding: 0 5px;
   border: var(--hairline);
-  border-radius: var(--radius-tag);
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--open);
   cursor: pointer;
@@ -974,7 +1239,6 @@ a {
   border-color: var(--border);
 }
 
-/* ── 状态点与标签 ─────────────────────────────────────────── */
 .dot {
   width: 7px;
   height: 7px;
@@ -994,7 +1258,7 @@ a {
   font-size: 11px;
   line-height: 1.6;
   padding: 0 6px;
-  border-radius: var(--radius-tag);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   color: var(--open);
   background: var(--surface);
@@ -1010,15 +1274,13 @@ a {
 .tag--constraint { color: var(--open); }
 .tag--conflict { color: var(--conflict); border-color: color-mix(in srgb, var(--conflict) 45%, var(--border)); }
 
-/* ── 闭环区 ───────────────────────────────────────────────── */
 .loop {
   grid-area: loop;
   position: relative;
   overflow: hidden;
-  background: var(--app-bg);
+  background: var(--surface);
   border-left: var(--hairline);
   min-width: 0;
-  /* 页签 / 轮次串在上，滚动区吃掉剩下的高度（M8 的「本轮 / 过目台」） */
   display: flex;
   flex-direction: column;
 }
@@ -1030,7 +1292,6 @@ a {
   padding: var(--space-4) var(--space-4) var(--space-5);
 }
 
-/* 「本轮 / 灵感箱 / 讨论」页签：复述卡阶段不显示（见 LoopColumn） */
 .loop__tabs {
   display: flex;
   gap: var(--space-1);
@@ -1038,12 +1299,11 @@ a {
   border-bottom: var(--hairline);
 }
 
-/* 灵感箱的未处理数：小数字 chip（0 条不渲染；不用红点——那是矛盾语义） */
 .loop__tabbadge {
   display: inline-block;
   margin-left: var(--space-1);
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--tint-primary);
   color: var(--primary);
   font-family: var(--font-mono);
@@ -1119,11 +1379,12 @@ a {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3);
+  margin: 0 var(--space-4) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: var(--hairline);
-  border-radius: var(--radius-card);
+  border-radius: var(--radius-md);
   background: var(--surface);
-  font-size: var(--step-2);
+  font-size: var(--step-1);
 }
 
 .statusline__step {
@@ -1141,29 +1402,93 @@ a {
   line-height: 1.6;
 }
 
-/* ── 本轮执行进度 ─────────────────────────────────────────── */
+/* 闭环区：Round 头 + 竖排步骤栏 + 内容流并排 */
+.loop__round {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.loop__round-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+  min-width: 0;
+}
+
+.loop__round-title {
+  font-family: var(--font-doc);
+  font-size: var(--step-5);
+  margin: 0;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.loop__split {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ── 本轮执行进度（竖排 rail）────────────────────────────── */
 .steps {
   list-style: none;
-  margin: var(--space-3) 0 0;
-  padding: 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-2) var(--space-4) var(--space-3);
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-3);
+  flex-direction: column;
+  gap: var(--space-4);
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .step {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 5px;
+  align-items: flex-start;
+  gap: 7px;
   font-size: var(--step-1);
   color: var(--empty);
 }
 
+/* 步骤之间的连线（对齐参考图的时间线样式） */
+.step::before {
+  content: "";
+  position: absolute;
+  left: 9.5px;
+  top: 24px;
+  bottom: -16px;
+  width: 1px;
+  background: var(--border);
+}
+
+.step:last-child::before {
+  display: none;
+}
+
 .step__dot {
-  width: 7px;
-  height: 7px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
-  border: 1px solid var(--empty);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--open);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.step__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
 
 .step--done {
@@ -1173,6 +1498,7 @@ a {
 .step--done .step__dot {
   background: var(--primary);
   border-color: var(--primary);
+  color: #ffffff;
 }
 
 .step--active {
@@ -1180,9 +1506,10 @@ a {
 }
 
 .step--active .step__dot {
-  background: var(--primary);
+  background: var(--surface);
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+  color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
 }
 
 .step__detail {
@@ -1191,7 +1518,6 @@ a {
   color: var(--empty);
 }
 
-/* ── 讨论流时间线 ─────────────────────────────────────────── */
 .timeline {
   list-style: none;
   margin: var(--space-4) 0 0;
@@ -1242,6 +1568,8 @@ a {
   align-items: baseline;
   gap: var(--space-2);
   margin-bottom: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .node__actor {
@@ -1258,7 +1586,8 @@ a {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--empty);
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .label-row {
@@ -1278,10 +1607,9 @@ a {
   white-space: pre-wrap;
 }
 
-/* ── 席位信息包 ───────────────────────────────────────────── */
 .packet {
   border: var(--hairline);
-  border-radius: var(--radius-card);
+  border-radius: var(--radius-lg);
   background: var(--surface);
   padding: var(--space-3);
   animation: rise var(--dur-short) var(--ease-out) both;
@@ -1391,22 +1719,20 @@ a {
   line-height: 1.6;
 }
 
-/* ── 输入区（闭环区底部常驻）─────────────────────────────── */
-/* ── 底部常驻条：左半与文档栏对齐，右半与闭环栏对齐 ───────── */
 .foot {
   grid-area: foot;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) 400px;
   border-top: var(--hairline);
   background: var(--surface);
   min-width: 0;
 }
 
 .foot__left {
-  max-width: 34em;
+  max-width: 60em;
   width: 100%;
   margin-inline: auto;
-  padding: var(--space-3) var(--space-5) var(--space-4);
+  padding: var(--space-3) var(--space-6) var(--space-4);
   min-width: 0;
 }
 
@@ -1420,20 +1746,22 @@ a {
 
 .input__box {
   width: 100%;
-  min-height: 62px;
-  max-height: 200px;
+  min-height: 72px;
+  max-height: 220px;
   resize: vertical;
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border: var(--hairline);
-  border-radius: var(--radius-input);
-  background: var(--paper);
+  border-radius: var(--radius-lg);
+  background: var(--app-bg);
   line-height: 1.7;
-  font-size: var(--step-2);
+  font-size: var(--step-3);
 }
 
 .input__box:focus-visible {
-  border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
-  outline-offset: 0;
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
+  outline: none;
 }
 
 .input__actions {
@@ -1441,29 +1769,25 @@ a {
   align-items: center;
   gap: var(--space-2);
   margin-top: var(--space-2);
-  /* 按钮多了就换行——不换行时那行提示会被压到"一列一个字"（P29 眼睛检查实拍） */
   flex-wrap: wrap;
 }
 
 .input__hint {
   flex: 1;
-  /* `flex:1` 的 flex-basis 是 0，窄屏会被压成一个字宽；给个下限，压不下就整体换行 */
   min-width: 12ch;
   font-size: var(--step-1);
   color: var(--empty);
   line-height: 1.5;
 }
 
-/* ── 按钮 ─────────────────────────────────────────────────── */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  /* 中文两字按钮被 flex 压窄会变成"一列一个字"（P29 F7 实拍：导出 / 暗色） */
   white-space: nowrap;
   padding: 6px var(--space-3);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-sm);
   border: var(--hairline);
   background: var(--surface);
   color: var(--ink);
@@ -1489,6 +1813,7 @@ a {
   background: var(--primary);
   border-color: var(--primary);
   color: #ffffff;
+  padding: 8px var(--space-4);
 }
 
 [data-theme="dark"] .btn--primary {
@@ -1496,8 +1821,8 @@ a {
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--primary) 88%, var(--ink));
-  border-color: color-mix(in srgb, var(--primary) 88%, var(--ink));
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
 }
 
 .btn--ghost {
@@ -1521,14 +1846,11 @@ a {
   border-color: color-mix(in srgb, var(--conflict) 35%, var(--border));
 }
 
-/* ── 抽屉：只覆盖闭环区，文档始终可见 ─────────────────────── */
 .drawer {
   position: absolute;
   inset: 0;
   z-index: 5;
   display: grid;
-  /* 列**必须**写死成 minmax(0,1fr)：隐式的 auto 列会按 max-content 撑开，
-     长文本（草案卡那种长告警）会把抽屉撑得比栏还宽、右边被裁掉（P29 F3 同族坑）。 */
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--surface);
@@ -1557,25 +1879,23 @@ a {
   padding: var(--space-4);
 }
 
-/* 归因留痕：不是错误，只是"这几条没算数"要让人看得见 */
 .drawer__note {
   margin: 0 0 var(--space-3);
   padding: var(--space-2) var(--space-3);
   border: var(--hairline);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--app-bg);
   color: var(--open);
   font-size: var(--step-1);
   line-height: 1.5;
 }
 
-/* 章节级就绪度：一行一句"这一章按合格标准还差什么" */
 .chapter__gaps {
   list-style: none;
   margin: 0 0 var(--space-3);
   padding: var(--space-2) var(--space-3);
   border: var(--hairline);
-  border-radius: var(--radius-card);
+  border-radius: var(--radius-lg);
   background: var(--app-bg);
   font-size: var(--step-2);
   line-height: 1.6;
@@ -1585,7 +1905,6 @@ a {
   color: var(--gap);
 }
 
-/* 版本条上的就绪度：有阻塞时用缺口色，读起来一眼能扫到 */
 .readiness {
   color: var(--gap);
 }
@@ -1596,7 +1915,6 @@ a {
   background: var(--surface);
 }
 
-/* 复述卡：占满闭环区（它不是抽屉——它是这一轮的开场） */
 .pane-card {
   position: absolute;
   inset: 0;
@@ -1606,7 +1924,6 @@ a {
   min-height: 0;
 }
 
-/* 主张（复述卡里可改，闭环区里只读） */
 .claims {
   list-style: none;
   margin: 0;
@@ -1655,7 +1972,7 @@ a {
 .select {
   appearance: none;
   border: var(--hairline);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-sm);
   background: var(--surface);
   padding: 3px var(--space-2);
   font-size: var(--step-1);
@@ -1681,7 +1998,6 @@ a {
   line-height: 1.6;
 }
 
-/* 席位编制 */
 .seats {
   margin: var(--space-5) 0 0;
   padding: 0;
@@ -1697,7 +2013,7 @@ a {
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border: var(--hairline);
-  border-radius: var(--radius-card);
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: border-color var(--dur-micro) var(--ease-out);
 }
@@ -1727,7 +2043,7 @@ a {
   font-size: 10px;
   color: var(--empty);
   border: var(--hairline);
-  border-radius: var(--radius-tag);
+  border-radius: var(--radius-sm);
   padding: 0 5px;
   vertical-align: 1px;
 }
@@ -1778,7 +2094,6 @@ a {
   margin-top: 2px;
 }
 
-/* 问卷 */
 .q + .q {
   margin-top: var(--space-5);
   padding-top: var(--space-4);
@@ -1831,7 +2146,7 @@ a {
   gap: var(--space-2);
   padding: var(--space-2);
   border: var(--hairline);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: var(--step-2);
   line-height: 1.6;
@@ -1857,7 +2172,7 @@ a {
   margin-top: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border: var(--hairline);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-sm);
   background: var(--paper);
   min-height: 54px;
   resize: vertical;
@@ -1865,7 +2180,6 @@ a {
   line-height: 1.6;
 }
 
-/* 草案卡 */
 .prop {
   display: grid;
   grid-template-columns: 52px minmax(0, 1fr);
@@ -1874,8 +2188,6 @@ a {
   border-top: var(--hairline);
 }
 
-/* 没有 52px 侧栏的用法（动作按钮在卡内，M8 起的候选/卡/失败卡）：内容占满两列。
-   没有这条，单一子元素会落进 52px 那一列，正文被压成一字一行。 */
 .prop > :only-child {
   grid-column: 1 / -1;
 }
@@ -1893,7 +2205,7 @@ a {
 .prop__verdict {
   font-size: var(--step-1);
   padding: 2px 6px;
-  border-radius: var(--radius-tag);
+  border-radius: var(--radius-sm);
   border: var(--hairline);
   background: var(--surface);
   color: var(--open);
@@ -1937,7 +2249,7 @@ a {
   color: var(--open);
   line-height: 1.6;
   background: var(--app-bg);
-  border-radius: var(--radius-tag);
+  border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
 }
 
@@ -1952,13 +2264,12 @@ a {
   opacity: 0.86;
 }
 
-/* ── 提示条 / 空态 / 骨架 ─────────────────────────────────── */
 .banner {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-sm);
   font-size: var(--step-2);
   line-height: 1.6;
   margin-bottom: var(--space-3);
@@ -1989,7 +2300,6 @@ a {
   text-align: left;
 }
 
-/* 报错提示：固定右下，不跟三栏抢位置 */
 .toast {
   position: fixed;
   right: var(--space-4);
@@ -2020,7 +2330,7 @@ a {
 .text-input {
   padding: 7px var(--space-3);
   border: var(--hairline);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-sm);
   background: var(--surface);
   min-width: 220px;
 }
@@ -2032,11 +2342,10 @@ a {
     color-mix(in srgb, var(--ink) 3%, transparent) 50%,
     color-mix(in srgb, var(--ink) 6%, transparent) 100%
   );
-  border-radius: var(--radius-tag);
+  border-radius: var(--radius-sm);
   animation: pulse 1.4s ease-in-out infinite;
 }
 
-/* 写入高亮：SSE 的 doc.changed 带来的那一版 */
 .block--just-written {
   animation: flash var(--dur-mid) var(--ease-out) both;
   animation-delay: var(--dur-mid);
@@ -2044,7 +2353,7 @@ a {
 
 [data-flash="on"] {
   animation: flash var(--dur-mid) var(--ease-out) both;
-  border-radius: var(--radius-tag);
+  border-radius: var(--radius-sm);
 }
 
 @keyframes rise {
@@ -2095,15 +2404,11 @@ a {
   }
 }
 
-/* ── 响应式：窄屏时闭环区掉到文档区下面 ───────────────────── */
 @media (max-width: 1240px) {
   .shell {
     grid-template-columns: 176px minmax(0, 1fr) 340px;
   }
 
-  /* 顶栏在窄屏先"缩"再"折"（P29 F7）：这两处文字进视觉隐藏，**仍在无障碍树里**
-     （真删掉等于对读屏用户撒谎）。腾出来的宽度给按钮，保证它们不竖排。 */
-  .wordmark__sub,
   .conn__label {
     position: absolute;
     width: 1px;
@@ -2135,8 +2440,13 @@ a {
     border-bottom: var(--hairline);
   }
 
-  /* 更窄一档：轮次状态本来就在复述卡/闭环区写着，这里让位给"导出 / 推送 / 明暗" */
-  .pill-step {
+  .btn,
+  .conn__label {
+    white-space: nowrap;
+  }
+
+  /* 窄屏：品牌名让位给搜索框（进视觉隐藏，仍在无障碍树里） */
+  .wordmark__name {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -2145,14 +2455,14 @@ a {
     white-space: nowrap;
   }
 
-  /* 按钮里的字**不许竖排**：中文两字按钮被压到 39px 宽就会一列一个字（P29 F7 实拍） */
-  .btn,
-  .conn__label {
-    white-space: nowrap;
+  .search {
+    min-width: 120px;
   }
 
   .rail__head,
-  .rail__meta {
+  .rail__meta,
+  .rail__doc-header,
+  .rail__readiness {
     display: none;
   }
 
@@ -2190,8 +2500,6 @@ a {
   }
 }
 
-/* ── 版本历史（P5b）：入口在顶栏版本条上，抽屉挂在闭环栏那一格 ─────────── */
-/* 挂载点：让 `.drawer` 的 absolute 定位落在闭环区，而不是整页（与问卷/草案同一条视觉规矩） */
 .overlay-slot {
   grid-area: loop;
   position: relative;
@@ -2231,7 +2539,7 @@ a {
   text-align: left;
   padding: var(--space-2) var(--space-3);
   border: var(--hairline);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   cursor: pointer;
 }
@@ -2273,7 +2581,7 @@ a {
 .diff__line {
   margin: 0;
   padding: 2px var(--space-2);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: var(--step-2);
   line-height: 1.6;
   white-space: pre-wrap;
@@ -2293,12 +2601,11 @@ a {
   margin-bottom: var(--space-1);
 }
 
-/* ── 留痕：每个席位包底下"它说的 N 条里，M 条没进卡片"（P5b） ────────── */
 .packet__drops {
   margin: var(--space-2) 0 0;
   padding: var(--space-2) var(--space-3);
   border: var(--hairline);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--app-bg);
 }
 
@@ -2327,14 +2634,12 @@ a {
   color: var(--muted);
 }
 
-/* ── 跨轮编号（P5b）：本地查不到的编号也可以点，后端查得到 ─────────────── */
 .chip--remote {
   border-style: dashed;
   color: var(--muted);
   cursor: pointer;
 }
 
-/* 历史轮横幅：把"你看的不是最新那一轮"说清楚，并给出回程 */
 .loop__history {
   display: flex;
   align-items: center;

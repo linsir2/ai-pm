@@ -42,7 +42,7 @@ export function SearchBox({
         id="project-search"
         className="search__input"
         type="search"
-        placeholder="搜文档 / 功能 / 编号 / 席位 / 材料"
+        placeholder="搜索文档、出处、材料…"
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
       />

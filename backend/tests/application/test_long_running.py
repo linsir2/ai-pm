@@ -7,15 +7,22 @@
 4. 席位间冲突检测（机械检测相反意见）
 5. source_ref 去重（同 source_ref 只保留最新）
 """
+import json
 from pathlib import Path
 
-import json
 import pytest
 
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from tests.support.harness import Harness
 
-DEFINITIONS_DIR = Path(__file__).resolve().parents[2] / "src" / "pmstudio" / "infrastructure" / "seats" / "definitions"
+DEFINITIONS_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "src"
+    / "pmstudio"
+    / "infrastructure"
+    / "seats"
+    / "definitions"
+)
 
 
 # ── 验证 1: 内容感知席位过滤 ─────────────────────────────────────
@@ -44,7 +51,13 @@ async def test_content_aware_seat_filtering():
     assert "seat.notification" not in ids_export, "导出输入不应命中 notification"
 
     # 验证 always_on 始终存在
-    always_on = {"seat.data_scale", "seat.business_rules", "seat.frontend_interaction", "seat.permissions", "seat.tech_approach"}
+    always_on = {
+        "seat.data_scale",
+        "seat.business_rules",
+        "seat.frontend_interaction",
+        "seat.permissions",
+        "seat.tech_approach",
+    }
     assert always_on <= ids_export
     assert always_on <= ids_approval
     assert always_on <= ids_notify
@@ -94,7 +107,7 @@ async def test_conflict_detection():
                                      "导出必须在 60 秒内完成", "产品要求", ("E2",)),)),
     )
     assert len(seat_conflict_pairs(same)) == 0
-    print(f"  同向判断冲突: 0 ✓")
+    print("  同向判断冲突: 0 ✓")
 
 
 # ── 验证 3: source_ref 去重 ───────────────────────────────────────
@@ -106,7 +119,7 @@ async def test_source_ref_dedup():
     h = Harness(replies={}, seat_replies={})
     pid = h.seed_project(title="测试")
 
-    from pmstudio.domain.memory.observations import RoundObservation, ObservationType
+    from pmstudio.domain.memory.observations import ObservationType, RoundObservation
 
     h.observations.save(RoundObservation(
         obs_id="obs-1", round_id="r1", project_id=str(pid),
@@ -136,7 +149,7 @@ async def test_l2_observations_accumulate():
     h = Harness(replies={}, seat_replies={})
     pid = h.seed_project(title="测试")
 
-    from pmstudio.domain.memory.observations import RoundObservation, ObservationType
+    from pmstudio.domain.memory.observations import ObservationType, RoundObservation
 
     # 模拟 3 轮产生观察
     for i in range(3):
@@ -200,7 +213,6 @@ async def test_l4_digest_generation():
 @pytest.mark.asyncio
 async def test_six_rounds_full_pipeline(tmp_path):
     """6 轮完整主闭环，验证记忆层端到端工作。"""
-    catalog = TomlSeatCatalog(DEFINITIONS_DIR)
 
     # 准备 6 轮的回复
     claims_replies = []
@@ -208,23 +220,49 @@ async def test_six_rounds_full_pipeline(tmp_path):
     seat_reply = json.dumps({
         "basis": "数据规模视角",
         "opinions": [
-            {"local_id": "O1", "form": "judgment", "about": "性能", "claim": "应在 60 秒内", "because": "体验"},
+            {
+                "local_id": "O1",
+                "form": "judgment",
+                "about": "性能",
+                "claim": "应在 60 秒内",
+                "because": "体验",
+            },
         ],
     })
 
     for i in range(6):
         claims_replies.append(json.dumps({
             "basis": f"R{i+1}",
-            "claims": [{"text": f"第{i+1}轮功能迭代", "raw_span": "功能迭代", "label": "need", "zone": "body", "section_id": "s5"}],
+            "claims": [
+                {
+                    "text": f"第{i+1}轮功能迭代",
+                    "raw_span": "功能迭代",
+                    "label": "need",
+                    "zone": "body",
+                    "section_id": "s5",
+                }
+            ],
             "seats": [{"seat_id": "seat.data_scale", "why": f"R{i+1}"}],
         }))
         integration_replies.append(json.dumps({
             "basis": f"R{i+1}",
             "proposals": [
-                {"op": "add", "target": {"zone": "body", "section_id": "s5", "feature_slug": f"feat-{i}", "field": "one_liner"},
-                 "text": f"第{i+1}轮功能迭代", "evidence_refs": ["E1"], "rationale": f"R{i+1}"},
+                {
+                    "op": "add",
+                    "target": {
+                        "zone": "body",
+                        "section_id": "s5",
+                        "feature_slug": f"feat-{i}",
+                        "field": "one_liner",
+                    },
+                    "text": f"第{i+1}轮功能迭代",
+                    "evidence_refs": ["E1"],
+                    "rationale": f"R{i+1}",
+                },
             ],
-            "questions": [], "list_items": [], "dropped_opinions": [],
+            "questions": [],
+            "list_items": [],
+            "dropped_opinions": [],
         }))
 
     h = Harness(
@@ -232,9 +270,13 @@ async def test_six_rounds_full_pipeline(tmp_path):
             "claims": claims_replies,
             "integration": integration_replies,
             "discussion": json.dumps({"text": "讨论回复", "based_on": []}),
-            "discussion_cards": json.dumps({"cards": [{"statement": "结论", "grounding": "invented", "based_on": []}]}),
+            "discussion_cards": json.dumps(
+                {"cards": [{"statement": "结论", "grounding": "invented", "based_on": []}]}
+            ),
             "sim_inquiry": json.dumps({"slices": [], "hypotheses": [], "unknowns": []}),
-            "sim_review": json.dumps({"runs": [], "summary": {"smooth": 0, "friction": 0, "blocked": 0}}),
+            "sim_review": json.dumps(
+                {"runs": [], "summary": {"smooth": 0, "friction": 0, "blocked": 0}}
+            ),
             "inquiry": json.dumps({"hypotheses": [], "blind_spots": []}),
             "opinion_dispositions": json.dumps({"dispositions": []}),
             "memory_curator": json.dumps({"changes": []}),
@@ -252,7 +294,7 @@ async def test_six_rounds_full_pipeline(tmp_path):
         await h.submit_opening()(round_id=rid, seats=("seat.data_scale",))
         await h.run_seat_round()(round_id=rid)
 
-        from pmstudio.domain.shared.ids import FeatureSlug, EvidenceId
+        from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug
         obj = h.rounds.get(rid)
         obj.authorize_new_feature(FeatureSlug(f"feat-{i}"), basis=EvidenceId("E1"))
         h.rounds.save(obj)
@@ -260,7 +302,8 @@ async def test_six_rounds_full_pipeline(tmp_path):
         await h.integrate_round()(round_id=rid)
         rv = await h.get_round()(round_id=rid)
         if rv.draft:
-            await h.confirm_draft()(round_id=rid, accepted=tuple(p.proposal_id for p in rv.draft.proposals))
+            accepted = tuple(p.proposal_id for p in rv.draft.proposals)
+            await h.confirm_draft()(round_id=rid, accepted=accepted)
         round_ids.append(rid)
 
     # 验证
@@ -269,7 +312,7 @@ async def test_six_rounds_full_pipeline(tmp_path):
     obs_count = len(h.observations.recent(str(pid)))
     digest_count = len(h.digests.recent(str(pid)))
 
-    print(f"\n  6 轮完成")
+    print("\n  6 轮完成")
     print(f"  L2 观察: {obs_count}")
     print(f"  L4 摘要: {digest_count}")
 

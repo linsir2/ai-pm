@@ -1,6 +1,5 @@
 """L1 + L2 在应用层的渲染：context.py 的新函数。"""
 
-import pytest
 
 from pmstudio.application.context import (
     render_observations_index,

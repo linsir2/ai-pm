@@ -4,6 +4,7 @@ import {
   readinessBySection,
   readinessHeadline,
   readinessItemsFor,
+  readinessPercent,
   readinessSummary,
 } from "./readiness";
 import type { ReadinessItemView } from "../api/types";
@@ -59,6 +60,38 @@ describe("readinessItemsFor", () => {
   it("只看这一章", () => {
     expect(readinessItemsFor(items, "s6")).toHaveLength(1);
     expect(readinessItemsFor(items, "s2")).toEqual([]);
+  });
+});
+
+describe("readinessPercent", () => {
+  const sections = [
+    { section_id: "s1" },
+    { section_id: "s2" },
+    { section_id: "s6" },
+    { section_id: "s13" }, // 不参与判定
+  ];
+
+  it("无阻塞章节占比：s1 有阻塞，s2/s6 干净 → 2/3", () => {
+    // items 里 s1 有两条阻塞、s6 只有一条提示（提示不算阻塞）
+    expect(readinessPercent(items, sections)).toBe(67);
+  });
+
+  it("s13 不参与：即使只有 s13 干净也不拉低分母", () => {
+    expect(readinessPercent([], sections)).toBe(100);
+  });
+
+  it("没有可判章节就是 0", () => {
+    expect(readinessPercent([], [])).toBe(0);
+    expect(readinessPercent([], [{ section_id: "s13" }])).toBe(0);
+  });
+
+  it("全都有阻塞就是 0", () => {
+    const allBlocked = [
+      { ...items[0]!, section_id: "s1" },
+      { ...items[0]!, section_id: "s2" },
+      { ...items[0]!, section_id: "s6" },
+    ];
+    expect(readinessPercent(allBlocked, sections)).toBe(0);
   });
 });
 

@@ -27,7 +27,14 @@ def test_seven_labels_have_a_zone():
         ClaimLabel.GUESS: Zone.BODY,
         ClaimLabel.DECISION: Zone.BODY,
     }
-    assert ClaimLabel.PREFERENCE not in {ClaimLabel.FACT, ClaimLabel.NEED, ClaimLabel.GOAL, ClaimLabel.CONSTRAINT, ClaimLabel.GUESS, ClaimLabel.DECISION}
+    assert ClaimLabel.PREFERENCE not in {
+        ClaimLabel.FACT,
+        ClaimLabel.NEED,
+        ClaimLabel.GOAL,
+        ClaimLabel.CONSTRAINT,
+        ClaimLabel.GUESS,
+        ClaimLabel.DECISION,
+    }
     assert len(ClaimLabel) == 7
 
 

@@ -1,18 +1,18 @@
-/* 设计令牌 —— 唯一真相源是 DESIGN.md。值一个都不许在这里改，
-   要改先去改 DESIGN.md，再回来同步这一份。 */
 :root {
-  --ink: #1b1a17;
-  --paper: #fcfbf8;
-  --app-bg: #f3f2ee;
+  --ink: #1a1a2e;
+  --paper: #ffffff;
+  --app-bg: #f5f6fa;
   --surface: #ffffff;
-  --border: #e3e0d8;
-  --primary: #2f5d50;
-  --gap: #b4690e;
-  --conflict: #a93b2c;
-  --open: #5a6470;
-  --empty: #9a958b;
+  --border: #e8eaf0;
+  --primary: #3b82f6;
+  --primary-dark: #2563eb;
+  --gap: #f59e0b;
+  --conflict: #ef4444;
+  --open: #6b7280;
+  --empty: #9ca3af;
+  --success: #10b981;
 
-  --font-ui: Geist, system-ui, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --font-doc: "Noto Serif SC", "Instrument Serif", "Songti SC", serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 
@@ -32,9 +32,11 @@
   --space-6: 32px;
   --space-7: 48px;
 
-  --radius-tag: 4px;
-  --radius-input: 6px;
-  --radius-card: 8px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in: cubic-bezier(0.55, 0, 1, 0.45);
@@ -42,23 +44,26 @@
   --dur-short: 160ms;
   --dur-mid: 240ms;
 
-  /* 衍生值：只为排版服务，不是新颜色 */
   --hairline: 1px solid var(--border);
   --tint-primary: color-mix(in srgb, var(--primary) 8%, transparent);
   --tint-warn: color-mix(in srgb, var(--gap) 10%, transparent);
   --tint-danger: color-mix(in srgb, var(--conflict) 9%, transparent);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 5%);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 8%);
+  --shadow-lg: 0 8px 24px rgb(0 0 0 / 12%);
 }
 
-/* 暗色：重做表面，不反相（DESIGN.md） */
 [data-theme="dark"] {
-  --ink: #e9e7e1;
-  --paper: #1d1c20;
-  --app-bg: #17161a;
-  --surface: #22212a;
-  --border: #2f2e36;
-  --primary: #7fb3a1;
-  --gap: color-mix(in srgb, #b4690e 85%, #e9e7e1);
-  --conflict: color-mix(in srgb, #a93b2c 80%, #e9e7e1);
-  --open: #9aa3ad;
-  --empty: #6f6a63;
+  --ink: #e5e7eb;
+  --paper: #1f2937;
+  --app-bg: #111827;
+  --surface: #1f2937;
+  --border: #374151;
+  --primary: #60a5fa;
+  --primary-dark: #3b82f6;
+  --gap: #fbbf24;
+  --conflict: #f87171;
+  --open: #9ca3af;
+  --empty: #6b7280;
+  --success: #34d399;
 }

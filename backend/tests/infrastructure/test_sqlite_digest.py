@@ -1,6 +1,5 @@
 """L4 轮次摘要的 SQLite 存储。"""
 
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 
