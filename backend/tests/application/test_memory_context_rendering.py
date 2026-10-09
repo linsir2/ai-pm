@@ -3,7 +3,6 @@
 import pytest
 
 from pmstudio.application.context import (
-    render_observation_detail,
     render_observations_index,
     render_project_context,
 )
@@ -98,21 +97,3 @@ class TestRenderObservationsIndex:
         text = render_observations_index(obs)
         # SEAT_INSIGHT 用洞察标记
         assert "洞察" in text or "●" in text
-
-
-class TestRenderObservationDetail:
-    def test_full_detail(self):
-        obs = RoundObservation(
-            obs_id="obs-1",
-            round_id="r1",
-            project_id="p1",
-            obs_type=ObservationType.SEAT_INSIGHT,
-            title="准入规则",
-            detail="团长需缴纳保证金（依据：降低流失率）",
-            source_ref="seat:biz:O1",
-        )
-        text = render_observation_detail(obs)
-        assert "准入规则" in text
-        assert "保证金" in text
-        assert "降低流失率" in text
-        assert "seat:biz:O1" in text

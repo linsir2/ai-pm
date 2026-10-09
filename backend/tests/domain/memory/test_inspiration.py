@@ -12,7 +12,6 @@ class TestInspirationOrigin:
         assert InspirationOrigin.DISCUSSION == "discussion"
         assert InspirationOrigin.EXPLORATION == "exploration"
         assert InspirationOrigin.SIM_INQUIRY == "sim_inquiry"
-        assert InspirationOrigin.SIM_REVIEW == "sim_review"
 
 
 class TestInspirationItem:
@@ -35,14 +34,5 @@ class TestInspirationItem:
             origin=InspirationOrigin.DISCUSSION,
             statement="团长流失率15%",
         )
-        assert item.context is None
-
-    def test_with_context(self):
-        item = InspirationItem(
-            item_id="ins-1",
-            project_id="p1",
-            origin=InspirationOrigin.EXPLORATION,
-            statement="用户最在意配送时效",
-            context="如果用户频繁比价则推翻",
-        )
-        assert item.context == "如果用户频繁比价则推翻"
+        assert item.item_id == "ins-1"
+        assert item.origin == InspirationOrigin.DISCUSSION

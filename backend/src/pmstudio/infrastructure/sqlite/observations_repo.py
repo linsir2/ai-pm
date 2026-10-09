@@ -1,9 +1,7 @@
-"""L2 观察的 SQLite 仓储：CRUD + FTS5 搜索 + 相关性淘汰。"""
+"""L2 观察的 SQLite 仓储：CRUD + LIKE 搜索 + 去重。"""
 
-import json
 import sqlite3
 from collections.abc import Sequence
-from datetime import datetime
 
 from pmstudio.domain.memory.observations import (
     ObservationType,
@@ -11,12 +9,8 @@ from pmstudio.domain.memory.observations import (
 )
 
 
-def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
-
 class SqliteObservationRepository:
-    """L2 观察的 SQLite 存储：CRUD + FTS5 搜索 + 相关性淘汰。"""
+    """L2 观察的 SQLite 存储。"""
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
@@ -24,9 +18,8 @@ class SqliteObservationRepository:
     def save(self, observation: RoundObservation) -> None:
         self._connection.execute(
             "INSERT INTO observations"
-            " (id, project_id, round_id, obs_type, title, detail, source_ref,"
-            "  sections, features, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " (id, project_id, round_id, obs_type, title, detail, source_ref)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(id) DO UPDATE SET"
             " title = excluded.title, detail = excluded.detail",
             (
@@ -37,9 +30,6 @@ class SqliteObservationRepository:
                 observation.title,
                 observation.detail,
                 observation.source_ref,
-                json.dumps(observation.related_sections, ensure_ascii=False),
-                json.dumps(observation.related_features, ensure_ascii=False),
-                observation.created_at.isoformat(timespec="seconds"),
             ),
         )
 
@@ -92,7 +82,4 @@ class SqliteObservationRepository:
             title=row["title"],
             detail=row["detail"],
             source_ref=row["source_ref"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            related_sections=tuple(json.loads(row["sections"])),
-            related_features=tuple(json.loads(row["features"])),
         )

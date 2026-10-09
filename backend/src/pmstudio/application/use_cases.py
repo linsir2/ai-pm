@@ -4006,9 +4006,8 @@ class KeepCandidate:
         item = InspirationItem(
             item_id=f"ins-expl-{candidate.candidate_id}-{uuid.uuid4().hex[:6]}",
             project_id=str(project_id),
-            origin=InspirationOrigin.EXPLORATION,
-            statement=candidate.statement,
-            context=candidate.falsification if hasattr(candidate, 'falsification') else None,
+             origin=InspirationOrigin.EXPLORATION,
+             statement=candidate.statement,
         )
         self._inspiration_repo.save(item)
 
@@ -4923,10 +4922,9 @@ class KeepSimInquiry:
             item = InspirationItem(
                 item_id=f"ins-sim-{hyp['local_id']}-{uuid.uuid4().hex[:6]}",
                 project_id=str(round_.project_id),
-                origin=InspirationOrigin.SIM_INQUIRY,
-                statement=hyp["statement"],
-                context=hyp.get("falsification"),
-            )
+                 origin=InspirationOrigin.SIM_INQUIRY,
+                 statement=hyp["statement"],
+             )
             self._inspiration_repo.save(item)
 
 

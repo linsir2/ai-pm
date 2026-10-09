@@ -797,8 +797,6 @@ def build_project_context(
                 if block.feature_slug:
                     features_defined.append(str(block.feature_slug))
 
-    total_entries = sum(_section_entry_count(s) for s in document_view.sections)
-
     top_decisions = tuple(
         e.text for e in memory_entries if e.kind == MemoryKind.DECISION
     )[:MAX_DECISIONS]
@@ -814,7 +812,6 @@ def build_project_context(
     return ProjectContext(
         sections_covered=sections_covered,
         features_defined=tuple(features_defined),
-        total_confirmed_entries=total_entries,
         top_decisions=top_decisions,
         open_questions=open_questions,
     )
@@ -913,18 +910,6 @@ def render_observations_index(
         lines.append(f"  {mark} [{obs.source_ref}] {obs.title}")
     lines.append("</observations-index>")
     return "\n".join(lines)
-
-
-def render_observation_detail(obs: RoundObservation) -> str:
-    """单条观察详情——模型主动拉取时返回。"""
-    return (
-        f"<observation-detail>\n"
-        f"类型: {obs.obs_type.value}\n"
-        f"标题: {obs.title}\n"
-        f"详情: {obs.detail}\n"
-        f"来源: {obs.source_ref}\n"
-        f"</observation-detail>"
-    )
 
 
 # ── L4 轮次摘要构建 ──────────────────────────────────────────────

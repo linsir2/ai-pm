@@ -28,7 +28,6 @@ def _obs(
         title=title,
         detail=detail,
         source_ref=source_ref,
-        created_at=NOW,
     )
 
 
@@ -87,7 +86,6 @@ class TestObservationRepository:
             title="Other",
             detail="",
             source_ref="",
-            created_at=NOW,
         ))
         recent = repo.recent("p1")
         assert all(o.project_id == "p1" for o in recent)

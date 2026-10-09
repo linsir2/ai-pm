@@ -16,6 +16,5 @@ class ProjectContext:
     key_constraints: tuple[str, ...] = ()
     sections_covered: tuple[tuple[str, str], ...] = ()
     features_defined: tuple[str, ...] = ()
-    total_confirmed_entries: int = 0
     top_decisions: tuple[str, ...] = ()
     open_questions: tuple[str, ...] = ()

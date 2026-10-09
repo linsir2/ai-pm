@@ -3,8 +3,7 @@
 提取逻辑在 `application/context.py`（应用层可以跨 context 导入）。
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from enum import StrEnum
 
 
@@ -26,6 +25,3 @@ class RoundObservation:
     title: str
     detail: str
     source_ref: str
-    created_at: datetime = field(default_factory=datetime.now)
-    related_sections: tuple[str, ...] = ()
-    related_features: tuple[str, ...] = ()

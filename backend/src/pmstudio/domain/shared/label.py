@@ -19,7 +19,6 @@ class ClaimLabel(StrEnum):
 
 
 PREFERENCE_LABELS = frozenset({ClaimLabel.PREFERENCE})
-BODY_LABELS = frozenset(set(ClaimLabel) - PREFERENCE_LABELS)
 
 
 def zone_for(label: ClaimLabel) -> Zone:

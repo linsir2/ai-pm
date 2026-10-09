@@ -247,9 +247,9 @@ def test_unknown_thread_raises_unknown_discussion(store) -> None:  # type: ignor
         repo.get(DiscussionId("d-9"))
 
 
-def test_user_version_is_9_and_discussions_table_exists(store) -> None:  # type: ignore[no-untyped-def]
+def test_user_version_is_11_and_discussions_table_exists(store) -> None:  # type: ignore[no-untyped-def]
     _, connection = store
-    assert database.USER_VERSION == 9
+    assert database.USER_VERSION == 11
     assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
     tables = {
         row["name"]
@@ -266,3 +266,12 @@ def test_user_version_is_9_and_discussions_table_exists(store) -> None:  # type:
     }
     assert "relevance_count" not in obs_cols
     assert "last_accessed" not in obs_cols
+    assert "sections" not in obs_cols
+    assert "features" not in obs_cols
+    assert "created_at" not in obs_cols
+    insp_cols = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(inspirations)")
+    }
+    assert "grounding" not in insp_cols
+    assert "context" not in insp_cols

@@ -30,7 +30,6 @@ MAX_OPEN_ITEMS_PER_BATCH = 3
 
 class QuestionType(StrEnum):
     SINGLE = "single"
-    MULTI = "multi"
     TEXT = "text"
 
 

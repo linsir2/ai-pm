@@ -64,7 +64,6 @@ class TestBuildProjectContext:
         assert ctx.core_value == ""
         assert ctx.sections_covered == ()
         assert ctx.features_defined == ()
-        assert ctx.total_confirmed_entries == 0
 
     def test_coverage_empty_sections(self):
         doc = _document(_section("s1"), _section("s5"))
@@ -97,14 +96,6 @@ class TestBuildProjectContext:
         doc = _document(s5)
         ctx = build_project_context(doc, (), ())
         assert set(ctx.features_defined) == {"feature-a", "feature-b"}
-
-    def test_total_confirmed_entries(self):
-        doc = _document(
-            _section("s1", "背景", "问题"),
-            _section("s2", "目标"),
-        )
-        ctx = build_project_context(doc, (), ())
-        assert ctx.total_confirmed_entries == 3
 
     def test_top_decisions_from_memory(self):
         entries = tuple(_entry(f"决策{i}", MemoryKind.DECISION) for i in range(15))
@@ -186,7 +177,6 @@ class TestRenderProjectContext:
             key_constraints=("团长流失率15%", "冷链必需"),
             sections_covered=tuple((f"s{i}", "partial") for i in range(1, 13)),
             features_defined=("group-buying", "presale", "delivery"),
-            total_confirmed_entries=42,
             top_decisions=tuple(f"决策{i}" for i in range(10)),
             open_questions=tuple(f"问题{i}" for i in range(5)),
         )

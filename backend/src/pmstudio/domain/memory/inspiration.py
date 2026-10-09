@@ -13,7 +13,6 @@ class InspirationOrigin(StrEnum):
     DISCUSSION = "discussion"
     EXPLORATION = "exploration"
     SIM_INQUIRY = "sim_inquiry"
-    SIM_REVIEW = "sim_review"
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,4 +23,3 @@ class InspirationItem:
     project_id: str
     origin: InspirationOrigin
     statement: str
-    context: str | None = None

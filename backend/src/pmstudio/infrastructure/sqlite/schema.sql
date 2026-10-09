@@ -138,10 +138,7 @@ CREATE TABLE IF NOT EXISTS observations (
   obs_type   TEXT NOT NULL,
   title      TEXT NOT NULL,
   detail     TEXT NOT NULL DEFAULT '',
-  source_ref TEXT NOT NULL DEFAULT '',
-  sections   TEXT NOT NULL DEFAULT '[]',
-  features   TEXT NOT NULL DEFAULT '[]',
-  created_at TEXT NOT NULL
+  source_ref TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_observations_project ON observations(project_id, id);
 CREATE INDEX IF NOT EXISTS idx_observations_round ON observations(round_id);
@@ -165,7 +162,6 @@ CREATE TABLE IF NOT EXISTS inspirations (
   project_id TEXT NOT NULL,
   origin     TEXT NOT NULL,
   statement  TEXT NOT NULL,
-  context    TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_inspirations_project ON inspirations(project_id, id);

@@ -4,8 +4,9 @@ import sqlite3
 from pathlib import Path
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-#: 9 = 删 `inspirations.grounding`（死字段销账）。
-USER_VERSION = 9
+#: 11 = 删 observations.sections/features/create
+#:     at（死字段销账）。
+USER_VERSION = 11
 
 #: `CREATE TABLE IF NOT EXISTS` 补不了**已有**表的列，所以老库要靠这里的 `ALTER TABLE`（幂等）。
 #: 留样表本身是可丢的（`02` §5.3：要清就 DELETE），但**不主动删数据**。
@@ -32,8 +33,8 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 #: 老库要删的列（销账死字段）。`ALTER TABLE ... DROP COLUMN` 要求 SQLite ≥ 3.35。
 DROPPED_COLUMNS: dict[str, tuple[str, ...]] = {
-    "observations": ("relevance_count", "last_accessed"),
-    "inspirations": ("grounding",),
+    "observations": ("relevance_count", "last_accessed", "sections", "features", "created_at"),
+    "inspirations": ("grounding", "context"),
 }
 
 

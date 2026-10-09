@@ -3,7 +3,7 @@ import pytest
 from pmstudio.domain.shared.errors import FeatureNotAllowedHere, ShapeError, UnknownSection
 from pmstudio.domain.shared.ids import evidence_id, evidence_seq
 from pmstudio.domain.shared.invariants import DInvariant
-from pmstudio.domain.shared.label import BODY_LABELS, ClaimLabel, Zone, zone_for
+from pmstudio.domain.shared.label import ClaimLabel, Zone, zone_for
 from pmstudio.domain.shared.sections import SECTION_IDS, section_spec
 from pmstudio.domain.shared.target import Target
 
@@ -27,7 +27,7 @@ def test_seven_labels_have_a_zone():
         ClaimLabel.GUESS: Zone.BODY,
         ClaimLabel.DECISION: Zone.BODY,
     }
-    assert ClaimLabel.PREFERENCE not in BODY_LABELS
+    assert ClaimLabel.PREFERENCE not in {ClaimLabel.FACT, ClaimLabel.NEED, ClaimLabel.GOAL, ClaimLabel.CONSTRAINT, ClaimLabel.GUESS, ClaimLabel.DECISION}
     assert len(ClaimLabel) == 7
 
 
