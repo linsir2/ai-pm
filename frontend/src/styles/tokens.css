@@ -48,9 +48,7 @@
   --tint-primary: color-mix(in srgb, var(--primary) 8%, transparent);
   --tint-warn: color-mix(in srgb, var(--gap) 10%, transparent);
   --tint-danger: color-mix(in srgb, var(--conflict) 9%, transparent);
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 5%);
   --shadow-md: 0 4px 12px rgb(0 0 0 / 8%);
-  --shadow-lg: 0 8px 24px rgb(0 0 0 / 12%);
 }
 
 [data-theme="dark"] {

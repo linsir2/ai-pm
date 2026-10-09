@@ -192,6 +192,10 @@ a {
   font-family: var(--font-mono);
 }
 
+[data-theme="dark"] .topbar__badge {
+  color: #17161a;
+}
+
 .topbar__action-count {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -283,10 +287,6 @@ a {
   color: var(--empty);
 }
 
-.rail__head--gap {
-  margin-top: var(--space-5);
-}
-
 .rail__list {
   list-style: none;
   margin: 0;
@@ -314,11 +314,6 @@ a {
   color: var(--ink);
 }
 
-.rail__item--on {
-  background: var(--tint-primary);
-  color: var(--primary);
-}
-
 .rail__num {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -334,11 +329,6 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.rail__meta {
-  font-size: 10px;
-  color: var(--empty);
 }
 
 .rail__item--feature {
@@ -522,7 +512,7 @@ a {
 .drawer__answers {
   margin: var(--space-1) 0 0;
   padding-left: var(--space-4);
-  color: var(--muted);
+  color: var(--open);
 }
 
 .feature__add {
@@ -546,7 +536,7 @@ a {
   border: none;
   padding: 0;
   cursor: pointer;
-  color: var(--muted);
+  color: var(--open);
   font-size: var(--step-1);
 }
 
@@ -578,11 +568,11 @@ a {
 
 .rounds__open:disabled {
   cursor: default;
-  color: var(--muted);
+  color: var(--open);
 }
 
 .rounds__row--here .rounds__input {
-  color: var(--muted);
+  color: var(--open);
 }
 
 .search {
@@ -987,15 +977,6 @@ a {
   color: var(--empty);
 }
 
-.prose__p {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-3);
-  align-items: baseline;
-  margin: 0 0 0.75em;
-  line-height: 1.75;
-}
-
 .keygrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -1011,21 +992,6 @@ a {
   border-bottom: var(--hairline);
   margin: 0 -1px -1px 0;
   scroll-margin-top: var(--space-6);
-}
-
-.keygrid__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.keygrid__item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-  font-size: var(--step-2);
-  line-height: 1.65;
-  padding: 2px 0;
 }
 
 /* 窄格子里的条目：正文一行、胶囊另起一行（159px 的格子放不下并排） */
@@ -1228,17 +1194,6 @@ a {
   border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
 }
 
-.chip--stale {
-  color: var(--empty);
-  cursor: default;
-  border-style: dashed;
-}
-
-.chip--stale:hover {
-  color: var(--empty);
-  border-color: var(--border);
-}
-
 .dot {
   width: 7px;
   height: 7px;
@@ -1316,7 +1271,7 @@ a {
   border: 0;
   border-bottom: 2px solid transparent;
   padding: var(--space-1) var(--space-2);
-  color: var(--muted);
+  color: var(--open);
   font: inherit;
   font-size: var(--step-2);
   cursor: pointer;
@@ -1499,6 +1454,10 @@ a {
   background: var(--primary);
   border-color: var(--primary);
   color: #ffffff;
+}
+
+[data-theme="dark"] .step--done .step__dot {
+  color: #17161a;
 }
 
 .step--active {
@@ -1839,11 +1798,6 @@ a {
 .btn--sm {
   padding: 3px var(--space-2);
   font-size: var(--step-1);
-}
-
-.btn--danger {
-  color: var(--conflict);
-  border-color: color-mix(in srgb, var(--conflict) 35%, var(--border));
 }
 
 .drawer {
@@ -2460,7 +2414,6 @@ a {
   }
 
   .rail__head,
-  .rail__meta,
   .rail__doc-header,
   .rail__readiness {
     display: none;
@@ -2506,17 +2459,6 @@ a {
   z-index: 6;
 }
 
-.versionbar__link {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--accent);
-  font: inherit;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
 .versions {
   list-style: none;
   margin: 0 0 var(--space-4);
@@ -2545,8 +2487,8 @@ a {
 }
 
 .version__pick--on {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
 }
 
 .version__confirm {
@@ -2575,7 +2517,7 @@ a {
 .diff__label {
   margin: 0 0 var(--space-1);
   font-size: var(--step-2);
-  color: var(--muted);
+  color: var(--open);
 }
 
 .diff__line {
@@ -2588,7 +2530,7 @@ a {
 }
 
 .diff__line--add {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
 }
 
 .diff__line--del {
@@ -2631,12 +2573,12 @@ a {
 }
 
 .drop__reason {
-  color: var(--muted);
+  color: var(--open);
 }
 
 .chip--remote {
   border-style: dashed;
-  color: var(--muted);
+  color: var(--open);
   cursor: pointer;
 }
 
