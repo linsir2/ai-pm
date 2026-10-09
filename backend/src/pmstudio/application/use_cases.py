@@ -36,6 +36,7 @@ from pmstudio.application.assembly import (
     Assembly,
     assemble,
     backbone_gap_lines,
+    cited_eids,
     contradiction_pairs,
     deferred_from_open_items,
     degraded_question_proposals,
@@ -2249,11 +2250,7 @@ def _accounted(
             seat_entry_handle(seat_id, opinion.local_id)
             for seat_id, opinion in seat_questions(round_.current_reviews)
         )
-    eids = frozenset(
-        eid for proposal in proposals for eid in proposal.origin.refs
-    ) | frozenset(
-        eid for question in questions for eid in question.evidence_refs
-    )
+    eids = cited_eids(proposals, questions)
     return Accounting(handles=handles, eids=eids)
 
 
@@ -2298,11 +2295,7 @@ def _unreferenced_materials_for(
     核算口径与席位意见的 `_accounted` 同一份：提案 origin.refs ∪ 题目 evidence_refs。
     差集 = 零引用。只计算"本轮带进来的"（Round.materials），不算账本里其他编号。
     """
-    accounted: frozenset[str] = frozenset(
-        eid for proposal in proposals for eid in proposal.origin.refs
-    ) | frozenset(
-        eid for question in questions for eid in question.evidence_refs
-    )
+    accounted = cited_eids(proposals, questions)
     return tuple(
         ref.eid
         for ref in round_.materials

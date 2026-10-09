@@ -454,6 +454,21 @@ def _unaccounted_tail(opinion: Opinion) -> str:
     return UNACCOUNTED_TAIL_JUDGMENT
 
 
+def cited_eids(
+    proposals: Sequence[Proposal], questions: Sequence[Question]
+) -> frozenset[EvidenceId]:
+    """这一趟"交代过"的编号 = 提案引用 ∪ 题目引用。**唯一实现**。
+
+    （`use_cases._accounted` 与 `_unreferenced_materials_for` 原来各抄了一遍，
+    消费遥测又要第三遍——这里收口，三处共用。）"""
+
+    return frozenset(
+        eid for proposal in proposals for eid in proposal.origin.refs
+    ) | frozenset(
+        eid for question in questions for eid in question.evidence_refs
+    )
+
+
 def unaccounted_drops(
     reviews: Sequence[SeatReview],
     *,

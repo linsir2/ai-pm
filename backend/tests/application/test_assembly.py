@@ -2342,3 +2342,36 @@ def test_a_multi_select_question_keeps_its_type():
     )
 
     assert result.questions[0].type is QuestionType.MULTI
+
+
+def test_cited_eids_unions_proposals_and_questions():
+    """引用口径的唯一实现：提案引用 ∪ 题目引用。
+
+    （`_accounted` 与 `_unreferenced_materials_for` 原来各抄了一遍，现在共用一个。）"""
+
+    proposals = [
+        Proposal(
+            proposal_id="p1",
+            entry_id="en1",
+            op=WriteOp.ADD,
+            target=Target.body("s5"),
+            text="测试提案",
+            origin=Origin(type=OriginType.USER, refs=(EvidenceId("E1"),)),
+        )
+    ]
+    questions = [
+        Question(
+            question_id=QuestionId("q1"),
+            target=Target.body("s5"),
+            type=QuestionType.SINGLE,
+            title="测试题",
+            why="为什么问",
+            consequence_if_skipped="跳过的后果",
+            options=(Option("a", "A"), Option("b", "B")),
+            evidence_refs=(EvidenceId("E2"),),
+        )
+    ]
+
+    assert assembly.cited_eids(proposals, questions) == frozenset(
+        {EvidenceId("E1"), EvidenceId("E2")}
+    )
