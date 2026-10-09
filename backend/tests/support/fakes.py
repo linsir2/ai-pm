@@ -12,7 +12,10 @@ from pmstudio.application.dto import (
 from pmstudio.application.errors import UnknownExploration, UnknownProject, UnknownRound
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.exploration.exploration import Exploration
+from pmstudio.domain.memory.digest import RoundDigest
+from pmstudio.domain.memory.inspiration import InspirationItem
 from pmstudio.domain.memory.memory import ProjectMemory
+from pmstudio.domain.memory.observations import RoundObservation
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.ids import ExplorationId, ProjectId, RoundId
@@ -276,6 +279,41 @@ class InMemoryMemoryRepository(_InMemoryRepository):
         self._items[memory.project_id] = deepcopy(memory)
 
 
+class InMemoryObservationRepository:
+    """L2 观察替身：内存存储，用于测试。"""
+
+    def __init__(self) -> None:
+        self._items: dict[str, RoundObservation] = {}
+
+    def save(self, observation: RoundObservation) -> None:
+        self._items[observation.obs_id] = observation
+
+    def save_batch(self, observations) -> None:
+        for obs in observations:
+            self.save(obs)
+
+    def get(self, obs_id: str):
+        return self._items.get(obs_id)
+
+    def search(self, project_id: str, query: str, limit: int = 10):
+        results = [
+            obs for obs in self._items.values()
+            if obs.project_id == project_id and (query in obs.title or query in obs.detail)
+        ]
+        return tuple(results[:limit])
+
+    def recent(self, project_id: str, limit: int = 5):
+        """最新观察，同 source_ref 只保留最新一条。"""
+        items = [obs for obs in self._items.values() if obs.project_id == project_id]
+        items.sort(key=lambda o: o.obs_id, reverse=True)
+        seen: dict[str, RoundObservation] = {}
+        for obs in items:
+            if obs.source_ref not in seen:
+                seen[obs.source_ref] = obs
+        deduped = sorted(seen.values(), key=lambda o: o.obs_id, reverse=True)[:limit]
+        return tuple(deduped)
+
+
 class FakeTransaction:
     """假 UnitOfWork：成功记一次提交；抛异常就把仓储恢复成进入事务前的样子。"""
 
@@ -316,3 +354,50 @@ class FailingRoundWriter:
     def save(self, round_: Round) -> None:
         self.saves += 1
         raise RuntimeError("模拟落库失败")
+
+
+class InMemoryDigestRepository:
+    """L4 轮次摘要替身：内存存储，用于测试。"""
+
+    def __init__(self) -> None:
+        self._items: dict[str, RoundDigest] = {}
+
+    def save(self, digest: RoundDigest) -> None:
+        self._items[digest.round_id] = digest
+
+    def get(self, round_id: str):
+        return self._items.get(round_id)
+
+    def recent(self, project_id: str, limit: int = 3):
+        items = [d for d in self._items.values() if d.project_id == project_id]
+        items.sort(key=lambda d: d.round_id, reverse=True)
+        return tuple(items[:limit])
+
+
+class InMemoryInspirationRepository:
+    """L3 灵感档案替身：内存存储，用于测试。"""
+
+    def __init__(self) -> None:
+        self._items: dict[str, InspirationItem] = {}
+
+    def save(self, item: InspirationItem) -> None:
+        self._items[item.item_id] = item
+
+    def save_batch(self, items) -> None:
+        for item in items:
+            self.save(item)
+
+    def get(self, item_id: str):
+        return self._items.get(item_id)
+
+    def search(self, project_id: str, query: str, limit: int = 10):
+        results = [
+            item for item in self._items.values()
+            if item.project_id == project_id and (query in item.statement or (item.context and query in item.context))
+        ]
+        return tuple(results[:limit])
+
+    def recent(self, project_id: str, limit: int = 5):
+        items = [i for i in self._items.values() if i.project_id == project_id]
+        items.sort(key=lambda i: i.item_id, reverse=True)
+        return tuple(items[:limit])

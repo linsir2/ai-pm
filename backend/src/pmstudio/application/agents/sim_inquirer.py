@@ -10,18 +10,16 @@ pydantic 管形状，装配层验挂载与账本，存 payload 时就是 dict。
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.agents.schemas import RULES
+from pmstudio.application.agents.definitions import SIM_INQUIRY
 from pmstudio.application.context import NO_MEMORY_TEXT
 from pmstudio.application.evidence_refs import resolve_evidence_refs
 from pmstudio.domain.exploration.item import BlindSpot, Grounding, Hypothesis
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.harness.agents.agent import Agent
 from pmstudio.harness.errors import PacketParseError
 from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
-from pmstudio.harness.model.envelope import Envelope, make_packet_id
-from pmstudio.harness.model.structured import StructuredCall, call_structured
-
-PURPOSE = "sim_inquiry"
+from pmstudio.harness.model.envelope import Envelope
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,31 +49,11 @@ class SimInquiryOutcome:
         return self.envelope.discarded
 
 
-class SimInquiryAgent:
-    PURPOSE = PURPOSE
-    PROMPT = "sim_inquiry"
-    CALL = StructuredCall(
-        purpose=PURPOSE,
-        kind="sim_inquiry",
-        prompt=PROMPT,
-        packet=schemas.SimInquiryPacket,
-        rules=RULES,
-    )
-    PROMPT_SLOTS = (
-        "document_state",
-        # 接地三源（D1 §3.3）：文档 ＋ 本轮用户的话（有 E 编号）＋ 本轮材料。
-        # 真跑抓过：只渲染文档时，空文档的项目里模型一个编号都看不见，
-        # 把章节号 s8 当锚点填进 anchors——这三段缺一不可（02 §11.0.47）。
-        "claims",
-        "external_material",
-        "project_memory",
-        "schema_json",
-        "validation_error",
-    )
+class SimInquiryAgent(Agent[SimInquiryOutcome, schemas.SimInquiryPacket]):
+    definition = SIM_INQUIRY
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
-        self._model = model
-        self._prompts = prompts
+        super().__init__(model=model, prompts=prompts)
 
     async def run(
         self,
@@ -89,10 +67,7 @@ class SimInquiryAgent:
         validation_error: str = "",
         packet_slot: str = "",
     ) -> SimInquiryOutcome:
-        outcome = await call_structured(
-            self.CALL,
-            gateway=self._model,
-            prompts=self._prompts,
+        outcome = await self._call(
             slots={
                 "document_state": document_state,
                 "claims": claims,
@@ -101,8 +76,8 @@ class SimInquiryAgent:
                 "validation_error": validation_error,
             },
             metadata={} if round_id is None else {"round_id": round_id},
-            packet_id=make_packet_id(
-                str(round_id or "new"), self.CALL.kind, "sim_inquirer", slot=packet_slot
+            packet_id=self._make_packet_id(
+                str(round_id or "new"), "sim_inquirer", slot=packet_slot
             ),
             run_id=str(round_id or "new"),
             produced_by="sim_inquirer",
@@ -135,7 +110,7 @@ def sim_from_packet(
 
     if not packet.hypotheses and not packet.unknowns:
         raise PacketParseError(
-            "模拟调研既没给假设、也没给盲区（空结果不算成功）", purpose=PURPOSE
+            "模拟调研既没给假设、也没给盲区（空结果不算成功）", purpose=SIM_INQUIRY.purpose
         )
     seen: set[str] = set()
     ref_drops: list[tuple[str, str]] = []
@@ -185,7 +160,7 @@ def sim_from_packet(
         except ValueError as error:
             raise PacketParseError(
                 f"未知的 grounding：{draft.grounding}",
-                purpose=PURPOSE,
+                purpose=SIM_INQUIRY.purpose,
                 local_id=local_id,
             ) from error
         refs, unknown = _resolve_refs_lenient(
@@ -209,7 +184,7 @@ def sim_from_packet(
         except DomainError as error:
             raise PacketParseError(
                 f"假设过不了领域校验：{error.message}",
-                purpose=PURPOSE,
+                purpose=SIM_INQUIRY.purpose,
                 local_id=local_id,
             ) from error
     unknowns: list[dict] = []
@@ -220,7 +195,7 @@ def sim_from_packet(
             if not field.strip():
                 raise PacketParseError(
                     "盲区三个字段都不许空（陈述/为什么值得问/怎么去验证）",
-                    purpose=PURPOSE,
+                    purpose=SIM_INQUIRY.purpose,
                     local_id=local_id,
                 )
         try:
@@ -232,7 +207,7 @@ def sim_from_packet(
         except DomainError as error:
             raise PacketParseError(
                 f"盲区过不了领域校验：{error.message}",
-                purpose=PURPOSE,
+                purpose=SIM_INQUIRY.purpose,
                 local_id=local_id,
             ) from error
         unknowns.append(
@@ -261,7 +236,7 @@ def _resolve_refs_lenient(
 
     try:
         refs = resolve_evidence_refs(
-            raw_refs, known=known, what=what, local_id=local_id, purpose=PURPOSE
+            raw_refs, known=known, what=what, local_id=local_id, purpose=SIM_INQUIRY.purpose
         )
     except PacketParseError as error:
         return None, error.message
@@ -277,5 +252,7 @@ def filled_local_id(raw: str, prefix: str, index: int) -> str:
 
 def _mark_unique(seen: set[str], local_id: str) -> None:
     if local_id in seen:
-        raise PacketParseError(f"候选 id 重复：{local_id}", purpose=PURPOSE, local_id=local_id)
+        raise PacketParseError(
+            f"候选 id 重复：{local_id}", purpose=SIM_INQUIRY.purpose, local_id=local_id
+        )
     seen.add(local_id)

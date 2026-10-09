@@ -119,3 +119,73 @@ def test_real_seat_files_all_declare_their_sections():
         assert set(seat.sections) <= valid_sections, seat.seat_id
         assert seat.fields, seat.seat_id
         assert set(seat.fields) <= set(FEATURE_FIELD_BY_NAME), seat.seat_id
+
+
+# ── 内容感知席位过滤 ────────────────────────────────────────────────
+
+
+def test_filter_by_input_keeps_all_always_on():
+    """always_on 席位无论输入是什么都保留。"""
+    catalog = TomlSeatCatalog(DEFINITIONS)
+    filtered = catalog.filter_by_input("完全无关的输入文本")
+    ids = {s.seat_id for s in filtered}
+    assert "seat.business_rules" in ids
+    assert "seat.data_scale" in ids
+    assert "seat.frontend_interaction" in ids
+    assert "seat.permissions" in ids
+    assert "seat.tech_approach" in ids
+
+
+def test_filter_by_input_keyword_match():
+    """关键词匹配的席位保留。"""
+    catalog = TomlSeatCatalog(DEFINITIONS)
+    filtered = catalog.filter_by_input("用户需要导出Excel报表")
+    ids = {s.seat_id for s in filtered}
+    assert "seat.export_import" in ids
+
+
+def test_filter_by_input_filters_irrelevant():
+    """无关席位被过滤。"""
+    catalog = TomlSeatCatalog(DEFINITIONS)
+    filtered = catalog.filter_by_input("添加一个按钮")
+    ids = {s.seat_id for s in filtered}
+    # 没有触发词的席位应该被过滤掉
+    assert "seat.compliance" not in ids
+    assert "seat.export_import" not in ids
+    assert "seat.integration" not in ids
+    assert "seat.notification" not in ids
+    assert "seat.state_machine" not in ids
+
+
+def test_filter_by_input_case_insensitive():
+    """大小写不敏感匹配。"""
+    catalog = TomlSeatCatalog(DEFINITIONS)
+    # EXCEL 大写也应命中
+    filtered = catalog.filter_by_input("需要EXCEL导出")
+    ids = {s.seat_id for s in filtered}
+    assert "seat.export_import" in ids
+
+
+def test_filter_by_input_chinese_keyword():
+    """中文关键词匹配。"""
+    catalog = TomlSeatCatalog(DEFINITIONS)
+    filtered = catalog.filter_by_input("订单状态流转需要审批")
+    ids = {s.seat_id for s in filtered}
+    assert "seat.state_machine" in ids
+
+
+def test_filter_by_input_empty_only_always_on():
+    """空输入只保留 always_on。"""
+    catalog = TomlSeatCatalog(DEFINITIONS)
+    filtered = catalog.filter_by_input("")
+    assert all(s.always_on for s in filtered)
+    assert len(filtered) == 5
+
+
+def test_filter_by_input_no_false_negatives_on_partial_match():
+    """部分匹配也能命中。"""
+    catalog = TomlSeatCatalog(DEFINITIONS)
+    # "批量导出" 应该命中 export_import（导出 命中）
+    filtered = catalog.filter_by_input("支持批量导出操作")
+    ids = {s.seat_id for s in filtered}
+    assert "seat.export_import" in ids

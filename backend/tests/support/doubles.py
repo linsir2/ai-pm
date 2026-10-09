@@ -189,6 +189,10 @@ class StaticSeatCatalog:
     def nominate(self, *, user_input: str) -> tuple[SeatDefinition, ...]:
         return self._seats
 
+    def filter_by_input(self, user_input: str) -> tuple[SeatDefinition, ...]:
+        """测试替身：返回全部席位（测试不关心过滤逻辑，只关心接口存在）。"""
+        return self._seats
+
     def by_id(self, seat_id: str) -> SeatDefinition:
         for seat in self._seats:
             if seat.seat_id == seat_id:

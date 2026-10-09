@@ -40,11 +40,14 @@ from tests.support.doubles import (
 )
 from tests.support.fakes import (
     FakeTransaction,
+    InMemoryDigestRepository,
     InMemoryDocumentRepository,
     InMemoryEvidenceRepository,
     InMemoryExplorationRepository,
+    InMemoryInspirationRepository,
     InMemoryMaterialStore,
     InMemoryMemoryRepository,
+    InMemoryObservationRepository,
     InMemoryRoundRepository,
 )
 
@@ -301,6 +304,9 @@ class Harness:
         self.factory = InMemoryProjectFactory(
             self.documents, self.evidences, self.index, self.ids
         )
+        self.observations = InMemoryObservationRepository()
+        self.digests = InMemoryDigestRepository()
+        self.inspirations = InMemoryInspirationRepository()
 
     def seed_project(self, *, title: str = "订单中台") -> ProjectId:
         self.documents.seed(make_document(title=title))
@@ -335,6 +341,7 @@ class Harness:
             materials=self.materials,
             explorations=self.explorations,
             discussions=self.discussions,
+            memory=self.memory,
         )
 
     # —— 探索（M8）——
@@ -400,6 +407,7 @@ class Harness:
             materials=self.materials,
             uow=self.uow,
             clock=self.clock,
+            inspiration_repo=self.inspirations,
         )
 
     def dismiss_candidate(self):  # type: ignore[no-untyped-def]
@@ -479,6 +487,7 @@ class Harness:
             materials=self.materials,
             uow=self.uow,
             clock=self.clock,
+            inspiration_repo=self.inspirations,
         )
 
     def dismiss_discussion_card(self):  # type: ignore[no-untyped-def]
@@ -535,6 +544,7 @@ class Harness:
             materials=self.materials,
             uow=self.uow,
             clock=self.clock,
+            inspiration_repo=self.inspirations,
         )
 
     def close_discussion(self):  # type: ignore[no-untyped-def]
@@ -591,6 +601,7 @@ class Harness:
             events=self.events,
             materials=self.materials,
             memory=self.memory,
+            observations_repo=self.observations,
         )
 
     def integrate_round(self):  # type: ignore[no-untyped-def]
@@ -613,6 +624,9 @@ class Harness:
             materials=self.materials,
             curator=self.curator,
             memory=self.memory,
+            observations_repo=self.observations,
+            digest_repo=self.digests,
+            inspiration_repo=self.inspirations,
         )
 
     def submit_answers(self):  # type: ignore[no-untyped-def]
@@ -633,7 +647,11 @@ class Harness:
         from pmstudio.application.use_cases import ConfirmDraft
 
         return ConfirmDraft(
-            committer=self.committer(), rounds=self.rounds, clock=self.clock, events=self.events
+            committer=self.committer(),
+            rounds=self.rounds,
+            clock=self.clock,
+            events=self.events,
+            digest_repo=self.digests,
         )
 
     def committer(self):  # type: ignore[no-untyped-def]

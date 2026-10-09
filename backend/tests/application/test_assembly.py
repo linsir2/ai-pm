@@ -2135,3 +2135,88 @@ def test_simulated_only_proposal_is_downgraded_to_proposed():
     assert [proposal.origin.type for proposal in result.proposals] == [
         OriginType.PROPOSED
     ]
+
+
+# ── 席位间冲突检测 ────────────────────────────────────────────────
+
+
+def _review(seat_id: str, opinions: list[Opinion]) -> SeatReview:
+    return SeatReview(seat_id=seat_id, basis="依据", opinions=tuple(opinions))
+
+
+def _judgment(local_id: str, about: str, claim: str) -> Opinion:
+    return Opinion(
+        local_id=local_id,
+        form=OpinionForm.JUDGMENT,
+        about=about,
+        claim=claim,
+        because="理由",
+        evidence_refs=(EvidenceId("E1"),),
+    )
+
+
+def test_seat_conflict_pairs_detects_opposite_judgments():
+    """两个席位对同一 about 持相反判断 → 检测为冲突。"""
+    reviews = (
+        _review("seat.a", [_judgment("O1", "导出性能", "导出应在 60 秒内完成")]),
+        _review("seat.b", [_judgment("O1", "导出性能", "导出不应在 60 秒内完成")]),
+    )
+    conflicts = assembly.seat_conflict_pairs(reviews)
+    assert len(conflicts) == 1
+    assert conflicts[0].about == "导出性能"
+    assert conflicts[0].seat_a in ("seat.a", "seat.b")
+    assert conflicts[0].seat_b in ("seat.a", "seat.b")
+    assert conflicts[0].seat_a != conflicts[0].seat_b
+
+
+def test_seat_conflict_pairs_same_stance_not_conflict():
+    """两个席位对同一 about 持相同判断 → 不是冲突。"""
+    reviews = (
+        _review("seat.a", [_judgment("O1", "导出性能", "导出应在 60 秒内完成")]),
+        _review("seat.b", [_judgment("O1", "导出性能", "导出必须在 60 秒内完成")]),
+    )
+    conflicts = assembly.seat_conflict_pairs(reviews)
+    assert len(conflicts) == 0
+
+
+def test_seat_conflict_pairs_different_about_not_conflict():
+    """不同 about → 不是冲突。"""
+    reviews = (
+        _review("seat.a", [_judgment("O1", "导出性能", "导出应在 60 秒内完成")]),
+        _review("seat.b", [_judgment("O1", "导出格式", "导出不应在 60 秒内完成")]),
+    )
+    conflicts = assembly.seat_conflict_pairs(reviews)
+    assert len(conflicts) == 0
+
+
+def test_seat_conflict_pairs_empty_reviews():
+    """没有席位 → 空冲突。"""
+    conflicts = assembly.seat_conflict_pairs(())
+    assert conflicts == ()
+
+
+def test_seat_conflict_pairs_same_seat_not_conflict():
+    """同一席位的多个判断 → 不与自己冲突。"""
+    reviews = (
+        _review("seat.a", [
+            _judgment("O1", "导出性能", "导出应在 60 秒内完成"),
+            _judgment("O2", "导出性能", "导出不应在 60 秒内完成"),
+        ]),
+    )
+    conflicts = assembly.seat_conflict_pairs(reviews)
+    assert len(conflicts) == 0
+
+
+def test_claims_contradict_positive_vs_negative():
+    """肯定 vs 否定 → 矛盾。"""
+    assert assembly._claims_contradict("应支持导出", "不应支持导出") is True
+
+
+def test_claims_contradict_same_direction():
+    """同方向 → 不矛盾。"""
+    assert assembly._claims_contradict("应支持导出", "必须支持导出") is False
+
+
+def test_claims_contradict_neutral():
+    """中性文本 → 不矛盾。"""
+    assert assembly._claims_contradict("导出功能", "导出功能") is False

@@ -4,8 +4,8 @@ import sqlite3
 from pathlib import Path
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-#: 5 = 加上 `discussions`（M9 讨论线程；新表免 ALTER，老库由 schema.sql 补齐）。
-USER_VERSION = 5
+#: 9 = 删 `inspirations.grounding`（死字段销账）。
+USER_VERSION = 9
 
 #: `CREATE TABLE IF NOT EXISTS` 补不了**已有**表的列，所以老库要靠这里的 `ALTER TABLE`（幂等）。
 #: 留样表本身是可丢的（`02` §5.3：要清就 DELETE），但**不主动删数据**。
@@ -30,8 +30,15 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return connection
 
 
+#: 老库要删的列（销账死字段）。`ALTER TABLE ... DROP COLUMN` 要求 SQLite ≥ 3.35。
+DROPPED_COLUMNS: dict[str, tuple[str, ...]] = {
+    "observations": ("relevance_count", "last_accessed"),
+    "inspirations": ("grounding",),
+}
+
+
 def migrate(connection: sqlite3.Connection) -> None:
-    """把老库补到当前形状：只加列、不删数据、可重复跑。"""
+    """把老库补到当前形状：加列、删列、不丢业务数据、可重复跑。"""
 
     for table, columns in ADDED_COLUMNS.items():
         existing = {
@@ -42,3 +49,13 @@ def migrate(connection: sqlite3.Connection) -> None:
         for name, definition in columns:
             if name not in existing:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+    for table, columns in DROPPED_COLUMNS.items():
+        existing = {
+            row["name"] for row in connection.execute(f"PRAGMA table_info({table})")
+        }
+        if not existing:
+            continue  # 表还没建，无需删
+        for name in columns:
+            if name in existing:
+                connection.execute(f"ALTER TABLE {table} DROP COLUMN {name}")

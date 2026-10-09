@@ -62,6 +62,24 @@ describe("roundProgress", () => {
     expect(stepOf(round, "draft").state).toBe("todo");
   });
 
+  it("出了问卷但没草案：席位轮仍 active（答完可能再跑一轮）", () => {
+    const round = {
+      ...empty,
+      step: "awaiting_answers",
+      waiting_on: "questionnaire",
+      seats: ["seat.a", "seat.b"],
+      seat_round_count: 1,
+      questions: [{ question_id: "q1" }],
+      seat_packets: [
+        { seat_id: "seat.a", status: "completed" },
+        { seat_id: "seat.b", status: "completed" },
+      ],
+    } as unknown as RoundView;
+    // 出了问卷 ≠ 席位轮完成；答完问卷可能触发第二轮席位
+    expect(stepOf(round, "seats").state).toBe("active");
+    expect(stepOf(round, "questionnaire").state).toBe("active");
+  });
+
   it("没有问卷的路径：问卷那格写「没有要问的」，不是没做事", () => {
     const round = {
       ...empty,

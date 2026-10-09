@@ -179,10 +179,10 @@ def test_sim_inquiry_agent_call_binding() -> None:
     from pmstudio.application.agents.inquirer import Inquirer
     from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
 
-    assert SimInquiryAgent.CALL.packet is schemas.SimInquiryPacket
-    assert SimInquiryAgent.CALL.purpose == "sim_inquiry"
-    assert SimInquiryAgent.CALL.purpose != Inquirer.CALL.purpose
-    assert SimInquiryAgent.PROMPT == "sim_inquiry"
+    assert SimInquiryAgent.definition.packet is schemas.SimInquiryPacket
+    assert SimInquiryAgent.definition.purpose == "sim_inquiry"
+    assert SimInquiryAgent.definition.purpose != Inquirer.definition.purpose
+    assert SimInquiryAgent.definition.prompt == "sim_inquiry"
     assert {"document_state", "claims", "external_material"} <= set(
-        SimInquiryAgent.PROMPT_SLOTS
+        SimInquiryAgent.definition.slots
     )

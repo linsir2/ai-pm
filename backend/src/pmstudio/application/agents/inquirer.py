@@ -8,18 +8,16 @@
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.agents.schemas import RULES
+from pmstudio.application.agents.definitions import INQUIRER
 from pmstudio.application.context import NO_MEMORY_TEXT
 from pmstudio.application.evidence_refs import resolve_evidence_refs
 from pmstudio.domain.exploration.item import BlindSpot, Grounding, Hypothesis
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.harness.agents.agent import Agent
 from pmstudio.harness.errors import PacketParseError
 from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
-from pmstudio.harness.model.envelope import Envelope, make_packet_id
-from pmstudio.harness.model.structured import StructuredCall, call_structured
-
-PURPOSE = "inquiry"
+from pmstudio.harness.model.envelope import Envelope
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,27 +37,11 @@ class InquiryOutcome:
         return self.envelope.discarded
 
 
-class Inquirer:
-    PURPOSE = PURPOSE
-    PROMPT = "inquiry"
-    CALL = StructuredCall(
-        purpose=PURPOSE,
-        kind="inquiry",
-        prompt=PROMPT,
-        packet=schemas.InquiryPacket,
-        rules=RULES,
-    )
-    PROMPT_SLOTS = (
-        "scope",
-        "document_state",
-        "project_memory",
-        "schema_json",
-        "validation_error",
-    )
+class Inquirer(Agent[InquiryOutcome, schemas.InquiryPacket]):
+    definition = INQUIRER
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
-        self._model = model
-        self._prompts = prompts
+        super().__init__(model=model, prompts=prompts)
 
     async def run(
         self,
@@ -72,10 +54,7 @@ class Inquirer:
         validation_error: str = "",
         packet_slot: str = "",
     ) -> InquiryOutcome:
-        outcome = await call_structured(
-            self.CALL,
-            gateway=self._model,
-            prompts=self._prompts,
+        outcome = await self._call(
             slots={
                 "scope": scope,
                 "document_state": document_state,
@@ -83,8 +62,8 @@ class Inquirer:
                 "validation_error": validation_error,
             },
             metadata={} if exploration_id is None else {"exploration_id": exploration_id},
-            packet_id=make_packet_id(
-                str(exploration_id or "new"), self.CALL.kind, "inquirer", slot=packet_slot
+            packet_id=self._make_packet_id(
+                str(exploration_id or "new"), "inquirer", slot=packet_slot
             ),
             run_id=str(exploration_id or "new"),
             produced_by="inquirer",
@@ -104,7 +83,7 @@ def inquiry_from_packet(
 
     if not packet.hypotheses and not packet.blind_spots:
         raise PacketParseError(
-            "调研既没给假设、也没给盲区（空结果不算成功）", purpose=PURPOSE
+            "调研既没给假设、也没给盲区（空结果不算成功）", purpose=INQUIRER.purpose
         )
     hypotheses: list[Hypothesis] = []
     blind_spots: list[BlindSpot] = []
@@ -117,7 +96,7 @@ def inquiry_from_packet(
         except ValueError as error:
             raise PacketParseError(
                 f"未知的 grounding：{draft.grounding}",
-                purpose=PURPOSE,
+                purpose=INQUIRER.purpose,
                 local_id=local_id,
             ) from error
         refs = resolve_evidence_refs(
@@ -140,7 +119,7 @@ def inquiry_from_packet(
         except DomainError as error:
             raise PacketParseError(
                 f"假设过不了领域校验：{error.message}",
-                purpose=PURPOSE,
+                purpose=INQUIRER.purpose,
                 local_id=local_id,
             ) from error
     for index, spot in enumerate(packet.blind_spots, start=1):
@@ -157,7 +136,7 @@ def inquiry_from_packet(
         except DomainError as error:
             raise PacketParseError(
                 f"盲区过不了领域校验：{error.message}",
-                purpose=PURPOSE,
+                purpose=INQUIRER.purpose,
                 local_id=local_id,
             ) from error
     return tuple(hypotheses), tuple(blind_spots)
@@ -165,5 +144,7 @@ def inquiry_from_packet(
 
 def _mark_unique(seen: set[str], local_id: str) -> None:
     if local_id in seen:
-        raise PacketParseError(f"候选 id 重复：{local_id}", purpose=PURPOSE, local_id=local_id)
+        raise PacketParseError(
+            f"候选 id 重复：{local_id}", purpose=INQUIRER.purpose, local_id=local_id
+        )
     seen.add(local_id)

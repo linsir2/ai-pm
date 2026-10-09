@@ -145,7 +145,7 @@ async def test_integrator_returns_parsed_packet_and_all_slots():
     assert request.schema_name == "IntegrationPacket"
     name, slots = prompts.calls[0]
     assert name == "integrator"
-    assert tuple(sorted(slots)) == tuple(sorted(Integrator.PROMPT_SLOTS))
+    assert tuple(sorted(slots)) == tuple(sorted(Integrator.definition.slots))
     assert slots["validation_error"] == ""  # 第一次不给错误
     assert "最多 5" in slots["limits"]
     assert "功能子树" in slots["limits"]

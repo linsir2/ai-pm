@@ -6,6 +6,7 @@
 
 import asyncio
 import hashlib
+import uuid
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -47,6 +48,7 @@ from pmstudio.application.assembly import (
     open_question_proposals,
     question_key,
     questionnaire_of,
+    seat_conflict_pairs,
     seat_questions,
     unaccounted_drops,
     unlanded_open_questions,
@@ -55,17 +57,25 @@ from pmstudio.application.context import (
     NO_MATERIAL_TEXT,
     WEB_BUDGET,
     answer_eids,
+    build_project_context,
+    build_round_digest,
+    extract_observations_from_reviews,
     render_answers,
     render_citations,
     render_claims,
     render_contradictions,
+    render_digests,
     render_document_state,
     render_existing_entries,
+    render_inspirations_index,
     render_materials,
     render_memory,
     render_memory_state,
+    render_observations_index,
+    render_project_context,
     render_reviews,
     render_round_digest,
+    render_seat_conflicts,
     render_selected_opinions,
     render_web_results,
     seat_entry_handle,
@@ -199,8 +209,15 @@ from pmstudio.domain.exploration.exploration import (
     ScopeKind,
 )
 from pmstudio.domain.exploration.item import BlindSpot, CandidateState, Hypothesis
+from pmstudio.domain.memory.inspiration import InspirationItem, InspirationOrigin
 from pmstudio.domain.memory.memory import screen_changes
+from pmstudio.domain.null_repos import (
+    NO_DIGESTS,
+    NO_INSPIRATIONS,
+    NO_OBSERVATIONS,
+)
 from pmstudio.domain.ports import (
+    DigestRepository,
     DiscussionReader,
     DiscussionWriter,
     DocumentReader,
@@ -208,8 +225,10 @@ from pmstudio.domain.ports import (
     EvidenceWriter,
     ExplorationReader,
     ExplorationWriter,
+    InspirationRepository,
     MemoryReader,
     MemoryWriter,
+    ObservationRepository,
     RoundReader,
     RoundWriter,
     UnitOfWork,
@@ -281,6 +300,17 @@ from pmstudio.harness.events import Event, EventPublisher
 from pmstudio.harness.tools.registry import ToolCatalog, ToolDefinition
 
 
+class _SimpleIdGen:
+    """简单的 ID 发生器，用于观察 ID 生成（不需要持久化唯一性）。"""
+
+    def __init__(self) -> None:
+        self._seq: dict[str, int] = {}
+
+    def new(self, prefix: str) -> str:
+        self._seq[prefix] = self._seq.get(prefix, 0) + 1
+        return f"{prefix}-{self._seq[prefix]}-{uuid.uuid4().hex[:6]}"
+
+
 @dataclass(frozen=True, slots=True)
 class ClaimEdit:
     """开场卡上的一处纠正：只改标签与去处（内容归文档，卡片不改内容）。"""
@@ -322,6 +352,7 @@ class StartRound:
         materials: MaterialStore,
         explorations: ExplorationReader,
         discussions: DiscussionReader,
+        memory: MemoryReader | None = None,
     ) -> None:
         self._documents = documents
         self._rounds = rounds
@@ -338,6 +369,7 @@ class StartRound:
         self._materials = materials
         self._explorations = explorations
         self._discussions = discussions
+        self._memory = memory
 
     async def create(
         self,
@@ -479,6 +511,10 @@ class StartRound:
         document_state = render_document_state(
             view, readiness=self._checker.check(view)
         )
+        memory_entries = self._memory.get(round_.project_id).entries if self._memory else ()
+        project_context = render_project_context(
+            build_project_context(view, memory_entries)
+        )
         # 上一次失败留下的报错就是这次第一次尝试的起点（同整合那条路，P13 C1/C2）。
         # **没有 hint 就不开事务**：寻常路径的事务数被既有用例钉着（不许为只读开事务）。
         retry_hint = round_.retry_hint
@@ -494,6 +530,7 @@ class StartRound:
                     user_input=user_input,
                     document_state=document_state,
                     external_material=external_material_text(round_, store=self._materials),
+                    project_context=project_context,
                     round_id=round_id,
                     validation_error=repair,
                     packet_slot=f"a{attempt}",
@@ -815,6 +852,7 @@ class RunSeatRound:
         events: EventPublisher,
         materials: MaterialStore,
         memory: MemoryReader,
+        observations_repo: ObservationRepository = NO_OBSERVATIONS,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -830,6 +868,7 @@ class RunSeatRound:
         self._events = events
         self._materials = materials
         self._memory = memory
+        self._observations_repo = observations_repo
 
     async def __call__(self, *, round_id: RoundId) -> None:
         # 读取阶段不开事务：模型调用绝不能包在事务里。
@@ -853,6 +892,12 @@ class RunSeatRound:
         external_material = external_material_text(round_, store=self._materials)
         #: 这一趟是第几趟（问卷回来后会 +1 再跑）。信封槽位的一部分，见 `_review_one`。
         pass_index = round_.seat_round_count
+        # L1 项目上下文：每轮都注入，让席位知道"我们在哪"
+        project_context = render_project_context(
+            build_project_context(view, self._memory.get(round_.project_id).entries)
+        )
+        # L2 观察索引：上一轮席位的洞察，渐进式披露
+        observations_index = self._build_observations_index(round_.project_id)
 
         results = await asyncio.gather(
             *(
@@ -867,6 +912,8 @@ class RunSeatRound:
                     project_memory=render_memory(
                         self._memory.get(round_.project_id).entries
                     ),
+                    project_context=project_context,
+                    observations_index=observations_index,
                     known_eids=known_eids,
                     answer_eids=answer_refs,
                     external_material=external_material,
@@ -919,6 +966,22 @@ class RunSeatRound:
             )
             self._evidence_writer.save(ledger)
         _publish(self._events, self._clock, round_)
+        # L2 观察提取：席位意见跨轮存活
+        self._extract_and_store_observations(round_)
+
+    def _build_observations_index(self, project_id) -> str:
+        """读取最近观察，渲染为索引注入提示词。"""
+        recent = self._observations_repo.recent(str(project_id), limit=5)
+        return render_observations_index(recent)
+
+    def _extract_and_store_observations(self, round_) -> None:
+        """从完成的席位轮提炼观察并存储。"""
+        ids = _SimpleIdGen()
+        observations = extract_observations_from_reviews(
+            round_.current_reviews, str(round_.round_id), str(round_.project_id), ids
+        )
+        if observations:
+            self._observations_repo.save_batch(observations)
 
     async def _review_one(
         self,
@@ -930,6 +993,8 @@ class RunSeatRound:
         opinions_so_far: str,
         answered: str,
         project_memory: str,
+        project_context: str = "",
+        observations_index: str = "",
         known_eids: frozenset[EvidenceId],
         answer_eids: dict[str, str] | None = None,
         external_material: str = "",
@@ -952,6 +1017,8 @@ class RunSeatRound:
                     opinions_so_far=opinions_so_far,
                     answered=answered,
                     project_memory=project_memory,
+                    project_context=project_context,
+                    observations_index=observations_index,
                     external_material=external_material,
                     known_eids=known_eids,
                     answer_eids=answer_eids or {},
@@ -1021,37 +1088,20 @@ class RunSeatRound:
             self._round_writer.save(round_)
             pass_index = round_.seat_round_count
             project_id = round_.project_id
-        # 逐席位发事件：闭环区立刻能看到这个席位的发言（编号在汇合点才有，所以 eid 先空着）
+        # 逐席位发事件：只通知"这一包交回了"，opinions 真源在 GET /round。
         self._events.publish(
             Event(
                 name=PACKET_EMITTED,
                 project_id=str(project_id),
                 round_id=str(round_id),
                 payload={
-                    # §4.4 信封的身份四件套 + 依据：**事件是信封的第一个消费者**。
-                    # 有了 packet_id，"这一趟交回的东西后来哪些没进卡片"按 id 一查即可
-                    # （以前要翻日志，且日志按席位分、跨趟混在一起）。
                     "packet_id": outcome.envelope.packet_id,
                     "run_id": outcome.envelope.run_id,
                     "kind": outcome.envelope.kind,
                     "produced_by": outcome.envelope.produced_by,
                     "basis": outcome.envelope.basis,
-                    # 下面两行是前端已在用的字段，**保持原名原义**
-                    # （前端按 key 取，缺了会静默不更新）
                     "seat_id": review.seat_id,
                     "pass_index": pass_index,
-                    "opinions": [
-                        {
-                            "local_id": opinion.local_id,
-                            "form": opinion.form.value,
-                            "about": opinion.about,
-                            "claim": opinion.claim,
-                            "because": opinion.because,
-                            "eids": [str(eid) for eid in opinion.evidence_refs],
-                            "eid": None,
-                        }
-                        for opinion in review.opinions
-                    ],
                 },
                 occurred_at=self._clock.now(),
             )
@@ -1441,6 +1491,9 @@ class IntegrateRound:
         materials: MaterialStore,
         curator: MemoryCurator,
         memory: MemoryReader,
+        observations_repo: ObservationRepository = NO_OBSERVATIONS,
+        digest_repo: DigestRepository = NO_DIGESTS,
+        inspiration_repo: InspirationRepository = NO_INSPIRATIONS,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -1458,6 +1511,9 @@ class IntegrateRound:
         self._materials = materials
         self._curator = curator
         self._memory = memory
+        self._observations_repo = observations_repo
+        self._digest_repo = digest_repo
+        self._inspiration_repo = inspiration_repo
 
     async def __call__(self, *, round_id: RoundId) -> None:
         result = await self._integrate_with_repair(round_id=round_id)
@@ -1821,6 +1877,11 @@ class IntegrateRound:
         )
         return assembled, gaps
 
+    def _build_observations_index(self, project_id) -> str:
+        """读取最近观察，渲染为索引注入提示词。"""
+        recent = self._observations_repo.recent(str(project_id), limit=5)
+        return render_observations_index(recent)
+
     async def _integrate_with_repair(self, *, round_id: RoundId):  # type: ignore[no-untyped-def]
         """先拿到一份能过校验的整包，再在**便宜的那一层**补交代（`02` §11.0.38）。
 
@@ -1876,6 +1937,9 @@ class IntegrateRound:
                 open_items = _render_open_items(carried_from_open_items)
                 previous_list_items = _render_list_items(round_)
                 contradictions = render_contradictions(round_)
+                seat_conflicts = render_seat_conflicts(
+                    seat_conflict_pairs(round_.current_reviews)
+                )
                 outcome = await self._integrator.integrate(
                     document_state=render_document_state(
                         view, readiness=self._checker.check(view)
@@ -1891,6 +1955,18 @@ class IntegrateRound:
             skipped=skipped,
             # 跨轮记忆（M6）：**已确认**的那些（席位与整合者看同一份渲染）
             project_memory=render_memory(self._memory.get(round_.project_id).entries),
+            # L1 项目上下文：让整合者知道"我们在哪"
+            project_context=render_project_context(
+                build_project_context(view, self._memory.get(round_.project_id).entries)
+            ),
+            # L2 观察索引：上一轮席位的洞察
+            observations_index=self._build_observations_index(round_.project_id),
+            # L4 轮次摘要：之前轮次发生了什么
+            digests=render_digests(self._digest_repo.recent(round_.project_id, limit=3)),
+            # L3 灵感档案：讨论/探索/模拟中的发现
+            inspirations_index=render_inspirations_index(
+                self._inspiration_repo.recent(round_.project_id, limit=5)
+            ),
             entry_ids=render_existing_entries(document),
                     external_material=external_material_text(round_, store=self._materials),
                     validation_error=validation_error,
@@ -1899,6 +1975,7 @@ class IntegrateRound:
                     open_items=open_items,
                     previous_list_items=previous_list_items,
                     contradictions=contradictions,
+                    seat_conflicts=seat_conflicts,
                     packet_slot=(
                         f"i{round_.integration_seq}"
                         f"a{MAX_INTEGRATION_ATTEMPTS - validate_left + 1}"
@@ -2352,11 +2429,13 @@ class ConfirmDraft:
         rounds: RoundReader,
         clock: Clock,
         events: EventPublisher,
+        digest_repo: DigestRepository = NO_DIGESTS,
     ) -> None:
         self._committer = committer
         self._rounds = rounds
         self._clock = clock
         self._events = events
+        self._digest_repo = digest_repo
 
     async def __call__(
         self,
@@ -2372,6 +2451,8 @@ class ConfirmDraft:
             # 记忆与文档同一次确认、同一个事务（M6）：勾了才写，没勾就什么都不发生
             accepted_memory=tuple(accepted_memory),
         )
+        # L4: 生成轮次摘要（事务外）
+        self._build_and_save_digest(round_id, accepted)
         round_ = self._rounds.get(round_id)
         self._events.publish(
             Event(
@@ -2390,6 +2471,17 @@ class ConfirmDraft:
         )
         _publish(self._events, self._clock, round_)
         return result
+
+    def _build_and_save_digest(self, round_id, accepted) -> None:
+        """生成并保存 L4 轮次摘要。"""
+        round_ = self._rounds.get(round_id)
+        if round_.draft is None:
+            return
+        confirmed = [p for p in round_.draft.proposals if p.proposal_id in accepted]
+        digest = build_round_digest(
+            confirmed, str(round_id), str(round_.project_id)
+        )
+        self._digest_repo.save(digest)
 
 
 class ForgetMemory:
@@ -3869,21 +3961,23 @@ class KeepCandidate:
         materials: MaterialStore,
         uow: UnitOfWork,
         clock: Clock,
+        inspiration_repo: InspirationRepository = NO_INSPIRATIONS,
     ) -> None:
         self._explorations = explorations
         self._exploration_writer = exploration_writer
         self._materials = materials
         self._uow = uow
         self._clock = clock
+        self._inspiration_repo = inspiration_repo
 
     async def __call__(
         self, *, exploration_id: ExplorationId, candidate_id: str, as_: str
     ) -> ExplorationView:
         if as_ not in ("seed", "material"):
             raise ShapeError("收下的去向只能是 seed 或 material", as_=as_)
+        exploration = self._explorations.get(exploration_id)
+        candidate = _candidate_of(exploration, candidate_id)
         if as_ == "material":
-            exploration = self._explorations.get(exploration_id)
-            candidate = _candidate_of(exploration, candidate_id)
             parsed, content = candidate_material(
                 candidate, exploration_id=str(exploration_id)
             )
@@ -3898,12 +3992,25 @@ class KeepCandidate:
                 stored = self._explorations.get(exploration_id)
                 stored.keep(candidate_id, as_="material", material_id=packet.material_id)
                 self._exploration_writer.save(stored)
+            self._store_inspiration(exploration.project_id, candidate)
             return exploration_view(stored)
         with self._uow:
             stored = self._explorations.get(exploration_id)
             stored.keep(candidate_id, as_="seed")
             self._exploration_writer.save(stored)
+        self._store_inspiration(exploration.project_id, candidate)
         return exploration_view(stored)
+
+    def _store_inspiration(self, project_id, candidate) -> None:
+        """L3: 收下候选后存入灵感档案。"""
+        item = InspirationItem(
+            item_id=f"ins-expl-{candidate.candidate_id}-{uuid.uuid4().hex[:6]}",
+            project_id=str(project_id),
+            origin=InspirationOrigin.EXPLORATION,
+            statement=candidate.statement,
+            context=candidate.falsification if hasattr(candidate, 'falsification') else None,
+        )
+        self._inspiration_repo.save(item)
 
 
 class DismissCandidate:
@@ -4359,12 +4466,14 @@ class KeepDiscussionCard:
         materials: MaterialStore,
         uow: UnitOfWork,
         clock: Clock,
+        inspiration_repo: InspirationRepository = NO_INSPIRATIONS,
     ) -> None:
         self._discussions = discussions
         self._discussion_writer = discussion_writer
         self._materials = materials
         self._uow = uow
         self._clock = clock
+        self._inspiration_repo = inspiration_repo
 
     async def __call__(
         self, *, discussion_id: DiscussionId, card_id: str, as_: str
@@ -4390,12 +4499,24 @@ class KeepDiscussionCard:
                     card_id, as_="material", material_id=packet.material_id
                 )
                 self._discussion_writer.save(stored)
+            self._store_inspiration(thread.project_id, card)
             return thread_view(stored)
         with self._uow:
             stored = self._discussions.get(discussion_id)
             stored.keep_card(card_id, as_="seed")
             self._discussion_writer.save(stored)
+        self._store_inspiration(thread.project_id, card)
         return thread_view(stored)
+
+    def _store_inspiration(self, project_id, card) -> None:
+        """L3: 收下讨论卡后存入灵感档案。"""
+        item = InspirationItem(
+            item_id=f"ins-disc-{card.card_id}-{uuid.uuid4().hex[:6]}",
+            project_id=str(project_id),
+            origin=InspirationOrigin.DISCUSSION,
+            statement=card.statement,
+        )
+        self._inspiration_repo.save(item)
 
 
 class DismissDiscussionCard:
@@ -4618,7 +4739,7 @@ class RunSimInquiry:
         if not clean_hypotheses and not clean_unknowns:
             raise PacketParseError(
                 "模拟筛完没剩可用的假设与盲区（引用落空 / 重复 / 身份词数字全被丢了）",
-                purpose=SimInquiryAgent.PURPOSE,
+                purpose=SimInquiryAgent.definition.purpose,
             )
         ref_items = tuple(
             DroppedItem(
@@ -4749,12 +4870,14 @@ class KeepSimInquiry:
         materials: MaterialStore,
         uow: UnitOfWork,
         clock: Clock,
+        inspiration_repo: InspirationRepository = NO_INSPIRATIONS,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
         self._materials = materials
         self._uow = uow
         self._clock = clock
+        self._inspiration_repo = inspiration_repo
 
     async def __call__(
         self, *, round_id: RoundId, chosen: Sequence[str]
@@ -4791,7 +4914,20 @@ class KeepSimInquiry:
             stored = self._rounds.get(round_id)
             stored.choose_sim_inquiry(kept)
             self._round_writer.save(stored)
+        self._store_inspirations(round_)
         return KeepSimResult(material_id=packet.material_id, kept=kept)
+
+    def _store_inspirations(self, round_) -> None:
+        """L3: 收下模拟调研后存入灵感档案。"""
+        for hyp in round_.sim_hypotheses:
+            item = InspirationItem(
+                item_id=f"ins-sim-{hyp['local_id']}-{uuid.uuid4().hex[:6]}",
+                project_id=str(round_.project_id),
+                origin=InspirationOrigin.SIM_INQUIRY,
+                statement=hyp["statement"],
+                context=hyp.get("falsification"),
+            )
+            self._inspiration_repo.save(item)
 
 
 class RunSimReview:
@@ -4998,7 +5134,7 @@ class RunSimReview:
                 raise PacketParseError(
                     f"{persona.persona_id} 的走查两次都没过机械筛："
                     + "；".join(issues[:3]),
-                    purpose=PersonaSimulatorAgent.PURPOSE,
+                    purpose=PersonaSimulatorAgent.definition.purpose,
                 )
             repair = "；".join(issues)
         raise AssertionError("重装环必然 return 或 raise")

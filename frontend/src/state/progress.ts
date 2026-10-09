@@ -24,6 +24,8 @@ export function roundProgress(
   const done = round.step === "done";
   const openingDone = round.seats.length > 0;
   const seatsDone = round.seat_packets.length > 0 && round.seat_packets.every(isCompleted);
+  // 席位轮只有出了草案（或整轮结束）才算 done；出了问卷不等于完成（答完可能再跑一轮）
+  const seatsFullyDone = seatsDone && (round.draft !== null || done);
   const integrated = round.questions.length > 0 || round.draft !== null;
 
   return [
@@ -42,7 +44,7 @@ export function roundProgress(
     {
       key: "seats",
       text: "席位轮",
-      state: seatsDone && integrated ? "done" : openingDone ? "active" : "todo",
+      state: seatsFullyDone ? "done" : openingDone ? "active" : "todo",
       detail: `${Math.min(round.seat_round_count, maxSeatRounds)} / ${maxSeatRounds} 轮`,
     },
     {

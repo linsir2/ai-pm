@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.agents.schemas import RULES
+from pmstudio.application.agents.definitions import INTEGRATOR
 from pmstudio.application.context import (
     FEATURE_FIELDS_TEXT,
     NO_MATERIAL_TEXT,
@@ -14,12 +14,11 @@ from pmstudio.application.context import (
     SECTION_SLOTS_TEXT,
 )
 from pmstudio.domain.shared.ids import RoundId
+from pmstudio.harness.agents.agent import Agent
 from pmstudio.harness.errors import PacketParseError
 from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
 from pmstudio.harness.model.envelope import Envelope, make_packet_id
 from pmstudio.harness.model.structured import StructuredCall, call_structured
-
-PURPOSE = "integration"
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,54 +147,23 @@ LIMITS_TEXT = "\n".join(
 )
 
 
-class Integrator:
-    PURPOSE = PURPOSE
-    PROMPT = "integrator"
-    CALL = StructuredCall(
-        purpose=PURPOSE,
-        kind="integration",
-        prompt=PROMPT,
-        packet=schemas.IntegrationPacket,
-        rules=RULES,
-    )
-    PROMPT_SLOTS = (
-        "document_state",
-        "claims",
-        "opinions",
-        "answered",
-        "skipped",
-        # 跨轮记忆（M6）：已确认的口径 / 教训 / 否掉的东西（只在有历史时出现，限量 20 行）
-        "project_memory",
-        "entry_ids",
-        "external_material",
-        "limits",
-        "feature_fields",
-        "section_slots",
-        "schema_json",
-        "validation_error",
-        "authorized_features",
-        "open_items",
-        "previous_list_items",
-        "contradictions",
-    )
+class Integrator(Agent[IntegrationOutcome, schemas.IntegrationPacket]):
+    definition = INTEGRATOR
 
     #: 归因补交代用的**小调用**（`02` §11.0.38）：同一个席位身份、另一种提示词，
     #: 只回答"我点名的那些里，哪些是你没采用的"。它**不重写**题目与提案——
     #: 真跑证明"重写整包"会补一批又漏一批（P23：点名 3/4/3 条补了 2/4/3，总量没降）。
-    DISPOSITIONS_PURPOSE = "opinion_dispositions"
-    DISPOSITIONS_PROMPT = "opinion_dispositions"
     DISPOSITIONS_CALL = StructuredCall(
-        purpose=DISPOSITIONS_PURPOSE,
+        purpose="opinion_dispositions",
         kind="opinion_dispositions",
-        prompt=DISPOSITIONS_PROMPT,
+        prompt="opinion_dispositions",
         packet=schemas.DispositionsPacket,
-        rules=RULES,
+        rules=schemas.RULES,
     )
     DISPOSITIONS_SLOTS = ("opinions", "produced", "schema_json")
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
-        self._model = model
-        self._prompts = prompts
+        super().__init__(model=model, prompts=prompts)
 
     async def integrate(
         self,
@@ -213,13 +181,15 @@ class Integrator:
         open_items: str = "",
         previous_list_items: str = "",
         contradictions: str = "",
+        seat_conflicts: str = "",
         project_memory: str = NO_MEMORY_TEXT,
+        project_context: str = "",
+        observations_index: str = "",
+        digests: str = "",
+        inspirations_index: str = "",
         packet_slot: str = "",
     ) -> IntegrationOutcome:
-        outcome = await call_structured(
-            self.CALL,
-            gateway=self._model,
-            prompts=self._prompts,
+        outcome = await self._call(
             slots={
                 "document_state": document_state,
                 "claims": claims,
@@ -227,6 +197,10 @@ class Integrator:
                 "answered": answered,
                 "skipped": skipped,
                 "project_memory": project_memory,
+                "project_context": project_context,
+                "observations_index": observations_index,
+                "digests": digests,
+                "inspirations_index": inspirations_index,
                 "entry_ids": entry_ids,
                 "external_material": external_material,
                 "limits": LIMITS_TEXT,
@@ -237,10 +211,11 @@ class Integrator:
                 "open_items": open_items,
                 "previous_list_items": previous_list_items,
                 "contradictions": contradictions,
+                "seat_conflicts": seat_conflicts,
             },
             metadata={} if round_id is None else {"round_id": str(round_id)},
-            packet_id=make_packet_id(
-                str(round_id or "new"), self.CALL.kind, "integrator", slot=packet_slot
+            packet_id=self._make_packet_id(
+                str(round_id or "new"), "integrator", slot=packet_slot
             ),
             run_id=str(round_id or "new"),
             produced_by="integrator",
@@ -253,12 +228,9 @@ class Integrator:
             or packet.proposals
             or packet.dropped_opinions
         ):
-            # 整包都是占位符 = 什么都没给。**必须判成错**（走重装 → 降级那条出口），
-            # 否则它会一路走到 `draft_of(...) is None` → ShapeError → HTTP 409，
-            # 用户看到的是一句莫名其妙的"整合既没有给出题目也没有给出提案"。
             raise PacketParseError(
                 "整包都是占位符：这一趟等于什么都没给（空返回不等于没意见）",
-                purpose=self.PURPOSE,
+                purpose=self.definition.purpose,
                 discarded=(discarded[0].container, discarded[0].index),
             )
         return IntegrationOutcome(envelope=outcome)
@@ -294,3 +266,4 @@ class Integrator:
             produced_by="integrator",
         )
         return DispositionOutcome(envelope=outcome)
+

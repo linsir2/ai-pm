@@ -23,7 +23,7 @@ describe("reduce", () => {
     expect(state.round?.waiting_on).toBe("draft_card");
   });
 
-  it("packet.emitted 让对应席位从等待变成已完成（闭环区逐条出现）", () => {
+  it("packet.emitted 只把该席位状态改成 completed 并置 roundStale（opinions 真源在 GET /round）", () => {
     const base = reduce(
       { ...initialState, projectId: "p1" },
       {
@@ -47,18 +47,9 @@ describe("reduce", () => {
         round_id: "r1",
         payload: {
           seat_id: "seat.data_scale",
+          packet_id: "pkt-r1-seat.seat.data_scale-1",
           basis: "读了 s5 与 E1",
-          opinions: [
-            {
-              local_id: "O1",
-              form: "judgment",
-              about: "性能上限",
-              claim: "60 秒内完成",
-              because: "同类做法",
-              eids: ["E1"],
-              eid: "E2",
-            },
-          ],
+          pass_index: 1,
         },
         occurred_at: "2026-09-22T10:00:00+00:00",
         seq: 4,
@@ -67,10 +58,9 @@ describe("reduce", () => {
 
     const packet = state.round!.seat_packets[0]!;
     expect(packet.status).toBe("completed");
-    expect(packet.opinions[0]!.claim).toBe("60 秒内完成");
-    expect(packet.judgment_count).toBe(1);
-    expect(packet.question_count).toBe(0);
-    expect(packet.basis).toBe("读了 s5 与 E1");
+    // 铁律④：事件不带 opinions，opinions 保持原样（空），等 GET /round 重读填充
+    expect(packet.opinions).toEqual([]);
+    expect(state.roundStale).toBe(true);
   });
 
   it("别的项目的事件不影响当前工作区", () => {

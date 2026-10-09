@@ -247,12 +247,22 @@ def test_unknown_thread_raises_unknown_discussion(store) -> None:  # type: ignor
         repo.get(DiscussionId("d-9"))
 
 
-def test_user_version_is_5_and_discussions_table_exists(store) -> None:  # type: ignore[no-untyped-def]
+def test_user_version_is_9_and_discussions_table_exists(store) -> None:  # type: ignore[no-untyped-def]
     _, connection = store
-    assert database.USER_VERSION == 5
+    assert database.USER_VERSION == 9
     assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
     tables = {
         row["name"]
         for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     assert "discussions" in tables
+    assert "observations" in tables
+    assert "round_digests" in tables
+    assert "inspirations" in tables
+    # 死字段已销账
+    obs_cols = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(observations)")
+    }
+    assert "relevance_count" not in obs_cols
+    assert "last_accessed" not in obs_cols

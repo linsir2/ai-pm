@@ -40,6 +40,23 @@ class TomlSeatCatalog:
             or any(keyword in user_input for keyword in seat.trigger_keywords)
         )
 
+    def filter_by_input(self, user_input: str) -> tuple[SeatDefinition, ...]:
+        """按用户输入过滤席位目录（大小写不敏感）。
+
+        always_on 的席位始终保留；
+        trigger_keywords 中任一关键词（不区分大小写）出现在用户输入中的席位保留；
+        其余过滤掉。
+
+        用于分析者提示词：只展示相关席位，减少 LLM 的选择负担和 prompt 体积。
+        """
+        text = user_input.lower()
+        return tuple(
+            seat
+            for seat in self._seats
+            if seat.always_on
+            or any(kw.lower() in text for kw in seat.trigger_keywords)
+        )
+
     def by_id(self, seat_id: str) -> SeatDefinition:
         for seat in self._seats:
             if seat.seat_id == seat_id:

@@ -95,7 +95,7 @@ async def test_seat_reviewer_passes_seat_metadata_and_all_slots():
     assert request.metadata["seat_id"] == "seat.data_scale"
     name, slots = prompts.calls[0]
     assert name == "seat_review"
-    assert tuple(sorted(slots)) == tuple(sorted(SeatReviewer.PROMPT_SLOTS))
+    assert tuple(sorted(slots)) == tuple(sorted(SeatReviewer.definition.slots))
     assert slots["seat_title"] == "数据规模与性能"
 
 

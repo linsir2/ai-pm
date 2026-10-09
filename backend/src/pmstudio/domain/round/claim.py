@@ -85,3 +85,18 @@ class Contradiction:
             raise ShapeError("互斥对子不能是同一条主张自己", claim_id=self.claim_id_a)
         if not self.why.strip():
             raise ShapeError("互斥对子必须写清为什么互斥", claim_id=self.claim_id_a)
+
+
+@dataclass(frozen=True, slots=True)
+class SeatConflict:
+    """两个席位对同一命题持相反判断（整合层机械检测）。
+
+    判据：同 about + 一条含肯定词、一条含否定词。
+    保守检测——宁可漏报不可误报。
+    """
+
+    about: str                              # 冲突针对的目标
+    seat_a: str                             # 席位 A 的 id
+    claim_a: str                            # 席位 A 的判断文本
+    seat_b: str                             # 席位 B 的 id
+    claim_b: str                            # 席位 B 的判断文本

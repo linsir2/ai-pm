@@ -223,6 +223,7 @@ tests/                architecture / contracts / domain / application / infrastr
 
 ```
 harness/model/        contracts.py envelope.py structured.py normalize.py failure.py jsonio.py prompt_log.py
+harness/agents/       agent.py
 harness/events/       schemas.py bus.py
 harness/prompts/      analyzer.md inquiry.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md discussion_say.md discussion_cards.md
 harness/providers/    litellm.py
@@ -233,10 +234,11 @@ domain/round/         round.py step.py claim.py opinion.py questionnaire.py draf
 domain/exploration/   exploration.py item.py
 domain/discussion/    thread.py card.py
 domain/services/      traceability.py committer.py scope_guard.py assigner.py
-domain/memory/        memory.py
+domain/memory/        memory.py context.py observations.py digest.py inspiration.py
+domain/               null_repos.py
 domain/shared/        ids.py errors.py invariants.py target.py label.py sections.py writing.py evidence_kind.py memory.py
-application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py discusser.py sim_inquirer.py persona_simulator.py
-infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py model_calls.py project_factory.py
+application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py discusser.py sim_inquirer.py persona_simulator.py definitions.py
+infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py model_calls.py project_factory.py observations_repo.py digest_repo.py inspiration_repo.py
 infrastructure/seats/ catalog.py definitions/*.toml
 infrastructure/personas/ catalog.py personas.toml
 infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py

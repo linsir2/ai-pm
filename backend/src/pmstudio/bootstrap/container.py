@@ -1,5 +1,4 @@
 """唯一组装点。infrastructure 在这里被注入到 application，别处不许 new 实现。"""
-
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -81,8 +80,11 @@ from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.personas.catalog import load_personas
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.sqlite import database
+from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
+from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
 from pmstudio.infrastructure.sqlite.materials import SqliteLikeRetriever, SqliteMaterialStore
 from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
+from pmstudio.infrastructure.sqlite.observations_repo import SqliteObservationRepository
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDiscussionRepository,
@@ -105,50 +107,36 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 #: 席位目录暂时还住在外层，所以 `SEATS_DIR` 仍由这里拼——**它迟早也要跟着搬**
 #: （`tests/architecture/test_resource_paths.py` 那条守卫盯着这件事）。
 SEATS_DIR = PACKAGE_ROOT / "infrastructure" / "seats" / "definitions"
-
-
 class SystemClock:
     def now(self) -> datetime:
         return datetime.now(UTC)
-
-
 class UuidIdGenerator:
     def new(self, prefix: str) -> str:
         return f"{prefix}-{uuid.uuid4().hex[:8]}"
-
-
 class Container:
     def __init__(self, *, settings: Settings, app: FastAPI) -> None:
         self.settings = settings
         self.app = app
-
-
 def _web_search_gateway(
     settings: Settings, *, tools: TomlToolCatalog, keys: frozenset[str]
 ) -> TavilySearchGateway | None:
     """两件事都成立才造网关：**目录说这个工具可用**（`requires` 都配上了）
     且密钥确实在手上。缺一件就是 None——用例那边会把"勾了但没有工具"当场拒掉，
     而不是拿一个空 key 去请求，更不是假装搜过。"""
-
     if web_search_tool(tools, keys=keys) is None or settings.tavily_api_key is None:
         return None
     return TavilySearchGateway(api_key=settings.tavily_api_key)
-
-
 def build_container(settings: Settings, *, gateway: ModelGateway | None = None) -> Container:
     """唯一组装点。
-
     `gateway` 是**唯一**给测试用的注入口（端到端测试注入脚本化网关）。
     生产路径（`build_app`）永远自己 new 真网关，不提供"用假模型"的开关——
     这一点由 `tests/architecture/test_no_fakes_in_production.py` 与
     `tests/bootstrap/test_container.py::test_container_has_no_fake_model_switch` 守着。
     """
-
     connection = database.connect(settings.db_path)
     clock = SystemClock()
     ids = UuidIdGenerator()
     bus = InProcessEventBus()
-
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
     explorations = SqliteExplorationRepository(connection)
@@ -163,8 +151,10 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     fetcher: WebFetcher = HttpxWebFetcher()
     index = SqliteWorkspaceIndex(connection)
     memory = SqliteMemoryRepository(connection)
+    observations_repo = SqliteObservationRepository(connection)
+    digest_repo = SqliteDigestRepository(connection)
+    inspiration_repo = SqliteInspirationRepository(connection)
     uow = SqliteUnitOfWork(connection)
-
     prompts = FilePromptLibrary(PROMPTS_DIR)
     if gateway is None:
         # 留样默认关（`PMSTUDIO_TRACE_MODEL=1` 才接）：库会长，且它是排查材料不是业务事实
@@ -195,7 +185,6 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     integrator = Integrator(model=gateway, prompts=prompts)
     curator = MemoryCurator(model=gateway, prompts=prompts)
     factory = SqliteProjectFactory(connection, ids=ids)
-
     start_round = StartRound(
         documents=documents,
         rounds=rounds,
@@ -242,6 +231,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         events=bus,
         materials=materials,
         memory=memory,
+        observations_repo=observations_repo,
     )
     integrate_round = IntegrateRound(
         rounds=rounds,
@@ -260,6 +250,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         materials=materials,
         curator=curator,
         memory=memory,
+        observations_repo=observations_repo,
+        digest_repo=digest_repo,
+        inspiration_repo=inspiration_repo,
     )
     submit_answers = SubmitAnswers(
         rounds=rounds,
@@ -285,7 +278,13 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         memory_writer=memory,
         ids=ids,
     )
-    confirm_draft = ConfirmDraft(committer=committer, rounds=rounds, clock=clock, events=bus)
+    confirm_draft = ConfirmDraft(
+        committer=committer,
+        rounds=rounds,
+        clock=clock,
+        events=bus,
+        digest_repo=digest_repo,
+    )
     retry_round = RetryRound(
         rounds=rounds, round_writer=rounds, uow=uow, clock=clock, events=bus
     )
@@ -309,6 +308,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         materials=materials,
         uow=uow,
         clock=clock,
+        inspiration_repo=inspiration_repo,
     )
     run_sim_review = RunSimReview(
         rounds=rounds,
@@ -436,6 +436,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             materials=materials,
             uow=uow,
             clock=clock,
+            inspiration_repo=inspiration_repo,
         ),
         dismiss_candidate=DismissCandidate(
             explorations=explorations,
@@ -452,6 +453,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             materials=materials,
             uow=uow,
             clock=clock,
+            inspiration_repo=inspiration_repo,
         ),
         dismiss_card=DismissDiscussionCard(
             discussions=discussions,
@@ -534,9 +536,6 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         model_name=settings.model,
     )
     return Container(settings=settings, app=create_app(services))
-
-
 def build_app() -> FastAPI:
     """`uvicorn pmstudio.bootstrap.container:build_app --factory` 的入口。"""
-
     return build_container(Settings.from_env()).app

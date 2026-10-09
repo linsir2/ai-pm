@@ -4,6 +4,9 @@
 ## 当前文档
 $document_state
 
+## 项目上下文（覆盖状态、已确认决策、开放问题）
+$project_context
+
 ## 本轮用户输入（原话）
 $user_input
 

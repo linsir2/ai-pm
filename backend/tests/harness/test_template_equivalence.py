@@ -15,19 +15,35 @@ payload（那是脆弱的），而且以后谁改了引擎或模板，第一批�
 
 import pytest
 
-from pmstudio.application.agents import analyzer, integrator, memory_curator, schemas, seat
+from pmstudio.application.agents import (
+    analyzer,
+    inquirer,
+    integrator,
+    memory_curator,
+    schemas,
+    seat,
+)
 from pmstudio.harness.errors import ApplicationError
 from pmstudio.harness.model import normalize
 from pmstudio.harness.model.contracts import ModelReply
 from pmstudio.harness.model.structured import call_structured
 from tests.support.doubles import RecordingPrompts
 
+
+def _call_from_definition(defn):
+    """从 AgentDefinition 构造 StructuredCall（测试用）。"""
+    from pmstudio.harness.model.structured import StructuredCall
+    return StructuredCall(
+        purpose=defn.purpose, kind=defn.kind, prompt=defn.prompt, packet=defn.packet
+    )
+
 ALL_CALLS = [
-    (analyzer.ClaimAnalyzer.CALL, "analyzer"),
-    (seat.SeatReviewer.CALL, "seat.data_scale"),
-    (integrator.Integrator.CALL, "integrator"),
+    (_call_from_definition(analyzer.ClaimAnalyzer.definition), "analyzer"),
+    (_call_from_definition(seat.SeatReviewer.definition), "seat.data_scale"),
+    (_call_from_definition(integrator.Integrator.definition), "integrator"),
+    (_call_from_definition(inquirer.Inquirer.definition), "inquirer"),
     (integrator.Integrator.DISPOSITIONS_CALL, "integrator"),
-    (memory_curator.MemoryCurator.CALL, "memory_curator"),
+    (_call_from_definition(memory_curator.MemoryCurator.definition), "memory_curator"),
 ]
 
 #: 覆盖四类形状：正常对象 / 顶层数组（真跑留样 15/66）/ 非 JSON / 空与全 null。

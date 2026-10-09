@@ -17,9 +17,13 @@ from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
 from pmstudio.domain.authoring.schema import FEATURE_FIELDS
 from pmstudio.domain.authoring.views import BlockView, DocumentView
-from pmstudio.domain.memory.memory import MemoryEntry, kind_title
+from pmstudio.domain.memory.context import ProjectContext
+from pmstudio.domain.memory.digest import RoundDigest
+from pmstudio.domain.memory.inspiration import InspirationItem
+from pmstudio.domain.memory.memory import MemoryEntry, MemoryKind, kind_title
+from pmstudio.domain.memory.observations import ObservationType, RoundObservation
 from pmstudio.domain.provenance.ledger import EvidenceLedger
-from pmstudio.domain.round.claim import Claim
+from pmstudio.domain.round.claim import Claim, SeatConflict
 from pmstudio.domain.round.draft import Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import Question
@@ -278,6 +282,17 @@ def render_contradictions(round_: Round) -> str:
             "（两侧立场互斥：要出一道**让用户拍板**的题，`kind` 写 conflict）"
         )
     return "\n".join(lines) or "（这一轮没有判出互斥的主张）"
+
+
+def render_seat_conflicts(conflicts: tuple[SeatConflict, ...]) -> str:
+    """给整合者看的"席位间冲突"。"""
+    lines: list[str] = []
+    for c in conflicts:
+        lines.append(
+            f"- [{c.seat_a}]「{c.claim_a}」 ↔ [{c.seat_b}]「{c.claim_b}」"
+            f"（两个席位对「{c.about}」持相反判断：要出一道**让用户拍板**的题，`kind` 写 conflict）"
+        )
+    return "\n".join(lines) or "（这一轮没有检测出席位间冲突）"
 
 
 def render_claims(claims: Sequence[Claim]) -> str:
@@ -723,3 +738,267 @@ def render_web_results(
     return RenderedMaterial(
         text="\n".join(lines), truncated=truncated, used_chunk_ids=tuple(used_ids)
     )
+
+
+# ── L1 项目上下文构建 ──────────────────────────────────────────────
+
+MAX_DECISIONS = 10
+MAX_OPEN_QUESTIONS = 10
+
+
+def _section_entry_count(section) -> int:
+    """一个章节里的条目总数（含子块）。"""
+
+    def count_block(block) -> int:
+        return len(block.entries) + sum(count_block(child) for child in block.children)
+
+    return sum(count_block(b) for b in section.blocks)
+
+
+def _compute_coverage(view) -> tuple[tuple[str, str], ...]:
+    """计算每个章节的覆盖状态: empty / partial / complete。"""
+    from pmstudio.domain.authoring.readiness import SECTION_MIN_ENTRIES
+    section_minimums: dict[str, int] = {
+        sid: min_val for sid, (min_val, _) in SECTION_MIN_ENTRIES.items()
+    }
+    for sid in ("s5", "s6", "s7", "s9", "s11"):
+        section_minimums.setdefault(sid, 2)
+    section_minimums.setdefault("s8", 6)
+
+    result: list[tuple[str, str]] = []
+    for section in view.sections:
+        sid = str(section.section_id)
+        count = _section_entry_count(section)
+        minimum = section_minimums.get(sid, 1)
+
+        if count == 0:
+            state = "empty"
+        elif count < minimum:
+            state = "partial"
+        else:
+            state = "complete"
+        result.append((sid, state))
+
+    return tuple(result)
+
+
+def build_project_context(
+    document_view,
+    memory_entries: Sequence[MemoryEntry],
+    readiness: tuple = (),
+) -> ProjectContext:
+    """从文档现状 + 记忆 + 就绪度构建 L1 项目上下文（纯函数）。"""
+    sections_covered = _compute_coverage(document_view)
+
+    features_defined: list[str] = []
+    for section in document_view.sections:
+        if str(section.section_id) == "s5":
+            for block in section.blocks:
+                if block.feature_slug:
+                    features_defined.append(str(block.feature_slug))
+
+    total_entries = sum(_section_entry_count(s) for s in document_view.sections)
+
+    top_decisions = tuple(
+        e.text for e in memory_entries if e.kind == MemoryKind.DECISION
+    )[:MAX_DECISIONS]
+
+    open_questions: list[str] = []
+    for section in document_view.sections:
+        if str(section.section_id) == "s11":
+            for block in section.blocks:
+                if block.kind == "open_questions":
+                    open_questions.extend(block.entries)
+    open_questions = tuple(open_questions[:MAX_OPEN_QUESTIONS])
+
+    return ProjectContext(
+        sections_covered=sections_covered,
+        features_defined=tuple(features_defined),
+        total_confirmed_entries=total_entries,
+        top_decisions=top_decisions,
+        open_questions=open_questions,
+    )
+
+
+def render_project_context(ctx: ProjectContext) -> str:
+    """渲染 L1 上下文为提示词文本（固定格式，≤30 行）。"""
+    lines: list[str] = ["<project-context>"]
+
+    parts: list[str] = []
+    if ctx.domain:
+        parts.append(f"项目: {ctx.domain}")
+    if ctx.target_users:
+        parts.append(f"用户: {ctx.target_users}")
+    if ctx.core_value:
+        parts.append(f"核心价值: {ctx.core_value}")
+    if parts:
+        lines.append(" | ".join(parts))
+
+    if ctx.key_constraints:
+        lines.append(f"约束: {' | '.join(ctx.key_constraints)}")
+
+    if ctx.sections_covered:
+        coverage_str = " ".join(f"{sid}({state})" for sid, state in ctx.sections_covered)
+        lines.append(f"覆盖: {coverage_str}")
+
+    if ctx.features_defined:
+        lines.append(f"已确认功能: {', '.join(ctx.features_defined)}")
+
+    if ctx.top_decisions:
+        for d in ctx.top_decisions:
+            lines.append(f"决策: {d}")
+
+    if ctx.open_questions:
+        lines.append(f"开放问题: {' | '.join(ctx.open_questions)}")
+
+    lines.append("</project-context>")
+    return "\n".join(lines)
+
+
+# ── L2 轮次观察提取 ───────────────────────────────────────────────
+
+
+def extract_observations_from_reviews(
+    reviews,
+    round_id: str,
+    project_id: str,
+    ids,  # IdSource protocol
+) -> tuple[RoundObservation, ...]:
+    """从席位意见中提炼观察（纯函数）。
+
+    question → GAP_IDENTIFIED（标题 = about, detail = claim + because）
+    judgment → SEAT_INSIGHT（标题 = about, detail = claim + because）
+    """
+    from pmstudio.domain.round.opinion import OpinionForm
+    observations: list[RoundObservation] = []
+
+    for review in reviews:
+        for opinion in review.opinions:
+            if opinion.form == OpinionForm.QUESTION:
+                obs_type = ObservationType.GAP_IDENTIFIED
+            else:
+                obs_type = ObservationType.SEAT_INSIGHT
+
+            detail = f"{opinion.claim}"
+            if opinion.because:
+                detail += f"（依据：{opinion.because}）"
+
+            obs = RoundObservation(
+                obs_id=ids.new("obs"),
+                round_id=round_id,
+                project_id=project_id,
+                obs_type=obs_type,
+                title=opinion.about,
+                detail=detail,
+                source_ref=f"{review.seat_id}:{opinion.local_id}",
+            )
+            observations.append(obs)
+
+    return tuple(observations)
+
+
+# ── L2 轮次观察渲染 ────────────────────────────────────────────────
+
+
+def render_observations_index(
+    observations: Sequence[RoundObservation], limit: int = 5
+) -> str:
+    """L2 观察索引——只给标题（≤limit 条），模型按需拉详情。"""
+    if not observations:
+        return ""
+    shown = observations[:limit]
+    lines = ["<observations-index>"]
+    for obs in shown:
+        mark = "？" if obs.obs_type == "gap_identified" else "●"
+        lines.append(f"  {mark} [{obs.source_ref}] {obs.title}")
+    lines.append("</observations-index>")
+    return "\n".join(lines)
+
+
+def render_observation_detail(obs: RoundObservation) -> str:
+    """单条观察详情——模型主动拉取时返回。"""
+    return (
+        f"<observation-detail>\n"
+        f"类型: {obs.obs_type.value}\n"
+        f"标题: {obs.title}\n"
+        f"详情: {obs.detail}\n"
+        f"来源: {obs.source_ref}\n"
+        f"</observation-detail>"
+    )
+
+
+# ── L4 轮次摘要构建 ──────────────────────────────────────────────
+
+MAX_OUTCOMES = 5
+
+
+def build_round_digest(
+    confirmed_proposals: Sequence[Proposal],
+    round_id: str,
+    project_id: str,
+) -> RoundDigest:
+    """从已确认提案构建轮次摘要（纯函数）。"""
+    sections: list[str] = []
+    features: list[str] = []
+    outcomes: list[str] = []
+
+    for proposal in confirmed_proposals:
+        # 提取触及章节
+        section = str(proposal.target.section_id) if proposal.target.section_id else None
+        if section and section not in sections:
+            sections.append(section)
+        # 提取涉及功能
+        feature = str(proposal.target.feature_slug) if proposal.target.feature_slug else None
+        if feature and feature not in features:
+            features.append(feature)
+        # 提取关键成果（前 5 条）
+        if len(outcomes) < MAX_OUTCOMES:
+            outcomes.append(f"{proposal.text}")
+
+    summary = ""
+    if sections:
+        summary += f"触及 {'、'.join(sections)}"
+    if outcomes:
+        summary += f"，确认 {len(outcomes)} 条" if not summary else f"，确认 {len(outcomes)} 条"
+
+    return RoundDigest(
+        round_id=round_id,
+        project_id=project_id,
+        summary=summary,
+        sections_touched=tuple(sections),
+        features_addressed=tuple(features),
+        key_outcomes=tuple(outcomes),
+    )
+
+
+def render_digests(digests: Sequence[RoundDigest]) -> str:
+    """渲染轮次摘要列表（≤3 轮）。"""
+    if not digests:
+        return ""
+    lines = ["<round-digests>"]
+    for digest in digests:
+        lines.append(f"### {digest.round_id}")
+        if digest.sections_touched:
+            lines.append(f"触及: {', '.join(digest.sections_touched)}")
+        if digest.key_outcomes:
+            for outcome in digest.key_outcomes:
+                lines.append(f"确认: {outcome}")
+    lines.append("</round-digests>")
+    return "\n".join(lines)
+
+
+# ── L3 灵感档案渲染 ──────────────────────────────────────────────
+
+
+def render_inspirations_index(
+    inspirations: Sequence[InspirationItem], limit: int = 5
+) -> str:
+    """渲染灵感索引（≤limit 条标题）。"""
+    if not inspirations:
+        return ""
+    shown = inspirations[:limit]
+    lines = ["<inspirations-index>"]
+    for item in shown:
+        lines.append(f"  💡 [{item.origin.value}:{item.item_id}] {item.statement}")
+    lines.append("</inspirations-index>")
+    return "\n".join(lines)

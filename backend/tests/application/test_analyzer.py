@@ -101,7 +101,7 @@ async def test_analyzer_sends_purpose_schema_and_all_prompt_slots():
     assert gateway.requests[0].response_schema["title"] == "ClaimsPacket"
     name, slots = prompts.calls[0]
     assert name == "analyzer"
-    assert tuple(sorted(slots)) == tuple(sorted(ClaimAnalyzer.PROMPT_SLOTS))
+    assert tuple(sorted(slots)) == tuple(sorted(ClaimAnalyzer.definition.slots))
     assert "猜测" in slots["labels"]
     assert "s5 功能需求" in slots["sections"]
     # 席位目录也要进上下文：模型得看见"有哪些席位"才好挑

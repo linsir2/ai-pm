@@ -128,3 +128,44 @@ CREATE TABLE IF NOT EXISTS model_calls (
   error       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_model_calls_round ON model_calls(round_id, id);
+
+-- L2 轮次观察（记忆层 M-boat）：席位意见提炼的结构化记录。
+-- 席位意见每轮结束就丢了，L2 把它们存下来供跨轮渐进式披露。
+CREATE TABLE IF NOT EXISTS observations (
+  id         TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  round_id   TEXT NOT NULL,
+  obs_type   TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  detail     TEXT NOT NULL DEFAULT '',
+  source_ref TEXT NOT NULL DEFAULT '',
+  sections   TEXT NOT NULL DEFAULT '[]',
+  features   TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_observations_project ON observations(project_id, id);
+CREATE INDEX IF NOT EXISTS idx_observations_round ON observations(round_id);
+
+-- L4 轮次摘要（记忆层）：每轮确认后生成的结构化摘要，供跨轮注入。
+CREATE TABLE IF NOT EXISTS round_digests (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL,
+  round_id    TEXT NOT NULL,
+  summary     TEXT NOT NULL,
+  sections    TEXT NOT NULL DEFAULT '[]',
+  features    TEXT NOT NULL DEFAULT '[]',
+  outcomes    TEXT NOT NULL DEFAULT '[]',
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_round_digests_project ON round_digests(project_id, id);
+
+-- L3 灵感档案（记忆层）：讨论卡/探索假设/模拟发现的可搜索存档。
+CREATE TABLE IF NOT EXISTS inspirations (
+  id         TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  origin     TEXT NOT NULL,
+  statement  TEXT NOT NULL,
+  context    TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inspirations_project ON inspirations(project_id, id);

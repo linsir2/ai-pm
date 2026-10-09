@@ -24,6 +24,7 @@ from pmstudio.domain.authoring.readiness import (
 from pmstudio.domain.authoring.schema import REQUIRED_FEATURE_FIELDS, field_spec
 from pmstudio.domain.provenance.evidence import EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
+from pmstudio.domain.round.claim import SeatConflict
 from pmstudio.domain.round.draft import (
     Draft,
     Origin,
@@ -1217,6 +1218,46 @@ def _covers_a_contradiction(
     return any(pair <= cited for pair in pairs)
 
 
+def seat_conflict_pairs(reviews: tuple[SeatReview, ...]) -> tuple[SeatConflict, ...]:
+    """机械检测席位间冲突：同 about + 相反判断方向。
+
+    极简关键词匹配——保守策略，宁可漏报不可误报。
+    """
+    conflicts: list[SeatConflict] = []
+    judgments = [
+        (review.seat_id, opinion)
+        for review in reviews
+        for opinion in review.opinions
+        if opinion.form == OpinionForm.JUDGMENT
+    ]
+    for i, (seat_a, op_a) in enumerate(judgments):
+        for seat_b, op_b in judgments[i + 1 :]:
+            if seat_a == seat_b:
+                continue
+            if op_a.about == op_b.about and _claims_contradict(op_a.claim, op_b.claim):
+                conflicts.append(
+                    SeatConflict(
+                        about=op_a.about,
+                        seat_a=seat_a,
+                        claim_a=op_a.claim,
+                        seat_b=seat_b,
+                        claim_b=op_b.claim,
+                    )
+                )
+    return tuple(conflicts)
+
+
+def _claims_contradict(claim_a: str, claim_b: str) -> bool:
+    """极简矛盾判断：一条含肯定词，一条含否定词。"""
+    positive = ("应", "必须", "需要", "要", "可以", "支持", "建议")
+    negative = ("不应", "不能", "不要", "不可", "反对", "禁止", "不建议")
+    a_pos = any(w in claim_a for w in positive)
+    a_neg = any(w in claim_a for w in negative)
+    b_pos = any(w in claim_b for w in positive)
+    b_neg = any(w in claim_b for w in negative)
+    return (a_pos and b_neg) or (a_neg and b_pos)
+
+
 def _kind_for(target: Target, name: str | None) -> BlockKind:
     try:
         if target.field is not None:
@@ -1292,14 +1333,6 @@ def _proposal(
         if not draft.entry_id:
             raise PacketParseError(
                 f"{draft.op} 必须给 entry_id（用既有条目清单里的 id）", purpose=PURPOSE
-            )
-        # 自证用：`assemble` 那条路已经在进这里之前丢掉了"条目不存在"的那些，
-        # 所以这一句在正常路径上不可达；留着是为了这个函数单独被调用时也守规矩。
-        if _entry_target_missing(draft, document=document):
-            raise PacketParseError(
-                f"要改的条目不存在：{draft.entry_id}",
-                purpose=PURPOSE,
-                entry_id=draft.entry_id,
             )
         entry_id = EntryId(draft.entry_id)
     try:

@@ -79,6 +79,7 @@ def test_prompt_library_renders_slots_and_reports_missing():
         seat_catalog="- seat.data_scale · 数据规模与性能 · 管：量级与耗时 · 常驻",
         # 工具层 C-2 起，analyzer 多一个外部材料槽（提示词里那节是新的）
         external_material="（这一轮没有外部材料）",
+        project_context="（这个项目还没有构建上下文）",
         schema_json="{}",
         validation_error="",
     )
@@ -100,14 +101,14 @@ def test_every_prompt_placeholder_is_declared_by_its_agent():
     """提示词文件与智能体声明的槽位必须一一对应（防漂移的机械手段）。"""
 
     expected = {
-        "analyzer": ClaimAnalyzer.PROMPT_SLOTS,
-        "seat_review": SeatReviewer.PROMPT_SLOTS,
-        "inquiry": Inquirer.PROMPT_SLOTS,
-        "sim_inquiry": SimInquiryAgent.PROMPT_SLOTS,
-        "sim_review": PersonaSimulatorAgent.PROMPT_SLOTS,
-        "integrator": Integrator.PROMPT_SLOTS,
+        "analyzer": ClaimAnalyzer.definition.slots,
+        "seat_review": SeatReviewer.definition.slots,
+        "inquiry": Inquirer.definition.slots,
+        "sim_inquiry": SimInquiryAgent.definition.slots,
+        "sim_review": PersonaSimulatorAgent.definition.slots,
+        "integrator": Integrator.definition.slots,
         "opinion_dispositions": Integrator.DISPOSITIONS_SLOTS,
-        "memory_curator": MemoryCurator.PROMPT_SLOTS,
+        "memory_curator": MemoryCurator.definition.slots,
     }
     for name, slots in expected.items():
         text = (PROMPTS / f"{name}.md").read_text(encoding="utf-8")

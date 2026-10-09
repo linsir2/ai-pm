@@ -2,6 +2,6 @@ seat_id = "seat.compliance"
 title = "合规与数据安全"
 focus = "敏感信息范围、脱敏与留存、审计留痕、对外提供数据的口径"
 always_on = false
-trigger_keywords = ["合规", "审计", "隐私", "敏感", "脱敏", "留存", "等保", "GDPR", "gdpr", "实名", "个人信息", "客户信息"]
+trigger_keywords = ["合规", "审计", "隐私", "敏感", "脱敏", "留存", "等保", "GDPR", "gdpr", "实名", "个人信息", "客户信息", "安全", "加密", "授权"]
 sections = ["s7", "s8"]
 fields = ["exceptions", "acceptance"]

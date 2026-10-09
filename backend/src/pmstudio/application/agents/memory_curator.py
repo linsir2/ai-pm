@@ -10,14 +10,12 @@
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.agents.schemas import RULES
+from pmstudio.application.agents.definitions import MEMORY_CURATOR
 from pmstudio.domain.shared.ids import RoundId
 from pmstudio.domain.shared.memory import MemoryChange, MemoryKind, MemoryOp
+from pmstudio.harness.agents.agent import Agent
 from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
-from pmstudio.harness.model.envelope import Envelope, make_packet_id
-from pmstudio.harness.model.structured import StructuredCall, call_structured
-
-PURPOSE = "memory_curation"
+from pmstudio.harness.model.envelope import Envelope
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,22 +40,11 @@ class CuratorOutcome:
         return self.envelope.discarded
 
 
-class MemoryCurator:
-    PURPOSE = PURPOSE
-    PROMPT = "memory_curator"
-    CALL = StructuredCall(
-        purpose=PURPOSE,
-        kind="memory_curation",
-        prompt=PROMPT,
-        packet=schemas.MemoryPacket,
-        rules=RULES,
-    )
-    #: 槽位顺序就是提示词里的节顺序；少给一个都会炸（`FilePromptLibrary` 的既定行为）
-    PROMPT_SLOTS = ("memory_state", "round_digest", "schema_json", "validation_error")
+class MemoryCurator(Agent[CuratorOutcome, schemas.MemoryPacket]):
+    definition = MEMORY_CURATOR
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
-        self._model = model
-        self._prompts = prompts
+        super().__init__(model=model, prompts=prompts)
 
     async def propose(
         self,
@@ -68,18 +55,15 @@ class MemoryCurator:
         validation_error: str = "",
         packet_slot: str = "",
     ) -> CuratorOutcome:
-        outcome = await call_structured(
-            self.CALL,
-            gateway=self._model,
-            prompts=self._prompts,
+        outcome = await self._call(
             slots={
                 "memory_state": memory_state,
                 "round_digest": round_digest,
                 "validation_error": validation_error,
             },
             metadata={} if round_id is None else {"round_id": str(round_id)},
-            packet_id=make_packet_id(
-                str(round_id or "new"), self.CALL.kind, "memory_curator", slot=packet_slot
+            packet_id=self._make_packet_id(
+                str(round_id or "new"), "memory_curator", slot=packet_slot
             ),
             run_id=str(round_id or "new"),
             produced_by="memory_curator",

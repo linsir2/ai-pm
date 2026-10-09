@@ -166,8 +166,10 @@ async def test_run_seat_round_emits_one_packet_event_per_seat():
     packets = [event for event in harness.events.published if event.name == PACKET_EMITTED]
     assert len(packets) == 1
     assert packets[0].payload["seat_id"] == SEAT
-    assert packets[0].payload["opinions"][0]["claim"] == "单次导出应在 60 秒内完成"
-    assert packets[0].payload["opinions"][0]["eids"] == ["E1"]  # 依据编号（输入侧）
+    # 铁律④：事件不带 opinions（真源在 GET /round），只含身份 + 进度
+    assert "opinions" not in packets[0].payload
+    assert packets[0].payload["packet_id"].startswith("pkt-")
+    assert packets[0].payload["pass_index"] == 1
 
 
 async def test_run_seat_round_bad_one_seat_failure_fails_the_round_but_keeps_what_came_back():

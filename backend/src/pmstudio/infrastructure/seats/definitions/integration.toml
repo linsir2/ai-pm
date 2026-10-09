@@ -2,6 +2,6 @@ seat_id = "seat.integration"
 title = "第三方集成"
 focus = "对接方式、鉴权、幂等、超时与补偿、对端不可用时的降级"
 always_on = false
-trigger_keywords = ["对接", "接口", "API", "api", "第三方", "ERP", "erp", "CRM", "crm", "支付", "同步", "回调", "webhook", "开放平台"]
+trigger_keywords = ["对接", "接口", "API", "api", "第三方", "ERP", "erp", "CRM", "crm", "支付", "同步", "回调", "webhook", "开放平台", "调用"]
 sections = ["s7", "s9"]
 fields = ["dependencies", "io"]

@@ -8,15 +8,13 @@
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.agents.schemas import RULES
+from pmstudio.application.agents.definitions import SIM_REVIEW
 from pmstudio.application.agents.sim_inquirer import filled_local_id
 from pmstudio.application.context import NO_MEMORY_TEXT
+from pmstudio.harness.agents.agent import Agent
 from pmstudio.harness.errors import PacketParseError
 from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
-from pmstudio.harness.model.envelope import Envelope, make_packet_id
-from pmstudio.harness.model.structured import StructuredCall, call_structured
-
-PURPOSE = "sim_review"
+from pmstudio.harness.model.envelope import Envelope
 
 
 def render_persona(persona: object) -> str:
@@ -63,31 +61,11 @@ class SimReviewOutcome:
         return self.envelope.discarded
 
 
-class PersonaSimulatorAgent:
-    PURPOSE = PURPOSE
-    PROMPT = "sim_review"
-    CALL = StructuredCall(
-        purpose=PURPOSE,
-        kind="sim_review",
-        prompt=PROMPT,
-        packet=schemas.SimReviewPacket,
-        rules=RULES,
-    )
-    PROMPT_SLOTS = (
-        "document_state",
-        "claims",
-        "external_material",
-        "project_memory",
-        # 这一趟代入谁、查哪些功能：persona 定义与目标清单（其余上下文与席位同源）
-        "persona",
-        "targets",
-        "schema_json",
-        "validation_error",
-    )
+class PersonaSimulatorAgent(Agent[SimReviewOutcome, schemas.SimReviewPacket]):
+    definition = SIM_REVIEW
 
     def __init__(self, *, model: ModelGateway, prompts: PromptLibrary) -> None:
-        self._model = model
-        self._prompts = prompts
+        super().__init__(model=model, prompts=prompts)
 
     async def run(
         self,
@@ -102,10 +80,7 @@ class PersonaSimulatorAgent:
         validation_error: str = "",
         packet_slot: str = "",
     ) -> SimReviewOutcome:
-        outcome = await call_structured(
-            self.CALL,
-            gateway=self._model,
-            prompts=self._prompts,
+        outcome = await self._call(
             slots={
                 "document_state": document_state,
                 "claims": claims,
@@ -118,11 +93,8 @@ class PersonaSimulatorAgent:
             metadata={}
             if round_id is None
             else {"round_id": round_id, "persona_id": persona.persona_id},
-            packet_id=make_packet_id(
-                str(round_id or "new"),
-                self.CALL.kind,
-                "persona_simulator",
-                slot=packet_slot,
+            packet_id=self._make_packet_id(
+                str(round_id or "new"), "persona_simulator", slot=packet_slot
             ),
             run_id=str(round_id or "new"),
             produced_by="persona_simulator",
@@ -148,7 +120,7 @@ def review_from_packet(packet: schemas.SimReviewPacket) -> dict:
             local_id = filled_local_id(item.local_id, "F", index)
             if local_id in friction_ids:
                 raise PacketParseError(
-                    f"摩擦 id 重复：{local_id}", purpose=PURPOSE, local_id=local_id
+                    f"摩擦 id 重复：{local_id}", purpose=SIM_REVIEW.purpose, local_id=local_id
                 )
             friction_ids.add(local_id)
             frictions.append(
@@ -169,7 +141,7 @@ def review_from_packet(packet: schemas.SimReviewPacket) -> dict:
             local_id = filled_local_id(item.local_id, "A", index)
             if local_id in check_ids:
                 raise PacketParseError(
-                    f"验收核对 id 重复：{local_id}", purpose=PURPOSE, local_id=local_id
+                    f"验收核对 id 重复：{local_id}", purpose=SIM_REVIEW.purpose, local_id=local_id
                 )
             check_ids.add(local_id)
             checks.append(

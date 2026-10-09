@@ -4,6 +4,12 @@
 ## 当前文档
 $document_state
 
+## 项目上下文（覆盖状态、已确认决策、开放问题）
+$project_context
+
+## 历史席位洞察（上一轮席位的意见摘要）
+$observations_index
+
 ## 本轮主张（带编号）
 $claims
 

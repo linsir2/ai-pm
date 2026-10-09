@@ -9,8 +9,8 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from pmstudio.application.agents import schemas
-from pmstudio.application.agents.schemas import RULES
+from pmstudio.application.agents import schemas  # noqa: I001 — schemas 必须在 definitions 之前
+from pmstudio.application.agents.definitions import ANALYZER
 from pmstudio.application.context import (
     FEATURE_FIELDS_TEXT,
     LABELS_TEXT,
@@ -27,12 +27,10 @@ from pmstudio.domain.round.web_query import MAX_WEB_QUERIES, WebQuery
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.label import ClaimLabel
+from pmstudio.harness.agents.agent import Agent
 from pmstudio.harness.errors import PacketParseError
 from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
-from pmstudio.harness.model.envelope import Envelope, make_packet_id
-from pmstudio.harness.model.structured import StructuredCall, call_structured
-
-PURPOSE = "claims"
+from pmstudio.harness.model.envelope import Envelope
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,34 +145,13 @@ def grounded_span(raw_span: str, source: str) -> str | None:
     return max(spans, key=len, default=None)
 
 
-class ClaimAnalyzer:
-    PURPOSE = PURPOSE
-    PROMPT = "analyzer"
-    CALL = StructuredCall(
-        purpose=PURPOSE,
-        kind="claims",
-        prompt=PROMPT,
-        packet=schemas.ClaimsPacket,
-        rules=RULES,
-    )
-    PROMPT_SLOTS = (
-        "document_state",
-        "user_input",
-        "labels",
-        "sections",
-        "feature_fields",
-        "section_slots",
-        "seat_catalog",
-        "external_material",
-        "schema_json",
-        "validation_error",
-    )
+class ClaimAnalyzer(Agent[Analysis, schemas.ClaimsPacket]):
+    definition = ANALYZER
 
     def __init__(
         self, *, model: ModelGateway, prompts: PromptLibrary, catalog: SeatCatalog
     ) -> None:
-        self._model = model
-        self._prompts = prompts
+        super().__init__(model=model, prompts=prompts)
         self._catalog = catalog
 
     async def analyze(
@@ -183,15 +160,13 @@ class ClaimAnalyzer:
         user_input: str,
         document_state: str,
         external_material: str = NO_MATERIAL_TEXT,
+        project_context: str = "",
         round_id: RoundId | None = None,
         validation_error: str = "",
         packet_slot: str = "",
         material_eids: frozenset[EvidenceId] = frozenset(),
     ) -> Analysis:
-        outcome = await call_structured(
-            self.CALL,
-            gateway=self._model,
-            prompts=self._prompts,
+        outcome = await self._call(
             slots={
                 "document_state": document_state,
                 "user_input": user_input,
@@ -199,14 +174,14 @@ class ClaimAnalyzer:
                 "sections": SECTIONS_TEXT,
                 "feature_fields": FEATURE_FIELDS_TEXT,
                 "section_slots": SECTION_SLOTS_TEXT,
-                "seat_catalog": render_seat_catalog(self._catalog.all()),
+                "seat_catalog": render_seat_catalog(self._catalog.filter_by_input(user_input)),
                 "external_material": external_material,
+                "project_context": project_context,
                 "validation_error": validation_error,
             },
-            # 留样按 round_id 归堆（`02` §5.3）：排查时要能一次捞出一整轮
             metadata={} if round_id is None else {"round_id": str(round_id)},
-            packet_id=make_packet_id(
-                str(round_id or "new"), self.CALL.kind, "analyzer", slot=packet_slot
+            packet_id=self._make_packet_id(
+                str(round_id or "new"), "analyzer", slot=packet_slot
             ),
             run_id=str(round_id or "new"),
             produced_by="analyzer",
@@ -371,7 +346,7 @@ def nominations_from_packet(
         except DomainError as error:
             raise PacketParseError(
                 f"席位 {item.seat_id} 的提名过不了领域校验：{error.message}",
-                purpose=PURPOSE,
+                purpose=ANALYZER.purpose,
                 seat_id=item.seat_id,
             ) from error
     if not picked:
@@ -380,7 +355,7 @@ def nominations_from_packet(
             "这一轮挑的席位一个都不在目录里："
             + "、".join(unknown)
             + "——目录里没有这些席位",
-            purpose=PURPOSE,
+            purpose=ANALYZER.purpose,
             seat_id=unknown[0] if unknown else None,
             seat_ids=unknown,
             position=1,
@@ -414,7 +389,7 @@ def claims_from_packet(
         if span is None:
             raise PacketParseError(
                 "主张里的原话片段在用户输入里找不到（复述必须能跳回原文）",
-                purpose=PURPOSE,
+                purpose=ANALYZER.purpose,
                 claim_id=claim_id,
                 position=index,
                 raw_span=draft.raw_span,
@@ -427,7 +402,7 @@ def claims_from_packet(
             known=material_eids,
             what="主张引用了不存在或本轮没带进来的材料块编号",
             local_id=claim_id,
-            purpose=PURPOSE,
+            purpose=ANALYZER.purpose,
         )
         if assumption is not None and draft.label.strip().lower() != ClaimLabel.GUESS.value:
             dropped.append(
@@ -466,7 +441,7 @@ def claims_from_packet(
         except DomainError as error:
             raise PacketParseError(
                 f"主张 {claim_id} 过不了领域校验：{error.message}",
-                purpose=PURPOSE,
+                purpose=ANALYZER.purpose,
                 claim_id=claim_id,
                 domain_code=error.code,
             ) from error
