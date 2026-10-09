@@ -21,6 +21,34 @@ class TestRenderProjectContext:
         text = render_project_context(ProjectContext(domain="团购平台"))
         assert "团购平台" in text
 
+    def test_notes_omitted_decisions(self):
+        """截断要照实说：只带前 10 条，就得说清一共几条。"""
+
+        text = render_project_context(
+            ProjectContext(
+                top_decisions=tuple(f"决策{i}" for i in range(10)),
+                decisions_total=12,
+            )
+        )
+        assert "共 12 条" in text
+        assert "只带了前 10 条" in text
+
+    def test_notes_omitted_open_questions(self):
+        text = render_project_context(
+            ProjectContext(
+                open_questions=tuple(f"问题{i}" for i in range(10)),
+                open_questions_total=15,
+            )
+        )
+        assert "共 15 条" in text
+        assert "只带了前 10 条" in text
+
+    def test_no_note_when_nothing_omitted(self):
+        text = render_project_context(
+            ProjectContext(top_decisions=("d1", "d2"), decisions_total=2)
+        )
+        assert "只带了前" not in text
+
 
 class TestRenderObservationsIndex:
     """L2 索引渲染——只给标题，≤5 条。"""
@@ -48,6 +76,24 @@ class TestRenderObservationsIndex:
         assert "洞察4" in text
         # 第 6 条不渲染
         assert "洞察5" not in text
+
+    def test_limit_5_notes_omitted(self):
+        """截断要照实说：只带前 5 条，就说清一共几条。"""
+        obs = tuple(
+            RoundObservation(
+                obs_id=f"obs-{i}",
+                round_id="r1",
+                project_id="p1",
+                obs_type=ObservationType.SEAT_INSIGHT,
+                title=f"洞察{i}",
+                detail="",
+                source_ref="seat:biz:O1",
+            )
+            for i in range(10)
+        )
+        text = render_observations_index(obs)
+        assert "共 10 条" in text
+        assert "只带了前 5 条" in text
 
     def test_format_includes_source(self):
         obs = (

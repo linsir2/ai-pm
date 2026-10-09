@@ -118,6 +118,7 @@ DISCUSSER_SAY = AgentDefinition(
         "role_focus",
         "topic",
         "question",
+        "related_findings",
         "thread_history",
         "document_state",
         "schema_json",
@@ -132,6 +133,9 @@ DISCUSSER_CARDS = AgentDefinition(
     prompt="discussion_cards",
     packet=CardsPacket,
     slots=(
+        "role_title",
+        "role_focus",
+        "topic",
         "thread_history",
         "document_state",
         "schema_json",

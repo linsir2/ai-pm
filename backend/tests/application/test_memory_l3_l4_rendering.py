@@ -72,6 +72,11 @@ class TestBuildRoundDigest:
         proposals = [_proposal(text=f"条目{i}") for i in range(10)]
         digest = build_round_digest(proposals, "r1", "p1")
         assert len(digest.key_outcomes) <= 5
+        assert digest.outcomes_total == 10
+
+    def test_outcomes_total_is_full_count(self):
+        digest = build_round_digest([_proposal(text="甲"), _proposal(text="乙")], "r1", "p1")
+        assert digest.outcomes_total == 2
 
 
 class TestRenderDigests:
@@ -98,6 +103,27 @@ class TestRenderDigests:
         assert "<round-digests>" in text
         assert "</round-digests>" in text
 
+    def test_notes_the_round_limit_only_at_capacity(self):
+        """只说"只带最近 N 轮"这个**限制**；不知道有没有更早，就不虚报。"""
+        d = RoundDigest(round_id="r1", project_id="p1", summary="摘要")
+
+        assert "只带最近 3 轮摘要" not in render_digests((d,))
+        text = render_digests((d, d, d))
+        assert "只带最近 3 轮摘要" in text
+
+    def test_notes_omitted_outcomes(self):
+        """摘要自己只留前 5 条成果，也要照实说。"""
+        d = RoundDigest(
+            round_id="r1",
+            project_id="p1",
+            summary="摘要",
+            key_outcomes=tuple(f"成果{i}" for i in range(5)),
+            outcomes_total=10,
+        )
+        text = render_digests((d,))
+        assert "共 10 条" in text
+        assert "只带了前 5 条" in text
+
 
 class TestRenderInspirationsIndex:
     """render_inspirations_index: 渲染灵感索引。"""
@@ -119,6 +145,18 @@ class TestRenderInspirationsIndex:
         assert "灵感4" in text
         # 第 6 条不渲染
         assert "灵感5" not in text
+
+    def test_limit_5_notes_omitted(self):
+        items = tuple(
+            InspirationItem(
+                item_id=f"ins-{i}", project_id="p1",
+                origin=InspirationOrigin.DISCUSSION, statement=f"灵感{i}"
+            )
+            for i in range(10)
+        )
+        text = render_inspirations_index(items)
+        assert "共 10 条" in text
+        assert "只带了前 5 条" in text
 
     def test_format_includes_origin(self):
         items = (

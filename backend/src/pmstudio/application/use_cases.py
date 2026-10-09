@@ -56,6 +56,7 @@ from pmstudio.application.assembly import (
     unlanded_open_questions,
 )
 from pmstudio.application.context import (
+    DIGEST_LIMIT,
     NO_MATERIAL_TEXT,
     WEB_BUDGET,
     answer_eids,
@@ -1409,6 +1410,9 @@ def _render_list_items(round_: Round) -> str:
         f"- 〔去处：{item.target.label()}〕{item.text}（为什么记下：{item.reason}）"
         for item in items
     ]
+    omitted = len(round_.list_items) - len(items)
+    if omitted > 0:
+        lines.append(f"（共 {len(round_.list_items)} 条，只带了前 {len(items)} 条）")
     return "\n".join(lines) or "（这一轮前面几批没有记下清单项）"
 
 
@@ -1971,7 +1975,10 @@ class IntegrateRound:
             # L2 观察索引：上一轮席位的洞察
             observations_index=self._build_observations_index(round_.project_id),
             # L4 轮次摘要：之前轮次发生了什么
-            digests=render_digests(self._digest_repo.recent(round_.project_id, limit=3)),
+            digests=render_digests(
+                self._digest_repo.recent(round_.project_id, limit=DIGEST_LIMIT),
+                limit=DIGEST_LIMIT,
+            ),
             # L3 灵感档案：讨论/探索/模拟中的发现
             inspirations_index=render_inspirations_index(
                 self._inspiration_repo.recent(round_.project_id, limit=5)
@@ -3573,10 +3580,12 @@ def external_material_text(round_: Round, *, store: MaterialStore) -> str:
         by_material.setdefault(ref.material_id, {})[ref.chunk_id] = ref.eid
     uploads: list[tuple[MaterialPacket, dict[str, EvidenceId]]] = []
     found: list[tuple[MaterialPacket, list[EvidenceId]]] = []
+    missing: list[str] = []
     for material_id, eids in by_material.items():
         packet = store.get(material_id)
         if packet is None:
-            # 材料不在了（将来允许删材料时会出现）：不编内容，跳过；界面另行提示
+            # 材料不在了（将来允许删材料时会出现）：不编内容，跳过；但要说清少了几份
+            missing.append(material_id)
             continue
         if packet.parsed.origin == WEB_ORIGIN:
             found.append((packet, list(eids.values())))
@@ -3590,6 +3599,10 @@ def external_material_text(round_: Round, *, store: MaterialStore) -> str:
             render_web_results(
                 [(packet, eids[0]) for packet, eids in found if eids]
             ).text
+        )
+    if missing:
+        parts.append(
+            f"（{len(missing)} 份材料已不在库里，未带入：{'、'.join(missing)}）"
         )
     return "\n\n".join(parts) if parts else NO_MATERIAL_TEXT
 

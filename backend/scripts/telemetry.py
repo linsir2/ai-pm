@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sqlite3
 import sys
 from collections import defaultdict
@@ -38,6 +39,7 @@ from pmstudio.application.context import answer_eids  # noqa: E402
 from pmstudio.domain.provenance.ledger import EvidenceLedger  # noqa: E402
 from pmstudio.domain.round.round import Round  # noqa: E402
 from pmstudio.domain.shared.ids import EvidenceId, RoundId  # noqa: E402
+from pmstudio.harness.model.prompt_log import TRUNCATION_MARK  # noqa: E402
 from pmstudio.infrastructure.sqlite.repositories import (  # noqa: E402
     SqliteEvidenceRepository,
     SqliteRoundRepository,
@@ -61,6 +63,22 @@ class SlotCoverage:
     @property
     def rate(self) -> float:
         return self.cited / self.injected if self.injected else 0.0
+
+
+def real_prompt_length(prompt_text: str) -> int:
+    """`model_calls.prompt_text` 的**真实长度**（口径，别再量错）。
+
+    留样被 `keep_head_and_tail` 截成"头尾各半 + 中间标记"，直接 `len()` 会把所有大提示词
+    压成 20,017 的假平原。标记**整段**（含外层换行）都是留样新加的、不属于原文；
+    真实长度 = 存储长度 − 标记整段 + 标记里写的略去数。
+    """
+
+    found = re.search(r"…（略去 (\d+) 字符）…", prompt_text)
+    if found is None:
+        return len(prompt_text)
+    omitted = int(found.group(1))
+    whole_mark = TRUNCATION_MARK.format(count=omitted)
+    return len(prompt_text) - len(whole_mark) + omitted
 
 
 def injected_by_slot(

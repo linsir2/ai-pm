@@ -804,6 +804,8 @@ def render_web_results(
 # ── L1 项目上下文构建 ──────────────────────────────────────────────
 
 MAX_DECISIONS = 10
+#: L4 摘要一次最多带几轮（`render_digests` 的 limit 与仓储 `recent(limit=…)` 共用这个数）。
+DIGEST_LIMIT = 3
 MAX_OPEN_QUESTIONS = 10
 
 
@@ -860,7 +862,9 @@ def build_project_context(
 
     top_decisions = tuple(
         e.text for e in memory_entries if e.kind == MemoryKind.DECISION
-    )[:MAX_DECISIONS]
+    )
+    decisions_total = len(top_decisions)
+    top_decisions = top_decisions[:MAX_DECISIONS]
 
     open_questions: list[str] = []
     for section in document_view.sections:
@@ -868,6 +872,7 @@ def build_project_context(
             for block in section.blocks:
                 if block.kind == "open_questions":
                     open_questions.extend(block.entries)
+    questions_total = len(open_questions)
     open_questions = tuple(open_questions[:MAX_OPEN_QUESTIONS])
 
     return ProjectContext(
@@ -875,6 +880,8 @@ def build_project_context(
         features_defined=tuple(features_defined),
         top_decisions=top_decisions,
         open_questions=open_questions,
+        decisions_total=decisions_total,
+        open_questions_total=questions_total,
     )
 
 
@@ -905,9 +912,20 @@ def render_project_context(ctx: ProjectContext) -> str:
     if ctx.top_decisions:
         for d in ctx.top_decisions:
             lines.append(f"决策: {d}")
+        omitted = ctx.decisions_total - len(ctx.top_decisions)
+        if omitted > 0:
+            lines.append(
+                f"（共 {ctx.decisions_total} 条决策，只带了前 {len(ctx.top_decisions)} 条）"
+            )
 
     if ctx.open_questions:
         lines.append(f"开放问题: {' | '.join(ctx.open_questions)}")
+        omitted = ctx.open_questions_total - len(ctx.open_questions)
+        if omitted > 0:
+            lines.append(
+                f"（共 {ctx.open_questions_total} 条开放问题，"
+                f"只带了前 {len(ctx.open_questions)} 条）"
+            )
 
     lines.append("</project-context>")
     return "\n".join(lines)
@@ -969,6 +987,9 @@ def render_observations_index(
     for obs in shown:
         mark = "？" if obs.obs_type == "gap_identified" else "●"
         lines.append(f"  {mark} [{obs.source_ref}] {obs.title}")
+    omitted = len(observations) - len(shown)
+    if omitted > 0:
+        lines.append(f"  （共 {len(observations)} 条，只带了前 {len(shown)} 条）")
     lines.append("</observations-index>")
     return "\n".join(lines)
 
@@ -1014,11 +1035,17 @@ def build_round_digest(
         sections_touched=tuple(sections),
         features_addressed=tuple(features),
         key_outcomes=tuple(outcomes),
+        outcomes_total=len(confirmed_proposals),
     )
 
 
-def render_digests(digests: Sequence[RoundDigest]) -> str:
-    """渲染轮次摘要列表（≤3 轮）。"""
+def render_digests(digests: Sequence[RoundDigest], *, limit: int = 3) -> str:
+    """渲染轮次摘要列表。
+
+    `limit` 是"最多带几轮"（调用侧 `recent(limit=…)` 同一个数）；**带满时才说**
+    "只带最近 N 轮"——没带满说明不知道有没有更早，不虚报。
+    """
+
     if not digests:
         return ""
     lines = ["<round-digests>"]
@@ -1029,6 +1056,14 @@ def render_digests(digests: Sequence[RoundDigest]) -> str:
         if digest.key_outcomes:
             for outcome in digest.key_outcomes:
                 lines.append(f"确认: {outcome}")
+            omitted = digest.outcomes_total - len(digest.key_outcomes)
+            if omitted > 0:
+                lines.append(
+                    f"（共 {digest.outcomes_total} 条，只带了前 "
+                    f"{len(digest.key_outcomes)} 条）"
+                )
+    if len(digests) >= limit:
+        lines.append(f"（只带最近 {limit} 轮摘要）")
     lines.append("</round-digests>")
     return "\n".join(lines)
 
@@ -1046,5 +1081,8 @@ def render_inspirations_index(
     lines = ["<inspirations-index>"]
     for item in shown:
         lines.append(f"  💡 [{item.origin.value}:{item.item_id}] {item.statement}")
+    omitted = len(inspirations) - len(shown)
+    if omitted > 0:
+        lines.append(f"  （共 {len(inspirations)} 条，只带了前 {len(shown)} 条）")
     lines.append("</inspirations-index>")
     return "\n".join(lines)

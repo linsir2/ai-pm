@@ -42,12 +42,31 @@ def test_render_thread_history_keeps_only_last_6_and_numbers_them() -> None:
     text = render_thread_history(turns)
 
     lines = text.splitlines()
-    assert len(lines) == 6
+    assert len(lines) == 7  # 6 条历史 + 1 行"只带了最近 6 轮"的照实说明
     assert "[t0 用户]" not in text
     assert "[t1 助手]" not in text
     assert "[t2 用户]" in text
     assert "[t7 助手]" in text
     assert "依据 E1" in text
+
+
+def test_render_thread_history_notes_the_omitted_turns() -> None:
+    """只带最近 6 轮，就说清一共几轮（不然模型以为前面没了）。"""
+
+    turns = tuple(
+        Turn(
+            index=index,
+            role="user" if index % 2 == 0 else "assistant",
+            text=f"第{index}轮",
+        )
+        for index in range(8)
+    )
+    text = render_thread_history(turns)
+
+    assert "共 8 轮" in text
+    assert "只带了最近 6 轮" in text
+    # 没超时不说
+    assert "共 6 轮" not in render_thread_history(turns[:6])
 
 
 def test_discussion_material_builds_source_ref_and_single_chunk() -> None:

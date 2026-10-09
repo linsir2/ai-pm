@@ -5,6 +5,7 @@ import time
 import pytest
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.agents.discusser import Discusser
 from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
@@ -109,6 +110,8 @@ def test_every_prompt_placeholder_is_declared_by_its_agent():
         "integrator": Integrator.definition.slots,
         "opinion_dispositions": Integrator.DISPOSITIONS_SLOTS,
         "memory_curator": MemoryCurator.definition.slots,
+        "discussion_say": Discusser.definition.slots,
+        "discussion_cards": Discusser.cards_definition.slots,
     }
     for name, slots in expected.items():
         text = (PROMPTS / f"{name}.md").read_text(encoding="utf-8")

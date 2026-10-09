@@ -6,7 +6,12 @@
 
 from datetime import UTC, datetime
 
-from scripts.telemetry import analyze_db, coverage, injected_by_slot
+from scripts.telemetry import (
+    analyze_db,
+    coverage,
+    injected_by_slot,
+    real_prompt_length,
+)
 
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -31,6 +36,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
+from pmstudio.harness.model.prompt_log import PROMPT_LIMIT, TRUNCATION_MARK
 from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
@@ -188,6 +194,28 @@ def test_coverage_counts_cited_across_proposals_and_questions():
         "reviews": (0, 0),
         "materials": (1, 1),
     }
+
+
+class TestRealPromptLength:
+    """口径：`model_calls.prompt_text` 是留样截断后的，真实长度要把略去的 N 加回去。"""
+
+    def test_untruncated_text_is_its_own_length(self):
+        assert real_prompt_length("短提示词") == len("短提示词")
+
+    def test_truncated_text_adds_back_the_omitted_characters(self):
+        body = "x" * 100
+        text = body + TRUNCATION_MARK.format(count=500) + body
+
+        assert real_prompt_length(text) == len(body) * 2 + 500
+
+    def test_full_house_truncation_adds_up(self):
+        """留样是头尾各半 + 中间标记：还原后应超过 PROMPT_LIMIT。"""
+
+        mark = TRUNCATION_MARK.format(count=4321)
+        text = "a" * (PROMPT_LIMIT // 2) + mark + "b" * (PROMPT_LIMIT // 2)
+
+        assert real_prompt_length(text) == len(text) - len(mark) + 4321
+        assert real_prompt_length(text) > PROMPT_LIMIT
 
 
 def test_opinion_without_ledger_entry_is_not_injected():

@@ -18,3 +18,6 @@ class ProjectContext:
     features_defined: tuple[str, ...] = ()
     top_decisions: tuple[str, ...] = ()
     open_questions: tuple[str, ...] = ()
+    #: 上面两槽**未截断时的总数**（0 = 未统计）。渲染时用来照实说"只带了前 N 条"。
+    decisions_total: int = 0
+    open_questions_total: int = 0

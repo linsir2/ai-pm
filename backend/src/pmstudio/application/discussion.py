@@ -64,7 +64,10 @@ def validate_ledger_refs(
 
 
 def render_thread_history(turns: tuple[Turn, ...]) -> str:
-    """取后 6 条，渲染成带序号的行；`based_on` 非空追一句依据。"""
+    """取后 6 条，渲染成带序号的行；`based_on` 非空追一句依据。
+
+    超了 6 条要说清"一共几轮、只带了最近 6 轮"——不然模型以为前面没有了。
+    """
 
     tail = turns[-MAX_SAY_HISTORY:] if len(turns) > MAX_SAY_HISTORY else turns
     lines = []
@@ -74,6 +77,8 @@ def render_thread_history(turns: tuple[Turn, ...]) -> str:
         if turn.based_on:
             line += "（依据 " + "、".join(str(ref) for ref in turn.based_on) + "）"
         lines.append(line)
+    if len(turns) > len(tail):
+        lines.append(f"（共 {len(turns)} 轮，只带了最近 {MAX_SAY_HISTORY} 轮）")
     return "\n".join(lines)
 
 

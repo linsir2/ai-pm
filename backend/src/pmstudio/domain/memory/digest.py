@@ -16,3 +16,5 @@ class RoundDigest:
     sections_touched: tuple[str, ...] = ()
     features_addressed: tuple[str, ...] = ()
     key_outcomes: tuple[str, ...] = ()
+    #: `key_outcomes` **未截断时的总数**（0 = 未统计）。渲染时照实说"只带了前 N 条"。
+    outcomes_total: int = 0
