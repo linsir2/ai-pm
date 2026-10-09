@@ -304,7 +304,7 @@ class InMemoryObservationRepository:
 
     def recent(self, project_id: str, limit: int = 5):
         """最新观察，同 source_ref 只保留最新一条。"""
-        items = [obs for obs in self._items.values() if obs.project_id == project_id]
+        items = [obs for obs in self._items.values() if obs.project_id == str(project_id)]
         items.sort(key=lambda o: o.obs_id, reverse=True)
         seen: dict[str, RoundObservation] = {}
         for obs in items:
