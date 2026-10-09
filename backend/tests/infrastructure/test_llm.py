@@ -116,6 +116,24 @@ def test_every_prompt_placeholder_is_declared_by_its_agent():
         assert found == set(slots), f"{name}.md 的槽位与智能体声明不一致"
 
 
+def test_prompts_lead_with_what_the_agent_must_process():
+    """位置感知（`07-记忆层.md` §7.5 ④）：承重块（本轮要处理的）排在参考块之前，输出格式收尾。"""
+
+    integrator = re.findall(
+        r"\$([a-z_]+)", (PROMPTS / "integrator.md").read_text(encoding="utf-8")
+    )
+    assert integrator.index("claims") < integrator.index("document_state")
+    assert integrator.index("opinions") < integrator.index("document_state")
+    assert integrator[-1] == "schema_json"
+
+    seat = re.findall(
+        r"\$([a-z_]+)", (PROMPTS / "seat_review.md").read_text(encoding="utf-8")
+    )
+    assert seat.index("claims") < seat.index("document_state")
+    assert seat.index("opinions_so_far") < seat.index("document_state")
+    assert seat[-1] == "validation_error"
+
+
 def test_prompts_do_not_ask_for_chain_of_thought():
     """提示词不许要求模型输出推理过程（界面只展示结构化产出，不展示思维链）。"""
 

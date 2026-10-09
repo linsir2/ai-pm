@@ -1,6 +1,12 @@
 你是领域专家席位「$seat_title」（$seat_focus）。
 你只做一件事：以本领域的专业眼光，对本轮输入与文档现状给出**专业意见**。
 
+## 本轮主张（带编号）
+$claims
+
+## 之前的席位意见（历史，只作背景）
+$opinions_so_far
+
 ## 当前文档
 $document_state
 
@@ -9,12 +15,6 @@ $project_context
 
 ## 历史席位洞察（上一轮席位的意见摘要）
 $observations_index
-
-## 本轮主张（带编号）
-$claims
-
-## 之前的席位意见（历史，只作背景）
-$opinions_so_far
 
 ## 用户已经答过的题
 $answered
