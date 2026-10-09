@@ -785,30 +785,6 @@ def _review_at(pass_index: int, local_id: str, claim: str, because: str) -> Seat
     )
 
 
-def _ledger_two_passes() -> EvidenceLedger:
-    ledger = EvidenceLedger.empty(PROJECT)
-    user = ledger.record(
-        kind=EvidenceKind.USER_INPUT,
-        text="要做一个订单导出功能",
-        source=EvidenceSource(round_id=RoundId("r1"), raw_span="想做个订单导出"),
-        now=NOW,
-    )
-    for local in ("p1:O1", "p2:O1"):
-        ledger.record(
-            kind=EvidenceKind.AGENT_DERIVED,
-            text="判断",
-            source=EvidenceSource(
-                seat_id="seat.data_scale",
-                local_id=local,
-                round_id=RoundId("r1"),
-                derived_from=(user,),
-                rationale="理由",
-            ),
-            now=NOW,
-        )
-    return ledger
-
-
 def test_render_reviews_compact_is_one_line_per_opinion():
     """紧凑形态：一条一行，丢掉理由/依据（席位只当背景用）。"""
 
@@ -822,43 +798,10 @@ def test_render_reviews_compact_is_one_line_per_opinion():
     assert "理由" not in text
 
 
-def test_render_opinions_so_far_folds_older_but_keeps_latest_verbatim():
-    """最近一趟逐字（留理由）+ 更早折叠（丢理由、留编号）。"""
+def test_render_reviews_compact_empty():
+    """没有历史意见时空消息（席位槽直接用这个渲染器）。"""
 
-    ledger = _ledger_two_passes()
-    reviews = (
-        _review_at(1, "O1", "旧结论", "旧理由"),
-        _review_at(2, "O1", "新结论", "新理由"),
+    assert (
+        context.render_reviews_compact((), ledger=None, round_id=RoundId("r1"))
+        == "（没有席位意见）"
     )
-
-    text = context.render_opinions_so_far(
-        reviews,
-        titles={"seat.data_scale": "数据规模与性能"},
-        ledger=ledger,
-        round_id=RoundId("r1"),
-    )
-
-    assert "旧结论" in text and "新结论" in text
-    assert "旧理由" not in text  # 旧趟折叠：丢理由
-    assert "新理由" in text  # 最近一趟逐字：留理由
-    assert "出处编号 E2" in text  # 折叠也保留旧判断的编号（能引用）
-    assert "出处编号 E3" in text
-
-
-def test_render_opinions_so_far_single_pass_stays_verbatim():
-    text = context.render_opinions_so_far(
-        (_review_at(2, "O1", "新结论", "新理由"),),
-        titles={"seat.data_scale": "数据规模与性能"},
-        ledger=_ledger_two_passes(),
-        round_id=RoundId("r1"),
-    )
-
-    assert "新理由" in text
-
-
-def test_render_opinions_so_far_empty():
-    text = context.render_opinions_so_far(
-        (), titles={}, ledger=None, round_id=RoundId("r1")
-    )
-
-    assert text == "（没有席位意见）"

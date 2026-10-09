@@ -449,7 +449,7 @@ def render_reviews_compact(
 ) -> str:
     """席位意见的**紧凑形态**：一条一行，保留双身份（能引用），丢掉理由/依据。
 
-    给旧趟用——席位把它当"背景"（`seat_review.md`），一行足够"别重复、能引用"。
+    席位把它当"背景"（`seat_review.md`），一行足够"别重复、能引用"。
     """
 
     lines: list[str] = []
@@ -458,32 +458,7 @@ def render_reviews_compact(
             form = "疑问" if opinion.form is OpinionForm.QUESTION else "判断"
             identity = _opinion_identity(review, opinion, ledger=ledger, round_id=round_id)
             lines.append(f"- [{form}]{identity}关于{opinion.about}：{opinion.claim}")
-    return "\n".join(lines) or "（没有更早的席位意见）"
-
-
-def render_opinions_so_far(
-    reviews: Sequence[SeatReview],
-    *,
-    titles: Mapping[str, str],
-    ledger: EvidenceLedger | None = None,
-    round_id: RoundId,
-) -> str:
-    """席位看的"之前的席位意见"：**最近一趟逐字 + 更早的压成一行**。
-
-    为什么不是"本趟逐字 + 旧趟折叠"：席位是并行跑的，`seat_reviews` 里**没有本趟**
-    （`RunSeatRound` 在跑席位之前读它）——最近的只有"上一趟"。
-    """
-
-    if not reviews:
-        return "（没有席位意见）"
-    latest = max(review.pass_index for review in reviews)
-    older = tuple(review for review in reviews if review.pass_index < latest)
-    recent = tuple(review for review in reviews if review.pass_index == latest)
-    parts: list[str] = []
-    if older:
-        parts.append(render_reviews_compact(older, ledger=ledger, round_id=round_id))
-    parts.append(render_reviews(recent, titles=titles, ledger=ledger, round_id=round_id))
-    return "\n\n".join(parts)
+    return "\n".join(lines) or "（没有席位意见）"
 
 
 def render_selected_opinions(

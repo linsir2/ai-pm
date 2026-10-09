@@ -74,9 +74,9 @@ from pmstudio.application.context import (
     render_memory,
     render_memory_state,
     render_observations_index,
-    render_opinions_so_far,
     render_project_context,
     render_reviews,
+    render_reviews_compact,
     render_round_digest,
     render_seat_conflicts,
     render_selected_opinions,
@@ -879,7 +879,6 @@ class RunSeatRound:
         document = self._documents.get(round_.project_id)
         ledger = self._evidence.get(round_.project_id)
         pending = tuple(self._catalog.by_id(seat_id) for seat_id in round_.pending_seats)
-        titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
         view = document.view()
         document_state = render_document_state(
             view, readiness=self._checker.check(view)
@@ -888,8 +887,8 @@ class RunSeatRound:
         answered_text = render_answers(round_, ledger=ledger)
         # 席位把 `q3` 翻译成 E 编号时，只许翻**本轮**的答案（跨轮同号会把出处指错）
         answer_refs = answer_eids(ledger=ledger, round_id=round_id)
-        previous = render_opinions_so_far(
-            round_.seat_reviews, titles=titles, ledger=ledger, round_id=round_id
+        previous = render_reviews_compact(
+            round_.seat_reviews, ledger=ledger, round_id=round_id
         )
         known_eids = frozenset(evidence.eid for evidence in ledger.evidences())
         external_material = external_material_text(round_, store=self._materials)
