@@ -219,6 +219,23 @@ def test_question_kind_conflict_is_preserved():
     assert question.kind is QuestionKind.CONFLICT
 
 
+def test_question_type_multi_is_allowed():
+    """多选题是合法形态：模型按 schema 出 `type="multi"`，领域必须接得住。
+
+    （439327e「死代码清理」误删了 `MULTI`，schema 与前端契约却一直留着它 → 真跑整轮崩。）"""
+
+    question = Question(
+        question_id=QuestionId("q7"),
+        target=Target.body("s8"),
+        type=QuestionType.MULTI,
+        title="导出要支持哪些格式？",
+        why="格式互不排斥，可多选",
+        consequence_if_skipped="默认只支持 Excel",
+        options=(Option("x", "Excel"), Option("c", "CSV"), Option("j", "JSON")),
+    )
+    assert question.type is QuestionType.MULTI
+
+
 def test_question_bad_unknown_kind_is_rejected():
     with pytest.raises(ShapeError):
         Question(

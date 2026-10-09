@@ -30,6 +30,7 @@ MAX_OPEN_ITEMS_PER_BATCH = 3
 
 class QuestionType(StrEnum):
     SINGLE = "single"
+    MULTI = "multi"  # 多选：选项互不排斥（前端按 checkbox 渲染）
     TEXT = "text"
 
 

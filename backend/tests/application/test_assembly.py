@@ -2220,3 +2220,17 @@ def test_claims_contradict_same_direction():
 def test_claims_contradict_neutral():
     """中性文本 → 不矛盾。"""
     assert assembly._claims_contradict("导出功能", "导出功能") is False
+
+def test_a_multi_select_question_keeps_its_type():
+    """真跑撞到（2026-10-09）：模型按 schema 出 `type="multi"`，领域枚举却没有 MULTI →
+    `QuestionType("multi")` 抛 ValueError（不是 DomainError，`except` 兜不住）→ 整轮崩。
+    补回 MULTI（439327e 误删；schema 与前端契约一直留着它）。"""
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(type="multi")]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert result.questions[0].type is QuestionType.MULTI
