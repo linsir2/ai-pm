@@ -77,4 +77,37 @@ describe("SearchBox", () => {
     draw({ query: "   ", results: { query: "   ", hits: [], truncated: false } });
     expect(screen.queryByRole("list")).toBeNull();
   });
+
+  it("键盘：↓ 选中第一条，Enter 把命中递出去", () => {
+    const props = draw({ query: "导出", results });
+    const input = screen.getByLabelText("搜索");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(props.onPick).toHaveBeenCalledWith(results.hits[0]);
+  });
+
+  it("键盘：↓↓ 到第二条，Enter 递第二条", () => {
+    const props = draw({ query: "导出", results });
+    const input = screen.getByLabelText("搜索");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(props.onPick).toHaveBeenCalledWith(results.hits[1]);
+  });
+
+  it("键盘：↑ 在第一条上不越界；没选中时 Enter 不误发", () => {
+    const props = draw({ query: "导出", results });
+    const input = screen.getByLabelText("搜索");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(props.onPick).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(props.onPick).toHaveBeenCalledWith(results.hits[0]);
+  });
 });

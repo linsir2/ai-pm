@@ -156,7 +156,7 @@ a {
   position: absolute;
   right: 7px;
   pointer-events: none;
-  color: var(--empty);
+  color: var(--open);
   font-size: 10px;
 }
 
@@ -199,7 +199,7 @@ a {
 .topbar__action-count {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--empty);
+  color: var(--open);
 }
 
 .conn {
@@ -277,14 +277,14 @@ a {
 .rail__head {
   font-size: var(--step-1);
   letter-spacing: 0.08em;
-  color: var(--empty);
+  color: var(--open);
   margin: 0 0 var(--space-2) 6px;
 }
 
 .rail__head-count {
   font-family: var(--font-mono);
   margin-left: 4px;
-  color: var(--empty);
+  color: var(--open);
 }
 
 .rail__list {
@@ -317,7 +317,7 @@ a {
 .rail__num {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--empty);
+  color: var(--open);
   width: 22px;
   flex: none;
 }
@@ -366,7 +366,7 @@ a {
   flex: none;
   border: 0;
   background: none;
-  color: var(--empty);
+  color: var(--open);
   font-size: 10px;
   line-height: 1;
   padding: 4px 0;
@@ -393,7 +393,7 @@ a {
 }
 
 .rail__item--leaf {
-  color: var(--empty);
+  color: var(--open);
   font-size: var(--step-1);
   padding-block: 3px;
 }
@@ -442,7 +442,7 @@ a {
 }
 
 .doc__crumb-sep {
-  color: var(--empty);
+  color: var(--open);
 }
 
 .discuss-handle {
@@ -475,7 +475,7 @@ a {
   align-items: center;
   gap: var(--space-2);
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
   margin-bottom: var(--space-2);
 }
 
@@ -500,7 +500,7 @@ a {
 
 .drawer__subtitle {
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
   margin: 0 0 var(--space-2);
   font-weight: 500;
 }
@@ -630,6 +630,11 @@ a {
   padding: var(--space-1);
   cursor: pointer;
   color: inherit;
+}
+
+.search__hit:hover,
+.search__hit--on {
+  background: var(--tint-primary);
 }
 
 .search__label {
@@ -807,7 +812,7 @@ a {
 }
 
 .chain__label {
-  color: var(--empty);
+  color: var(--open);
   letter-spacing: 0.06em;
   flex: none;
 }
@@ -836,7 +841,7 @@ a {
 
 .chain__end {
   border-style: dashed;
-  color: var(--empty);
+  color: var(--open);
 }
 
 .chain__eid {
@@ -856,11 +861,11 @@ a {
 }
 
 .chain__arrow {
-  color: var(--empty);
+  color: var(--open);
 }
 
 .chain__more {
-  color: var(--empty);
+  color: var(--open);
 }
 
 /* 版本条：vN + 版本历史 + 就绪度 + 记忆 */
@@ -872,7 +877,7 @@ a {
 
 .vbar__version {
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
 }
 
 .vbar__btn {
@@ -974,7 +979,7 @@ a {
 
 .field__num {
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
 }
 
 .keygrid {
@@ -1005,7 +1010,7 @@ a {
 }
 
 .section__blank {
-  color: var(--empty);
+  color: var(--open);
   font-size: var(--step-2);
   margin: 0;
 }
@@ -1075,7 +1080,7 @@ a {
 .iconbtn {
   border: 0;
   background: none;
-  color: var(--empty);
+  color: var(--open);
   font-size: 11px;
   padding: 1px 4px;
   border-radius: var(--radius-sm);
@@ -1126,7 +1131,7 @@ a {
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--empty);
+  color: var(--open);
   font-size: var(--step-1);
   padding: 3px var(--space-2);
   cursor: pointer;
@@ -1163,7 +1168,7 @@ a {
 
 .prefs__note {
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
   margin: 0 0 var(--space-3);
 }
 
@@ -1225,7 +1230,7 @@ a {
 .tag--goal { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
 .tag--decision { color: var(--primary); background: var(--tint-primary); border-color: transparent; }
 .tag--guess { color: var(--gap); border-color: color-mix(in srgb, var(--gap) 40%, var(--border)); }
-.tag--preference { color: var(--empty); border-style: dashed; }
+.tag--preference { color: var(--open); border-style: dashed; }
 .tag--constraint { color: var(--open); }
 .tag--conflict { color: var(--conflict); border-color: color-mix(in srgb, var(--conflict) 45%, var(--border)); }
 
@@ -1305,7 +1310,7 @@ a {
 
 .loop__hint {
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
 }
 
 .loop__group {
@@ -1318,7 +1323,7 @@ a {
   gap: var(--space-2);
   font-size: var(--step-1);
   letter-spacing: 0.06em;
-  color: var(--empty);
+  color: var(--open);
   margin-bottom: var(--space-2);
 }
 
@@ -1406,7 +1411,7 @@ a {
   align-items: flex-start;
   gap: 7px;
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
 }
 
 /* 步骤之间的连线（对齐参考图的时间线样式） */
@@ -1474,7 +1479,7 @@ a {
 .step__detail {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--empty);
+  color: var(--open);
 }
 
 .timeline {
@@ -1544,7 +1549,7 @@ a {
 .node__meta {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--empty);
+  color: var(--open);
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -1581,7 +1586,7 @@ a {
 .packet--pending {
   background: transparent;
   border-style: dashed;
-  color: var(--empty);
+  color: var(--open);
 }
 
 .packet__head {
@@ -1594,7 +1599,7 @@ a {
 .packet__index {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--empty);
+  color: var(--open);
 }
 
 .packet__title {
@@ -1616,7 +1621,7 @@ a {
 .packet__basis {
   margin: var(--space-2) 0 0;
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
   line-height: 1.6;
 }
 
@@ -1661,7 +1666,7 @@ a {
 
 .opinion__about {
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
 }
 
 .opinion__claim {
@@ -1735,7 +1740,7 @@ a {
   flex: 1;
   min-width: 12ch;
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
   line-height: 1.5;
 }
 
@@ -1934,14 +1939,14 @@ a {
 }
 
 .select:disabled {
-  color: var(--empty);
+  color: var(--open);
   background: var(--app-bg);
 }
 
 .claim__raw {
   margin: var(--space-2) 0 0;
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
   line-height: 1.6;
 }
 
@@ -1995,7 +2000,7 @@ a {
 .seat__tag {
   margin-left: var(--space-2);
   font-size: 10px;
-  color: var(--empty);
+  color: var(--open);
   border: var(--hairline);
   border-radius: var(--radius-sm);
   padding: 0 5px;
@@ -2012,7 +2017,7 @@ a {
 
 .seat__note {
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
   line-height: 1.7;
   margin: 0 0 var(--space-2);
 }
@@ -2043,7 +2048,7 @@ a {
 .seat__focus {
   display: block;
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
   line-height: 1.6;
   margin-top: 2px;
 }
@@ -2083,7 +2088,7 @@ a {
 
 .q__meta {
   font-size: var(--step-1);
-  color: var(--empty);
+  color: var(--open);
   line-height: 1.6;
   margin: var(--space-2) 0 0;
 }
@@ -2179,7 +2184,7 @@ a {
 .prop__target {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--empty);
+  color: var(--open);
   text-align: center;
 }
 
