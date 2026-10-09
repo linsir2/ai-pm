@@ -64,9 +64,6 @@ export function SideRail({
     <nav className="rail" aria-label="文档结构">
       <div className="rail__doc-header">
         <span className="rail__doc-title">产品文档</span>
-        <button type="button" className="iconbtn" aria-label="编辑文档" title="编辑文档">
-          ✎
-        </button>
       </div>
 
       {hasDoc && (

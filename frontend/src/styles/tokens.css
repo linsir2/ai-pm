@@ -11,6 +11,8 @@
   --open: #6b7280;
   --empty: #9ca3af;
   --success: #10b981;
+  /* 主色底上的文字色（按钮 / 徽标 / 完成点）：亮色底用白，暗色底用深色 */
+  --on-primary: #ffffff;
 
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --font-doc: "Noto Serif SC", "Instrument Serif", "Songti SC", serif;
@@ -49,6 +51,7 @@
   --tint-warn: color-mix(in srgb, var(--gap) 10%, transparent);
   --tint-danger: color-mix(in srgb, var(--conflict) 9%, transparent);
   --shadow-md: 0 4px 12px rgb(0 0 0 / 8%);
+  --shadow-drawer: -10px 0 28px rgb(0 0 0 / 8%);
 }
 
 [data-theme="dark"] {
@@ -64,4 +67,6 @@
   --open: #9ca3af;
   --empty: #6b7280;
   --success: #34d399;
+  --on-primary: #17161a;
+  --shadow-drawer: -10px 0 28px rgb(0 0 0 / 40%);
 }
