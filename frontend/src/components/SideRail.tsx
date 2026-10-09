@@ -130,7 +130,7 @@ export function SideRail({
                 >
                   <span className="rail__num mono">{section.section_id}</span>
                   <span className="rail__label">{section.title}</span>
-                  <span className={statusClass(status)} />
+                  <span className={statusClass(status)} role="img" aria-label={STATUS_TEXT[status]} />
                 </button>
               </div>
 
