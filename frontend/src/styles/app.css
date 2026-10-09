@@ -139,7 +139,7 @@ a {
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  padding: 5px 22px 5px var(--space-2);
+  padding: 4px 24px 4px var(--space-2);
   font-size: var(--step-2);
   font-weight: 500;
   max-width: 260px;
@@ -154,17 +154,17 @@ a {
 
 .project-switch__caret {
   position: absolute;
-  right: 7px;
+  right: 8px;
   pointer-events: none;
   color: var(--open);
-  font-size: 10px;
+  font-size: var(--step-0);
 }
 
 .topbar__action {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px var(--space-2);
+  gap: 8px;
+  padding: 4px var(--space-2);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -182,11 +182,11 @@ a {
 .topbar__badge {
   display: inline-block;
   min-width: 18px;
-  padding: 0 5px;
+  padding: 0 4px;
   border-radius: var(--radius-full);
   background: var(--primary);
   color: var(--on-primary);
-  font-size: 11px;
+  font-size: var(--step-0);
   line-height: 18px;
   text-align: center;
   font-family: var(--font-mono);
@@ -194,14 +194,14 @@ a {
 
 .topbar__action-count {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--step-0);
   color: var(--open);
 }
 
 .conn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .conn__dot {
@@ -274,7 +274,7 @@ a {
   font-size: var(--step-1);
   letter-spacing: 0.08em;
   color: var(--open);
-  margin: 0 0 var(--space-2) 6px;
+  margin: 0 0 var(--space-2) 8px;
 }
 
 .rail__head-count {
@@ -295,7 +295,7 @@ a {
   gap: var(--space-2);
   width: 100%;
   min-width: 0;
-  padding: 5px 6px;
+  padding: 4px 8px;
   border: 0;
   background: none;
   border-radius: var(--radius-sm);
@@ -312,7 +312,7 @@ a {
 
 .rail__num {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--step-0);
   color: var(--open);
   width: 22px;
   flex: none;
@@ -363,7 +363,7 @@ a {
   border: 0;
   background: none;
   color: var(--open);
-  font-size: 10px;
+  font-size: var(--step-0);
   line-height: 1;
   padding: 4px 0;
   cursor: pointer;
@@ -430,7 +430,7 @@ a {
 .doc__crumb-path {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -579,7 +579,7 @@ a {
 
 .search__input {
   width: 100%;
-  padding: 7px var(--space-4);
+  padding: 8px var(--space-4);
   border: var(--hairline);
   border-radius: var(--radius-full);
   background: var(--app-bg);
@@ -764,7 +764,7 @@ a {
   color: var(--primary);
   background: var(--tint-primary);
   border-radius: var(--radius-sm);
-  padding: 2px 7px;
+  padding: 2px 8px;
   font-weight: 500;
 }
 
@@ -816,7 +816,7 @@ a {
 .chain__items {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -824,7 +824,7 @@ a {
 .chain__kind,
 .chain__material,
 .chain__end {
-  padding: 1px 7px;
+  padding: 1px 8px;
   border-radius: var(--radius-sm);
   background: var(--surface);
   border: var(--hairline);
@@ -845,9 +845,9 @@ a {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--primary);
-  font-size: 11px;
+  font-size: var(--step-0);
   line-height: 1.6;
-  padding: 0 6px;
+  padding: 0 8px;
   cursor: pointer;
   transition: border-color var(--dur-micro) var(--ease-out);
 }
@@ -879,7 +879,7 @@ a {
 .vbar__btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   padding: 4px var(--space-2);
   border: var(--hairline);
   border-radius: var(--radius-sm);
@@ -946,7 +946,7 @@ a {
   color: var(--primary);
   background: var(--tint-primary);
   border-radius: var(--radius-sm);
-  padding: 1px 6px;
+  padding: 1px 8px;
 }
 
 .fields {
@@ -1058,7 +1058,7 @@ a {
 }
 
 .entries--steps .entry__refs {
-  margin-left: 6px;
+  margin-left: 8px;
 }
 
 .entry__tools {
@@ -1077,7 +1077,7 @@ a {
   border: 0;
   background: none;
   color: var(--open);
-  font-size: 11px;
+  font-size: var(--step-0);
   padding: 1px 4px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -1177,9 +1177,9 @@ a {
 
 .chip {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--step-0);
   line-height: 1.7;
-  padding: 0 5px;
+  padding: 0 4px;
   border: var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -1211,9 +1211,9 @@ a {
 
 .tag {
   display: inline-block;
-  font-size: 11px;
+  font-size: var(--step-0);
   line-height: 1.6;
-  padding: 0 6px;
+  padding: 0 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   color: var(--open);
@@ -1258,7 +1258,7 @@ a {
 .loop__tabbadge {
   display: inline-block;
   margin-left: var(--space-1);
-  padding: 0 6px;
+  padding: 0 8px;
   border-radius: var(--radius-full);
   background: var(--tint-primary);
   color: var(--primary);
@@ -1405,7 +1405,7 @@ a {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 7px;
+  gap: 8px;
   font-size: var(--step-1);
   color: var(--open);
 }
@@ -1432,7 +1432,7 @@ a {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--open);
-  font-size: 10px;
+  font-size: var(--step-0);
   font-family: var(--font-mono);
   display: flex;
   align-items: center;
@@ -1470,7 +1470,7 @@ a {
 
 .step__detail {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--step-0);
   color: var(--open);
 }
 
@@ -1513,7 +1513,7 @@ a {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--open);
-  font-size: 9px;
+  font-size: var(--step-0);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1540,7 +1540,7 @@ a {
 
 .node__meta {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--step-0);
   color: var(--open);
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1590,7 +1590,7 @@ a {
 
 .packet__index {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--step-0);
   color: var(--open);
 }
 
@@ -1740,9 +1740,9 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
   white-space: nowrap;
-  padding: 6px var(--space-3);
+  padding: 8px var(--space-3);
   border-radius: var(--radius-sm);
   border: var(--hairline);
   background: var(--surface);
@@ -1951,7 +1951,7 @@ a {
   border: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .seat {
@@ -1987,11 +1987,11 @@ a {
 
 .seat__tag {
   margin-left: var(--space-2);
-  font-size: 10px;
+  font-size: var(--step-0);
   color: var(--open);
   border: var(--hairline);
   border-radius: var(--radius-sm);
-  padding: 0 5px;
+  padding: 0 4px;
   vertical-align: 1px;
 }
 
@@ -2025,7 +2025,7 @@ a {
 .seat--extra {
   align-items: flex-start;
   border-style: dashed;
-  margin-top: 6px;
+  margin-top: 8px;
 }
 
 .seat--extra button {
@@ -2084,7 +2084,7 @@ a {
 .options {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .opt {
@@ -2151,7 +2151,7 @@ a {
 
 .prop__verdict {
   font-size: var(--step-1);
-  padding: 2px 6px;
+  padding: 2px 8px;
   border-radius: var(--radius-sm);
   border: var(--hairline);
   background: var(--surface);
@@ -2167,7 +2167,7 @@ a {
 
 .prop__target {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--step-0);
   color: var(--open);
   text-align: center;
 }
@@ -2271,7 +2271,7 @@ a {
 }
 
 .text-input {
-  padding: 7px var(--space-3);
+  padding: 8px var(--space-3);
   border: var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--surface);

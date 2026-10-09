@@ -18,6 +18,7 @@
   --font-doc: "Noto Serif SC", "Instrument Serif", "Songti SC", serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 
+  --step-0: 11px;
   --step-1: 12px;
   --step-2: 13px;
   --step-3: 14px;

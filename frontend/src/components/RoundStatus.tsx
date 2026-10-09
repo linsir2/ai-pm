@@ -38,9 +38,9 @@ export function RoundStatus({
         className="btn btn--sm"
         onClick={onRetry}
         disabled={running}
-        title="接着跑这一轮；已经交回的席位不会重跑"
+        title="已经交回的席位不会重跑"
       >
-        继续/重试
+        接着跑这一轮
       </button>
       {canAbandon && round.step !== "failed" && round.step !== "done" && (
         <button

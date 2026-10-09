@@ -55,7 +55,7 @@ describe("RoundStatus", () => {
     const props = draw(round({ step: "abandoned", abandon_reason: "不要这一轮了" }));
 
     expect(screen.getByText(/^已放弃：不要这一轮了/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /继续\/重试/ }));
+    fireEvent.click(screen.getByRole("button", { name: /接着跑这一轮/ }));
     expect(props.onRetry).toHaveBeenCalledTimes(1);
   });
 });
