@@ -48,6 +48,7 @@ from pmstudio.application.assembly import (
     open_question_proposals,
     question_key,
     questionnaire_of,
+    seat_conflict_eid_pairs,
     seat_conflict_pairs,
     seat_questions,
     unaccounted_drops,
@@ -1839,7 +1840,12 @@ class IntegrateRound:
             document=document,
             ledger=ledger,
             carried=carried,
-            contradictions=contradiction_pairs(round_),
+            contradictions=contradiction_pairs(round_)
+            | seat_conflict_eid_pairs(
+                seat_conflict_pairs(round_.current_reviews),
+                ledger=ledger,
+                round_id=round_.round_id,
+            ),
         )
         # 截断 / 形状错掉的那几条要留痕 + 在草案卡缺口行里说清（"不静默丢"）。
         assembled = replace(
@@ -1938,7 +1944,9 @@ class IntegrateRound:
                 previous_list_items = _render_list_items(round_)
                 contradictions = render_contradictions(round_)
                 seat_conflicts = render_seat_conflicts(
-                    seat_conflict_pairs(round_.current_reviews)
+                    seat_conflict_pairs(round_.current_reviews),
+                    ledger=ledger,
+                    round_id=round_id,
                 )
                 outcome = await self._integrator.integrate(
                     document_state=render_document_state(

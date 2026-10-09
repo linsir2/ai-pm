@@ -1217,34 +1217,65 @@ def _covers_a_contradiction(
     cited = set(refs)
     return any(pair <= cited for pair in pairs)
 
-
 def seat_conflict_pairs(reviews: tuple[SeatReview, ...]) -> tuple[SeatConflict, ...]:
     """机械检测席位间冲突：同 about + 相反判断方向。
 
     极简关键词匹配——保守策略，宁可漏报不可误报。
     """
+
     conflicts: list[SeatConflict] = []
     judgments = [
-        (review.seat_id, opinion)
+        (review, opinion)
         for review in reviews
         for opinion in review.opinions
         if opinion.form == OpinionForm.JUDGMENT
     ]
-    for i, (seat_a, op_a) in enumerate(judgments):
-        for seat_b, op_b in judgments[i + 1 :]:
-            if seat_a == seat_b:
+    for i, (review_a, op_a) in enumerate(judgments):
+        for review_b, op_b in judgments[i + 1 :]:
+            if review_a.seat_id == review_b.seat_id:
                 continue
             if op_a.about == op_b.about and _claims_contradict(op_a.claim, op_b.claim):
                 conflicts.append(
                     SeatConflict(
                         about=op_a.about,
-                        seat_a=seat_a,
+                        seat_a=review_a.seat_id,
                         claim_a=op_a.claim,
-                        seat_b=seat_b,
+                        handle_a=_judgment_handle(review_a, op_a),
+                        seat_b=review_b.seat_id,
                         claim_b=op_b.claim,
+                        handle_b=_judgment_handle(review_b, op_b),
                     )
                 )
     return tuple(conflicts)
+
+
+def _judgment_handle(review: SeatReview, opinion: Opinion) -> str:
+    """这条判断在账本里的局部键：`p{趟}:{条目}`（与 `assigner`/`_own_eid` 同一口径）。"""
+
+    return f"p{review.pass_index}:{opinion.local_id}"
+
+
+def seat_conflict_eid_pairs(
+    conflicts: tuple[SeatConflict, ...], *, ledger: EvidenceLedger, round_id: RoundId
+) -> frozenset[frozenset[EvidenceId]]:
+    """席位冲突对子的**编号版**：把两条判断的句柄换成账本里的 `E…`。
+
+    与 `contradiction_pairs` 同一个用法——`assemble` 盖章只认 EID 对，不关心来源是用户
+    主张还是席位判断。查不到编号的对子跳过（还没落账本，盖章本来也无从谈起）。
+    """
+
+    pairs: list[frozenset[EvidenceId]] = []
+    for conflict in conflicts:
+        left = ledger.find_by_local(
+            seat_id=conflict.seat_a, local_id=conflict.handle_a, round_id=round_id
+        )
+        right = ledger.find_by_local(
+            seat_id=conflict.seat_b, local_id=conflict.handle_b, round_id=round_id
+        )
+        if left is None or right is None:
+            continue
+        pairs.append(frozenset({left.eid, right.eid}))
+    return frozenset(pairs)
 
 
 def _claims_contradict(claim_a: str, claim_b: str) -> bool:

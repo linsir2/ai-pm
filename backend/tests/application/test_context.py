@@ -7,7 +7,7 @@ from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
 from pmstudio.domain.memory.memory import MemoryEntry
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
-from pmstudio.domain.round.claim import Claim
+from pmstudio.domain.round.claim import Claim, SeatConflict
 from pmstudio.domain.round.draft import Origin, OriginType, Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
@@ -690,3 +690,73 @@ def test_the_memory_we_show_the_agents_never_carries_a_memory_id():
     state = context.render_memory_state(entries)
     assert "mem1" in state                     # 整理者要拿它写 target_id
     assert "只用来填 `target_id`" in state
+
+
+def _ledger_with_two_seat_judgments() -> EvidenceLedger:
+    """两条席位判断进账本（seat.a / seat.b 各一条），形状与真 assigner 一致。"""
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    user = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做一个订单导出功能",
+        source=EvidenceSource(round_id=RoundId("r1"), raw_span="想做个订单导出"),
+        now=NOW,
+    )
+    ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="导出应在 60 秒内完成",
+        source=EvidenceSource(
+            seat_id="seat.a",
+            local_id="p1:O1",
+            round_id=RoundId("r1"),
+            derived_from=(user,),
+            rationale="体验优先",
+        ),
+        now=NOW,
+    )
+    ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="导出不应在 60 秒内完成",
+        source=EvidenceSource(
+            seat_id="seat.b",
+            local_id="p1:O1",
+            round_id=RoundId("r1"),
+            derived_from=(user,),
+            rationale="数据量大",
+        ),
+        now=NOW,
+    )
+    return ledger
+
+
+def _seat_conflict() -> SeatConflict:
+    return SeatConflict(
+        about="导出性能",
+        seat_a="seat.a",
+        claim_a="导出应在 60 秒内完成",
+        handle_a="p1:O1",
+        seat_b="seat.b",
+        claim_b="导出不应在 60 秒内完成",
+        handle_b="p1:O1",
+    )
+
+
+def test_render_seat_conflicts_shows_the_judgment_eids():
+    """席位冲突要带两条判断的出处编号——整合者才引得到，机械盖章才盖得上。"""
+
+    text = context.render_seat_conflicts(
+        (_seat_conflict(),), ledger=_ledger_with_two_seat_judgments(), round_id=RoundId("r1")
+    )
+
+    assert "出处编号 E2" in text
+    assert "出处编号 E3" in text
+    assert "导出性能" in text
+
+
+def test_render_seat_conflicts_without_ledger_omits_eids():
+    """没有账本时不假装有编号（与 `render_reviews` 同口径）。"""
+
+    text = context.render_seat_conflicts((_seat_conflict(),), round_id=RoundId("r1"))
+
+    assert "出处编号" not in text
+    assert "导出性能" in text

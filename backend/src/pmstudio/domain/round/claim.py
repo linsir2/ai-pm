@@ -93,10 +93,15 @@ class SeatConflict:
 
     判据：同 about + 一条含肯定词、一条含否定词。
     保守检测——宁可漏报不可误报。
+
+    `handle_*` 是那条判断的**账本句柄** `p{趟}:{条目}`（与 `assigner` 落编号、`_own_eid`
+    反查同一个口径）——盖章时要靠它把两条判断换成出处编号 `E…`。
     """
 
     about: str                              # 冲突针对的目标
     seat_a: str                             # 席位 A 的 id
     claim_a: str                            # 席位 A 的判断文本
+    handle_a: str                           # 席位 A 那条判断的账本句柄 `p{趟}:{条目}`
     seat_b: str                             # 席位 B 的 id
     claim_b: str                            # 席位 B 的判断文本
+    handle_b: str                           # 席位 B 那条判断的账本句柄 `p{趟}:{条目}`

@@ -284,15 +284,45 @@ def render_contradictions(round_: Round) -> str:
     return "\n".join(lines) or "（这一轮没有判出互斥的主张）"
 
 
-def render_seat_conflicts(conflicts: tuple[SeatConflict, ...]) -> str:
-    """给整合者看的"席位间冲突"。"""
+def render_seat_conflicts(
+    conflicts: tuple[SeatConflict, ...],
+    *,
+    ledger: EvidenceLedger | None = None,
+    round_id: RoundId,
+) -> str:
+    """给整合者看的"席位间冲突"。
+
+    两条判断都带上**出处编号**：整合者照着引，机械盖章才盖得上（与 `contradiction_pairs`
+    的盖章先例配套）。没有账本时不假装有编号（与 `render_reviews` 同口径）。
+    """
+
     lines: list[str] = []
     for c in conflicts:
+        left = _conflict_eid_note(c.seat_a, c.handle_a, ledger=ledger, round_id=round_id)
+        right = _conflict_eid_note(c.seat_b, c.handle_b, ledger=ledger, round_id=round_id)
         lines.append(
-            f"- [{c.seat_a}]「{c.claim_a}」 ↔ [{c.seat_b}]「{c.claim_b}」"
-            f"（两个席位对「{c.about}」持相反判断：要出一道**让用户拍板**的题，`kind` 写 conflict）"
+            f"- [{c.seat_a}]「{c.claim_a}」{left}"
+            f" ↔ [{c.seat_b}]「{c.claim_b}」{right}"
+            f"（两个席位对「{c.about}」持相反判断："
+            "要出一道**让用户拍板**的题，`kind` 写 conflict）"
         )
     return "\n".join(lines) or "（这一轮没有检测出席位间冲突）"
+
+
+def _conflict_eid_note(
+    seat_id: str,
+    handle: str,
+    *,
+    ledger: EvidenceLedger | None,
+    round_id: RoundId,
+) -> str:
+    """一条判断的出处编号注：没账本 ⇒ 空；有账本但查不到 ⇒ 明确写"没有"。"""
+
+    if ledger is None:
+        return ""
+    evidence = ledger.find_by_local(seat_id=seat_id, local_id=handle, round_id=round_id)
+    eid = None if evidence is None else evidence.eid
+    return f"（出处编号 {eid}）" if eid is not None else "（没有出处编号）"
 
 
 def render_claims(claims: Sequence[Claim]) -> str:

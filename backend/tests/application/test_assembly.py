@@ -2221,6 +2221,114 @@ def test_claims_contradict_neutral():
     """中性文本 → 不矛盾。"""
     assert assembly._claims_contradict("导出功能", "导出功能") is False
 
+
+def _ledger_with_two_seat_judgments() -> EvidenceLedger:
+    """两条席位判断进账本（seat.a / seat.b 各一条），形状与真 assigner 一致。"""
+
+    ledger = EvidenceLedger.empty(PROJECT)
+    user = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做一个订单导出功能",
+        source=EvidenceSource(round_id=ROUND_ID, raw_span="想做个订单导出"),
+        now=NOW,
+    )
+    ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="导出应在 60 秒内完成",
+        source=EvidenceSource(
+            seat_id="seat.a",
+            local_id="p1:O1",
+            round_id=ROUND_ID,
+            derived_from=(user,),
+            rationale="体验优先",
+        ),
+        now=NOW,
+    )
+    ledger.record(
+        kind=EvidenceKind.AGENT_DERIVED,
+        text="导出不应在 60 秒内完成",
+        source=EvidenceSource(
+            seat_id="seat.b",
+            local_id="p1:O1",
+            round_id=ROUND_ID,
+            derived_from=(user,),
+            rationale="数据量大",
+        ),
+        now=NOW,
+    )
+    return ledger
+
+
+def test_seat_conflict_pairs_carry_the_ledger_handles():
+    """冲突对子要带每条判断的 `p{趟}:{条目}` 句柄——盖章时靠它反查 EID。"""
+
+    reviews = (
+        _review("seat.a", [_judgment("O1", "导出性能", "导出应在 60 秒内完成")]),
+        _review("seat.b", [_judgment("O2", "导出性能", "导出不应在 60 秒内完成")]),
+    )
+
+    conflict = assembly.seat_conflict_pairs(reviews)[0]
+
+    assert {conflict.handle_a, conflict.handle_b} == {"p1:O1", "p1:O2"}
+
+
+def test_seat_conflict_eid_pairs_maps_handles_to_ledger_eids():
+    """句柄 → 账本里的 E 编号（`assemble` 盖章要的就是这一对）。"""
+
+    ledger = _ledger_with_two_seat_judgments()
+    reviews = (
+        _review("seat.a", [_judgment("O1", "导出性能", "导出应在 60 秒内完成")]),
+        _review("seat.b", [_judgment("O1", "导出性能", "导出不应在 60 秒内完成")]),
+    )
+    conflicts = assembly.seat_conflict_pairs(reviews)
+
+    pairs = assembly.seat_conflict_eid_pairs(conflicts, ledger=ledger, round_id=ROUND_ID)
+
+    left = ledger.find_by_local(seat_id="seat.a", local_id="p1:O1", round_id=ROUND_ID)
+    right = ledger.find_by_local(seat_id="seat.b", local_id="p1:O1", round_id=ROUND_ID)
+    assert pairs == frozenset({frozenset({left.eid, right.eid})})
+
+
+def test_seat_conflict_eid_pairs_skips_unresolved_judgments():
+    """账本里查不到（还没落编号）⇒ 跳过，不判死。"""
+
+    reviews = (
+        _review("seat.a", [_judgment("O1", "导出性能", "导出应在 60 秒内完成")]),
+        _review("seat.b", [_judgment("O1", "导出性能", "导出不应在 60 秒内完成")]),
+    )
+    conflicts = assembly.seat_conflict_pairs(reviews)
+
+    pairs = assembly.seat_conflict_eid_pairs(
+        conflicts, ledger=EvidenceLedger.empty(PROJECT), round_id=ROUND_ID
+    )
+
+    assert pairs == frozenset()
+
+
+def test_a_question_covering_both_seat_judgments_is_stamped_as_conflict():
+    """席位冲突走同一台盖章机器：题目覆盖两条判断 ⇒ 系统盖章 conflict。"""
+
+    ledger = _ledger_with_two_seat_judgments()
+    reviews = (
+        _review("seat.a", [_judgment("O1", "导出性能", "导出应在 60 秒内完成")]),
+        _review("seat.b", [_judgment("O1", "导出性能", "导出不应在 60 秒内完成")]),
+    )
+    pairs = assembly.seat_conflict_eid_pairs(
+        assembly.seat_conflict_pairs(reviews), ledger=ledger, round_id=ROUND_ID
+    )
+    (pair,) = pairs
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(evidence_refs=[str(e) for e in pair])]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger,
+        contradictions=pairs,
+    )
+
+    assert result.questions[0].kind is QuestionKind.CONFLICT
+
+
 def test_a_multi_select_question_keeps_its_type():
     """真跑撞到（2026-10-09）：模型按 schema 出 `type="multi"`，领域枚举却没有 MULTI →
     `QuestionType("multi")` 抛 ValueError（不是 DomainError，`except` 兜不住）→ 整轮崩。
