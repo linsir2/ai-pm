@@ -760,3 +760,105 @@ def test_render_seat_conflicts_without_ledger_omits_eids():
 
     assert "出处编号" not in text
     assert "导出性能" in text
+
+
+# ── 席位意见按趟折叠（消费遥测 §7.5 ③）────────────────────────────
+
+
+def _judgment_at(local_id: str, claim: str, because: str) -> Opinion:
+    return Opinion(
+        local_id=local_id,
+        form=OpinionForm.JUDGMENT,
+        about="导出",
+        claim=claim,
+        because=because,
+        evidence_refs=(EvidenceId("E1"),),
+    )
+
+
+def _review_at(pass_index: int, local_id: str, claim: str, because: str) -> SeatReview:
+    return SeatReview(
+        seat_id="seat.data_scale",
+        basis="依据",
+        opinions=(_judgment_at(local_id, claim, because),),
+        pass_index=pass_index,
+    )
+
+
+def _ledger_two_passes() -> EvidenceLedger:
+    ledger = EvidenceLedger.empty(PROJECT)
+    user = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text="要做一个订单导出功能",
+        source=EvidenceSource(round_id=RoundId("r1"), raw_span="想做个订单导出"),
+        now=NOW,
+    )
+    for local in ("p1:O1", "p2:O1"):
+        ledger.record(
+            kind=EvidenceKind.AGENT_DERIVED,
+            text="判断",
+            source=EvidenceSource(
+                seat_id="seat.data_scale",
+                local_id=local,
+                round_id=RoundId("r1"),
+                derived_from=(user,),
+                rationale="理由",
+            ),
+            now=NOW,
+        )
+    return ledger
+
+
+def test_render_reviews_compact_is_one_line_per_opinion():
+    """紧凑形态：一条一行，丢掉理由/依据（席位只当背景用）。"""
+
+    text = context.render_reviews_compact(
+        (_review_at(1, "O1", "应支持", "因为快"),), ledger=None, round_id=RoundId("r1")
+    )
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert "应支持" in lines[0]
+    assert "理由" not in text
+
+
+def test_render_opinions_so_far_folds_older_but_keeps_latest_verbatim():
+    """最近一趟逐字（留理由）+ 更早折叠（丢理由、留编号）。"""
+
+    ledger = _ledger_two_passes()
+    reviews = (
+        _review_at(1, "O1", "旧结论", "旧理由"),
+        _review_at(2, "O1", "新结论", "新理由"),
+    )
+
+    text = context.render_opinions_so_far(
+        reviews,
+        titles={"seat.data_scale": "数据规模与性能"},
+        ledger=ledger,
+        round_id=RoundId("r1"),
+    )
+
+    assert "旧结论" in text and "新结论" in text
+    assert "旧理由" not in text  # 旧趟折叠：丢理由
+    assert "新理由" in text  # 最近一趟逐字：留理由
+    assert "出处编号 E2" in text  # 折叠也保留旧判断的编号（能引用）
+    assert "出处编号 E3" in text
+
+
+def test_render_opinions_so_far_single_pass_stays_verbatim():
+    text = context.render_opinions_so_far(
+        (_review_at(2, "O1", "新结论", "新理由"),),
+        titles={"seat.data_scale": "数据规模与性能"},
+        ledger=_ledger_two_passes(),
+        round_id=RoundId("r1"),
+    )
+
+    assert "新理由" in text
+
+
+def test_render_opinions_so_far_empty():
+    text = context.render_opinions_so_far(
+        (), titles={}, ledger=None, round_id=RoundId("r1")
+    )
+
+    assert text == "（没有席位意见）"

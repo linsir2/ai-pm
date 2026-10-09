@@ -74,6 +74,7 @@ from pmstudio.application.context import (
     render_memory,
     render_memory_state,
     render_observations_index,
+    render_opinions_so_far,
     render_project_context,
     render_reviews,
     render_round_digest,
@@ -887,7 +888,7 @@ class RunSeatRound:
         answered_text = render_answers(round_, ledger=ledger)
         # 席位把 `q3` 翻译成 E 编号时，只许翻**本轮**的答案（跨轮同号会把出处指错）
         answer_refs = answer_eids(ledger=ledger, round_id=round_id)
-        previous = render_reviews(
+        previous = render_opinions_so_far(
             round_.seat_reviews, titles=titles, ledger=ledger, round_id=round_id
         )
         known_eids = frozenset(evidence.eid for evidence in ledger.evidences())
