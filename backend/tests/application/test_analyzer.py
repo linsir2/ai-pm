@@ -98,7 +98,10 @@ async def test_analyzer_sends_purpose_schema_and_all_prompt_slots():
 
     assert gateway.requests[0].purpose == "claims"
     assert gateway.requests[0].schema_name == "ClaimsPacket"
-    assert gateway.requests[0].response_schema["title"] == "ClaimsPacket"
+    # 瘦版 schema 把 pydantic 自动生成的 `title` 摘了，但"发的是哪份报文"这条判据
+    # 一个字没变：顶层是 ClaimsPacket（它自己有 properties），嵌套模型在 `$defs` 里。
+    top = gateway.requests[0].response_schema
+    assert "claims" in top["properties"] and "ClaimDraft" in top["$defs"]
     name, slots = prompts.calls[0]
     assert name == "analyzer"
     assert tuple(sorted(slots)) == tuple(sorted(ClaimAnalyzer.definition.slots))

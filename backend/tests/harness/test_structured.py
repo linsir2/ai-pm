@@ -9,13 +9,33 @@
 
 import pytest
 
+from pmstudio.application.agents import schemas
 from pmstudio.harness.errors import ModelCallFailed, PacketParseError
 from pmstudio.harness.model.contracts import ModelMessage, ModelReply, ModelRequest
 from pmstudio.harness.model.envelope import Envelope
 from pmstudio.harness.model.normalize import NormalizeRules
-from pmstudio.harness.model.structured import StructuredCall, call_structured
+from pmstudio.harness.model.structured import (
+    StructuredCall,
+    _LeanSchemaGenerator,
+    call_structured,
+)
 from tests.harness.test_normalize import RULES, Roster
 from tests.support.doubles import RecordingPrompts
+
+#: 送进提示词的全部报文。加新报文忘了进这份清单，守卫会**静默漏掉它**——
+#: 所以下面那条清单一致性测试要求它跟 `AgentDefinition` / `StructuredCall` 对得上。
+PACKETS = [
+    schemas.ClaimsPacket,
+    schemas.SeatPacket,
+    schemas.InquiryPacket,
+    schemas.IntegrationPacket,
+    schemas.DispositionsPacket,
+    schemas.MemoryPacket,
+    schemas.SimInquiryPacket,
+    schemas.SimReviewPacket,
+    schemas.CardsPacket,
+    schemas.DiscussionReply,
+]
 
 
 class ScriptedGateway:
@@ -92,7 +112,9 @@ async def test_request_carries_purpose_schema_name_and_metadata():
     assert request.purpose == "seat_review"
     assert request.schema_name == "Roster"
     assert request.metadata == {"seat_id": "seat.data_scale", "trace_id": "r-1"}
-    assert request.response_schema == Roster.model_json_schema()
+    assert request.response_schema == Roster.model_json_schema(
+        schema_generator=_LeanSchemaGenerator
+    )
 
 
 async def test_schema_json_is_inlined_into_the_prompt():
@@ -111,6 +133,98 @@ async def test_schema_json_is_inlined_into_the_prompt():
         produced_by="seat.x",
     )
     assert prompts.last("seat_review")["schema_json"]
+
+
+def test_the_schema_we_send_carries_no_machine_generated_words():
+    """pydantic 自动塞的两样东西，一个字都不许进提示词——但**只限 BaseModel 节点**。
+
+    `title`（`Raw Span` / `ClaimsPacket`）是 pydantic 从字段名与类名机械生成的英文，
+    对中文模型零信息量；**模型级** `description` 是类 docstring 漏出来的开发者笔记
+    （写着 `M6/M11`、`02 §11.0.38`、`domain/memory/memory.py::screen_changes` 这类
+    只有作者看得懂的东西）。两样都逐字进 `prompt_text` 与 `prompt_sha`。
+    """
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            if "properties" in node:
+                assert "title" not in node, node.get("title")
+                assert "description" not in node
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    for packet in PACKETS:
+        walk(packet.model_json_schema(schema_generator=_LeanSchemaGenerator))
+
+
+def test_slimming_never_removes_a_field():
+    """瘦身**一个字都不能少**：字段名、`required`、`enum`、上限，`properties` 与
+    瘦版逐项相同。
+
+    这条钉的是一个已经犯过的错：`title` 既是 pydantic 的元数据键，又是本项目的真实
+    字段名（`QuestionDraft.title`，题面）。按"键名叫 title 就删"写，第一次真跑立刻
+    回归——模型看不见 `title`，把题干写进 `why`，整包 `questions[*].title is required`
+    校验失败，两次重装都不行，整合降级、草案里 0 条功能内容（三次连跑复现）。
+
+    瘦身的判据只能是"这个节点描述一个 BaseModel"（有没有 `properties` 兄弟键）。
+    """
+
+    def model_level_only(node: object) -> object:
+        """只剥 BaseModel 节点上的机造词（与实现同一个判据）。"""
+        if isinstance(node, dict):
+            machine_words = ("title", "description") if "properties" in node else ()
+            node = {k: v for k, v in node.items() if k not in machine_words}
+            return {k: model_level_only(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [model_level_only(v) for v in node]
+        return node
+
+    for packet in PACKETS:
+        fat = packet.model_json_schema()
+        lean = packet.model_json_schema(schema_generator=_LeanSchemaGenerator)
+        assert model_level_only(fat) == lean, packet.__name__
+
+
+def test_field_level_descriptions_survive_the_slimming():
+    """**字段级 description 必须一字不少**（`02` §11.0.4「口径的入口不止一个，
+    改一处要说三处」+ `tests/application/test_agent_schemas.py:21-29`）。
+
+    这条钉的是删除判据**本身的有效性**：瘦身只删模型级（判据是"这个节点有没有
+    `properties` 兄弟键"）。哪天有人把条件写成"顶层删 description"，嵌套模型的
+    字段规矩会跟着一起消失，而上面那条守卫照样绿。
+    """
+
+    schema = schemas.ClaimsPacket.model_json_schema(schema_generator=_LeanSchemaGenerator)
+    raw_span = schema["$defs"]["ClaimDraft"]["properties"]["raw_span"]
+
+    assert "连续" in raw_span["description"]
+    assert "省略号" in raw_span["description"]
+
+
+async def test_schema_json_is_serialized_without_padding():
+    """`json.dumps` 默认的 `", "` / `": "` 在这份 schema 里是纯空白（实测约 1,650 字符）。
+
+    它逐字进提示词，也就逐字进 `prompt_sha`——省下来的是每个 agent 每趟都付的钱。
+    """
+
+    prompts = RecordingPrompts()
+    gateway = ScriptedGateway('{"basis": "b"}')
+    await call_structured(
+        CALL,
+        gateway=gateway,
+        prompts=prompts,
+        slots={},
+        metadata={},
+        packet_id="pkt-1",
+        run_id="r-1",
+        produced_by="seat.x",
+    )
+
+    schema_json = prompts.last("seat_review")["schema_json"]
+    assert '", "' not in schema_json
+    assert '": "' not in schema_json
 
 
 async def test_missing_slot_still_blows_up():

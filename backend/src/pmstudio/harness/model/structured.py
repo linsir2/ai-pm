@@ -22,8 +22,10 @@
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic import BaseModel
+from pydantic.json_schema import GenerateJsonSchema, JsonSchemaMode, JsonSchemaValue
 
 from pmstudio.harness.model.contracts import (
     ModelGateway,
@@ -33,6 +35,59 @@ from pmstudio.harness.model.contracts import (
 )
 from pmstudio.harness.model.envelope import Envelope, basis_of
 from pmstudio.harness.model.normalize import NormalizeRules, load_shell, parse_lenient_from
+
+
+class _LeanSchemaGenerator(GenerateJsonSchema):
+    """给模型看的 schema 要**瘦**：pydantic 自动塞的英文名与开发者笔记一个字都不许进提示词。
+
+    `title`（`Raw Span` / `ClaimsPacket`）是 pydantic 从字段名与类名机械生成的，对中文模型
+    零信息量；**模型级** `description` 是类 docstring 漏出来的——那些 docstring 写的是
+    `M6/M11`、`02 §11.0.38`、`domain/memory/memory.py::screen_changes` 这类只有作者看得懂
+    的笔记。两样都逐字进 `prompt_text` 与 `prompt_sha`（实测 21,064 字符的 schema 里，
+    6,132 字是它们）。
+
+    **删的判据是"这个节点描述一个 BaseModel"**（有没有 `properties` 兄弟键），不是"有没有
+    `title`/`description` 这两个键"——`title` 同时是本项目一个**真实字段名**
+    （`QuestionDraft.title`，题面）。按键名无差别地`pop` 会把它连同它在 `required`
+    里的义务一起删掉：模型看不见这个字段，改为把题干写进 `why`，于是整包
+    `questions[*].title is required` 校验失败，两次重装都不行 → 整合降级、s11 全空
+    （真跑实测：瘦版三次连跑，草案里 0 条功能内容）。
+
+    字段级 `description` 是 `02` §11.0.4「口径的入口不止一个，改一处要说三处」的既定冗余，
+    一律保留，由 `tests/application/test_agent_schemas.py:21-29` 与
+    `tests/harness/test_structured.py::test_field_level_descriptions_survive_the_slimming` 钉着。
+
+    供应商侧零损失：`providers/litellm.py` 把它塞进 `response_format` 给约束解码用，
+    而约束引擎只消费 `type` / `enum` / `required` / `properties` / `items`。
+    """
+
+    def generate(
+        self, schema: Any, mode: JsonSchemaMode = "validation"
+    ) -> JsonSchemaValue:
+        out = super().generate(schema, mode)
+        _strip_machine_words(out)
+        return out
+
+
+def _strip_machine_words(node: object) -> None:
+    """就地剥掉 BaseModel 节点上的 pydantic 机造词。
+
+    **只动"描述一个 BaseModel"的那些节点**（有 `properties` 兄弟键的）：它们的 `title` 是
+    类名机造的、`description` 是类 docstring 漏出来的。字段名一律不动——`title` 在本项目
+    里是一个真实字段名（`QuestionDraft.title`），按键名无差别 `pop` 会把它从
+    `properties` 与 `required` 里一起删掉（见 `_LeanSchemaGenerator` 的 docstring 记的那次回归）。
+    """
+
+    if isinstance(node, dict):
+        if "properties" in node:
+            node.pop("title", None)
+            node.pop("description", None)
+            for child in node["properties"].values():
+                _strip_machine_words(child)
+        for key in ("items", "anyOf", "oneOf", "allOf", "prefixItems"):
+            _strip_machine_words(node.get(key))
+        for defs in node.get("$defs", {}).values():
+            _strip_machine_words(defs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,9 +130,13 @@ async def call_structured[P: BaseModel](
     提示词是机制的一部分（`schemas.py` 拆出前的头注就写着这三件事同源）。
     """
 
-    schema = call.packet.model_json_schema()
+    schema = call.packet.model_json_schema(schema_generator=_LeanSchemaGenerator)
     prompt = prompts.render(
-        call.prompt, **dict(slots), schema_json=json.dumps(schema, ensure_ascii=False)
+        call.prompt,
+        **dict(slots),
+        # 紧凑分隔符：`json.dumps` 默认的 `", "` / `": "` 在这份 schema 里是纯空白
+        # （实测 9 个报文共约 1,650 字符）。它逐字进提示词，也就逐字进 `prompt_sha`。
+        schema_json=json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
     )
     reply = await gateway.complete(
         ModelRequest(

@@ -21,6 +21,25 @@ def test_integrator_limits_forbid_the_same_question_twice():
     assert "两件不同的事" in LIMITS_TEXT
 
 
+def test_limits_tell_the_truth_about_what_repetition_and_overflow_actually_cost():
+    """两句提示词曾经与机制**相反**，这里钉住说真话的那一面。
+
+    ① 题位满：`assembly.py:701-708` 把超 5 的题放进**轮内队列 deferred**（下一批先问），
+       轮结束没排上的落 s11，其中阻塞题被就绪判定挡住（`readiness.py:211-227`）。
+       提示词原来写"放进 `list_items`（本轮不挡交付）"——那是 **F12 那个 bug 的做法**
+       （`test_assembly.py:1264` 的 docstring 记着"真跑里它们会消失"）。
+
+    ② 重复题：`assembly.py:666-668` 命中去重后是 `continue`——**悄悄丢掉，模型收不到
+       任何提示**。原来写"整轮不算通过"，那是一句系统并不执行、模型也无法验证的威胁，
+       正撞 AGENTS.md「门禁条款别写成形容词，机器判不了的条款最终会退化成永远通过」。
+    """
+
+    assert "多出来的放进 list_items" not in LIMITS_TEXT
+    assert "下一批先问" in LIMITS_TEXT
+    assert "整轮不算通过" not in LIMITS_TEXT
+    assert "悄悄丢掉" in LIMITS_TEXT
+
+
 def test_limits_say_authorized_features_must_land_in_feature_fields():
     """真跑实测（报告 F1）：主张点名的功能已授权，模型却把内容降级成章节级 → s5 整章空。"""
 

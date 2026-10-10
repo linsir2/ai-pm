@@ -70,18 +70,18 @@ class ClaimDraft(BaseModel):
 
 
 class SeatPickDraft(BaseModel):
-    """Analyzer 挑的席位：只能从目录里挑，并且必须说清为什么这一轮需要它。"""
+    #: Analyzer 挑的席位：只能从目录里挑，并且必须说清为什么这一轮需要它。
 
     seat_id: str = Field(description="只能取上面席位目录里出现过的 id")
     why: str = Field(description="一句话：读完这段输入，为什么这个专业面要表态")
 
 
 class WebQueryDraft(BaseModel):
-    """Analyzer 提名的检索词（工具层 C-2b）：**只提名，不联网**。
-
-    为什么把上限写在描述里、而不是 `max_length=3`：写死了就是"给了 4 条 → 整包重装一次"，
-    而仓库对"模型多写了一条"的既定口径是**丢那一条 + 留痕**（见席位提名与互斥对子）。
-    """
+    #: Analyzer 提名的检索词（工具层 C-2b）：**只提名，不联网**。
+    #:
+    #:    为什么把上限写在描述里、而不是 `max_length=3`：写死了就是"给了 4 条 → 整包重装一次"，
+    #:    而仓库对"模型多写了一条"的既定口径是**丢那一条 + 留痕**（见席位提名与互斥对子）。
+    #:
 
     query: str = Field(description="要拿去搜的一句话（像人问的那样，别堆关键词）")
     why: str = Field(
@@ -93,11 +93,11 @@ class WebQueryDraft(BaseModel):
 
 
 class ContradictionDraft(BaseModel):
-    """一对**立场互斥**的主张。写的是**第几条**（从 1 开始），不是 `c1`。
-
-    为什么用序号：`c1/c2` 是我们按 claims 数组下标发的，提示词里从没出现过——
-    让模型写 id 等于让它猜。序号 → 主张 id 的映射由解析那一层做，只有那一处。
-    """
+    #: 一对**立场互斥**的主张。写的是**第几条**（从 1 开始），不是 `c1`。
+    #:
+    #:    为什么用序号：`c1/c2` 是我们按 claims 数组下标发的，提示词里从没出现过——
+    #:    让模型写 id 等于让它猜。序号 → 主张 id 的映射由解析那一层做，只有那一处。
+    #:
 
     claim_a: int = Field(description="第几条主张（从 1 开始，按 claims 数组的顺序）")
     claim_b: int = Field(description="另一条主张的序号（从 1 开始）")
@@ -153,7 +153,7 @@ class SeatPacket(BaseModel):
 
 
 class HypothesisDraft(BaseModel):
-    """一条待验证假设（M8 调研）。**可证伪是硬要求**：证伪方式与所需真实证据都不许空。"""
+    #: 一条待验证假设（M8 调研）。**可证伪是硬要求**：证伪方式与所需真实证据都不许空。
 
     local_id: str = Field(default="", description="本包内唯一，如 H1；留空由系统按顺序补")
     statement: str = Field(description="一句**可证伪**的陈述，不是结论、不是愿望")
@@ -171,7 +171,7 @@ class HypothesisDraft(BaseModel):
 
 
 class BlindSpotDraft(BaseModel):
-    """一条盲区：模拟答不了、只能靠真实接触回答的问题。"""
+    #: 一条盲区：模拟答不了、只能靠真实接触回答的问题。
 
     local_id: str = Field(default="", description="本包内唯一，如 B1；留空由系统按顺序补")
     statement: str = Field(description="我们现在不知道什么")
@@ -179,7 +179,7 @@ class BlindSpotDraft(BaseModel):
 
 
 class InquiryPacket(BaseModel):
-    """调研回包：假设 + 盲区。两样都空**不算成功**（由解析层判，不靠提示词自觉）。"""
+    #: 调研回包：假设 + 盲区。两样都空**不算成功**（由解析层判，不靠提示词自觉）。
 
     basis: str = Field(description="你读了文档里的哪些内容才推出这些")
     hypotheses: list[HypothesisDraft] = Field(
@@ -191,11 +191,11 @@ class InquiryPacket(BaseModel):
 
 
 class SimSliceDraft(BaseModel):
-    """一个处境切片（M10 模拟调研）：任务/处境分组，不是人口学画像。
-
-    schema 里没有可填身份属性的位置；`anchors` 是它唯一的机械作用
-    （装配层逐个验账本存在性，落空则丢条 + 留痕）。
-    """
+    #: 一个处境切片（M10 模拟调研）：任务/处境分组，不是人口学画像。
+    #:
+    #:    schema 里没有可填身份属性的位置；`anchors` 是它唯一的机械作用
+    #:    （装配层逐个验账本存在性，落空则丢条 + 留痕）。
+    #:
 
     local_id: str = Field(default="", description="本包内唯一，如 S1；留空由系统按顺序补")
     situation: str = Field(description="谁·在什么场景·要完成什么（不许写身份属性）")
@@ -208,11 +208,11 @@ class SimSliceDraft(BaseModel):
 
 
 class SimHypothesisDraft(BaseModel):
-    """一条模拟假设：字段集锁死这 7 个。
-
-    kind / subject / touches 被砍掉过（M10 审核：没有任何机械消费者，
-    分组看 grounding 就够，去向提示是展示文案不是字段）——加回来先过评审。
-    """
+    #: 一条模拟假设：字段集锁死这 7 个。
+    #:
+    #:    kind / subject / touches 被砍掉过（M10 审核：没有任何机械消费者，
+    #:    分组看 grounding 就够，去向提示是展示文案不是字段）——加回来先过评审。
+    #:
 
     local_id: str = Field(default="", description="本包内唯一，如 H1；留空由系统按顺序补")
     slice_id: str = Field(description="挂在哪个切片（装配层验存在性，挂不上则丢条 + 留痕）")
@@ -226,7 +226,7 @@ class SimHypothesisDraft(BaseModel):
 
 
 class SimUnknownDraft(BaseModel):
-    """一条盲区：模拟答不了、只能靠真实接触回答的问题（只活在 artifact，不落文档）。"""
+    #: 一条盲区：模拟答不了、只能靠真实接触回答的问题（只活在 artifact，不落文档）。
 
     local_id: str = Field(default="", description="本包内唯一，如 U1；留空由系统按顺序补")
     statement: str = Field(description="我们现在不知道什么")
@@ -235,11 +235,11 @@ class SimUnknownDraft(BaseModel):
 
 
 class SimInquiryPacket(BaseModel):
-    """模拟调研回包：切片 + 假设 + 盲区。
-
-    分层：parse 只管形状（空假设/空盲区放行）；"没东西算不算成功"、
-    slice 挂载、账本锚点都是装配层的事。
-    """
+    #: 模拟调研回包：切片 + 假设 + 盲区。
+    #:
+    #:    分层：parse 只管形状（空假设/空盲区放行）；"没东西算不算成功"、
+    #:    slice 挂载、账本锚点都是装配层的事。
+    #:
 
     basis: str = Field(description="你读了文档里的哪些内容才推出这些")
     slices: list[SimSliceDraft] = Field(min_length=1, max_length=MAX_SIM_INQUIRY_SLICES)
@@ -265,7 +265,7 @@ MAX_SIM_REVIEW_CHECKS = 12
 
 
 class SimWalkStepDraft(BaseModel):
-    """一步走查：我在这一步做什么、文档支不支持、卡在缺什么。"""
+    #: 一步走查：我在这一步做什么、文档支不支持、卡在缺什么。
 
     step_index: int = Field(description="对齐文档 main_flow 的步骤序号（从 1 起）")
     step_text: str = Field(description="文档里的原步骤文字（抄写，不改写）")
@@ -280,7 +280,7 @@ class SimWalkStepDraft(BaseModel):
 
 
 class SimFrictionDraft(BaseModel):
-    """一个摩擦点：**要么引原文、要么明确标"文档没写"**（二选一，机械判）。"""
+    #: 一个摩擦点：**要么引原文、要么明确标"文档没写"**（二选一，机械判）。
 
     local_id: str = Field(default="", description="本功能内唯一，如 F1；留空由系统补")
     kind: Literal[
@@ -304,7 +304,7 @@ class SimFrictionDraft(BaseModel):
 
 
 class SimAcceptanceDraft(BaseModel):
-    """一条验收标准的核对：浅到"文档有没有说清它"，不预测真实行为。"""
+    #: 一条验收标准的核对：浅到"文档有没有说清它"，不预测真实行为。
 
     local_id: str = Field(default="", description="本功能内唯一，如 A1；留空由系统补")
     entry_id: str = Field(description="对应文档里的那条 acceptance 条目")
@@ -315,7 +315,7 @@ class SimAcceptanceDraft(BaseModel):
 
 
 class SimFeatureReviewDraft(BaseModel):
-    """一个功能的走查报告：走查 + 摩擦 + 验收核对 + 三档结论。"""
+    #: 一个功能的走查报告：走查 + 摩擦 + 验收核对 + 三档结论。
 
     feature_slug: str = Field(description="必须是本次被点名的功能之一")
     started: bool = Field(description="false=照文档根本开不了头（要么文档没有，要么进不去）")
@@ -337,12 +337,12 @@ class SimFeatureReviewDraft(BaseModel):
 
 
 class SimReviewPacket(BaseModel):
-    """模拟评测回包：一个 persona 对全部被点名功能的走查（M11）。
-
-    不叫 SimulationPacket 之外的名字是为了和 `SimInquiryPacket` 成对：
-    同一个 `simulated` 编号体系、同一条"默认不勾"的降级链，但产物形状不同
-    （评测=走查报告+减提案，调研=处境切片+假设）。
-    """
+    #: 模拟评测回包：一个 persona 对全部被点名功能的走查（M11）。
+    #:
+    #:    不叫 SimulationPacket 之外的名字是为了和 `SimInquiryPacket` 成对：
+    #:    同一个 `simulated` 编号体系、同一条"默认不勾"的降级链，但产物形状不同
+    #:    （评测=走查报告+减提案，调研=处境切片+假设）。
+    #:
 
     basis: str = Field(description="你读了文档里的哪些内容才走出这些")
     features: list[SimFeatureReviewDraft] = Field(
@@ -351,7 +351,7 @@ class SimReviewPacket(BaseModel):
 
 
 class DiscussionReply(BaseModel):
-    """讨论里的一轮回答：全文 + 引用的 E 编号；空串不算成功。"""
+    #: 讨论里的一轮回答：全文 + 引用的 E 编号；空串不算成功。
 
     text: str = Field(
         min_length=1, description="这一轮的回答全文；空串不算成功"
@@ -362,7 +362,7 @@ class DiscussionReply(BaseModel):
 
 
 class DiscussionCardDraft(BaseModel):
-    """一条待收下的灵感（M9 讨论）。模型不管 id：`card_id` 由服务端 stamp C1..。"""
+    #: 一条待收下的灵感（M9 讨论）。模型不管 id：`card_id` 由服务端 stamp C1..。
 
     statement: str = Field(description="一条可收下的灵感，一句话")
     grounding: Literal["document", "invented"] = Field(
@@ -372,7 +372,7 @@ class DiscussionCardDraft(BaseModel):
 
 
 class CardsPacket(BaseModel):
-    """组装回包：1-3 张卡。空 list 不算成功；超 3 不算成功（重装指引会说）。"""
+    #: 组装回包：1-3 张卡。空 list 不算成功；超 3 不算成功（重装指引会说）。
 
     cards: list[DiscussionCardDraft] = Field(min_length=1, max_length=3)
 
@@ -447,20 +447,20 @@ class ProposalDraft(BaseModel):
 
 
 class DroppedOpinionDraft(BaseModel):
-    """模型自己申报的丢弃：一条都不许默默丢掉（`04-未决.md` C5 后半）。"""
+    #: 模型自己申报的丢弃：一条都不许默默丢掉（`04-未决.md` C5 后半）。
 
     handle: str = Field(min_length=1, description="席位条目地址，如 seat.business_rules:O1")
     reason: str = Field(min_length=1, description="一句话：为什么这条意见没有进卡片")
 
 
 class DispositionsPacket(BaseModel):
-    """归因补交代那条**小调用**的唯一回答形状（`02` §11.0.38）。
-
-    只有 `dropped_opinions` 一个字段，而且只回答"我点名的那些里，哪些是你没采用的"。
-    为什么不让它回"我用了"：那样等于**让模型自己把"没人交代"这条指标清零**，
-    而 `04-未决.md` C5 早就否掉了"赌模型老实交代"这条设计。**它没列的就仍算没交代**，
-    沉默还是沉默——这条指标才不会被自报抹平。
-    """
+    #: 归因补交代那条**小调用**的唯一回答形状（`02` §11.0.38）。
+    #:
+    #:    只有 `dropped_opinions` 一个字段，而且只回答"我点名的那些里，哪些是你没采用的"。
+    #:    为什么不让它回"我用了"：那样等于**让模型自己把"没人交代"这条指标清零**，
+    #:    而 `04-未决.md` C5 早就否掉了"赌模型老实交代"这条设计。**它没列的就仍算没交代**，
+    #:    沉默还是沉默——这条指标才不会被自报抹平。
+    #:
 
     dropped_opinions: list[DroppedOpinionDraft] = Field(
         default_factory=list,
@@ -486,12 +486,12 @@ class IntegrationPacket(BaseModel):
 
 
 class MemoryChangeDraft(BaseModel):
-    """记忆变更指令（M6）。**提议，不是事实**——只有用户在草案卡上勾了才生效。
-
-    形状故意宽松（与 `DroppedOpinionDraft` 同一个理由）：模型写歪的东西正是要留痕的东西。
-    真正的判据在领域层（`domain/memory/memory.py::screen_changes`）：缺出处 / 账本里没有 /
-    点名不存在 / 超两行 / 装不下——一处实现，这里不重复判。
-    """
+    #: 记忆变更指令（M6）。**提议，不是事实**——只有用户在草案卡上勾了才生效。
+    #:
+    #:    形状故意宽松（与 `DroppedOpinionDraft` 同一个理由）：模型写歪的东西正是要留痕的东西。
+    #:    真正的判据在领域层（`domain/memory/memory.py::screen_changes`）：缺出处 / 账本里没有 /
+    #:    点名不存在 / 超两行 / 装不下——一处实现，这里不重复判。
+    #:
 
     op: Literal["add", "update", "merge", "delete"]
     kind: Literal["decision", "rejected", "lesson"]
@@ -507,7 +507,7 @@ class MemoryChangeDraft(BaseModel):
 
 
 class MemoryPacket(BaseModel):
-    """记忆整理者的唯一回答形状。`changes` 上限 5 条：一轮能攒下的"值得记住的事"没那么多。"""
+    #: 记忆整理者的唯一回答形状。`changes` 上限 5 条：一轮能攒下的"值得记住的事"没那么多。
 
     changes: list[MemoryChangeDraft] = Field(
         default_factory=list,
