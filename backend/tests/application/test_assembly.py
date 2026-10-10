@@ -458,6 +458,50 @@ def test_the_duplicate_trace_says_which_question_was_dropped_and_why():
     assert "同一件事" in trace.reason
 
 
+def test_a_question_the_model_wrote_twice_in_one_packet_is_still_its_fault():
+    """**同一包里写两遍**仍然是模型的错——判"该不该算它的错"不能一刀切。
+
+    这是 2026-10-09 拆分留痕时踩到的洞：第一版把"撞用户已表过态的题"当唯一例外，
+    结果把这一类比成"正确行为"了。而它明明是模型自己在一份输出里重复了
+    （真跑 `r-b6eb3c45` 那 3 条里最后一条正是这种：第 2 批的报文自己重了）。
+
+    所以分的是**三种**：自己写重 / 问出去过而用户没碰过（提示词里没有它）/
+    其余（模型本来就知道）。
+    """
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(), question_draft()]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    (trace,) = result.dropped
+    assert "同一件事问了两遍" in trace.reason
+
+
+def test_a_repeat_of_a_question_the_user_already_answered_is_not_the_models_fault():
+
+    result = assembly.assemble(
+        packet(
+            questions=[
+                question_draft(title="谁能执行导出？", target={"zone": "body", "section_id": "s3"})
+            ]
+        ),
+        round_=round_after_skipping_a_question(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert result.questions == ()
+    (trace,) = result.dropped
+    assert trace.source is DropSource.ASSEMBLY
+    assert "又问了一遍" in trace.reason
+    assert "谁能执行导出？" in trace.reason
+    # 判据只认"模型看不见"那一类，所以这句话不能被它当成红灯
+    assert "同一件事问了两遍" not in trace.reason
+
+
 def test_the_same_place_asked_differently_is_not_a_duplicate():
     """挪一个问法就不是同一道题：同一去处上的另一件事照问（别把去重做过头）。"""
 

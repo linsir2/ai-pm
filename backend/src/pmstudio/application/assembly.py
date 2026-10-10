@@ -624,11 +624,16 @@ def assemble(
     seen_questions = {question_key(item) for item in ordered}
     # 本轮**问过的**题也进种子（含已跳过）：同一轮里问过就不再问第二遍（D2）。
     # 原来只看"carried + 本批"，第一批量级那道题在第二批被原样再问一遍（报告 F6）。
-    seen_questions |= {
-        question_key(question)
-        for form in round_.questionnaire_history
-        for question in form.questions
-    }
+    #
+    # 同时记下"这道题的出处是哪一批的哪一号"——判重只认 `(去处, 问法)`，
+    # 而知不知道该算模型的错要看 `(form_id, 题号)`（用户碰过哪几道题的键）。
+    # 两边是**两套键**，所以要在这里留一张对照表，判重时才查得回原题。
+    asked_identity: dict[tuple[str, str], tuple[str, str]] = {}
+    for form in round_.questionnaire_history:
+        for question in form.questions:
+            key = question_key(question)
+            seen_questions.add(key)
+            asked_identity[key] = (str(form.form_id), str(question.question_id))
     for item in feature_questions:
         ordered.append(item)
         seen_questions.add(question_key(item))
@@ -646,6 +651,8 @@ def assemble(
         if item.type is QuestionType.TEXT and item.target.field is not None
     }
     fresh: list[Question] = []
+    # 这一包报文里已经出现过的题（判"该不该算模型的错"用：自己刚写重的是第①类）。
+    current_batch_keys: set[tuple[str, str]] = set()
     for index, item in enumerate(packet.questions, start=1):
         target = _target_or_drop(
             item.target, dropped=dropped, pass_index=pass_index, what="题目", index=index
@@ -670,14 +677,33 @@ def assemble(
         if question_key(question) in seen_questions:
             # 丢掉新出的那份（留先出的），但**必须留痕**：这里是整个装配层唯一一处
             # "丢掉却什么都不说"的地方——同类丢弃（去处写错 `:646`、条目不存在 `:567`、
-            # 让位 `:671`）全都留痕。模型收不到任何提示、这一趟 token 白烧了，
-            # 系统也不留证据，于是 `no_duplicate_questions` 判据读问卷
-            # （去重**之后**的产物）恒真，测不到任何模型行为（2026-10-09 真跑确认：
-            # 10 个 eval 用例 10/10 通过，零鉴别力）。
+            # 让位 `:671`）全都留痕。
+            #
+            # **要红灯还是留痕即止，分三种情形**（判据只认第一种）：
+            # ① **它自己在这一包里把同一件事写了两遍** —— 它的错
+            #    （真跑 `r-b6eb3c45` 那 3 条里的最后一条就是这种：第 2 批的报文自己重了）；
+            # ② **这道问出去过、而用户一个字都没答** —— 提示词里**没有它**：
+            #    `$asked_questions` 之外没有任何槽渲染"问过但没答也没跳过"的题，
+            #    模型无从避开。这才是红灯。
+            # ③ 其余：撞 carried 的老问题、撞系统自造的功能题、撞用户**答过 / 跳过**的题
+            #    —— 都是模型**本来就知道**的（`$open_items` 明写"少做一份把同一件事
+            #    重新问一遍的活"，`$answered` / `$skipped` 渲染答与跳）。重复了照丢，
+            #    用户侧没有任何损失：真跑 10 个 eval 轮次，补上 ② 之后剩的 5 条全是这一类。
+            key = question_key(question)
+            asked_of = asked_identity.get(key)
+            its_own_copy = key in current_batch_keys
+            invisible = asked_of is not None and asked_of not in round_.touched_question_keys
+            if its_own_copy or invisible:
+                reason = f"同一件事问了两遍，丢掉新出的这份：「{question.title}」"
+            else:
+                reason = (
+                    f"刚问过的题又问了一遍（用户已经答过或跳过），"
+                    f"丢掉这份：「{question.title}」"
+                )
             dropped.append(
                 DroppedItem(
                     handle=f"题目 #{index}",
-                    reason=f"同一件事问了两遍，丢掉新出的这份：「{question.title}」",
+                    reason=reason,
                     source=DropSource.ASSEMBLY,
                     seat_id=None,
                     pass_index=pass_index,
@@ -702,6 +728,7 @@ def assemble(
             )
             continue
         fresh.append(question)
+        current_batch_keys.add(question_key(question))
     # 排序两级（`sorted` 稳定 → 同级保持模型给的顺序）：
     #   ① **阻塞题先问**（P21 F20）：只有它挡交付，被挤进 `deferred` 就会落成 s11 的
     #      〔未决·阻塞〕——真跑里一轮产出的阻塞题没被问出去，ready 就"永远差一轮"。

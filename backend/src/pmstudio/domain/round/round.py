@@ -389,6 +389,28 @@ class Round:
         return sum(len(form.questions) for form in self._questionnaire_history)
 
     @property
+    def touched_question_keys(self) -> frozenset[tuple[str, str]]:
+        """用户**已经表过态**的题的身份集合：答了的 + 显式跳过的。
+
+        为什么要有它：这些题是"模型看得见的"——`$answered` 与 `$skipped` 两段渲染的就是它们。
+        反过来，问过但没答也没跳过的题**模型看不见**（提示词里一个字都没有）。这个区别决定了
+        模型重问一道题时该不该算它的错，装配层与渲染层都要用同一个判据，
+        所以它是领域事实而不是工具函数。
+
+        身份是 `(form_id, question_id)`（不是裸题号）：题号跨批会重复（D4 之前的老库），
+        用裸题号会把上一批的题面挂到这一批的题号上。
+        """
+
+        return frozenset(
+            (str(answer_set.form_id), str(item))
+            for answer_set in self._answer_sets
+            for item in (
+                [answer.question_id for answer in answer_set.answers]
+                + list(answer_set.skipped)
+            )
+        )
+
+    @property
     def draft(self) -> Draft | None:
         return self._draft
 

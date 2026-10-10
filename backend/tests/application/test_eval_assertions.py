@@ -212,6 +212,38 @@ def test_the_duplicate_assertion_ignores_other_kinds_of_trace():
     assert check({"type": "no_duplicate_questions"}, view) is None
 
 
+def test_a_repeat_of_an_answered_question_is_not_a_red_light():
+    """**撞用户已经表过态的题，不算红**（2026-10-09 判据拆分）。
+
+    真跑实证：补上"问过但没答也没跳过"那一段之后，10 个 eval 轮次剩 5 条重复题，
+    **5/5 全撞用户已跳过的题**——而 `$skipped` 那一段本来就渲染给模型看。
+    模型重问、系统丢掉，用户侧结果与再问他一次完全相同（他还是会跳过）。
+    那是**正确行为**；把它算成红，等于用一盏误导人的灯惩罚系统做对的事。
+
+    真正的 bug（模型看不见的题）是另一类，判据照旧抓它——
+    见 `test_the_duplicate_assertion_reads_the_trace_not_the_questionnaire`。
+    """
+
+    view = view_of(
+        round_with(
+            [question("q1", target=Target.body("s8"))],
+            dropped=(
+                DroppedItem(
+                    handle="题目 #2",
+                    reason=(
+                        "刚问过的题又问了一遍（用户已经答过或跳过），丢掉这份：「这面怎么定？」"
+                    ),
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                ),
+            ),
+        )
+    )
+
+    assert check({"type": "no_duplicate_questions"}, view) is None
+
+
 def test_the_duplicate_assertion_stays_quiet_on_rounds_written_before_the_trace_existed():
     """老轮次的留痕里没有这一类——历史轮次不该因为判据改了就假红。"""
 

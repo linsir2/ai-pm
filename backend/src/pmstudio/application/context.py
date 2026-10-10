@@ -590,17 +590,10 @@ def render_asked_questions(round_: Round) -> str:
     用裸题号会把上一批的题面挂到这一批的题号上。
     """
 
-    touched = {
-        (str(answer_set.form_id), str(item))
-        for answer_set in round_.answer_sets
-        for item in (
-            [answer.question_id for answer in answer_set.answers] + list(answer_set.skipped)
-        )
-    }
     pending: list[str] = []
     for form in round_.questionnaire_history:
         for question in form.questions:
-            if (str(form.form_id), str(question.question_id)) in touched:
+            if (str(form.form_id), str(question.question_id)) in round_.touched_question_keys:
                 continue
             pending.append(f"- {question.question_id} {question.title}")
     if not pending:
