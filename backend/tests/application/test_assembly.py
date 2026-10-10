@@ -2460,3 +2460,4 @@ def test_cited_eids_unions_proposals_and_questions():
     assert assembly.cited_eids(proposals, questions) == frozenset(
         {EvidenceId("E1"), EvidenceId("E2")}
     )
+

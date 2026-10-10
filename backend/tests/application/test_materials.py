@@ -12,9 +12,16 @@ import pytest
 
 from pmstudio.application.dto import MaterialChunk, MaterialPacket, ParsedMaterial
 from pmstudio.application.errors import UnsupportedMaterial  # noqa: F401  (接口存在性)
+from pmstudio.application.use_cases import _unreferenced_materials_for
+from pmstudio.domain.authoring.instruction import WriteInstruction  # noqa: F401
 from pmstudio.domain.provenance.evidence import EvidenceKind
+from pmstudio.domain.round.draft import Origin, OriginType, Proposal
+from pmstudio.domain.round.round import MaterialRef, Round
+from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.errors import ShapeError
-from pmstudio.domain.shared.ids import RoundId
+from pmstudio.domain.shared.ids import EvidenceId, RoundId
+from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.writing import WriteOp
 from tests.support.builders import NOW, PROJECT, SEAT
 from tests.support.harness import Harness
 
@@ -264,3 +271,98 @@ async def test_evidence_lookup_shows_material_in_claim_chain():
     )
     view = await harness.get_evidence()(project_id=PROJECT, eid=str(claim_eid))
     assert [item.eid for item in view.chain] == [str(claim_eid), "E1"]
+
+
+# ── 装配层与材料块的**摆放顺序**无关（`02 §11.0.54` 的前提）────────────────
+#
+# 材料节的呈现改成 U 型之后，"哪些块被引用了"的核算必须不受影响。
+# 装配层只按集合消费编号（`cited_eids` 返回 frozenset），这里钉死它。
+
+
+def test_the_material_accounting_ignores_the_order_blocks_are_stored_in():
+    def round_with(*refs):
+        round_ = Round(
+            round_id=RoundId("r1"),
+            project_id=PROJECT,
+            user_input="按这份写",
+            created_at=NOW,
+            step=Step.DONE,
+            waiting_on=WaitingOn.NONE,
+        )
+        round_.add_materials(refs)
+        return round_
+
+    refs = [
+        MaterialRef(
+            material_id="m1", chunk_id=f"m1#c{index:02d}", eid=EvidenceId(f"E{10 + index}")
+        )
+        for index in range(6)
+    ]
+    proposal = Proposal(
+        proposal_id="p1",
+        entry_id="en1",
+        op=WriteOp.ADD,
+        target=Target.body("s5"),
+        text="测试提案",
+        origin=Origin(type=OriginType.USER, refs=(EvidenceId("E10"),)),
+    )
+
+    forward = _unreferenced_materials_for(round_with(*refs), proposals=[proposal], questions=())
+    backward = _unreferenced_materials_for(
+        round_with(*reversed(refs)), proposals=[proposal], questions=()
+    )
+
+    assert set(forward) == set(backward)
+    assert "E10" not in forward        # 被引用的那份不算零引用，两种摆法下都不算
+    assert len(forward) == 5
+
+
+async def test_the_same_chunk_gets_the_same_number_no_matter_how_relevant_it_is():
+    """编号按**文档顺序**发，不按相关度发。
+
+    相关度是本轮输入算出来的：让它决定编号，等于同一份材料换个问法就换一套号——
+    记忆条目、F35 核算、用户对着材料卡找 `[E15]`，全都要跟问法联动。
+    所以：相关度只决定**挑哪些**与**怎么摆**，编号始终按"第几份材料 × 第几块"。
+    """
+
+    harness = harness_with_material("甲甲甲甲", "导出权限说明", "乙乙乙乙")
+    await started_round(harness, user_input="按这份材料写，导出权限该怎么定")
+
+    ledger = harness.evidences.get(PROJECT)
+    externals = [item for item in ledger.evidences() if item.kind is EvidenceKind.EXTERNAL]
+    assert [item.text for item in externals] == ["甲甲甲甲", "导出权限说明", "乙乙乙乙"]
+    assert externals[1].eid != externals[0].eid
+
+    # 换个问法（"导出"仍命中第二块，但分数更高）：同一份材料的编号形状不变
+    other = harness_with_material("甲甲甲甲", "导出权限说明", "乙乙乙乙")
+    await started_round(other, user_input="按这份材料写，只想要导出的部分")
+    externals2 = [
+        item for item in other.evidences.get(PROJECT).evidences()
+        if item.kind is EvidenceKind.EXTERNAL
+    ]
+    assert [item.text for item in externals2] == ["甲甲甲甲", "导出权限说明", "乙乙乙乙"]
+
+
+async def test_the_material_card_reads_in_document_order_not_relevance_order():
+    """材料卡按**文档顺序**排（用户看的是原文，不是相关度榜单）。
+
+    提示词那一节是 U 型（`context.ushape`，给模型躲中段低谷用的），卡片是给人读的——
+    两个顺序，各自服务各自的人。编号也按文档序发，所以卡上号码顺序走。
+    """
+
+    harness = harness_with_material("甲甲甲甲", "导出权限说明在这里", "乙乙乙乙", "丙丙丙丙")
+    round_id = await started_round(harness, user_input="按这份材料写，导出权限该怎么定")
+
+    from pmstudio.application.dto import round_material_views
+
+    views = round_material_views(
+        harness.rounds.get(RoundId(round_id)), materials=[harness.materials.get("m1")]
+    )
+    assert [chunk.chunk_id for chunk in views[0].chunks] == [
+        "m1#c00",
+        "m1#c01",
+        "m1#c02",
+        "m1#c03",
+    ]
+    eids = [chunk.eid for chunk in views[0].chunks]
+    assert eids == sorted(eids)      # 编号也按文档序，所以卡上顺序走

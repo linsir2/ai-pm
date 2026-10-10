@@ -884,3 +884,64 @@ def test_render_reviews_compact_empty():
         context.render_reviews_compact((), ledger=None, round_id=RoundId("r1"))
         == "（没有席位意见）"
     )
+
+
+# ── U 型呈现（`02 §11.0.54`）───────────────────────────────────────────
+#
+# 粗排把"最可能相关"的块挑出来之后，**怎么摆**是另一件事：大模型对 Prompt 中间位置的
+# 关注度明显低于首尾（lost-in-the-middle）。所以最强的一批摆首尾、最弱的摆中间。
+# 只在材料这一节做，且是纯函数——同一输入永远同一输出（KV 缓存的前缀稳定靠这条）。
+
+
+def test_ushape_puts_the_strongest_first_and_last():
+    assert context.ushape([1, 2, 3, 4, 5, 6]) == [1, 2, 3, 6, 5, 4]
+    assert context.ushape([1, 2, 3, 4, 5]) == [1, 2, 5, 4, 3]
+
+
+def test_ushape_of_a_short_list_is_the_list_itself():
+    assert context.ushape([1]) == [1]
+    assert context.ushape([1, 2]) == [1, 2]
+    assert context.ushape([]) == []
+
+
+def test_ushape_is_stable_under_repeated_calls():
+    """同一输入必须同一输出——否则同一轮里三次调用会渲染出三份不同的材料节，
+    `prompt_sha` 漂移、跨轮前缀命中也别想。"""
+
+    ranked = [f"块{index}" for index in range(9)]
+
+    assert context.ushape(ranked) == context.ushape(ranked)
+
+
+def test_the_material_section_is_u_shaped():
+    """六块按相关度降序进来（c00 最强），渲染出来必须是 U 型：c00 c01 c02 c05 c04 c03。
+
+    编号各自不同，才能从渲染结果里把顺序读出来。
+    """
+
+    packet = make_packet(*[f"导出权限说明{index}" for index in range(6)])
+    eids = {f"m1#c{index:02d}": EvidenceId(f"E{10 + index}") for index in range(6)}
+
+    rendered = context.render_materials([(packet, eids)])
+
+    shown = [
+        line[1 : line.index("]")] for line in rendered.text.splitlines() if line.startswith("[E")
+    ]
+    assert shown == ["E10", "E11", "E12", "E15", "E14", "E13"]
+
+
+def test_the_material_section_is_byte_identical_when_rendered_twice():
+    """KV 缓存的前提：同一份输入渲染两遍必须逐字相同。
+
+    同一轮里分析者、每个席位、整合者渲染的是**同一段**材料节；它只要抖一个字节，
+    `prompt_sha` 就漂、跨轮的前缀命中也别想。这条钉住 `ushape` 是纯函数这件事。
+    """
+
+    packet = make_packet(*[f"块{index}" for index in range(9)])
+    eids = {f"m1#c{index:02d}": EvidenceId(f"E{20 + index}") for index in range(9)}
+
+    first = context.render_materials([(packet, eids)])
+    second = context.render_materials([(packet, eids)])
+
+    assert first.text == second.text
+    assert first.used_chunk_ids == second.used_chunk_ids

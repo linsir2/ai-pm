@@ -835,6 +835,29 @@ class RenderedMaterial:
     used_chunk_ids: tuple[str, ...]
 
 
+def ushape[T](items: Sequence[T]) -> list[T]:
+    """把**按相关度降序**的列表重排成 U 型：最强的一批摆首尾，最弱的摆中间。
+
+    `[1,2,3,4,5,6] → [1,2,3,6,5,4]`——前半保持降序，后半倒序。
+
+    为什么：大模型对 Prompt 中间位置的信息关注度明显低于首尾（lost-in-the-middle）。
+    相关度降序摆进去，等于把最相关的第 4、5、6 条正正扔进注意力低谷。
+    这个重排几乎零成本（一次切片），而且**是纯函数**：同一输入永远同一输出——
+    这一点对 KV 缓存是必需的（同一轮里分析者、每个席位、整合者渲染出的材料节必须逐字相同，
+    否则 `prompt_sha` 漂移、跨轮前缀命中也别想）。
+
+    只重排**同一份材料内部**的块：提示词里每种材料是连续一段（有自己的小标题），
+    段与段之间不能穿插，否则「来源：URL」那种小标题就和内容对不上了。
+
+    **不进联网检索那条路**：那里的预算安全网用 `break` 截断，U 型之后再截，
+    "只带了前 N 条"这句话就不再为真。说不清就不做。
+    """
+
+    items = list(items)
+    middle = len(items) // 2
+    return items[:middle] + items[middle:][::-1]
+
+
 def render_materials(
     entries: Sequence[tuple[MaterialPacket, Mapping[str, EvidenceId]]],
     *,
@@ -864,13 +887,17 @@ def render_materials(
             # 不占这份预算。
             head += f"\n来源：{parsed.source_ref}"
         lines.append(head)
-        for chunk in parsed.chunks:
-            eid = eids.get(chunk.chunk_id)
-            if eid is None:
+        # 呈现顺序 U 型（`ushape`）：发号顺序与呈现顺序**必须是同一个序**——
+        # 否则提示词里的编号会跳着走（`[E15] [E12] [E18]`），用户对着材料卡找不到北。
+        # 所以这里按调用方给的顺序（= `select_chunks` 挑完的顺序）走，不再按文档序。
+        by_id = {chunk.chunk_id: chunk for chunk in parsed.chunks}
+        for chunk_id in ushape(list(eids)):
+            chunk = by_id.get(chunk_id)
+            if chunk is None:
                 continue
-            lines.append(f"[{eid}] {chunk.anchor}")
+            lines.append(f"[{eids[chunk_id]}] {chunk.anchor}")
             lines.append(chunk.text)
-            used_ids.append(chunk.chunk_id)
+            used_ids.append(chunk_id)
         for warning in parsed.warnings:
             lines.append(f"（{warning}）")
         kept = len(used_ids)

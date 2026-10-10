@@ -401,20 +401,39 @@ class StartRound:
             )
             if picked:
                 # 逐块记 `external` 出处：**只有带进这一轮的块才有编号**（口径见 02 §11.0.28）
+                #
+                # 编号顺序与存储顺序**故意不同**，各有各的主人：
+                # · 编号按**文档顺序**（用户勾选顺序 × 块序）——编号是这一轮的身份：
+                #   同一份材料、同一句输入，编号形状不随相关度变；材料卡按行读，号码也顺序走。
+                # · 存储按**相关度顺序**（`select_chunks` 挑完的序）——提示词里材料节按它
+                #   做 U 型呈现（`context.ushape`），把最强的摆到首尾、躲开中段注意力低谷。
+                # **代价说清**：于是提示词里的编号不是单调的（`[E2][E1][E3][E6][E5][E4]`）。
+                # 这是有意的取舍——编号的稳定性（不跟 query 跑）比"读起来顺"重要，
+                # 而模型从不按顺序读编号，人对着锚点与材料卡也找得着。
                 ledger = self._evidence.get(project_id)
+                position = {
+                    material_id: index
+                    for index, material_id in enumerate(dict.fromkeys(material_ids))
+                }
+                eid_of = {
+                    (material_id, chunk.chunk_id): ledger.record(
+                        kind=_material_kind(packets[material_id]),
+                        text=chunk.text,
+                        source=EvidenceSource(
+                            external_ref=_external_ref(packets[material_id], chunk)
+                        ),
+                        now=self._clock.now(),
+                    )
+                    for material_id, chunk in sorted(
+                        picked, key=lambda item: (position[item[0]], item[1].ordinal)
+                    )
+                }
                 round_.add_materials(
                     [
                         MaterialRef(
                             material_id=material_id,
                             chunk_id=chunk.chunk_id,
-                            eid=ledger.record(
-                                kind=_material_kind(packets[material_id]),
-                                text=chunk.text,
-                                source=EvidenceSource(
-                                    external_ref=_external_ref(packets[material_id], chunk)
-                                ),
-                                now=self._clock.now(),
-                            ),
+                            eid=eid_of[(material_id, chunk.chunk_id)],
                         )
                         for material_id, chunk in picked
                     ]
