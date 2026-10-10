@@ -41,6 +41,9 @@ export function TopBar({
   connection,
   onSelectProject,
   onExport,
+  /** 左上角标识：点了回项目列表。没有项目时不传（顶栏就没有可回的
+      地方——那一屏本来就在 `Onboarding`）。 */
+  onHome,
   libraryCount = 0,
   onOpenLibrary,
   inboxCount = 0,
@@ -53,6 +56,7 @@ export function TopBar({
   project: ProjectSummaryView | null;
   connection: "idle" | "open" | "lost";
   onSelectProject: (projectId: string) => void;
+  onHome?: () => void;
   onExport: () => void;
   /** 材料库入口（顶栏）：显示库里有几份，点开抽屉。 */
   libraryCount?: number;
@@ -80,10 +84,18 @@ export function TopBar({
 
   return (
     <header className="topbar">
-      <span className="wordmark">
-        <Logo />
-        <span className="wordmark__name">PM Studio</span>
-      </span>
+      {onHome !== undefined ? (
+        <button type="button" className="wordmark wordmark--button" onClick={onHome}
+          title="查看所有项目">
+          <Logo />
+          <span className="wordmark__name">PM Studio</span>
+        </button>
+      ) : (
+        <span className="wordmark">
+          <Logo />
+          <span className="wordmark__name">PM Studio</span>
+        </span>
+      )}
 
       {project !== null && (
         <>

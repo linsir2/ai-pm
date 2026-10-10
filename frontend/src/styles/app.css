@@ -124,6 +124,79 @@ a {
   letter-spacing: 0.02em;
 }
 
+/* 左上角标识点了回项目列表：可聚焦，所以要 reset 成按钮的样子
+   （顶栏其它按钮也走同一套 reset，见 `.topbar__btn`）。 */
+.wordmark--button {
+  border: 0;
+  background: none;
+  padding: 4px 6px;
+  margin-left: -6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.wordmark--button:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+
+/* 项目列表：行式列表与左栏章节列表同一套语言（hover / 圆角 / 左对齐），
+   不另造一种卡片。 */
+.projects__head {
+  margin-bottom: var(--space-6);
+}
+
+.projects {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.projects__item {
+  border-bottom: 1px solid var(--border);
+}
+
+.projects__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  width: 100%;
+  padding: var(--space-3) var(--space-2);
+  border: 0;
+  background: none;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+  transition: background var(--dur-micro) var(--ease-out);
+}
+
+.projects__row:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.projects__title {
+  font-size: var(--step-5);
+  font-weight: 500;
+}
+
+.projects__meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--step-0);
+  color: var(--open);
+  white-space: nowrap;
+}
+
+.projects__version {
+  font-variant-numeric: tabular-nums;
+}
+
 .topbar__spacer {
   flex: 1;
 }

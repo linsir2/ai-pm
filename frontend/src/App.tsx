@@ -30,6 +30,7 @@ import type { LoopTab } from "./components/LoopColumn";
 import { MaterialLibrary } from "./components/MaterialLibrary";
 import { MemoryDrawer } from "./components/MemoryDrawer";
 import { Onboarding } from "./components/Onboarding";
+import { ProjectList } from "./components/ProjectList";
 import { ReadinessDrawer } from "./components/ReadinessDrawer";
 import { ResearchDrawer } from "./components/ResearchDrawer";
 import { SideRail } from "./components/SideRail";
@@ -66,6 +67,10 @@ export default function App() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
+  /** 顶层视图：项目列表 ⇄ 工作区。**纯 UI 态，不进 URL、不进后端**——
+      `?project=` 才是要留着刷新恢复的那一个（两者性质不同，混在一起就要回答
+      "刷新时有 view=projects 没 project 该去哪"）。 */
+  const [listing, setListing] = useState(false);
 
   const mode = awaitingMode(round);
   const project = state.project;
@@ -219,6 +224,38 @@ export default function App() {
     [project, data.pending],
   );
 
+  // 顶层视图：项目列表。项目一个都没有时它内部自己落回 `Onboarding`，
+  // 所以这里**不需要**额外的空态分支。
+  if (listing) {
+    return (
+      <div className="shell shell--plain">
+        <TopBar
+          projects={projects}
+          project={null}
+          connection={state.connection}
+          onSelectProject={data.selectProject}
+          onExport={() => void data.exportMarkdown()}
+          onHome={() => setListing(false)}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+        />
+        <main className="doc" aria-label="项目列表">
+          <ProjectList
+            projects={projects}
+            onOpen={(projectId) => {
+              setListing(false);
+              data.selectProject(projectId);
+            }}
+            onCreate={(title) => void data.createProject(title)}
+            pending={data.pending !== null}
+            error={data.bootError}
+            booting={data.booting}
+          />
+        </main>
+      </div>
+    );
+  }
+
   if (project === null) {
     return (
       <div className="shell shell--plain">
@@ -229,7 +266,7 @@ export default function App() {
           onSelectProject={data.selectProject}
           onExport={() => void data.exportMarkdown()}
           theme={theme}
-          onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+          onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
         />
         <main className="doc" aria-label="产品文档">
           <div className="doc__inner">
@@ -260,6 +297,7 @@ export default function App() {
             connection={state.connection}
             onSelectProject={data.selectProject}
             onExport={() => void data.exportMarkdown()}
+            onHome={() => setListing(true)}
             libraryCount={data.materials.length}
             onOpenLibrary={() => setLibraryOpen(true)}
             inboxCount={inboxCount(data.discussions, data.explorations)}
