@@ -417,6 +417,47 @@ def test_a_question_already_asked_this_round_is_not_asked_again():
     assert result.deferred == ()
 
 
+def test_a_question_asked_twice_in_one_batch_leaves_a_trace():
+    """**同一批里**问了两遍的那一份要留痕——丢东西却什么都不说，是整个装配层
+    唯一一处这样的地方（同类丢弃：去处写错 `:646`、条目不存在 `:567`、让位 `:671`
+    全都留痕）。
+
+    后果有两层：模型收不到任何提示、它这一趟的 token 白烧了；系统也没留下证据，
+    于是 `no_duplicate_questions` 判据读问卷（去重**之后**的产物）恒真，测不到
+    任何模型行为（2026-10-09 真跑确认：10/10 通过、零鉴别力）。
+    """
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(), question_draft()]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert len(result.questions) == 1
+    assert len(result.dropped) == 1
+
+
+def test_the_duplicate_trace_says_which_question_was_dropped_and_why():
+    """留痕要能回答"丢的是哪一道、为什么丢"：题目面 + 一句原因 + 报文里的第几条。
+
+    `handle` 用 `题目 #N`——与让位那条留痕（`:671`）同一格式，不另发明。
+    """
+
+    result = assembly.assemble(
+        packet(questions=[question_draft(), question_draft()]),
+        round_=make_round(),
+        document=document_with_feature(),
+        ledger=ledger_with_two_entries(),
+    )
+
+    (trace,) = result.dropped
+    assert trace.handle == "题目 #2"
+    assert trace.source is DropSource.ASSEMBLY
+    assert "单次导出的最大行数是多少？" in trace.reason
+    assert "同一件事" in trace.reason
+
+
 def test_the_same_place_asked_differently_is_not_a_duplicate():
     """挪一个问法就不是同一道题：同一去处上的另一件事照问（别把去重做过头）。"""
 

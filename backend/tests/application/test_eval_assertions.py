@@ -108,8 +108,19 @@ def test_questions_must_stay_within_the_batch_limit():
     assert check({"type": "questions_at_most", "count": 5}, view) is None
 
 
-def test_the_same_question_asked_twice_is_a_duplicate():
-    """真重复 = 同一去处 + **同一问法**（这里 helper 的标题是固定的，所以算重复）。"""
+def test_two_questions_with_the_same_title_in_one_form_no_longer_mean_anything_here():
+    """这道用例钉的是**旧机制**，已经作废（2026-10-09 判据改读留痕）。
+
+    原来它造两道同去处同问法的题进问卷、期待判据报红——但**问卷里不可能有重复题**：
+    模型出的重复题在 `application/assembly.py:666` 装配时就被去重丢掉了。所以这条
+    用例过去测的是一个**永远为真的分支**：它绿，判据却从来没真正测到过模型行为
+    （真跑 10/10 通过、零鉴别力）。
+
+    现在同样的意图由 `test_the_duplicate_assertion_reads_the_trace_not_the_questionnaire`
+    接着，而且那边造的是**真实情形**（问卷里没有重复、留痕里有）。
+    这里改成钉住那条"读不出来也不算错"：同 form 里两道同标题的题，问卷原样展开，
+    判据不因为它们报错——判据认的是留痕，不是问卷内容。
+    """
 
     view = view_of(
         round_with(
@@ -120,10 +131,7 @@ def test_the_same_question_asked_twice_is_a_duplicate():
         )
     )
 
-    failure = check({"type": "no_duplicate_questions"}, view)
-
-    assert failure is not None
-    assert "s8" in failure
+    assert check({"type": "no_duplicate_questions"}, view) is None
 
 
 def test_two_different_questions_on_the_same_place_are_allowed():
@@ -142,6 +150,87 @@ def test_two_different_questions_on_the_same_place_are_allowed():
     same_place[1] = replace(same_place[1], title="对端不可用时的降级策略确认")
 
     assert check({"type": "no_duplicate_questions"}, view_of(round_with(same_place))) is None
+
+
+def test_the_duplicate_assertion_reads_the_trace_not_the_questionnaire():
+    """判据读**留痕**——问卷里已经看不到重复题了。
+
+    模型出的重复题在 `assembly.py:666` 装配时就被去重丢掉，**永远进不了问卷**。
+    判据读 `view.questions` 等于读"去重之后的产物"，恒真、零鉴别力：10 个 eval 用例
+    全跑一遍 `no_duplicate_questions` 10/10 通过，而真跑里模型重复出题是真会发生的
+    （P28 T0：同一轮出两份只差一个句末问号的题）。
+
+    所以这一条必须造出**真实情形**：问卷里没有重复、留痕里有。
+    """
+
+    view = view_of(
+        round_with(
+            [question("q1", target=Target.body("s8"))],  # 问卷里只剩一道，重复的被丢了
+            dropped=(
+                DroppedItem(
+                    handle="题目 #2",
+                    reason="同一件事问了两遍，丢掉新出的这份：「这面怎么定？」",
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                ),
+            ),
+        )
+    )
+
+    failure = check({"type": "no_duplicate_questions"}, view)
+
+    assert failure is not None
+    assert "同一件事问了两遍" in failure
+
+
+def test_the_duplicate_assertion_ignores_other_kinds_of_trace():
+    """只认"重复题"这一类留痕：去处写错、条目不存在、让位那些不许算成重复出题。"""
+
+    view = view_of(
+        round_with(
+            [question("q1", target=Target.body("s8"))],
+            dropped=(
+                DroppedItem(
+                    handle="提案 #1",
+                    reason="去处写错了：s17 不在这一版的章节里",
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                ),
+                DroppedItem(
+                    handle="题目 #2",
+                    reason="同一个去处上本轮已经在问前几轮留下的未决题，先别重复问",
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                ),
+            ),
+        )
+    )
+
+    assert check({"type": "no_duplicate_questions"}, view) is None
+
+
+def test_the_duplicate_assertion_stays_quiet_on_rounds_written_before_the_trace_existed():
+    """老轮次的留痕里没有这一类——历史轮次不该因为判据改了就假红。"""
+
+    view = view_of(
+        round_with(
+            [question("q1", target=Target.body("s8"))],
+            dropped=(
+                DroppedItem(
+                    handle="seat.a:O1",
+                    reason="归因对不上号（旧记录：只留了地址，没留原因）",
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                ),
+            ),
+        )
+    )
+
+    assert check({"type": "no_duplicate_questions"}, view) is None
 
 
 def test_out_of_scope_items_are_labeled_when_both_surfaces_agree():

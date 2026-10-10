@@ -11,6 +11,15 @@ from pmstudio.application.sim_inquiry import SIM_NUMERIC
 
 EID = re.compile(r"^E\d+$")
 
+#: 装配层给"同一件事问了两遍"那条留痕的固定说法（`application/assembly.py`）。
+#:
+#: **判据靠它认出这一类留痕**，所以它是两侧的约定：装配层写它、判据找它。
+#: 用短语而不是新增一个 `DropSource` 枚举值——枚举值会一路进 SQLite payload、
+#: 进 API 契约、进前端 `DroppedView.source` 的联合类型，而这一类留痕在语义上
+#: 就是"装配层算出来的"（`DropSource.ASSEMBLY`，已有 11 处在用），单开一个值
+#: 只会多四处改动、多一份要同步的契约，换不来任何东西。
+_REPEAT_TRACE = "同一件事问了两遍"
+
 #: 跑每条用例时默认要过的十二条（case 里可以覆盖）
 EVAL_ASSERTIONS: list[dict] = [
     {"type": "evidence_refs_are_eids"},
@@ -38,12 +47,6 @@ EVAL_ASSERTIONS: list[dict] = [
 #: 要盯它就卸在**某条用例**上（case JSON 的 `extra_assertions`，与
 #: `contradiction_is_labelled` 同一个用法），或者用只读脚本
 #: `.codex/runs/2026-10-01/bin/measure_unaccounted.py` 复量。
-
-
-def normalized_title(text: str) -> str:
-    """标题归一化：空白与标点不参与判重（"这面怎么定？" 与 "这面怎么定" 是同一道题）。"""
-
-    return "".join(character for character in text if character.isalnum())
 
 
 def check(assertion: dict, view: RoundView) -> str | None:
@@ -89,18 +92,26 @@ def check(assertion: dict, view: RoundView) -> str | None:
         return None if not bad else f"这些提案没有依据：{'、'.join(bad)}"
 
     if kind == "no_duplicate_questions":
-        # 真重复 = **同一个去处 + 同一个问法**（2026-09-28 拍板）。
-        # 同一去处上的两件不同的事照问：各自有选项与跳过后果，合并会丢结构。
-        # 真模型实测（`case-a`）：`s8.availability` 上的"幂等性与重试策略"与
-        # "对端不可用时的降级策略"是两道题，旧的"只看去处"判据把它们判成了重复。
-        seen: dict[tuple[str, str], int] = {}
-        for question in view.questions:
-            key = (question.target_label, normalized_title(question.title))
-            seen[key] = seen.get(key, 0) + 1
+        # 判据读**留痕**，不是问卷——模型出的重复题在 `application/assembly.py:666`
+        # 装配时就被去重丢掉了，**永远进不了问卷**；`view.questions` 是去重**之后**的
+        # 产物，读它等于恒真：2026-10-09 真跑 10 个 eval 用例，10/10 通过、零鉴别力。
+        #
+        # 真重复 = **同一个去处 + 同一个问法**（2026-09-28 拍板）；同一去处上的两件不同
+        # 事照问（各自有选项与跳过后果，合并会丢结构）。真模型实测（`case-a`）：
+        # `s8.availability` 上的"幂等性与重试策略"与"对端不可用时的降级策略"是两道题，
+        # 旧的"只看去处"判据把它们判成了重复。
+        #
+        # **不复用装配层的 `_asked_how`**（`application/assembly.py`）：`evals` 的断言必须
+        # 是纯函数、不牵产品实现（见本文件头），而判据读的是**留痕原文**——留痕本身就在
+        # 判重的那一处写的，它的说法已经定了这一类。代价是两侧归一化函数不同：曾经判据
+        # 自己归一化、而它比装配层更宽松（`isalnum` 连中间标点也剥），只能多报不能漏报；
+        # 现在判据不归一化了，这条差异**随之消失**。
         repeated = sorted(
-            f"{target}｜{title}" for (target, title), count in seen.items() if count > 1
+            item.reason
+            for item in view.dropped
+            if item.source == "assembly" and _REPEAT_TRACE in item.reason
         )
-        return None if not repeated else f"同一道题问了两遍：{'、'.join(repeated)}"
+        return None if not repeated else f"同一道题问了两遍：{'、'.join(repeated[:5])}"
 
     if kind == "dropped_items_are_explained":
         bad = [item.handle for item in view.dropped if not item.reason.strip()]

@@ -64,6 +64,7 @@ from pmstudio.application.context import (
     build_round_digest,
     extract_observations_from_reviews,
     render_answers,
+    render_asked_questions,
     render_citations,
     render_claims,
     render_contradictions,
@@ -1940,6 +1941,12 @@ class IntegrateRound:
             answered, _, skipped = render_answers(
                 round_, ledger=self._evidence.get(round_.project_id)
             ).partition("--")
+            # 问过但没答也没跳过的那批题**另给一段**：`render_answers` 只认 `answer_sets`，
+            # 而"用户一道都没答就点确认"是正常主路径（`AnswerSet.__post_init__` 又规定
+            # 交卷至少要有一条答案或显式跳过，所以没有答案集 = 这一批一道都没碰过）——
+            # 那时题面一个字都不进提示词，模型下一趟就会把上一批的题逐字重写一遍
+            # （真跑 10 轮 14 条留痕，14/14 逐字相同），撞装配层判重被丢掉。
+            asked_questions = render_asked_questions(round_)
             view = document.view()
             try:
                 authorized_features = _render_authorized_features(
@@ -1966,6 +1973,8 @@ class IntegrateRound:
                     ),
             answered=answered,
             skipped=skipped,
+            # 问过、没答也没跳过的那批（模型看不见它们，只能靠这一段）
+            asked_questions=asked_questions,
             # 跨轮记忆（M6）：**已确认**的那些（席位与整合者看同一份渲染）
             project_memory=render_memory(self._memory.get(round_.project_id).entries),
             # L1 项目上下文：让整合者知道"我们在哪"

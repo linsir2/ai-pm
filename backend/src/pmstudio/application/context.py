@@ -566,6 +566,51 @@ def render_answers(round_: Round, *, ledger: EvidenceLedger | None = None) -> st
     return f"{answered}\n--\n{skipped}"
 
 
+#: 那一段为空时的固定文案（与 `NO_MEMORY_TEXT` / `NO_MATERIAL_TEXT` 同一约定：
+#: **不许留空段**——空段会让模型以为那里还有内容没显示）。
+NO_PENDING_QUESTION_TEXT = "（这一轮问过的题都答了或跳过了）"
+
+
+def render_asked_questions(round_: Round) -> str:
+    """**问过、但既没答也没跳过**的题——模型自己看不见它们，只能靠这一段。
+
+    为什么必须有：装配层 `assembly.py` 的 `seen_questions` 种子认这三类题
+    （carried / 本轮历史问卷 / 系统自造），命中的新题被判重丢掉；而渲染只认
+    `answer_sets`——**没有答案集时（用户直接点确认，这是正常主路径：
+    整合那一步明说「答案要么被引用、要么机械落地」）题面一个字都不进提示词**。
+
+    真跑实测（2026-10-09，10 个 eval轮次 14 条留痕）：**14/14 条题面与上一批完全相同**，
+    不是措辞近似——模型根本没看见过，于是逐字重写、撞判重被丢。
+
+    **单独一个槽，不塞进 `render_answers`**：调用侧（`use_cases.py`）用
+    `.partition("--")` 把它的输出切成 `answered` / `skipped` 两段，加第三段会被
+    切错位置、把没答的题显示在「用户跳过」标题下。
+
+    身份按 `(form_id, question_id)` 认：题号跨批会重复（D4 之前的老库），
+    用裸题号会把上一批的题面挂到这一批的题号上。
+    """
+
+    touched = {
+        (str(answer_set.form_id), str(item))
+        for answer_set in round_.answer_sets
+        for item in (
+            [answer.question_id for answer in answer_set.answers] + list(answer_set.skipped)
+        )
+    }
+    pending: list[str] = []
+    for form in round_.questionnaire_history:
+        for question in form.questions:
+            if (str(form.form_id), str(question.question_id)) in touched:
+                continue
+            pending.append(f"- {question.question_id} {question.title}")
+    if not pending:
+        return NO_PENDING_QUESTION_TEXT
+    return (
+        "下面这些**已经问过了、用户还没答也没跳过**——**别再出一遍**："
+        "重复的那条会被系统悄悄丢掉，你不会收到任何提示\n" + "\n".join(pending)
+    )
+
+
 def answer_eids(*, ledger: EvidenceLedger, round_id: RoundId) -> dict[str, str]:
     """题号 → 这条答案的出处编号（给席位做 `q3 → E8` 的引用翻译）。
 

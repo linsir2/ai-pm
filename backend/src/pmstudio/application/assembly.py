@@ -220,12 +220,16 @@ def strip_process_notes(title: str) -> str:
 
 
 def question_key(question: Question) -> tuple[str, str]:
-    """题目的身份：**同一个去处 + 同一个问法**算同一件事（与 eval 的重复题判据同一口径）。
+    """题目的身份：**同一个去处 + 同一个问法**算同一件事。
 
     问法里**首尾标点不算数**（P28 T0 真案例）：模型同一轮里出过
     "会员请假审批的时限与超时转交规则？" 与 "…规则" 两份，一份进问卷、一份降级成 s11，
     下一轮又被当 carried 问一遍。只剥**首尾**标点——中间的问号、破折号、括号照旧算数
     （"最大行数是多少？还是多少？" 与 "最大行数是多少" 是两道题）。
+
+    命中之后会**留一条痕**（"同一件事问了两遍"，`:666`），eval 侧的
+    `no_duplicate_questions` 判据读的就是它——**不读问卷**（问卷里不可能有重复题，
+    本函数早就把它们去重丢掉了）。
     """
 
     return (question.target.label(), _asked_how(question.title))
@@ -664,7 +668,22 @@ def assemble(
         if _covers_a_contradiction(question.evidence_refs, contradictions):
             question = replace(question, kind=QuestionKind.CONFLICT)
         if question_key(question) in seen_questions:
-            continue  # 模型又问了同一件事：留 carried 那份，丢新出的
+            # 丢掉新出的那份（留先出的），但**必须留痕**：这里是整个装配层唯一一处
+            # "丢掉却什么都不说"的地方——同类丢弃（去处写错 `:646`、条目不存在 `:567`、
+            # 让位 `:671`）全都留痕。模型收不到任何提示、这一趟 token 白烧了，
+            # 系统也不留证据，于是 `no_duplicate_questions` 判据读问卷
+            # （去重**之后**的产物）恒真，测不到任何模型行为（2026-10-09 真跑确认：
+            # 10 个 eval 用例 10/10 通过，零鉴别力）。
+            dropped.append(
+                DroppedItem(
+                    handle=f"题目 #{index}",
+                    reason=f"同一件事问了两遍，丢掉新出的这份：「{question.title}」",
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=pass_index,
+                )
+            )
+            continue
         seen_questions.add(question_key(question))
         # 让位判定放在 `_question(...)` **之后**：归因（`used_handles`）得先照算，
         # 否则这条题背后的席位意见会变成新的 unaccounted 留痕。

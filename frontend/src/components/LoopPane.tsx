@@ -134,7 +134,7 @@ export function LoopPane({
                   <div className="packet__drops">
                     <p className="packet__counts packet__counts--drops">
                       另有 {unplaced.length} 条留痕没挂到某个席位包上
-                      （去处写错的、更早那趟的、或地址对不上号的）
+                      （去处写错的、同一件事问了两遍的、更早那趟的、或地址对不上号的）
                     </p>
                     <ul className="drops">
                       {/* key 带序号：同一条留痕（handle + reason 都一样）会出现多次，拿它俩拼 key 会撞（P29 F2） */}

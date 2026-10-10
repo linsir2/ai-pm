@@ -11,6 +11,7 @@ from pmstudio.application.context import (
     FEATURE_FIELDS_TEXT,
     NO_MATERIAL_TEXT,
     NO_MEMORY_TEXT,
+    NO_PENDING_QUESTION_TEXT,
     SECTION_SLOTS_TEXT,
 )
 from pmstudio.domain.shared.ids import RoundId
@@ -179,6 +180,10 @@ class Integrator(Agent[IntegrationOutcome, schemas.IntegrationPacket]):
         answered: str,
         skipped: str,
         entry_ids: str,
+        #: 问过但没答也没跳过的题（`context.render_asked_questions`）。**默认空串**，
+        #: 不是必填：它是一段补充上下文，缺了不影响任何机制——真跑里"没答案"才是常态，
+        #: 所以调用方不传也不该炸（与 `external_material` 同一档：带默认值的上下文）。
+        asked_questions: str = NO_PENDING_QUESTION_TEXT,
         external_material: str = NO_MATERIAL_TEXT,
         validation_error: str = "",
         round_id: RoundId | None = None,
@@ -200,6 +205,7 @@ class Integrator(Agent[IntegrationOutcome, schemas.IntegrationPacket]):
                 "claims": claims,
                 "opinions": opinions,
                 "answered": answered,
+                "asked_questions": asked_questions,
                 "skipped": skipped,
                 "project_memory": project_memory,
                 "project_context": project_context,

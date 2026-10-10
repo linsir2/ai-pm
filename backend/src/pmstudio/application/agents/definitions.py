@@ -71,6 +71,7 @@ INTEGRATOR = AgentDefinition(
         "claims",
         "opinions",
         "answered",
+        "asked_questions",
         "skipped",
         "project_memory",
         "project_context",

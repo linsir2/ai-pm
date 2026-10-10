@@ -61,6 +61,9 @@ $previous_list_items
 ## 用户已答
 $answered
 
+## 已经问过、用户还没答也没跳过的题（**别再出一遍**）
+$asked_questions
+
 ## 这个项目已经确认过的记忆（教训 / 已定口径 / 已否掉）
 $project_memory
 
