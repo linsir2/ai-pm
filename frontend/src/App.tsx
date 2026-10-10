@@ -17,6 +17,7 @@ import type { ExplorationAnchor } from "./api/payload";
 import { discussionTopic } from "./state/discussions";
 import type { DiscussionAnchor } from "./state/discussions";
 import { inboxCount } from "./state/inbox";
+import { limitsOf } from "./state/schema";
 import { BottomStrip } from "./components/BottomStrip";
 import { DocumentPane } from "./components/DocumentPane";
 import { EditScope } from "./components/EditContext";
@@ -250,6 +251,8 @@ export default function App() {
             pending={data.pending !== null}
             error={data.bootError}
             booting={data.booting}
+            limits={limitsOf(data.schema)}
+            model={data.model}
           />
         </main>
       </div>

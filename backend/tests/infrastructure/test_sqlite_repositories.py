@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from pmstudio.application.errors import UnknownProject, UnknownRound
+from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -19,7 +20,15 @@ from pmstudio.domain.round.round import (
     SeatNomination,
 )
 from pmstudio.domain.round.step import Step, WaitingOn
-from pmstudio.domain.shared.ids import EntryId, EvidenceId, FormId, ProjectId, QuestionId, RoundId
+from pmstudio.domain.shared.ids import (
+    DocumentId,
+    EntryId,
+    EvidenceId,
+    FormId,
+    ProjectId,
+    QuestionId,
+    RoundId,
+)
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.infrastructure.sqlite import database, serialization
@@ -31,6 +40,9 @@ from pmstudio.infrastructure.sqlite.repositories import (
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.support.builders import NOW, PROJECT, make_document, make_round
+
+#: 比 NOW 晚一个小时：用来验"最近更新倒序"（`Document.new(now=...)` 决定 `documents.updated_at`）
+LATER = NOW.replace(hour=NOW.hour + 1)
 
 
 @pytest.fixture()
@@ -190,6 +202,35 @@ def test_workspace_index_reports_summary_and_latest_round(repos):
     assert summary.version_no == 1
     assert index.latest_round_id(PROJECT) == RoundId("r1")
     assert [item.project_id for item in index.list_summaries()] == ["p1"]
+
+
+def test_list_summaries_puts_the_most_recently_updated_first(repos):
+    """项目列表按**最近更新倒序**——前端门户的"最近更新"那一格直接取 `[0]`。
+
+    这不是审美，是**数据契约**：`ProjectList` 的 `newestOf()` 假定第一个就是最新
+    （不想为一个小数字把整份列表再遍历一遍）。后端哪天不排了，那一个数字会静默变错，
+    所以在这里钉住。
+
+    两个项目用不同 project_id（同一 id 会被 `GROUP BY` 合成一行），
+    排序依据是仓储的 `updated_at`（`save` 用墙钟盖），所以断言**顺序**而不是具体时间。
+    """
+
+    documents, _, _, index, uow = repos
+    with uow:
+        documents.save(make_document(title="早期的项目"))
+        documents.save(
+            Document.new(
+                document_id=DocumentId("doc2"),
+                project_id=ProjectId("p2"),
+                title="后来的项目",
+                now=LATER,
+            )
+        )
+
+    summaries = index.list_summaries()
+    assert [item.title for item in summaries] == ["后来的项目", "早期的项目"]
+    # 顺带钉住"倒序"是真的倒序：后存的那一行的 updated_at 不小
+    assert summaries[0].updated_at >= summaries[1].updated_at
 
 
 def test_recent_rounds_returns_newest_first_and_reads_the_tally(repos):

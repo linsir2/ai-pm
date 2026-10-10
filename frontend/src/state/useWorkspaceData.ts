@@ -64,6 +64,8 @@ function describe(error: unknown): string {
 export function useWorkspaceData() {
   const [state, dispatch] = useReducer(reduce, initialState);
   const [projects, setProjects] = useState<ProjectSummaryView[]>([]);
+  // 模型名（`/health`）：只有项目列表的元信息条用它。拿不到就是 null，那一格显示 —。
+  const [model, setModel] = useState<string | null>(null);
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
@@ -146,6 +148,16 @@ export function useWorkspaceData() {
         const list = await api.listProjects();
         if (!alive) return;
         setProjects(list);
+        // 模型名（项目列表的元信息条要显示）：**与项目列表同一个启动 effect 里并行拿**，
+        // 不新增一次串行往返。拿不到就留 null，元信息条那一格显示 —（宁可不显示，也不编）。
+        void api
+          .health()
+          .then((info) => {
+            if (alive) setModel(info.model);
+          })
+          .catch(() => {
+            /* 模型名是装饰性的：拿不到不报错、不打断启动 */
+          });
         const wanted = new URLSearchParams(window.location.search).get(PROJECT_PARAM);
         const target = list.find((item) => item.project_id === wanted) ?? list[0];
         if (target !== undefined) {
@@ -795,6 +807,7 @@ export function useWorkspaceData() {
     forgetMemory,
     historyRound,
     projects,
+    model,
     booting,
     bootError,
     pending,

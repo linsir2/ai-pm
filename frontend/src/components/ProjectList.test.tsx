@@ -9,13 +9,22 @@
    ④ 新建表单：空白不提交、提交前去空白（与 `Onboarding` 同一口径）；
    ⑤ 加载中显示骨架，不显示空列表（否则"正在读"看起来像"没有项目"）。 */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ProjectSummaryView } from "../api/types";
+import type { LimitsView, ProjectSummaryView } from "../api/types";
 import { ProjectList } from "./ProjectList";
 
 afterEach(cleanup);
+
+const LIMITS: LimitsView = {
+  max_seat_rounds: 3,
+  max_questionnaires: 2,
+  max_open_items_per_batch: 3,
+  max_sim_review_personas: 3,
+  max_sim_review_features: 2,
+  max_discussion_turns: 12,
+};
 
 function project(
   id: string,
@@ -40,6 +49,7 @@ function renderList(over: Partial<Parameters<typeof ProjectList>[0]> = {}) {
     pending: false,
     error: null,
     booting: false,
+    limits: LIMITS,
     ...over,
   };
   render(<ProjectList {...props} />);
@@ -61,8 +71,13 @@ describe("ProjectList", () => {
     for (const item of THREE) {
       expect(screen.getByText(`v${item.version_no}`)).toBeTruthy();
     }
-    // 时间取日期部分（`ProjectSummaryView.updated_at` 是 ISO 串）
-    expect(screen.getAllByText(/^2026-10-/).length).toBe(THREE.length);
+    // 时间取日期部分（`ProjectSummaryView.updated_at` 是 ISO 串）。只在列表里数——
+    // 元信息条里也有一个"最近更新"的日期，那是另一处。
+    const rows = screen.getByRole("list").querySelectorAll(".projects__row");
+    expect(rows).toHaveLength(THREE.length);
+    for (const row of rows) {
+      expect(row.textContent).toMatch(/v\d2026-10-\d\d/);
+    }
   });
 
   it("clicking_a_row_opens_that_project", () => {
@@ -110,10 +125,57 @@ describe("ProjectList", () => {
 
     // 每行是一个 <button>（不是可点的 div）：Tab 能聚焦、Enter 能触发。
     // 这与 `06-前端.md` §7「全部交互元素是原生 button」同一条纪律。
-    const rows = screen.getAllByRole("button", { name: /v\d/ });
+    const rows = screen.getByRole("list").querySelectorAll("button.projects__row");
     expect(rows).toHaveLength(THREE.length);
     for (const row of rows) {
       expect(row.tagName).toBe("BUTTON");
+    }
+  });
+
+  it("shows_a_summary_strip_with_counts_newest_update_and_limits", () => {
+    renderList();
+
+    // 元信息条（hairline strip）：项目数 / 最近更新 / 席位轮上限。
+    // 三样的数据源都已在手：前两个来自 GET /projects，第三个来自 /schema.limits
+    // （前端 `limitsOf()` 已有，含离线回落）——**不新增请求**。
+    const strip = screen.getByRole("region", { name: "项目概览" });
+    expect(within(strip).getByText("3 个")).toBeTruthy();
+    expect(within(strip).getByText("2026-10-09")).toBeTruthy();
+    expect(within(strip).getByText("3 轮")).toBeTruthy();
+  });
+
+  it("the_summary_strip_counts_the_list_not_a_hardcoded_number", () => {
+    renderList({ projects: THREE.slice(0, 1) });
+
+    const strip = screen.getByRole("region", { name: "项目概览" });
+    expect(within(strip).getByText("1 个")).toBeTruthy();
+  });
+
+  it("the_model_cell_keeps_the_full_name_reachable_when_it_truncates", () => {
+    // 窄屏这一格是 `text-overflow: ellipsis`：`openai/qwen3.8-flash` 会被截成
+    // `openai/qwen3.8-f…`（真跑 720 截图看到的）。截断可以，但全文得还能看到 → title。
+    renderList({ model: "openai/qwen3.8-flash" });
+
+    const strip = screen.getByRole("region", { name: "项目概览" });
+    expect(within(strip).getByTitle("openai/qwen3.8-flash")).toBeTruthy();
+  });
+
+  it("each_row_carries_a_glyph_of_the_first_character_of_the_title", () => {
+    renderList();
+
+    // 每行一个身份方块（衬线首字母）：扫读时的落点，与顶栏 logo 同一种"图标在方形里"的语言
+    expect(screen.getByText("订")).toBeTruthy();
+    expect(screen.getByText("登")).toBeTruthy();
+    expect(screen.getByText("数")).toBeTruthy();
+  });
+
+  it("the_row_affords_entering_with_a_chevron", () => {
+    renderList();
+
+    // 行尾一个 ›：点进去的暗示。原来完全没有，只看不出可点。
+    const rows = screen.getByRole("list").querySelectorAll("button.projects__row");
+    for (const row of rows) {
+      expect(row.textContent).toContain("›");
     }
   });
 });
