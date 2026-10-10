@@ -682,16 +682,32 @@ def select_chunks(
     *,
     budget: int = MATERIAL_BUDGET,
     cost: Callable[[MaterialPacket, MaterialChunk], int] | None = None,
+    query: str = "",
 ) -> tuple[tuple[str, MaterialChunk], ...]:
-    """**唯一**决定"哪些块进这一轮"的地方：按材料顺序、块顺序取，到预算为止。
+    """**唯一**决定"哪些块进这一轮"的地方。
 
     返回 `(material_id, chunk)`：调用方拿它去发号（`Round.materials`）与渲染。
 
     `cost` 默认是"正文 + 每个块那行编号的开销"；联网结果要传 `web_block_cost`——
     那段渲染每条还要写标题与 URL，成本不一样（**同一件事不许有两把尺子**）。
+
+    `query` 给空就是老行为（按材料顺序、块顺序取到预算为止）——联网检索那条路**必须**
+    走这一支：Tavily 返回的顺序本身就是相关序，我们自己的粗排只会把它搅乱。
+    给了 query（本轮输入）才走粗排，见 `_select_ranked`。
     """
 
     weigh = cost or _material_block_cost
+    if not query.strip():
+        return _select_in_order(packets, budget=budget, weigh=weigh)
+    return _select_ranked(packets, budget=budget, weigh=weigh, query=query)
+
+
+def _select_in_order(
+    packets: Sequence[MaterialPacket],
+    *,
+    budget: int,
+    weigh: Callable[[MaterialPacket, MaterialChunk], int],
+) -> tuple[tuple[str, MaterialChunk], ...]:
     picked: list[tuple[str, MaterialChunk]] = []
     used = 0
     for packet in packets:
@@ -701,6 +717,95 @@ def select_chunks(
             picked.append((packet.material_id, chunk))
             used += weigh(packet, chunk)
     return tuple(picked)
+
+
+@dataclass(frozen=True, slots=True)
+class _Candidate:
+    """粗排里的一个候选块：块自己的身份 + 它在这场选块里的位次。"""
+
+    score: int
+    position: int  # 材料在用户勾选顺序里的位次
+    packet: MaterialPacket
+    chunk: MaterialChunk
+
+
+def _select_ranked(
+    packets: Sequence[MaterialPacket],
+    *,
+    budget: int,
+    weigh: Callable[[MaterialPacket, MaterialChunk], int],
+    query: str,
+) -> tuple[tuple[str, MaterialChunk], ...]:
+    """按相关粗排取块。两步：**每份材料至少露出它自己的第一名**，再按分数补满预算。
+
+    为什么要有保底那一步：用户勾 N 份材料等于说了"这些都要参与"。没有保底，
+    一份高分材料会吃光全部预算，其余被勾的材料整份缺席——那正是缺陷 ② 的用户体感
+    （勾了材料、提示词说没材料），修完块宽不保底会以另一种形式重现。
+    """
+
+    candidates = [
+        _Candidate(
+            score=_block_score(chunk.text, query),
+            position=position,
+            packet=packet,
+            chunk=chunk,
+        )
+        for position, packet in enumerate(packets)
+        for chunk in packet.parsed.chunks
+    ]
+    # 分数降序；同分按材料顺序、块顺序——排序**完全确定**，同样的输入永远得到同样的选择
+    order = sorted(candidates, key=lambda item: (-item.score, item.position, item.chunk.ordinal))
+
+    picked: list[tuple[str, MaterialChunk]] = []
+    taken: set[tuple[str, int]] = set()
+    floored: set[str] = set()
+    used = 0
+
+    def take(candidate: _Candidate) -> bool:
+        """装得下就装；装不下返回 False（保底那一步靠这个跳过，不是报错）。"""
+
+        nonlocal used
+        cost = weigh(candidate.packet, candidate.chunk)
+        if used + cost > budget:
+            return False
+        picked.append((candidate.packet.material_id, candidate.chunk))
+        taken.add((candidate.packet.material_id, candidate.chunk.ordinal))
+        used += cost
+        return True
+
+    # 第一步：遍历已排序的候选，每份材料的第一名第一次出现时就收下它
+    for candidate in order:
+        if candidate.packet.material_id in floored:
+            continue
+        floored.add(candidate.packet.material_id)
+        take(candidate)
+    # 第二步：剩下的按分数补满预算
+    for candidate in order:
+        if (candidate.packet.material_id, candidate.chunk.ordinal) not in taken:
+            take(candidate)
+    return tuple(picked)
+
+
+def _block_score(text: str, query: str) -> int:
+    """块与本轮输入的字面重合度：**同一把尺子**——和 `SqliteLikeRetriever` 一样按字面算。
+
+    为什么是 2-gram 而不是"整句包含"：query 是"导出权限该怎么定"这样一句话，
+    要求整句命中等于永远不命中（今天就是退化成"顺序取"，预算给排最前面的材料）。
+    2-gram 也不需要分词库：中文按字滑窗即可，`re` 都不用。
+
+    这是**粗排，不是语义排序**。语义检索在这套系统里被证据否决（注入越多越可能掉分：
+    真实分布下 >60% 的查询 top-10 至少有一条硬干扰项，检索器越强干扰越毒）——
+    所以这里只做"把预算从排前面的挪到提到本轮用词的"。
+    """
+
+    return sum(text.count(gram) for gram in _query_grams(query))
+
+
+def _query_grams(query: str) -> tuple[str, ...]:
+    """query → 去重后的 2-gram（丢掉空白与标点；不足 2 字就一个都没有）。"""
+
+    kept = "".join(char for char in query if char.isalnum())
+    return tuple(dict.fromkeys(kept[index : index + 2] for index in range(len(kept) - 1)))
 
 
 def _material_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
@@ -793,6 +898,9 @@ ORIGIN_TITLES: dict[str, str] = {
 
 #: 上传材料的 origin（只有它不写"来源"——`attachment:标题` 与标题重复）
 UPLOAD_ORIGIN = "upload"
+#: 按网址抓来的材料的 origin。与 `infrastructure/tools/fetch.py` 无关——origin 是
+#: application 层的词汇（`ORIGIN_TITLES` 也在这儿），基础设施不该定义它。
+FETCH_ORIGIN = "web_fetch"
 
 
 def render_web_results(

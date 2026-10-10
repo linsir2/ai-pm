@@ -57,6 +57,7 @@ from pmstudio.application.assembly import (
 )
 from pmstudio.application.context import (
     DIGEST_LIMIT,
+    FETCH_ORIGIN,
     NO_MATERIAL_TEXT,
     WEB_BUDGET,
     answer_eids,
@@ -385,7 +386,7 @@ class StartRound:
         seed_ids: Sequence[str] = (),
     ) -> RoundId:
         # 材料在**事务外**读（只读查询），选块是纯函数——所以下面那个事务里只有写入。
-        picked, packets = self._pick_materials(material_ids)
+        picked, packets = self._pick_materials(material_ids, query=user_input)
         # 种子同样是事务外的只读校验：必须存在、同项目、跑完了、且被收下为「下一轮输入」
         seeds = self._resolve_seeds(project_id, seed_ids)
         with self._uow:
@@ -424,9 +425,13 @@ class StartRound:
         return round_id
 
     def _pick_materials(
-        self, material_ids: Sequence[str]
+        self, material_ids: Sequence[str], *, query: str
     ) -> tuple[tuple[tuple[str, MaterialChunk], ...], dict[str, MaterialPacket]]:
-        """按用户挑的 id 读材料 → 选块（`select_chunks` 是唯一决策点）。"""
+        """按用户挑的 id 读材料 → 选块（`select_chunks` 是唯一决策点）。
+
+        `query` 是本轮输入：预算只有 4000 字，粗排把预算从"排最前面的"挪到"提到本轮用词的"
+        （`02 §11.0.53`）。用户勾选的顺序仍然作数——它决定同分时的先后。
+        """
 
         packets: dict[str, MaterialPacket] = {}
         for material_id in material_ids:
@@ -436,7 +441,9 @@ class StartRound:
             if packet is None:
                 raise ShapeError(f"找不到这份材料：{material_id}", material_id=material_id)
             packets[material_id] = packet
-        picked = select_chunks([packets[item] for item in dict.fromkeys(material_ids)])
+        picked = select_chunks(
+            [packets[item] for item in dict.fromkeys(material_ids)], query=query
+        )
         return picked, packets
 
     def _resolve_seeds(
@@ -2979,6 +2986,31 @@ class FetchMaterial:
     async def __call__(self, *, project_id: ProjectId, url: str) -> MaterialSummaryView:
         # 抓取在**事务外**（网络可能很慢，别占着写事务）；抓不到就照实报，不写垃圾
         page = await self._fetcher.fetch(url=url)
+        # 解析同样在事务外，而且**走 MaterialParser 那一条真实分派**——于是抓 PDF / Word /
+        # Excel 与上传它们走的是同一份切块、同一批上限、同一句"抽不出就说抽不出"。
+        # 出处三件套（origin / source_ref / title）由本用例补：fetcher 管网络，
+        # parser 管字节→文字，用例管"这份材料是谁的、从哪来"（`dataclasses.replace`
+        # 是为了不动 `MaterialParser` 端口形状——那是把用例知识塞进端口）。
+        try:
+            drafted = self._parser.parse(
+                filename=page.title or page.final_url,
+                media_type=page.media_type,
+                data=page.content,
+            )
+        except UnsupportedMaterial as error:
+            # 解析器的报错只知道"哪份文件"（这里传给它的是标题）——抓取这一路要把**网址**
+            # 说给人听，否则用户看见"导出权限读不了"却不知道是哪个链接
+            raise UnsupportedMaterial(
+                f"这个网址读不出正文（{error.message}）：{page.final_url}",
+                source_ref=page.final_url,
+            ) from error
+        parsed = replace(
+            drafted,
+            origin=FETCH_ORIGIN,
+            source_ref=page.final_url,
+            title=page.title or page.final_url,
+            warnings=(*_redirect_note(url, page.final_url), *drafted.warnings),
+        )
         digest = _fetch_key(url)
         with self._uow:
             self._documents.get(project_id)      # 项目不存在就地失败
@@ -2993,7 +3025,7 @@ class FetchMaterial:
                     )
                 packet = self._materials.put(
                     project_id=project_id,
-                    parsed=page.parsed,
+                    parsed=parsed,
                     sha256=digest,
                     content=page.content,
                     now=self._clock.now(),
@@ -3002,16 +3034,24 @@ class FetchMaterial:
                 # 发过编号：不就地改（那些编号指着它里面的块）——另出一份，旧的冻结留着
                 packet = self._materials.put(
                     project_id=project_id,
-                    parsed=page.parsed,
+                    parsed=parsed,
                     sha256=_refetch_key(url, page.content),
                     content=page.content,
                     now=self._clock.now(),
                 )
             else:
                 packet = self._materials.refresh(
-                    existing.material_id, parsed=page.parsed, content=page.content
+                    existing.material_id, parsed=parsed, content=page.content
                 )
         return material_summary_view(packet, current=self._parser.identities())
+
+
+def _redirect_note(url: str, final_url: str) -> tuple[str, ...]:
+    """抓的时候跳转过才说一句（`FetchedPage` 只报最终地址，跳没跳要跟原话比）。"""
+
+    if final_url == url:
+        return ()
+    return (f"这个网址跳转过（最终地址：{final_url}）",)
 
 
 def _fetch_key(url: str) -> str:

@@ -1,14 +1,15 @@
-"""按网址抓网页：真 httpx + 一条 HTML→正文（与上传 `.html` 共用 `extract.html_text`）。
+"""按网址抓一份材料：真 httpx，**只管网络与护栏，不解析**。
 
 与联网检索（Tavily）分开：那是"搜线索"（300 字摘要），这是"**用户点名的一个页面**"——
-抓正文、块级切分，跟上传的材料走同一条链（存储、编号、渲染、检索、出处）。
+拿到字节之后交给 `MaterialParser`（用例里做），于是 HTML / PDF / Office 全都走
+`extract` 那一条真实分派，跟上传的材料是同一条链（切块、发号、渲染、检索、出处）。
 
 四条规矩：
 ① **只抓公开网页**：http/https、拒绝内网 / 环回 / 链路本地地址，**每一跳都重新判**。
    为什么：这套 API 没有鉴权，任何页面都能诱导本机后端去抓内网地址（CSRF 型 SSRF）；
-② **有上限**：15 秒、5MB（边下边数）、最多 3 跳、Content-Type 必须是网页；
+② **有上限**：15 秒、5MB（边下边数）、最多 3 跳、Content-Type 必须是已知材料类型；
 ③ **原始字节照原样留下**（存进材料表）——重解析、追证都不用再抓一次；
-④ **失败抛 `ToolCallFailed`**：超时 / 非 2xx / 不是网页 / 太大 / 内网——不吞、不假装抓到。
+④ **失败抛 `ToolCallFailed`**：超时 / 非 2xx / 不是材料 / 太大 / 内网——不吞、不假装抓到。
 """
 
 import ipaddress
@@ -16,30 +17,28 @@ import socket
 from collections.abc import Callable
 
 import httpx
+from bs4 import BeautifulSoup
 
-from pmstudio.application.dto import ParsedMaterial
-from pmstudio.application.errors import UnsupportedMaterial
 from pmstudio.application.ports import FetchedPage
 from pmstudio.harness.errors import FetchRefused, ToolCallFailed
-from pmstudio.infrastructure.tools.extract import (
-    HTML_PARSER_ID,
-    TRUNCATED_WARNING,
-    cap_text,
-    chunk_text,
-    html_parser_version,
-    html_text,
-)
-from pmstudio.infrastructure.tools.limits import MAX_MATERIAL_CHARS
 
 TOOL_ID = "tool.web_fetch"
-#: 抓来的网页在信息包里的 origin（前端文案与提示词标题都按它写："抓来的网页"）
-FETCH_ORIGIN = "web_fetch"
 FETCH_TIMEOUT = 15.0
 MAX_FETCH_BYTES = 5 * 1024 * 1024
 MAX_REDIRECTS = 3
 USER_AGENT = "PMStudio/0.1 (+local single-user workbench)"
-#: 只收这几种 Content-Type（其余一律"这不是网页"）
-WEB_MEDIA_TYPES = ("text/html", "application/xhtml+xml", "text/plain")
+#: 只收这些 Content-Type：HTML，加上 `extract` 已有真实分派的 PDF / Word / Excel。
+#: 判决按 media_type 与扩展名**两级**都接受（站点经常把 .pdf 返成 application/octet-stream，
+#: 那种情况下 URL 扩展名才是唯一线索）。
+WANTED_MEDIA_TYPES = (
+    "text/html",
+    "application/xhtml+xml",
+    "text/plain",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
+WANTED_SUFFIXES = (".html", ".htm", ".pdf", ".docx", ".xlsx")
 
 
 def resolve_host(host: str) -> tuple[str, ...]:
@@ -63,39 +62,13 @@ class HttpxWebFetcher:
     async def fetch(self, *, url: str) -> FetchedPage:
         target = _checked_url(url)
         body, media_type, final_url = await self._read(target)
-        try:
-            text, page_title = html_text(body)
-        except UnsupportedMaterial as error:
-            raise ToolCallFailed(
-                f"这个网址抓下来的页面读不了（{error.message}）", tool_id=TOOL_ID
-            ) from error
-        text, truncated = cap_text(text)
-        if not text.strip():
-            raise UnsupportedMaterial(
-                f"这个网址里没有可抽取的文字：{final_url}（可能是脚本渲染的页面）",
-                source_ref=final_url,
-            )
-        chunks = chunk_text(text, parser_id=HTML_PARSER_ID)
-        warnings: list[str] = []
-        if final_url != target:
-            warnings.append(f"这个网址跳转过（最终地址：{final_url}）")
-        if truncated:
-            warnings.append(TRUNCATED_WARNING.format(limit=MAX_MATERIAL_CHARS))
+        # 标题只对 HTML 有意义；PDF / Office 没有 <title>，那种情况留 None，
+        # 由用例退回用最终地址当材料标题
         return FetchedPage(
-            parsed=ParsedMaterial(
-                origin=FETCH_ORIGIN,
-                title=page_title or final_url,
-                source_ref=final_url,
-                media_type=media_type,
-                bytes_len=len(body),
-                chunks=chunks,
-                parser_id=HTML_PARSER_ID,
-                parser_version=html_parser_version(),
-                truncated=truncated,
-                warnings=tuple(warnings),
-            ),
-            # 抓到的 HTML 原始字节跟着一起走（材料表要存它，重解析靠它）
             content=body,
+            media_type=media_type,
+            final_url=final_url,
+            title=_page_title(body) if _looks_like_html(media_type) else None,
         )
 
     async def _read(self, url: str) -> tuple[bytes, str, str]:
@@ -130,10 +103,10 @@ class HttpxWebFetcher:
                                 status=response.status_code,
                             )
                         media_type = _media_type(response)
-                        if media_type not in WEB_MEDIA_TYPES:
+                        if not _is_wanted(media_type, current):
                             raise FetchRefused(
-                                f"这个地址返回的不是网页（{media_type or '没写类型'}）"
-                                "——先把内容下载下来再上传"
+                                f"这个地址返回的不是已知材料类型（{media_type or '没写类型'}）"
+                                "——支持网页 / PDF / Word / Excel，先下载再上传也行"
                             )
                         body = await _read_capped(response)
                 except httpx.HTTPError as error:
@@ -185,6 +158,27 @@ def _assert_public(url: str, *, resolve: Callable[[str], tuple[str, ...]]) -> No
 
 def _media_type(response: httpx.Response) -> str:
     return response.headers.get("content-type", "").split(";")[0].strip().lower()
+
+
+def _looks_like_html(media_type: str) -> bool:
+    return media_type in ("text/html", "application/xhtml+xml")
+
+
+def _is_wanted(media_type: str, url: str) -> bool:
+    """Content-Type 在名单里，**或者** URL 扩展名在名单里（两级都认）。"""
+
+    return media_type in WANTED_MEDIA_TYPES or url.lower().endswith(WANTED_SUFFIXES)
+
+
+def _page_title(body: bytes) -> str | None:
+    """HTML 的 `<title>`（只用来当材料标题，不参与正文）。"""
+
+    try:
+        soup = BeautifulSoup(body, "lxml")
+    except Exception:  # noqa: BLE001 —— 标题拿不到不影响抓取，交给解析器去说
+        return None
+    node = soup.title
+    return node.get_text(strip=True) if node is not None else None
 
 
 async def _read_capped(response: httpx.Response) -> bytes:

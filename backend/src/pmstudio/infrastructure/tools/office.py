@@ -23,7 +23,7 @@ from docx.text.paragraph import Paragraph
 
 from pmstudio.application.dto import MaterialChunk
 from pmstudio.application.errors import UnsupportedMaterial
-from pmstudio.infrastructure.tools.extract import MAX_MATERIAL_CHARS
+from pmstudio.infrastructure.tools.limits import MAX_MATERIAL_CHARS, part_label, parts_of
 
 #: 解析器身份（写进信息包，材料卡上看得见；换 docling 之后这一组会变）
 DOCX_PARSER_ID = "python-docx"
@@ -52,24 +52,30 @@ def docx_chunks(data: bytes) -> tuple[tuple[MaterialChunk, ...], bool]:
     chunks: list[MaterialChunk] = []
     buffer: list[str] = []
     headings: list[tuple[int, str]] = []
-    state = {"start": 1, "end": 1, "used": 0}
+    state = {"start": 1, "used": 0}
     truncated = False
     table_number = 0
 
     def flush() -> None:
-        """把攒着的正文收成一块（空 buffer 什么都不做——收尾调用可以重复）。"""
+        """把攒着的正文收成块（空 buffer 什么都不做——收尾调用可以重复）。"""
 
         body = "\n".join(buffer).strip()
         if body:
-            chunks.append(
-                MaterialChunk(
-                    chunk_id=f"{DOCX_PARSER_ID}#c{len(chunks):02d}",
-                    ordinal=len(chunks),
-                    text=body,
-                    heading_path=tuple(item for _, item in headings),
-                    anchor=_paragraph_anchor(state["start"], max(state["start"], state["end"])),
+            # 攒着的正文可能超宽（一个本节里几千字没有小标题）：切，每片 ≤ 块宽，
+            # 段号光标随"每片占几行"推进，锚点仍精确
+            for part, consumed in parts_of(body):
+                chunks.append(
+                    MaterialChunk(
+                        chunk_id=f"{DOCX_PARSER_ID}#c{len(chunks):02d}",
+                        ordinal=len(chunks),
+                        text=part,
+                        heading_path=tuple(item for _, item in headings),
+                        anchor=_paragraph_anchor(
+                            state["start"], state["start"] + consumed - 1
+                        ),
+                    )
                 )
-            )
+                state["start"] += consumed
         buffer.clear()
 
     def keep(part: str) -> bool:
@@ -100,7 +106,6 @@ def docx_chunks(data: bytes) -> tuple[tuple[MaterialChunk, ...], bool]:
             if not keep(text):
                 truncated = True
                 break
-            state["end"] = index
         elif child.tag == qn("w:tbl"):
             body, header = _table_lines(Table(child, document))
             if not body:
@@ -112,15 +117,18 @@ def docx_chunks(data: bytes) -> tuple[tuple[MaterialChunk, ...], bool]:
                 break
             state["used"] += len(body) + 1
             table_number += 1
-            chunks.append(
-                MaterialChunk(
-                    chunk_id=f"{DOCX_PARSER_ID}#c{len(chunks):02d}",
-                    ordinal=len(chunks),
-                    text=body,
-                    heading_path=tuple(item for _, item in headings),
-                    anchor=f"表格 {table_number}（表头：{header}）",
+            anchor = f"表格 {table_number}（表头：{header}）"
+            # 一张大表就是一个逻辑片：切；锚点单位是"表格 N"，比片粗，用尾标分辨
+            for part_number, (part, _) in enumerate(parts_of(body)):
+                chunks.append(
+                    MaterialChunk(
+                        chunk_id=f"{DOCX_PARSER_ID}#c{len(chunks):02d}",
+                        ordinal=len(chunks),
+                        text=part,
+                        heading_path=tuple(item for _, item in headings),
+                        anchor=anchor + part_label(part_number),
+                    )
                 )
-            )
 
     # 收尾：正常走完、或者中途截断，**攒着的正文都要收成一块**（截断不等于把已读的丢掉）
     flush()
@@ -164,7 +172,6 @@ def xlsx_chunks(data: bytes) -> tuple[tuple[MaterialChunk, ...], bool, tuple[str
     for sheet in values.worksheets:
         lines: list[str] = []
         first_row: int | None = None
-        last_row = 0
         mirror = formulas[sheet.title]
         for offset, row in enumerate(sheet.iter_rows()):
             number = (sheet.min_row or 1) + offset
@@ -185,18 +192,22 @@ def xlsx_chunks(data: bytes) -> tuple[tuple[MaterialChunk, ...], bool, tuple[str
             used += len(line) + 1
             if first_row is None:
                 first_row = number
-            last_row = number
             lines.append(line)
         if lines:
-            chunks.append(
-                MaterialChunk(
-                    chunk_id=f"{XLSX_PARSER_ID}#c{len(chunks):02d}",
-                    ordinal=len(chunks),
-                    text="\n".join(lines),
-                    heading_path=(sheet.title,),
-                    anchor=_sheet_anchor(sheet.title, first_row or 1, last_row),
+            # 一个工作表曾是一个逻辑片（2000 行 → 1 块 / 44,682 字，直接超掉整个预算）。
+            # 行本身就是换行，所以按行切；行号光标随"每片占几行"推进，每片有精确行范围。
+            cursor = first_row or 1
+            for part, consumed in parts_of("\n".join(lines)):
+                chunks.append(
+                    MaterialChunk(
+                        chunk_id=f"{XLSX_PARSER_ID}#c{len(chunks):02d}",
+                        ordinal=len(chunks),
+                        text=part,
+                        heading_path=(sheet.title,),
+                        anchor=_sheet_anchor(sheet.title, cursor, cursor + consumed - 1),
+                    )
                 )
-            )
+                cursor += consumed
         if truncated:
             break
 

@@ -34,6 +34,7 @@ from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.memory import MemoryKind
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from pmstudio.infrastructure.tools.limits import CHUNK_CHARS
 from tests.support.builders import (
     make_material_packet as make_packet,
 )
@@ -407,6 +408,84 @@ def test_select_chunks_is_the_only_place_that_decides_what_goes_in():
 
     assert [chunk.ordinal for _, chunk in picked] == [0, 1]
     assert all(material_id == "m1" for material_id, _ in picked)
+
+
+def test_a_block_always_fits_the_material_budget():
+    """块宽与材料预算是**一对有耦合的常数**：块比预算还宽 → 那个块永远选不中 → ② 换一身衣服回来。
+
+    今天这两边没有守卫，而且分居两层（块宽在 `infrastructure`、预算在 `application`）——
+    `CHUNK_CHARS` 抬到 4000 以上、或 `MATERIAL_BUDGET` 降到 500 以下，都会让"用户勾了材料、
+    提示词说没材料"重现，且任何测试都不会红。测试同时 import 两边只在这里发生：
+    **测试不构成生产依赖**，所以不违反分层。
+    """
+
+    assert CHUNK_CHARS + context.CHUNK_OVERHEAD < context.MATERIAL_BUDGET
+
+
+# ── 选块粗排（`02 §11.0.53`）───────────────────────────────────────────
+#
+# 预算只有 4000 字 ≈ 8 块。没有 query 时"顺序取"会把预算给排在最前面的材料，而与内容无关；
+# 块宽不变式修好之后一份 200 页文档会切出几百块，"只读前 8 块"比修之前更糟。
+
+
+def test_without_a_query_selection_keeps_document_order():
+    """不传 query = 与今天逐块一致（联网检索那条路走这里：Tavily 的序就是相关序）。"""
+
+    packet = make_packet("甲" * 300, "导出权限" * 100, "乙" * 300)
+
+    picked = context.select_chunks([packet], budget=800)
+
+    assert [chunk.ordinal for _, chunk in picked] == [0, 1]
+
+
+def test_a_query_pulls_the_blocks_that_mention_it_forward():
+    packet = make_packet("甲" * 300, "导出权限" * 100, "乙" * 300)
+
+    picked = context.select_chunks([packet], budget=800, query="导出权限怎么定")
+
+    assert [chunk.ordinal for _, chunk in picked] == [1, 0]
+
+
+def test_ties_keep_document_order_so_the_result_is_reproducible():
+    packet = make_packet("同一段话", "同一段话", "同一段话")
+
+    picked = context.select_chunks([packet], budget=10_000, query="导出")
+
+    assert [chunk.ordinal for _, chunk in picked] == [0, 1, 2]
+
+
+def test_a_query_no_block_mentions_falls_back_to_document_order():
+    packet = make_packet("甲" * 300, "乙" * 300, "丙" * 300)
+
+    picked = context.select_chunks([packet], budget=700, query="完全不搭的词")
+
+    assert [chunk.ordinal for _, chunk in picked] == [0, 1]
+
+
+def test_every_picked_material_gets_at_least_one_block():
+    """用户勾了 N 份材料 = 说了"这些都要参与"：预算再紧，每份也得露一面。
+
+    没有这条保底，一份高分材料会吃光全部 8 个块，其余被勾的材料整份缺席——那正是缺陷 ②
+    的用户体感（勾了材料、提示词说没材料），修完块宽不加重现一次。
+    """
+
+    strong = make_packet(*(["导出权限" * 60] * 12), material_id="强", title="强.md")
+    weak = make_packet("甲" * 300, "乙" * 300, material_id="弱", title="弱.md")
+
+    picked = context.select_chunks([strong, weak], budget=800, query="导出权限")
+
+    assert {material_id for material_id, _ in picked} == {"强", "弱"}
+
+
+def test_the_floor_does_not_break_the_budget():
+    """保底也不能超预算：装不下就装不下，不许为了"每份露一面"把预算撑破。"""
+
+    strong = make_packet(*(["字" * 500] * 12), material_id="强", title="强.md")
+    weak = make_packet(*(["字" * 500] * 4), material_id="弱", title="弱.md")
+
+    picked = context.select_chunks([strong, weak], budget=1200)
+
+    assert sum(len(chunk.text) for _, chunk in picked) <= 1200
 
 
 def test_select_chunks_stops_when_the_budget_runs_out_across_materials():

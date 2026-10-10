@@ -12,6 +12,7 @@ Word / Excel 那种"按文档结构切"的活在同目录的 `office.py` 里—�
 分派与"抽不出就说抽不出"这条纪律留在这儿（**这一处**是唯一的入口）。
 """
 
+import codecs
 import re
 from importlib import metadata
 from io import BytesIO
@@ -22,7 +23,12 @@ from pdfminer.high_level import extract_text as pdf_extract_text
 
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
 from pmstudio.application.errors import UnsupportedMaterial
-from pmstudio.infrastructure.tools.limits import CHUNK_CHARS, MAX_MATERIAL_CHARS
+from pmstudio.infrastructure.tools.limits import (
+    CHUNK_CHARS,
+    MAX_MATERIAL_CHARS,
+    part_label,
+    parts_of,
+)
 from pmstudio.infrastructure.tools.office import (
     DOCX_PARSER_ID,
     XLSX_PARSER_ID,
@@ -54,6 +60,34 @@ _HEADING = re.compile(
     r"|第[一二三四五六七八九十百\d]+[章节][、.．]?\s*\S.*)$"
 )
 
+#: HTML 正文抽取的算法档位。**换算法就 +1**：`html_parser_version` 会跟着变，
+#: 既有 HTML 与抓取材料因此被判"该重解析"——否则新旧两种质量在界面上分不出来。
+HTML_EXTRACT_REVISION = 1
+
+#: 站点噪音标签：语义上确定不是正文的那些。`<header>` **故意不在内**（见 `html_text`）。
+#: 也不按 `class`/`id` 关键词剥（"宁留不删"）——实测博客页残留的侧栏只有约 20 字，
+#: 在 4000 字预算里占比可忽略，而类名黑名单会误删正文且要随站点形态不断补。
+#:
+#: **试过并撤掉的一整级**：`readability-lxml`（Firefox Reader View 的那套统计抽取）。
+#: 三个真实页面实测增益 1–6%（docs.python.org 19710→18478，httpbin 3596→3568），
+#: 而它会**静默整块丢掉**它认为不是正文的节点——短页面上丢的是唯一内容，
+#: 且要靠三四条守门判据去猜它丢得对不对（见 `04 §I` 的取舍记录）。
+#: 语义标签剥离是确定性的，噪声的大头（nav / aside / footer）已经被它拿走；
+#: 剩下的那 1–6% 由本轮新增的选块粗排补上（命中本轮输入的块自然排在前面）。
+#: 结论：为 1–6% 的收益背一个会丢内容的依赖，不划算。
+CHROME_TAGS = (
+    "script",
+    "style",
+    "nav",
+    "aside",
+    "footer",
+    "form",
+    "noscript",
+    "iframe",
+    "svg",
+    "button",
+)
+
 
 def _package_version(distribution: str) -> str:
     try:
@@ -62,20 +96,69 @@ def _package_version(distribution: str) -> str:
         return f"{distribution} unknown"
 
 
+#: 一句实话：按 GB18030 兜底读的时候要说清，免得用户以为乱码是原文
+GB18030_NOTE = "这份材料不是 UTF-8，按 GB18030 读的（有乱码就另存为 UTF-8）"
+
+
+def decode_text(data: bytes) -> tuple[str, str | None]:
+    """字节 → 文字，并告诉调用方"是不是按 GB18030 兜的底"（兜了才给一句话）。
+
+    **没有 `errors="replace"` 这一档**：那会把一份 GBK 的中文材料读成乱码且一声不吭
+    （实测 `"权限系统：谁能看报表？"` → `'ȫȫϵͳ'`，而 `warnings` 是空的）。读错比读不了
+    更坏——读不了会 422 指路，读错会静默污染提示词。这是本模块第一条纪律
+    "抽不出文字就说抽不出"在编码上的样子。
+
+    为什么只认 UTF-8 与 GB18030：前者是现在的事实标准，后者是国标全集（GBK / GB2312
+    都是它的子集）、stdlib 里现成，**且严格解码不可能猜错**。不引 `charset_normalizer`
+    一类的探测器：它可能猜错，而猜错的表现和今天一模一样——静默的乱码；为一个不存在
+    的收益多背一个新依赖，不划算。
+    """
+
+    if data.startswith(codecs.BOM_UTF8):
+        return data.decode("utf-8-sig"), None
+    try:
+        return data.decode("utf-8"), None
+    except UnicodeDecodeError:
+        pass
+    try:
+        return data.decode("gb18030"), GB18030_NOTE
+    except UnicodeDecodeError as error:
+        raise UnsupportedMaterial(
+            "这份材料读不了：编码既不是 UTF-8 也不是 GB18030——另存成 UTF-8 再给我"
+        ) from error
+
+
 def html_parser_version() -> str:
     """`bs4-html` 这一档的解析器身份。
 
     上传 `.html` 与**抓网页**必须写同一个——否则抓来的网页会被 `needs_reparse` 判成
     "旧解析器读的"（同一份实现、两个入口，身份只能有一份）。
+
+    **算法档位（`HTML_EXTRACT_REVISION`）是故意写进去的**：换了正文抽取算法，这条串就变，
+    于是既有 HTML/抓取材料全部被判"该重解析"（原始字节都还在，点一次即可）。
+    不写档位的后果是新旧材料两种质量且界面上看不出区别——那正是 `needs_reparse`
+    这一机制要防的事。
     """
 
-    return f"beautifulsoup4 {metadata.version('beautifulsoup4')}"
+    return f"bs4-{HTML_EXTRACT_REVISION}+beautifulsoup4 {metadata.version('beautifulsoup4')}"
 
 
 def html_text(data: bytes) -> tuple[str, str | None]:
     """HTML →（正文, `<title>` 或 None）。上传 `.html` 与抓网页**共用这一条**。
 
-    script / style 一律剥掉；畸形输入抛 `UnsupportedMaterial`（调用方补文件名或网址）。
+    剥掉语义确定的站点噪音标签（`CHROME_TAGS`）。`<header>` 刻意不在内——它既可能是站点
+    导航也可能是正文的标题块，剥它可能丢内容；**宁留不删**：留着的噪音看得见，删错的
+    内容看不见。同样不按 `class`/`id` 关键词剥（`CHROME_TAGS` 注释里有实测依据）。
+
+    正文一律原样保留：这里**不做主内容抽取**。试过 `readability-lxml`，三个真实页面
+    增益只有 1–6%，而它会静默丢内容（见 `CHROME_TAGS` 注释）。噪声的大头已经被语义标签
+    拿走，剩下那点由选块粗排（`select_chunks(query=...)`）解决——**同一个动作不请两把刀**。
+
+    `<title>` 总在正文第一行：模型该知道自己读的是哪一页，`test_fetch.py` 钉着这条。
+    抽不出正文时返回 `("", title)`——**不在这里抛**：报错要带上是哪个文件/哪个网址，
+    那只有调用方知道（上传有文件名、抓取有最终地址，两条路的既有报错都不一样）。
+
+    畸形输入抛 `UnsupportedMaterial`（调用方补文件名或网址）。
     """
 
     try:
@@ -84,10 +167,18 @@ def html_text(data: bytes) -> tuple[str, str | None]:
         raise UnsupportedMaterial(
             f"这份网页读不了（{type(error).__name__}）——换一份、或另存成文本再给我"
         ) from error
-    for tag in soup(["script", "style"]):
+    for tag in soup(CHROME_TAGS):
         tag.decompose()
-    title = soup.title.get_text(strip=True) if soup.title is not None else ""
-    return soup.get_text("\n", strip=True).strip(), (title or None)
+    # `<title>` 先从树里抽走：否则"整页只有标题和导航"的页面会被当成有正文
+    # （标题在 `<head>` 里，`get_text` 会把它一起念出来）
+    node = soup.title
+    title = node.get_text(strip=True) if node is not None else ""
+    if node is not None:
+        node.extract()
+    text = soup.get_text("\n", strip=True).strip()
+    if not text:
+        return "", (title or None)
+    return (f"{title}\n{text}" if title and title not in text else text), (title or None)
 
 
 def _is_heading(line: str) -> bool:
@@ -117,26 +208,29 @@ def chunk_text(text: str, *, parser_id: str) -> tuple[MaterialChunk, ...]:
     def width() -> int:
         return sum(len(item) for item in buffer)
 
-    def flush(end_line: int) -> None:
-        nonlocal buffer
+    def flush() -> None:
+        nonlocal buffer, start_line
         body = "\n".join(buffer).strip()
         if body:
-            ordinal = len(chunks)
-            chunks.append(
-                MaterialChunk(
-                    chunk_id=f"{parser_id}#c{ordinal:02d}",
-                    ordinal=ordinal,
-                    text=body,
-                    heading_path=tuple(item for _, item in headings),
-                    anchor=_line_anchor(start_line, max(start_line, end_line)),
+            # 一个逻辑片可能超宽（一整个长行、几千字没有小标题的正文）：切，且每片 ≤ 块宽。
+            # 行号光标随"每片占几行"推进，所以切完每片仍有自己精确的锚点。
+            for part, consumed in parts_of(body):
+                chunks.append(
+                    MaterialChunk(
+                        chunk_id=f"{parser_id}#c{len(chunks):02d}",
+                        ordinal=len(chunks),
+                        text=part,
+                        heading_path=tuple(item for _, item in headings),
+                        anchor=_line_anchor(start_line, start_line + consumed - 1),
+                    )
                 )
-            )
+                start_line += consumed
         buffer = []
 
     for number, line in enumerate(lines, start=1):
         heading = _is_heading(line)
         if buffer and (heading or width() >= CHUNK_CHARS):
-            flush(number - 1)
+            flush()
         if not buffer:
             start_line = number
         if heading:
@@ -144,7 +238,7 @@ def chunk_text(text: str, *, parser_id: str) -> tuple[MaterialChunk, ...]:
             headings = [item for item in headings if item[0] < level]
             headings.append((level, line.strip()))
         buffer.append(line)
-    flush(len(lines))
+    flush()
     return tuple(chunks)
 
 
@@ -162,21 +256,23 @@ def chunk_pages(pages: list[str] | tuple[str, ...], *, parser_id: str) -> tuple[
             body = paragraph.strip()
             if not body:
                 continue
-            ordinal = len(chunks)
             anchor = (
                 f"第 {page_number} 页"
                 if part_number == 1
                 else f"第 {page_number} 页（第 {part_number} 段）"
             )
-            chunks.append(
-                MaterialChunk(
-                    chunk_id=f"{parser_id}#c{ordinal:02d}",
-                    ordinal=ordinal,
-                    text=body,
-                    heading_path=(),
-                    anchor=anchor,
+            # 一段可能长得离谱（法务条款、说明书）：同样切。锚点单位是"段"，比片粗，
+            # 所以多片用尾标分辨。
+            for index, (part, _) in enumerate(parts_of(body)):
+                chunks.append(
+                    MaterialChunk(
+                        chunk_id=f"{parser_id}#c{len(chunks):02d}",
+                        ordinal=len(chunks),
+                        text=part,
+                        heading_path=(),
+                        anchor=anchor + part_label(index),
+                    )
                 )
-            )
     return tuple(chunks)
 
 
@@ -217,7 +313,9 @@ class LocalMaterialParser:
         )
 
     def _from_text(self, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
-        text, truncated = cap_text(data.decode("utf-8", errors="replace").strip())
+        # 编码探测在解析最前面：GBK 的 txt/csv 是国内最常见的遗留材料，读不懂要说读不懂
+        text, encoding_note = decode_text(data)
+        text, truncated = cap_text(text.strip())
         return self._pack(
             filename=filename,
             media_type=media_type,
@@ -227,6 +325,7 @@ class LocalMaterialParser:
             parser_id=TEXT_PARSER_ID,
             parser_version=_package_version("pmstudio"),
             chunks=chunk_text(text, parser_id=TEXT_PARSER_ID),
+            extra_warnings=(encoding_note,) if encoding_note else (),
         )
 
     def _from_html(self, filename: str, media_type: str, data: bytes) -> ParsedMaterial:
@@ -234,6 +333,13 @@ class LocalMaterialParser:
             text, _ = html_text(data)
         except UnsupportedMaterial as error:
             raise UnsupportedMaterial(error.message, filename=filename) from error
+        if not text.strip():
+            # 抽不出正文：**在这里**报，因为只有这里知道是哪份文件
+            raise UnsupportedMaterial(
+                f"这份网页没有可抽取的文字：{filename}"
+                "（可能是脚本渲染的页面，也可能整页都是导航和页脚——先把正文复制下来）",
+                filename=filename,
+            )
         text, truncated = cap_text(text)
         return self._pack(
             filename=filename,

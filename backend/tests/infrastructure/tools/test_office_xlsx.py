@@ -9,7 +9,11 @@ import openpyxl
 import pytest
 
 from pmstudio.application.errors import UnsupportedMaterial
-from pmstudio.infrastructure.tools.extract import MAX_MATERIAL_CHARS, LocalMaterialParser
+from pmstudio.infrastructure.tools.extract import (
+    CHUNK_CHARS,
+    MAX_MATERIAL_CHARS,
+    LocalMaterialParser,
+)
 from pmstudio.infrastructure.tools.office import xlsx_chunks
 
 parser = LocalMaterialParser()
@@ -85,6 +89,23 @@ def test_a_very_long_sheet_is_marked_truncated():
     assert parsed.truncated is True
     assert any("截断" in warning for warning in parsed.warnings)
     assert sum(len(chunk.text) for chunk in parsed.chunks) <= MAX_MATERIAL_CHARS + 100
+
+
+def test_a_wide_sheet_splits_on_row_boundaries_and_keeps_rows_whole():
+    """一个工作表不再是一整块（实测 2000 行曾切成 1 块 / 44,682 字）：按行切，每块 ≤ 块宽，
+    且**一行不会被从中间斩断**——表格是按行读的，半行对模型没有意义。"""
+
+    rows = [["角色", "能否导出"]] + [
+        [f"角色{index}", f"说明{index}" * 8] for index in range(200)
+    ]
+
+    chunks, truncated, _ = xlsx_chunks(xlsx_bytes(("明细", rows)))
+
+    assert truncated is False
+    assert len(chunks) > 1
+    assert all(len(chunk.text) <= CHUNK_CHARS for chunk in chunks)
+    for chunk in chunks:
+        assert all(line.startswith("角色") for line in chunk.text.split("\n")), chunk.anchor
 
 
 def test_xlsx_becomes_an_upload_material_with_its_own_identity():

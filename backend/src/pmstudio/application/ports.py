@@ -101,15 +101,22 @@ class WebFetcher(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class FetchedPage:
-    """一次抓取的产出：**解析草稿 + 原始字节**。
+    """一次抓取的产出：**原始字节 + 媒体类型 + 最终地址 + 标题**。
+
+    刻意**不含**解析结果（`ParsedMaterial`）：解析是 `MaterialParser` 的活，不属于
+    "按网址抓一个页面"这个动作。旧版让 `HttpxWebFetcher` 自己调 `html_text`，后果是
+    同一份 HTML 有两个解析调用点，而 `extract` 里现成的 PDF / Office 分派抓取侧一种都
+    用不上（用户点一个 PDF 链接只能先下载再上传）。职责切干净之后：
+    fetcher 管网络与护栏，parser 管字节→文字，用例管出处。
 
     为什么要带原始字节：材料表存的是"原始字节 + 解析结果"（换解析器时要能重解析，
-    用户不用重抓）。解析草稿里没有 bytes——投影里不许出现 bytes 这条不变量不动，
-    所以字节只在这条**端口 → 用例 → 存储**的路上走，绝不进任何 API 投影。
+    用户不用重抓）。字节只在这条**端口 → 用例 → 存储**的路上走，绝不进任何 API 投影。
     """
 
-    parsed: "ParsedMaterial"
     content: bytes
+    media_type: str
+    final_url: str
+    title: str | None = None
 
 
 @runtime_checkable

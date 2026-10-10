@@ -9,9 +9,9 @@ import socket
 import httpx
 import pytest
 
-from pmstudio.application.errors import UnsupportedMaterial
 from pmstudio.harness.errors import FetchRefused, ToolCallFailed
 from pmstudio.infrastructure.tools.fetch import MAX_FETCH_BYTES, HttpxWebFetcher
+from tests.infrastructure.tools.test_extract import minimal_pdf
 
 PAGE = (
     "<html><head><title>导出权限</title></head><body>"
@@ -45,35 +45,36 @@ def page(handler_calls: list[str], **headers):
     return handler
 
 
-async def test_fetch_returns_a_parsed_material_with_anchors():
+async def test_the_fetcher_returns_raw_bytes_the_final_url_and_the_title():
+    """fetcher 只回答"这一页的字节、地址、标题"——**解析不归它管**（`02 §11.0.53`）。
+
+    旧版它自己调 `html_text`：同一份 HTML 于是有两个解析调用点，而 `extract` 里现成的
+    PDF / Office 分派抓取侧一种都用不上。切成"fetcher 管网络、parser 管文字"之后，
+    抓到的正文长什么样在 `test_fetch_material.py` 里断言（那儿才走得到真解析器）。
+    """
+
     calls: list[str] = []
 
-    parsed = (await fetcher(page(calls)).fetch(url="https://example.com/spec")).parsed
+    fetched = await fetcher(page(calls)).fetch(url="https://example.com/spec")
 
     assert calls == ["https://example.com/spec"]
-    assert parsed.origin == "web_fetch"
-    assert parsed.source_ref == "https://example.com/spec"
-    assert parsed.media_type == "text/html"
-    assert parsed.parser_id == "bs4-html"
-    assert parsed.title == "导出权限"
-    texts = [chunk.text for chunk in parsed.chunks]
-    # `<title>` 那行也进正文——与上传 `.html` 走的是同一条抽取（`extract.html_text`）
-    assert texts[0] == "导出权限"
-    assert any("# 导出" in text for text in texts)
-    assert any("只有管理员能导出。" in text for text in texts)
-    assert all("var x" not in text and "p{}" not in text for text in texts)
-    assert parsed.chunks[0].anchor == "第 1 行"
+    assert fetched.content == PAGE         # 原始字节照原样回来（材料表存它）
+    assert fetched.media_type == "text/html"
+    assert fetched.final_url == "https://example.com/spec"
+    assert fetched.title == "导出权限"
 
 
-async def test_a_page_without_a_title_falls_back_to_the_url():
+async def test_a_page_without_a_title_has_no_title():
+    """没有 `<title>` 就老实说没有——退回用网址当标题是**用例**的决定（它才知道怎么取舍）。"""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200, headers={"content-type": "text/html"}, content=b"<p>no title here</p>"
         )
 
-    parsed = (await fetcher(handler).fetch(url="https://example.com/no-title")).parsed
+    page = await fetcher(handler).fetch(url="https://example.com/no-title")
 
-    assert parsed.title == "https://example.com/no-title"
+    assert page.title is None
 
 
 async def test_non_2xx_is_a_tool_failure():
@@ -87,15 +88,40 @@ async def test_non_2xx_is_a_tool_failure():
 
 
 async def test_non_html_content_type_is_a_tool_failure():
+    """不是网页的类型（压缩包 / 图片…）照旧拒——"先下载再上传"。
+
+    原断言用的是 `application/pdf`，它钉住的正是本轮要拆掉的那道限制：
+    `extract` 里本来就有完整的 PDF 解析路径，抓取侧却把自己关在 HTML 一种类型上。
+    """
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            200, headers={"content-type": "application/pdf"}, content=b"%PDF-1.4"
+            200, headers={"content-type": "application/zip"}, content=b"PK\x03\x04xxx"
         )
 
     with pytest.raises(FetchRefused) as error:
-        await fetcher(handler).fetch(url="https://example.com/spec.pdf")
+        await fetcher(handler).fetch(url="https://example.com/spec.zip")
 
-    assert "不是网页" in str(error.value)
+    assert "不是已知材料类型" in str(error.value)
+
+
+async def test_a_pdf_url_is_fetched_and_parsed_by_the_pdf_path():
+    """PDF 网址：抓回来交给**真解析器**（`MaterialParser` 的分派），于是按页切块、
+    锚点写第几页、parser 身份是 pdfminer——上传 `.pdf` 走的就是这一条。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/pdf"},
+            content=minimal_pdf("Hello export"),
+        )
+
+    page = await fetcher(handler).fetch(url="https://example.com/spec.pdf")
+
+    assert page.content.startswith(b"%PDF")
+    assert page.media_type == "application/pdf"
+    assert page.final_url == "https://example.com/spec.pdf"
+    assert page.title is None               # PDF 没有 <title>；"用网址当标题"是用例的决定
 
 
 async def test_timeout_is_a_tool_failure():
@@ -161,9 +187,8 @@ async def test_redirect_chain_is_followed_and_the_final_url_is_reported():
     page_ = await fetcher(handler).fetch(url="https://example.com/go")
 
     assert calls == ["https://example.com/go", "https://cdn.example.com/final"]
-    assert page_.parsed.source_ref == "https://cdn.example.com/final"
+    assert page_.final_url == "https://cdn.example.com/final"
     assert page_.content == PAGE          # 原始字节跟着一起回来
-    assert any("跳转" in warning for warning in page_.parsed.warnings)
 
 
 async def test_too_many_redirects_is_a_tool_failure():
@@ -188,13 +213,3 @@ async def test_a_url_that_is_not_a_plain_public_web_page_is_refused(url):
     assert calls == []
 
 
-async def test_a_page_that_cannot_be_parsed_says_so():
-    """抽不出正文的页面（比如只有一个空 body）→ 明确报错，不存空包。"""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers={"content-type": "text/html"}, content=b"<html></html>")
-
-    with pytest.raises(UnsupportedMaterial) as error:
-        await fetcher(handler).fetch(url="https://example.com/empty")
-
-    assert "没有可抽取的文字" in str(error.value)
