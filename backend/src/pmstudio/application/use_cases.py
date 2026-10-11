@@ -77,9 +77,9 @@ from pmstudio.application.context import (
     render_memory,
     render_memory_state,
     render_observations_index,
+    render_prior_opinions,
     render_project_context,
     render_reviews,
-    render_reviews_compact,
     render_round_digest,
     render_seat_conflicts,
     render_selected_opinions,
@@ -243,6 +243,7 @@ from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
 from pmstudio.domain.round.draft import Origin, OriginType, Proposal
+from pmstudio.domain.round.opinion import SeatReview
 from pmstudio.domain.round.questionnaire import (
     MAX_OPEN_ITEMS_PER_BATCH,
     MAX_QUESTIONNAIRES,
@@ -915,9 +916,9 @@ class RunSeatRound:
         answered_text = render_answers(round_, ledger=ledger)
         # 席位把 `q3` 翻译成 E 编号时，只许翻**本轮**的答案（跨轮同号会把出处指错）
         answer_refs = answer_eids(ledger=ledger, round_id=round_id)
-        previous = render_reviews_compact(
-            round_.seat_reviews, ledger=ledger, round_id=round_id
-        )
+        # 历史意见**不再一次性渲染成共用品**：指针式要按席位分流（本席位逐字、其它席位
+        # 一行点名），所以把原始 seat_reviews 传下去，由每个席位自己裁（`07 §7.12` 第 1 项）。
+        # 顺带省掉一件蠢事：以前 N 个席位人手一份全量历史，其实各不相同也没意义。
         known_eids = frozenset(evidence.eid for evidence in ledger.evidences())
         external_material = external_material_text(round_, store=self._materials)
         #: 这一趟是第几趟（问卷回来后会 +1 再跑）。信封槽位的一部分，见 `_review_one`。
@@ -936,8 +937,9 @@ class RunSeatRound:
                     seat=seat,
                     document_state=document_state,
                     claims=claims_text,
-                    opinions_so_far=previous,
+                    opinions_so_far=round_.seat_reviews,
                     answered=answered_text,
+                    ledger=ledger,
                     # 跨轮记忆（M6）：**已确认**的那些，与整合者看同一份渲染
                     project_memory=render_memory(
                         self._memory.get(round_.project_id).entries
@@ -1020,8 +1022,9 @@ class RunSeatRound:
         seat: SeatDefinition,
         document_state: str,
         claims: str,
-        opinions_so_far: str,
+        opinions_so_far: Sequence[SeatReview],
         answered: str,
+        ledger: EvidenceLedger,
         project_memory: str,
         project_context: str = "",
         observations_index: str = "",
@@ -1037,6 +1040,14 @@ class RunSeatRound:
         不知道这是第几趟第几次——不传就会撞车（同一席位两趟拿到同一个 packet_id）。
         """
 
+        # 指针式历史（`07 §7.12` 第 1 项）：本席位自己的逐字，其它席位一行点名。
+        # 每个席位各裁一次——同一份历史对不同席位是不同的视图。
+        previous = render_prior_opinions(
+            opinions_so_far,
+            ledger=ledger,
+            round_id=round_id,
+            seat_id=seat.seat_id,
+        )
         validation_error = ""
         for attempt in range(1, MAX_SEAT_ATTEMPTS + 1):
             try:
@@ -1044,7 +1055,7 @@ class RunSeatRound:
                     seat=seat,
                     document_state=document_state,
                     claims=claims,
-                    opinions_so_far=opinions_so_far,
+                    opinions_so_far=previous,
                     answered=answered,
                     project_memory=project_memory,
                     project_context=project_context,

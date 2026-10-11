@@ -461,6 +461,49 @@ def render_reviews_compact(
     return "\n".join(lines) or "（没有席位意见）"
 
 
+def render_prior_opinions(
+    reviews: Sequence[SeatReview],
+    *,
+    ledger: EvidenceLedger | None,
+    round_id: RoundId,
+    seat_id: str,
+) -> str:
+    """席位轮里"之前的意见"：**本席位自己的逐字，其它席位压成一行点名**。
+
+    这是 `07 §7.12` 第 1 项（指针式历史）。为什么必须分流——量出来的事实：
+
+    - 席位提示词 60.3% 是 `opinions_so_far`，而它真正要审的 `claims` 只占 2.2%**；
+    - §7.7 的消费遥测：11,029 条席位意见里只有 **42 条（0.4%）**被别的席位引用，
+      且全部是"更早趟"。
+    - 后果不只是胖：`opinions_so_far` 每轮全量重发且随历史线性增长，10 轮的老项目
+      席位轮 **90 秒 ×3 全超时**。
+
+    所以按 §7.12 原则③「指针换内容，不摘要换内容」处理成两半：
+
+    1. **本席位自己**的历史结论**逐字**给（一行一条，带双身份便于引用）——
+       它上一轮判过什么，直接决定这一轮该说什么，这是承重信息，不压；
+    2. **其它席位**压成一行点名：坐过什么位、各自看过几个题。保留"这块已经有人看过"
+       的信号（避免重复提问），丢掉无人消费的正文与理由。
+
+    `render_reviews_compact` 保留不动（一行一条的全量形态），供别处需要全量时用。
+    """
+
+    mine = [review for review in reviews if review.seat_id == seat_id]
+    others = [review for review in reviews if review.seat_id != seat_id]
+    if not mine and not others:
+        return "（没有席位意见）"
+
+    parts: list[str] = []
+    if mine:
+        parts.append(render_reviews_compact(mine, ledger=ledger, round_id=round_id))
+    if others:
+        roster = "、".join(
+            f"{review.seat_id}（{len(review.opinions)} 条）" for review in others
+        )
+        parts.append(f"（另有席位给过意见，原话不重复：{roster}）")
+    return "\n".join(parts)
+
+
 def render_selected_opinions(
     reviews: Sequence[SeatReview],
     handles: Collection[str],

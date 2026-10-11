@@ -864,26 +864,89 @@ def _review_at(pass_index: int, local_id: str, claim: str, because: str) -> Seat
     )
 
 
-def test_render_reviews_compact_is_one_line_per_opinion():
-    """紧凑形态：一条一行，丢掉理由/依据（席位只当背景用）。"""
+def test_the_seat_gets_its_own_past_opinions_verbatim():
+    """指针式的第一半：**本席位自己**的历史结论逐字保留——它要的是"别重复自己"。
 
-    text = context.render_reviews_compact(
-        (_review_at(1, "O1", "应支持", "因为快"),), ledger=None, round_id=RoundId("r1")
+    本席位的原话是承重信息（它上一轮判过什么，直接决定这一轮该说什么），
+    所以不压、不摘要，一行一条原样给。
+    """
+
+    mine = _review_at(1, "O1", "导出要按角色授予", "因为越权")
+    theirs = SeatReview(
+        seat_id="seat.permissions",
+        basis="依据",
+        opinions=(_judgment_at("O9", "字段级掩码要做", "因为合规"),),
+        pass_index=1,
     )
 
-    lines = [line for line in text.splitlines() if line.strip()]
-    assert len(lines) == 1
-    assert "应支持" in lines[0]
-    assert "理由" not in text
+    text = context.render_prior_opinions(
+        (mine, theirs), ledger=None, round_id=RoundId("r1"), seat_id="seat.data_scale"
+    )
+
+    assert "导出要按角色授予" in text
+    assert "字段级掩码要做" not in text        # 别人的原话不给
 
 
-def test_render_reviews_compact_empty():
-    """没有历史意见时空消息（席位槽直接用这个渲染器）。"""
+def test_other_seats_are_reduced_to_a_one_line_roster():
+    """指针式的第二半：**其它席位**压成一行点名（坐过什么位、看过什么题）。
+
+    为什么不全给：实测跨席位引用率 0.4%（`07 §7.7` 遥测），而它们的原话占了席位
+    提示词 60.3%。§7.12 原则①「删优先于排」——压成点名仍保留"已有人看过这个题"的
+    信号（避免重复提问），但丢掉无人消费的正文。
+    """
+
+    mine = _review_at(1, "O1", "导出要按角色授予", "因为越权")
+    theirs = SeatReview(
+        seat_id="seat.permissions",
+        basis="依据",
+        opinions=(_judgment_at("O9", "字段级掩码要做", "因为合规"),),
+        pass_index=1,
+    )
+
+    text = context.render_prior_opinions(
+        (mine, theirs), ledger=None, round_id=RoundId("r1"), seat_id="seat.data_scale"
+    )
+
+    assert "seat.permissions" in text          # 点名还在：知道这块有人看过了
+    assert "因为合规" not in text               # 理由不给
+    assert text.count("\n") <= 2                # 别人的部分就一行
+
+
+def test_no_history_says_so():
+    """没有历史意见时说一句，不留空节（空节会让模型以为历史被省略了）。"""
 
     assert (
-        context.render_reviews_compact((), ledger=None, round_id=RoundId("r1"))
+        context.render_prior_opinions(
+            (), ledger=None, round_id=RoundId("r1"), seat_id="seat.data_scale"
+        )
         == "（没有席位意见）"
     )
+
+
+def test_the_pointer_form_is_materially_shorter_than_giving_everything():
+    """这条是 ①「删优先于排」的量化验收：指针式必须显著短于全量。"""
+
+    mine = _review_at(1, "O1", "导出要按角色授予", "因为越权")
+    others = tuple(
+        SeatReview(
+            seat_id=f"seat.other_{index}",
+            basis="依据",
+            opinions=(
+                _judgment_at(f"O{index}a", f"一段相当长的判断正文{index}" * 8, "理由" * 8),
+            ),
+            pass_index=1,
+        )
+        for index in range(8)
+    )
+
+    pointer = context.render_prior_opinions(
+        (mine, *others), ledger=None, round_id=RoundId("r1"), seat_id="seat.data_scale"
+    )
+    everything = context.render_reviews_compact(
+        (mine, *others), ledger=None, round_id=RoundId("r1")
+    )
+
+    assert len(pointer) * 2 < len(everything)
 
 
 # ── 材料节的呈现顺序 = 文档顺序（`02 §11.0.54` 撤掉 U 型之后的终态）────────────
