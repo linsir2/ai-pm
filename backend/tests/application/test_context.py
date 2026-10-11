@@ -987,3 +987,117 @@ def test_the_material_section_is_byte_identical_when_rendered_twice():
 
     assert first.text == second.text
     assert first.used_chunk_ids == second.used_chunk_ids
+
+
+# ── document_state 按功能窄化（`07 §7.12` 第 2 项）─────────────────────────
+#
+# sim_review（M11）点名要走查 `feature#slug`，却一直拿**全文十三章**——而它的机械筛
+# （`sim_review.py:174-183`）自己划定合法引用只在目标功能内（“指到了别的功能的内容”是 issue，
+# `acceptance[slug]` 必须全覆盖且只许这些）。所以窄上下文不省证据，只省干扰：
+# §7.12 原则①「删优先于排」，以及 Cognition 2026“干净上下文让 reviewer 更聪明”。
+
+
+def _two_feature_document() -> Document:
+    """两个功能 + 一段节级正文：够验“只留点名的、别的节说一句没展开”。"""
+
+    document = Document.new(
+        document_id=DocumentId("doc1"), project_id=PROJECT, title="订单中台", now=NOW
+    )
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i1",
+                entry_id="en1",
+                op=WriteOp.ADD,
+                target=Target.body("s1"),
+                text="运营每天导不出订单，靠人肉汇总",
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.TEXT,
+            ),
+            WriteInstruction(
+                instruction_id="i2",
+                entry_id="en2",
+                op=WriteOp.ADD,
+                target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+                text="把订单导出成表格",
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.TEXT,
+            ),
+            WriteInstruction(
+                instruction_id="i3",
+                entry_id="en3",
+                op=WriteOp.ADD,
+                target=Target.feature_field(FeatureSlug("wechat-login"), "one_liner"),
+                text="用微信扫码登录",
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.TEXT,
+            ),
+        ],
+        now=NOW,
+        summary="两个功能",
+        authorized_new_features=frozenset(
+            {FeatureSlug("order-export"), FeatureSlug("wechat-login")}
+        ),
+    )
+    return document
+
+
+def test_render_document_without_slugs_is_unchanged():
+    """不传 `feature_slugs` 时必须与今天逐字相同——另外 8 个调用方零行为变化。"""
+
+    document = _two_feature_document()
+    view = document.view()
+
+    assert context.render_document(view) == context.render_document(view, feature_slugs=None)
+
+
+def test_render_document_with_slugs_keeps_only_those_features():
+    document = _two_feature_document()
+
+    text = context.render_document(
+        document.view(), feature_slugs=frozenset({"order-export"})
+    )
+
+    assert "feature#order-export" in text
+    assert "把订单导出成表格" in text
+    assert "feature#wechat-login" not in text
+    assert "用微信扫码登录" not in text
+
+
+def test_a_section_without_a_named_feature_says_so_instead_of_vanishing():
+    """章节不许消失：否则模型会以为这一章不存在（本项目“不留空节”的同一条纪律）。"""
+
+    document = _two_feature_document()
+
+    text = context.render_document(
+        document.view(), feature_slugs=frozenset({"order-export"})
+    )
+
+    assert "## s1" in text                        # 节还在
+    assert "本节没有点名的功能" in text
+    assert "另见本节" in text and "条与功能无关" in text   # 且说清少了什么
+
+
+def test_the_narrowed_state_says_it_is_a_slice():
+    """开头必须声明这是走查切片——否则模型以为看过了全文，会对自己没看到的部分下判断。"""
+
+    document = _two_feature_document()
+
+    text = context.render_document_state(
+        document.view(), feature_slugs=frozenset({"order-export"})
+    )
+
+    assert "走查切片" in text
+    assert "不是全文" in text
+
+
+def test_the_narrowed_state_still_carries_the_gap_list():
+    """缺口清单必须还在——否则就绪度又变回界面上的仪表盘（`01` §7.2）。"""
+
+    document = _two_feature_document()
+
+    text = context.render_document_state(
+        document.view(), feature_slugs=frozenset({"order-export"})
+    )
+
+    assert "READINESS" in text or "补缺口" in text or "s6" in text

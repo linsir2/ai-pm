@@ -5098,9 +5098,14 @@ class RunSimReview:
         if unknown:
             raise ShapeError(f"文档里没有这些功能：{'、'.join(unknown)}")
 
-        # 接地四源（与 M10 同款；评测没有 schema_json 之外的额外上下文）
+        # 接地四源（与 M10 同款；评测没有 schema_json 之外的额外上下文）。
+        # document_state **只给点名的功能**：机械筛（`sim_review.review_issues`）的合法
+        # 引用域本来就在目标功能内（别的内容引了反而是 issue），全文只会添干扰——
+        # `07 §7.12` 第 2 项 / 判据①「删优先于排」。节级条目以"未展开 N 条"交代。
         document_state = render_document_state(
-            view, readiness=self._checker.check(view)
+            view,
+            readiness=self._checker.check(view),
+            feature_slugs=frozenset(feature_slugs),
         )
         memory_text = render_memory(self._memory.get(round_.project_id).entries)
         claims_text = render_claims(round_.claims)

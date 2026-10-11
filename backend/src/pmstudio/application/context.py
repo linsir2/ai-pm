@@ -128,14 +128,47 @@ def _block_lines(block: BlockView, *, indent: str = "  ") -> list[str]:
     return lines
 
 
-def render_document(view: DocumentView) -> str:
-    lines: list[str] = [f"# {view.title}（v{view.version_no}）"]
+#: 窄化渲染的开场一句：明说这是切片。否则模型会对自己没看到的部分下判断——
+#: 本项目一贯纪律是"不许假装完整"（与 `02` §11.0.53 同一条：不留空节、照实说略去了什么）。
+NARROWED_NOTE = "（以下是这份文档的走查切片，不是全文：只有点名的功能展开了）"
+
+
+def render_document(
+    view: DocumentView, *, feature_slugs: frozenset[str] | None = None
+) -> str:
+    """文档现状 → 文本。**默认全文；给了 `feature_slugs` 就只渲染这些功能的块。**
+
+    为什么值得有这个口子（`07 §7.12` 第 2 项）：`sim_review`（M11）点名要走查
+    `feature#slug`，却一直拿全文十三章——而它自己的机械筛（`sim_review.py`）划定合法
+    引用**只在目标功能内**（"指到了别的功能的内容"是 issue，`acceptance[slug]` 必须
+    全覆盖且只许这些）。所以窄化不省证据，只省干扰：判据①「删优先于排」。
+
+    三条不许破的规矩：
+    1. **章节不许消失**——没有点名功能的节写"（本节没有点名的功能）"，再说清略去了几条；
+    2. **偏好区照旧**——那是用户显式偏好，与功能无关，窄化不许静默丢它；
+    3. **不传参就是全文**——另外 8 个调用方（claims / seat / integration / inquiry /
+       discussion / sim_inquiry…）的输出必须逐字不变，有用例钉着。
+    """
+
+    lines: list[str] = []
+    if feature_slugs is not None:
+        lines.append(NARROWED_NOTE)
+    lines.append(f"# {view.title}（v{view.version_no}）")
     for section in view.sections:
         lines.append(f"## {section.section_id} {section.title}")
         body: list[str] = []
+        skipped = 0
         for block in section.blocks:
+            if feature_slugs is not None and block.feature_slug not in feature_slugs:
+                skipped += len(block.entries)
+                continue
             body.extend(_block_lines(block))
-        lines.extend(body or ["（空）"])
+        if not body:
+            lines.append("（本节没有点名的功能）" if feature_slugs is not None else "（空）")
+        else:
+            lines.extend(body)
+        if skipped:
+            lines.append(f"  ·（另见本节 {skipped} 条与功能无关的条目，本次未展开）")
     if view.preference_entries:
         lines.append("## 偏好区（不进正文 / 不进交付）")
         lines.extend(f"- {_entry_line(entry)}" for entry in view.preference_entries)
@@ -250,16 +283,22 @@ def render_readiness(items: Sequence[ReadinessItem]) -> str:
 
 
 def render_document_state(
-    view: DocumentView, *, readiness: Sequence[ReadinessItem] = ()
+    view: DocumentView,
+    *,
+    readiness: Sequence[ReadinessItem] = (),
+    feature_slugs: frozenset[str] | None = None,
 ) -> str:
-    """智能体看到的"文档现状" = 全文渲染 + 缺口清单。
+    """智能体看到的"文档现状" = 文档渲染 + 缺口清单。
 
     缺口必须进提示词，否则就绪度只是个界面上的仪表盘，不改变 AI 行为
-    （`01-规格.md` §7.2）。
+    （`01-规格.md` §7.2）——**窄化时也一样**：走查切片要知道自己缺什么。
+
+    `feature_slugs` 原样透传给 `render_document`（见那边的三条规矩）。不传 = 全文，
+    这是另外 8 个调用方的既有行为。
     """
 
     gaps = render_readiness(readiness)
-    text = render_document(view)
+    text = render_document(view, feature_slugs=feature_slugs)
     return text if not gaps else f"{text}\n\n{gaps}"
 
 

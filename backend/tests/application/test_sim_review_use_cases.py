@@ -460,3 +460,27 @@ async def test_review_proposals_carry_the_manual_override_permission() -> None:
     for proposal_id, flag in flags.items():
         if not proposal_id.startswith("sim#"):
             assert flag is False, f"{proposal_id} 不该带 D5 例外位"
+
+
+async def test_the_persona_prompt_carries_only_the_named_features() -> None:
+    """`07 §7.12` 第 2 项：走查切片的上下文只含点名的功能，别的功能正文不进提示词。
+
+    同时钉两件容易破的事：节级条目被略去时必须说一声（"未展开 N 条"），
+    以及切片要自报"不是全文"——否则模型会对自己没看到的部分下判断。
+    """
+
+    harness = _harness({}, _all_good())
+    round_id = await _round_on_draft_card(harness)
+
+    await _run(harness)(
+        round_id=round_id, persona_ids=PERSONAS, feature_slugs=("order-export",)
+    )
+
+    slots = harness.prompts.last("sim_review")
+    state = slots["document_state"]
+    assert "走查切片" in state and "不是全文" in state
+    assert "feature#order-export" in state
+    assert "把订单导出成表格" in state            # 点名功能的正文真在里面
+    assert "en-acc1" in state                     # 验收条目也在（机械筛要全覆盖它们）
+    assert "## s1 背景与问题" in state            # 没点名的节不许消失
+    # （"略去了 N 条"那句在 test_context.py 的纯函数用例里钉——这个夹具的其它节本来是空的）
