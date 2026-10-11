@@ -120,14 +120,25 @@ def test_every_prompt_placeholder_is_declared_by_its_agent():
 
 
 def test_prompts_lead_with_what_the_agent_must_process():
-    """位置感知（`07-记忆层.md` §7.5 ④）：承重块（本轮要处理的）排在参考块之前，输出格式收尾。"""
+    """位置感知（`07-记忆层.md` §7.5 ④）：承重块（本轮要处理的）排在参考块之前。
+
+    **2026-10-10 收窄**：原断言还有一句 `integrator[-1] == "schema_json"`
+    （④ 的"输出格式收尾"）。它被 `02 §11.0.55` 的缓存纪律顶掉了——静态块前移之后
+    schema 在头部、`validation_error` 落末位，顺序契约改由
+    `tests/contracts/test_prompt_slot_order.py` 守。
+
+    换掉它的依据（都是当天实测，不是推理）：
+    - 供应商按**前缀**命中缓存；旧布局下整合者可缓存前缀只有 83 个字符，
+      而整份提示词 20,016 字里有 8,816 字（44%）是静态块；
+    - 静态块前移后 eval **7/10 → 8/10**（失败集是原样的两个已知抖法），无回退。
+    承重块优先这一半④仍然成立，下面两条继续钉着。
+    """
 
     integrator = re.findall(
         r"\$([a-z_]+)", (PROMPTS / "integrator.md").read_text(encoding="utf-8")
     )
     assert integrator.index("claims") < integrator.index("document_state")
     assert integrator.index("opinions") < integrator.index("document_state")
-    assert integrator[-1] == "schema_json"
 
     seat = re.findall(
         r"\$([a-z_]+)", (PROMPTS / "seat_review.md").read_text(encoding="utf-8")
