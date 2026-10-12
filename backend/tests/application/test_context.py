@@ -360,6 +360,20 @@ def test_render_answers_separates_answered_and_skipped():
 
 def test_labels_and_sections_text_come_from_domain_constants():
     assert "猜测" in context.LABELS_TEXT
+
+
+def test_the_decision_label_says_how_to_spot_one():
+    """`decision` 只写"已经拍板的事"，模型识别不出来——真跑实测把
+    「复核入口这期也定了，放在订单详情页」标成了 preference，而 preference **不进正文**：
+    一条已经定的事被静默扔出文档。
+
+    判据两条：① 给识别线索（用户原话里"定了"的说法）；② 划清与偏好的边界。
+    """
+
+    hint = context.LABEL_HINTS[context.ClaimLabel.DECISION]
+
+    assert "定了" in hint                      # 识别线索
+    assert "偏好" in hint                      # 边界要说清
     assert "s5 功能需求" in context.SECTIONS_TEXT
 
 
