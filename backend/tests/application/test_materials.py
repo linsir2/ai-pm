@@ -19,10 +19,10 @@ from pmstudio.domain.round.draft import Origin, OriginType, Proposal
 from pmstudio.domain.round.round import MaterialRef, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.errors import ShapeError
-from pmstudio.domain.shared.ids import EvidenceId, RoundId
+from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, RoundId
 from pmstudio.domain.shared.target import Target
-from pmstudio.domain.shared.writing import WriteOp
-from tests.support.builders import NOW, PROJECT, SEAT
+from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from tests.support.builders import NOW, PROJECT, SEAT, make_document
 from tests.support.harness import Harness
 
 
@@ -366,3 +366,50 @@ async def test_the_material_card_reads_in_document_order_not_relevance_order():
     ]
     eids = [chunk.eid for chunk in views[0].chunks]
     assert eids == sorted(eids)      # 编号也按文档序，所以卡上顺序走
+
+
+async def test_the_analyzer_prompt_carries_the_digest_not_the_full_document():
+    """生产与测试不能有缝：直调 `analyzer.analyze(document_state=…)` 的测试传的是全文，
+    而生产给的是**摘要**。这条钉住生产那一侧真的在给摘要。
+
+    依据（`07 §7.12` 第 2 项·claims 层）：`ClaimDraft` 不含文档条目引用、矛盾判据是轮内的，
+    `document_state` 对分析者唯一的实际用途在 18 轮真跑里只发生过 1 次。
+    """
+
+    harness = harness_with_material(*(["导出要有权限，只给管理员。" * 12] * 3))
+    long_text = "这是一段故意很长的决策原文" + "，用于验证摘要截断" * 12
+    harness.documents.save(_document_with_a_long_entry(long_text))
+    await started_round(harness, material_ids=())
+
+    slots = harness.prompts.last("analyzer")
+    state = slots["document_state"]
+
+    assert "文档摘要" in state                       # 自报是摘要
+    assert long_text not in state                    # 原文没整段进来
+    assert long_text[:60] + "…" in state             # 但前 60 字在（去重时够认）
+    assert "## s1" in state                          # 十三章骨架一片不少
+
+
+def _document_with_a_long_entry(text: str):
+    """一份只有 s1 一条长条目的文档。"""
+
+    from tests.support.builders import NOW
+
+    document = make_document(title="订单中台")
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i1",
+                entry_id="en1",  # type: ignore[arg-type]
+                op=WriteOp.ADD,
+                target=Target.body("s1"),
+                text=text,
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.TEXT,
+            )
+        ],
+        now=NOW,
+        summary="长条目",
+        authorized_new_features=frozenset({FeatureSlug("order-export")}),
+    )
+    return document

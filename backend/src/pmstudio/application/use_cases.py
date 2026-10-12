@@ -71,6 +71,7 @@ from pmstudio.application.context import (
     render_contradictions,
     render_digests,
     render_document_state,
+    render_document_topics,
     render_existing_entries,
     render_inspirations_index,
     render_materials,
@@ -540,7 +541,12 @@ class StartRound:
         document = self._documents.get(round_.project_id)
         user_input = round_.user_input
         view = document.view()
-        document_state = render_document_state(
+        # 分析者拿**条目摘要**而不是全文（`07 §7.12` 第 2 项·claims 层）。量出来的依据：
+        # `ClaimDraft` 不含任何文档条目引用，矛盾判据是轮内的，而全文对它唯一的实际用途
+        # （web_queries 阶梯第一层"文档里已有的就别提"）在 18 轮真跑里只发生过 1 次；
+        # 它每轮都要的"文档现状概貌"已由下面的 `$project_context` 给全。摘要保留十三章骨架
+        # 与每条目一句、不给 id 与编号（引不了，给了只会诱导去引）。
+        document_state = render_document_topics(
             view, readiness=self._checker.check(view)
         )
         memory_entries = self._memory.get(round_.project_id).entries if self._memory else ()

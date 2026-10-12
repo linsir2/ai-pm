@@ -7,7 +7,7 @@
 不是新的真相源（计划 §3.13）。
 """
 
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 from pmstudio.application.dto import MaterialChunk, MaterialPacket
@@ -140,6 +140,13 @@ def _block_lines(block: BlockView, *, indent: str = "  ") -> list[str]:
 #: 窄化渲染的开场一句：明说这是切片。否则模型会对自己没看到的部分下判断——
 #: 本项目一贯纪律是"不许假装完整"（与 `02` §11.0.53 同一条：不留空节、照实说略去了什么）。
 NARROWED_NOTE = "（以下是这份文档的走查切片，不是全文：只有点名的功能展开了）"
+#: 摘要形态的开场一句：明说每条目只留了一句。否则模型会以为自己看到了全文。
+DIGEST_NOTE = "（以下是文档摘要：十三章骨架齐全，每条目只留一句，不是逐字全文）"
+
+
+#: 摘要形态下每条目最多留几个字。**60 是量出来的**：真实文档条目中位长 42–74 字、
+#: P90 108–145，截到 60 能让中位条目完整保留，总量 −59~69%（见 `07 §7.12`）。
+DIGEST_ENTRY_CHARS = 60
 
 
 def render_document(
@@ -303,7 +310,7 @@ def render_document_state(
     （`01-规格.md` §7.2）——**窄化时也一样**：走查切片要知道自己缺什么。
 
     `feature_slugs` 原样透传给 `render_document`（见那边的三条规矩）。不传 = 全文，
-    这是另外 8 个调用方的既有行为。
+    这是另外 8 个调用方的既有行为。要"条目摘要"那种形态用 `render_document_topics`。
     """
 
     gaps = render_readiness(readiness)
@@ -744,6 +751,55 @@ def render_existing_entries(document: Document) -> str:
     for entry in document.preference_entries:
         lines.append(f"- 条目 {entry.entry_id}：（偏好区）{entry.text}")
     return "\n".join(lines) or "（文档现在没有任何条目）"
+
+
+def render_document_topics(
+    view: DocumentView, *, readiness: Sequence[ReadinessItem] = ()
+) -> str:
+    """文档的**条目摘要**：十三章骨架 + 每条目一句，**不带条目 id、不带出处编号**。
+
+    给分析者用（`07 §7.12` 第 2 项·claims 层）。为什么单独一个函数而不是给
+    `render_document` 加参数：那会变成一个只有一处消费的旋钮，而这里要的是**另一种东西**——
+    一篇能扫的目录，不是缩水的全文。
+
+    量出来的依据：`ClaimDraft` 没有任何文档条目引用（只有 `material_eids`），矛盾判据是
+    **轮内**的（`claim_a`/`claim_b` 指向它自己产出的 claims 数组），而 `document_state`
+    对它唯一的实际用途——web_queries 阶梯第一层"文档里已有的就别提"——在 18 轮真跑里
+    **一共只发生过 1 次**（用户勾选 0 条）。它每轮都要的"文档现状概貌"已由 `$project_context`
+    （覆盖 / 功能 / 决策 / 开放问题）给全。真库实测：全文 5472–6249 字 → 摘要 2649–3227 字，
+    **−48~55%**，条目一条不漏。
+
+    两条不许破的规矩：
+    1. **章节不许消失**——空节写"（空）"，不留空节（空节会让模型以为这一章不存在）；
+    2. **不给 id 与编号**——`ClaimDraft` 引不了文档条目，给了只会诱导它去引不存在的编号
+       （本项目方括号归属出处编号 `E…`，见 `3d0d54b`）。
+    """
+
+    lines: list[str] = [DIGEST_NOTE, f"# {view.title}（v{view.version_no}）"]
+    for section in view.sections:
+        lines.append(f"## {section.section_id} {section.title}")
+        body = [
+            f"  · {_cap(entry.text, DIGEST_ENTRY_CHARS)}"
+            for block in section.blocks
+            for entry in _entries_of(block)
+        ]
+        lines.extend(body or ["（空）"])
+    gaps = render_readiness(readiness)
+    return f"{"\n".join(lines)}\n\n{gaps}" if gaps else "\n".join(lines)
+
+
+def _entries_of(block: BlockView) -> Iterator[Entry]:
+    """一个块子树里的全部条目（深度优先，按文档顺序）。"""
+
+    yield from block.entries
+    for child in block.children:
+        yield from _entries_of(child)
+
+
+def _cap(text: str, limit: int) -> str:
+    """摘要截断：超出就截并打省略号。短于上限的原样返回（真实条目中位长 42–74 字）。"""
+
+    return text if len(text) <= limit else f"{text[:limit]}…"
 
 
 # ── 外部材料：选块 + 渲染（工具层 C-2）──────────────────────────────────

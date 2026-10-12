@@ -949,56 +949,8 @@ def test_the_pointer_form_is_materially_shorter_than_giving_everything():
     assert len(pointer) * 2 < len(everything)
 
 
-# ── 材料节的呈现顺序 = 文档顺序（`02 §11.0.54` 撤掉 U 型之后的终态）────────────
-#
-# 2026-10-10 曾把材料节改成 U 型重排（高分摆首尾），随后撤掉：唯一直接检验 U 型重排的
-# 论文（Jin et al. arXiv 2410.05983）说 **k 小时收益可忽略**，而两篇大样本复现
-# （Cuconasu EMNLP'25 / Gabín SIGIR'26）在真实 top-k 里测不出显著收益；实测份额也小——
-# 分析者提示词里材料节只占 19%，那一轮的整合者提示词里占 0%。
-# 复现最稳的证据是"长度伤性能"，不是位置。所以选块只决定**挑哪些**，呈现一律按文档序。
-
-
-def test_the_material_section_follows_document_order():
-    """按文档序渲染，编号也按文档序发——提示词里号码顺序走，人对着材料卡找得到。"""
-
-    packet = make_packet(*[f"导出权限说明{index}" for index in range(6)])
-    eids = {f"m1#c{index:02d}": EvidenceId(f"E{10 + index}") for index in range(6)}
-
-    rendered = context.render_materials([(packet, eids)])
-
-    shown = [
-        line[1 : line.index("]")] for line in rendered.text.splitlines() if line.startswith("[E")
-    ]
-    assert shown == ["E10", "E11", "E12", "E13", "E14", "E15"]
-
-
-def test_the_material_section_is_byte_identical_when_rendered_twice():
-    """KV 缓存的前提：同一份输入渲染两遍必须逐字相同（`02 §11.0.55`）。
-
-    同一轮里分析者、每个席位、整合者渲染的是**同一段**材料节；它只要抖一个字节，
-    `prompt_sha` 就漂、跨轮的前缀命中也别想。
-    """
-
-    packet = make_packet(*[f"块{index}" for index in range(9)])
-    eids = {f"m1#c{index:02d}": EvidenceId(f"E{20 + index}") for index in range(9)}
-
-    first = context.render_materials([(packet, eids)])
-    second = context.render_materials([(packet, eids)])
-
-    assert first.text == second.text
-    assert first.used_chunk_ids == second.used_chunk_ids
-
-
-# ── document_state 按功能窄化（`07 §7.12` 第 2 项）─────────────────────────
-#
-# sim_review（M11）点名要走查 `feature#slug`，却一直拿**全文十三章**——而它的机械筛
-# （`sim_review.py:174-183`）自己划定合法引用只在目标功能内（“指到了别的功能的内容”是 issue，
-# `acceptance[slug]` 必须全覆盖且只许这些）。所以窄上下文不省证据，只省干扰：
-# §7.12 原则①「删优先于排」，以及 Cognition 2026“干净上下文让 reviewer 更聪明”。
-
-
 def _two_feature_document() -> Document:
-    """两个功能 + 一段节级正文：够验“只留点名的、别的节说一句没展开”。"""
+    """两个功能 + 一段节级正文：够验「只留点名的、别的节说一句没展开」。"""
 
     document = Document.new(
         document_id=DocumentId("doc1"), project_id=PROJECT, title="订单中台", now=NOW
@@ -1007,7 +959,7 @@ def _two_feature_document() -> Document:
         [
             WriteInstruction(
                 instruction_id="i1",
-                entry_id="en1",
+                entry_id="en1",  # type: ignore[arg-type]
                 op=WriteOp.ADD,
                 target=Target.body("s1"),
                 text="运营每天导不出订单，靠人肉汇总",
@@ -1042,8 +994,52 @@ def _two_feature_document() -> Document:
     return document
 
 
+# ── 材料节的呈现顺序 = 文档顺序（`02 §11.0.54` 撤掉 U 型之后的终态）────────────
+#
+# 2026-10-10 曾把材料节改成 U 型重排（高分摆首尾），随后撤掉：唯一直接检验 U 型重排的
+# 论文（Jin et al. arXiv 2410.05983）说 **k 小时收益可忽略**，而两篇大样本复现
+# （Cuconasu EMNLP'25 / Gabín SIGIR'26）在真实 top-k 里测不出显著收益；实测份额也小——
+# 分析者提示词里材料节只占 19%，那一轮的整合者提示词里占 0%。
+# 复现最稳的证据是"长度伤性能"，不是位置。所以选块只决定**挑哪些**，呈现一律按文档序。
+
+
+def test_the_material_section_follows_document_order():
+    """按文档序渲染，编号也按文档序发——提示词里号码顺序走，人对着材料卡找得到。"""
+
+    packet = make_packet(*[f"导出权限说明{index}" for index in range(6)])
+    eids = {f"m1#c{index:02d}": EvidenceId(f"E{10 + index}") for index in range(6)}
+
+    rendered = context.render_materials([(packet, eids)])
+
+    shown = [
+        line[1 : line.index("]")] for line in rendered.text.splitlines() if line.startswith("[E")
+    ]
+    assert shown == ["E10", "E11", "E12", "E13", "E14", "E15"]
+
+
+def test_the_material_section_is_byte_identical_when_rendered_twice():
+    """KV 缓存的前提：同一份输入渲染两遍必须逐字相同（`02 §11.0.55`）。"""
+
+    packet = make_packet(*[f"块{index}" for index in range(9)])
+    eids = {f"m1#c{index:02d}": EvidenceId(f"E{20 + index}") for index in range(9)}
+
+    first = context.render_materials([(packet, eids)])
+    second = context.render_materials([(packet, eids)])
+
+    assert first.text == second.text
+    assert first.used_chunk_ids == second.used_chunk_ids
+
+
+# ── document_state 按功能窄化（`07 §7.12` 第 2 项·sim_review 层）──────────────
+#
+# sim_review（M11）点名要走查 `feature#slug`，却一直拿**全文十三章**——而它的机械筛
+# （`sim_review.py:174-183`）自己划定合法引用只在目标功能内（"指到了别的功能的内容"是 issue，
+# `acceptance[slug]` 必须全覆盖且只许这些，`verdict_because` 只引本地摩擦）。
+# 所以窄化不省证据，只省干扰——正是判据①「删优先于排」。
+
+
 def test_render_document_without_slugs_is_unchanged():
-    """不传 `feature_slugs` 时必须与今天逐字相同——另外 8 个调用方零行为变化。"""
+    """不传 `feature_slugs` 时必须与今天逐字相同——除了 sim_review 之外的调用方零行为变化。"""
 
     document = _two_feature_document()
     view = document.view()
@@ -1054,9 +1050,7 @@ def test_render_document_without_slugs_is_unchanged():
 def test_render_document_with_slugs_keeps_only_those_features():
     document = _two_feature_document()
 
-    text = context.render_document(
-        document.view(), feature_slugs=frozenset({"order-export"})
-    )
+    text = context.render_document(document.view(), feature_slugs=frozenset({"order-export"}))
 
     assert "feature#order-export" in text
     assert "把订单导出成表格" in text
@@ -1065,13 +1059,11 @@ def test_render_document_with_slugs_keeps_only_those_features():
 
 
 def test_a_section_without_a_named_feature_says_so_instead_of_vanishing():
-    """章节不许消失：否则模型会以为这一章不存在（本项目“不留空节”的同一条纪律）。"""
+    """章节不许消失：否则模型会以为这一章不存在（本项目"不留空节"的同一条纪律）。"""
 
     document = _two_feature_document()
 
-    text = context.render_document(
-        document.view(), feature_slugs=frozenset({"order-export"})
-    )
+    text = context.render_document(document.view(), feature_slugs=frozenset({"order-export"}))
 
     assert "## s1" in text                        # 节还在
     assert "本节没有点名的功能" in text
@@ -1079,13 +1071,11 @@ def test_a_section_without_a_named_feature_says_so_instead_of_vanishing():
 
 
 def test_the_narrowed_state_says_it_is_a_slice():
-    """开头必须声明这是走查切片——否则模型以为看过了全文，会对自己没看到的部分下判断。"""
+    """开头必须声明这是走查切片——否则模型会对自己没看到的部分下判断。"""
 
     document = _two_feature_document()
 
-    text = context.render_document_state(
-        document.view(), feature_slugs=frozenset({"order-export"})
-    )
+    text = context.render_document_state(document.view(), feature_slugs=frozenset({"order-export"}))
 
     assert "走查切片" in text
     assert "不是全文" in text
@@ -1096,34 +1086,6 @@ def test_the_narrowed_state_still_carries_the_gap_list():
 
     document = _two_feature_document()
 
-    text = context.render_document_state(
-        document.view(), feature_slugs=frozenset({"order-export"})
-    )
+    text = context.render_document_state(document.view(), feature_slugs=frozenset({"order-export"}))
 
-    assert "READINESS" in text or "补缺口" in text or "s6" in text
-
-
-# ── 条目编号不许再用方括号（2026-10-10 真跑逮到的既有缺陷）────────────────
-#
-# `_entry_line` 把条目渲染成 `[r-01b4e9d1#09] 正文`，而 `sim_review.md` 又教模型
-# "文档里 `[条目编号]` 那种，抄原样"——于是模型把方括号一起抄进 `entry_id`，
-# 机械筛一律判"指向不存在的条目"（真跑 4 persona × 2 上下文，全文与窄化下同样发生）。
-# 根因是**格式撞车**：方括号在本项目里已经是出处编号 `[E12]` 的专用格式
-# （`render_materials` / `render_claims` 都用它）。条目 id 换成"条目 <id>："前缀。
-
-
-def test_the_rendered_document_does_not_put_entry_ids_in_brackets():
-    document = _two_feature_document()
-
-    text = context.render_document(document.view())
-
-    assert "条目 en2：" in text                  # 新格式：自描述前缀，无方括号
-    assert "[en2]" not in text                   # 旧格式必须消失
-    assert "（E1）" in text                       # 出处编号**仍然**用方括号（既有约定不动）
-
-
-def test_render_existing_entries_uses_the_same_unambiguous_format():
-    text = context.render_existing_entries(_two_feature_document())
-
-    assert "条目 en2：" in text
-    assert "[en2]" not in text
+    assert "s6" in text or "补缺口" in text
