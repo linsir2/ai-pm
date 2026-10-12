@@ -1307,3 +1307,54 @@ def test_the_dropped_opinion_rule_is_stated_once():
 
     hits = LIMITS_TEXT.count("dropped_opinions")
     assert hits == 1, f"dropped_opinions 出现了 {hits} 次——同一件事只讲一遍"
+
+
+# ── 第 4 项的结论：试过，被真模型实验否掉（2026-10-10，`07 §7.13`）──────────
+#
+# 原假设（来自联网调研）：① Veseli 2025 的 distance-to-end bias → 载荷贴输出；
+# ② OpenAI GPT-4.1 官方 → 指令首尾各一份。据此把 $user_input/$external_material
+# 挪到所有参照段与指令之后，并加了一段末尾指令卡。
+#
+# 隔离变量的真模型实验（5 种布局 × 2 输入 × 2 次；再 L0 vs L2 × 5 次）证明：
+# - **载荷位移无可测收益**：主张数、章节覆盖、真互斥检出在各布局间无差异；
+# - **末尾指令卡有害**：无互异的输入上误报互斥从 0/4 升到 2/4，且没有任何补偿收益。
+#   机制上说得通：卡里复述"两条规则不能同时成立"这类措辞，把模型的互斥阈值调低了。
+#
+# 所以这里钉的是**旧顺序**，并且明确禁止末尾指令卡回来。
+
+
+def _slots_of(name: str) -> list[str]:
+    text = (PROMPTS / f"{name}.md").read_text(encoding="utf-8")
+    found = re.findall(r"\$([a-z_]+)", text)
+    return [item for index, item in enumerate(found) if found.index(item) == index]
+
+
+def test_the_analyzer_keeps_the_payload_beside_the_project_context():
+    """载荷留在原处（项目上下文之后、席位目录之前）——位移实验证明没有收益。"""
+
+    slots = _slots_of("analyzer")
+
+    assert slots.index("user_input") < slots.index("seat_catalog")
+    assert slots.index("document_state") < slots.index("user_input")
+
+
+def test_no_prompt_gets_a_tail_instruction_card():
+    """末尾指令卡被试成有害（误报互斥 0/4 → 2/4），禁止回来。
+
+    判据是"user_input 之后不存在第二个 ## 节"——那正是末尾卡的形状。
+    """
+
+    for name in ("analyzer", "sim_inquiry"):
+        text = (PROMPTS / f"{name}.md").read_text(encoding="utf-8")
+        after = text[text.index("$user_input") if "$user_input" in text else text.index("$claims"):]
+
+        assert "## 动手前" not in after, f"{name}.md 又冒出了末尾指令卡"
+
+
+def test_the_analyzer_wording_still_points_at_the_sections_above():
+    """"上面「当前文档」"这类指向必须和实际顺序一致——搬过家就必须改口，
+    没搬家就不许乱改。现在搬回来了，原话恢复。"""
+
+    text = (PROMPTS / "analyzer.md").read_text(encoding="utf-8")
+
+    assert "上面「当前文档」" in text
