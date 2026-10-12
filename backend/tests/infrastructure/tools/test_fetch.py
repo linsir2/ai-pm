@@ -57,10 +57,10 @@ async def test_the_fetcher_returns_raw_bytes_the_final_url_and_the_title():
 
     fetched = await fetcher(page(calls)).fetch(url="https://example.com/spec")
 
-    assert calls == ["https://example.com/spec"]
+    assert calls == ["https://93.184.216.34/spec"]   # 2026-10-10（§I ⑦）：连的是已校验的 IP
     assert fetched.content == PAGE         # 原始字节照原样回来（材料表存它）
     assert fetched.media_type == "text/html"
-    assert fetched.final_url == "https://example.com/spec"
+    assert fetched.final_url == "https://example.com/spec"   # 出处仍按原域名算
     assert fetched.title == "导出权限"
 
 
@@ -172,7 +172,7 @@ async def test_redirect_to_a_private_address_is_refused():
         await fetcher(handler).fetch(url="https://example.com/go")
 
     assert "内网" in str(error.value)
-    assert calls == ["https://example.com/go"]
+    assert calls == ["https://93.184.216.34/go"]   # 第一跳连的是校验过的那个 IP
 
 
 async def test_redirect_chain_is_followed_and_the_final_url_is_reported():
@@ -186,7 +186,7 @@ async def test_redirect_chain_is_followed_and_the_final_url_is_reported():
 
     page_ = await fetcher(handler).fetch(url="https://example.com/go")
 
-    assert calls == ["https://example.com/go", "https://cdn.example.com/final"]
+    assert calls == ["https://93.184.216.34/go", "https://93.184.216.34/final"]
     assert page_.final_url == "https://cdn.example.com/final"
     assert page_.content == PAGE          # 原始字节跟着一起回来
 
@@ -213,3 +213,130 @@ async def test_a_url_that_is_not_a_plain_public_web_page_is_refused(url):
     assert calls == []
 
 
+
+
+# ── 重试与 SSRF（`04-未决.md` §I 的 ⑦，2026-10-10）─────────────────────────
+#
+# httpx 内置的 `AsyncHTTPTransport(retries=N)` 在这个场景不能用（官方文档 + httpcore
+# 源码）：只覆盖 TCP/TLS 握手、**证书错也被重试**、无 jitter、不覆盖 read timeout
+# 与 5xx——而 5MB 边下边数超过 15s 恰好在 body 阶段抛 ReadTimeout。
+# 所以自己写 3-attempt 循环，并且**把校验过的 IP 钉进 URL**：否则"校验时解析的公网 IP"
+# 与"连接时重新解析的 IP"可以是两个（DNS rebinding / TOCTOU）。
+
+
+def counting_resolve(answers: list[tuple[str, ...]]):
+    """按调用次序返回预设的解析结果（测试 DNS 行为，不依赖真 DNS）。"""
+    calls = {"n": 0}
+
+    def resolve(host: str) -> tuple[str, ...]:
+        index = min(calls["n"], len(answers) - 1)
+        calls["n"] += 1
+        return answers[index]
+
+    return resolve, calls
+
+
+async def test_a_timeout_is_retried_and_the_second_attempt_succeeds():
+    calls: list[str] = []
+    state = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        state["n"] += 1
+        if state["n"] == 1:
+            raise httpx.ReadTimeout("body too slow")
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=b"<p>ok</p>")
+
+    fetched = await fetcher(handler).fetch(url="https://example.com/spec")
+
+    assert b"ok" in fetched.content
+    assert len(calls) == 2                     # 真的重试了一次，不是只试一次
+
+
+async def test_a_connection_error_is_not_retried():
+    """连接类错误（含证书错——httpx 把它 map 成 ConnectError）一律不重试。
+
+    用户粘来的 URL 连不上就是连不上，不是抖动；重试它只是把同样的失败做三遍。
+    """
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        raise httpx.ConnectError("certificate verify failed")
+
+    with pytest.raises(ToolCallFailed):
+        await fetcher(handler).fetch(url="https://example.com/spec")
+
+    assert len(calls) == 1
+
+
+async def test_a_retryable_status_is_retried_but_a_404_is_not():
+    calls: list[str] = []
+    state = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        state["n"] += 1
+        if state["n"] == 1:
+            return httpx.Response(503, headers={"content-type": "text/html"}, content=b"later")
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=b"<p>ok</p>")
+
+    fetched = await fetcher(handler).fetch(url="https://example.com/spec")
+    assert b"ok" in fetched.content
+    assert len(calls) == 2
+
+    not_found: list[str] = []
+
+    def missing(request: httpx.Request) -> httpx.Response:
+        not_found.append(str(request.url))
+        return httpx.Response(404, headers={"content-type": "text/html"}, content=b"gone")
+
+    with pytest.raises(ToolCallFailed):
+        await fetcher(missing).fetch(url="https://example.com/x")
+    assert len(not_found) == 1
+
+
+async def test_the_client_connects_to_the_ip_it_just_validated():
+    """钉住校验过的 IP：解析第一次给公网、第二次给内网，客户端仍连第一次那个。
+
+    这才是 DNS rebinding 的修法——校验与连接之间不能再有第二次解析。
+    """
+
+    seen: list[str] = []
+    resolve, dns = counting_resolve([("93.184.216.34",), ("127.0.0.1",)])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=b"<p>ok</p>")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    fetched = await HttpxWebFetcher(client=client, resolve=resolve).fetch(
+        url="https://example.com/spec"
+    )
+
+    assert "93.184.216.34" in seen[0]        # 连的是校验过的那个 IP
+    assert "example.com" not in seen[0]      # URL 里不再是域名
+    assert dns["n"] == 1                     # 只解析了一次
+    assert b"ok" in fetched.content
+
+
+async def test_every_hop_is_revalidated_after_a_redirect():
+    """重定向后重新解析+校验——已有的护栏不能因为加重试而松掉。"""
+
+    seen: list[str] = []
+    resolve, dns = counting_resolve([("93.184.216.34",), ("10.0.0.5",)])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.path == "/go":
+            return httpx.Response(302, headers={"location": "https://cdn.example.com/next"})
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=b"<p>ok</p>")
+
+    with pytest.raises(FetchRefused) as error:
+        await HttpxWebFetcher(
+            client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), resolve=resolve
+        ).fetch(url="https://example.com/go")
+
+    assert "内网" in str(error.value)
+    assert dns["n"] == 2                     # 每一跳都重新解析校验
