@@ -17,7 +17,8 @@ def test_integrator_limits_forbid_the_same_question_twice():
     （断言考的东西，提示词先说）。
     """
 
-    assert "同一件事不要问两遍" in LIMITS_TEXT
+    # 2026-10-10 第 3 项：祈使否定改正面写法（"只出一道"替代"不要问两遍"），规则本身未变
+    assert "同一个 target 配同一个问法只出一道" in LIMITS_TEXT
     assert "两件不同的事" in LIMITS_TEXT
 
 

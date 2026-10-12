@@ -250,7 +250,10 @@ def test_integrator_limits_tell_how_to_write_the_end_to_end_flow():
     assert "steps" in LIMITS_TEXT
     assert "端到端" in LIMITS_TEXT
     assert "main_flow" in LIMITS_TEXT  # 功能内部流程仍写 s5
-    assert "不许编" in LIMITS_TEXT  # 依据里看不出来的一步不写，写不全就空着 / 出题
+    # 2026-10-10 第 3 项：祈使否定改正面写法，这句的措辞随之换成"找依据"
+    # （规则本身一个字没丢：找得到才写，找不到就出题问用户，或者空着）
+    assert "找依据" in LIMITS_TEXT
+    assert "或者空着" in LIMITS_TEXT
     # P36 真跑：模型把 s6 的流程**写成 text** 过 4/7 —— 这一句钉住"kind 必须是 steps"
     assert "kind 必须写 steps" in LIMITS_TEXT
     # P36 二次真跑：分析者把端到端流程派给了 s6，整合者却**一条 s6 提案都没出**（各功能已覆盖）
@@ -1260,3 +1263,47 @@ def test_no_prompt_tells_the_model_to_copy_a_bracketed_token():
                 offenders.append(f"{path.stem}:{number}")
 
     assert offenders == [], f"这些行在教模型照抄方括号（方括号只归出处编号用）：{offenders}"
+
+
+# ── 硬规矩只说"要怎么做"，不说"不许怎么做"（`07 §7.12` 第 3 项）──────────────
+#
+# 依据（2026-10 联网调研）：否定问句下 **37.4–71.1%** 的案例里近期开源与闭门模型会重复原答案
+# （arXiv:2610.09571），且呈**逆规模律**（越大越差，arXiv:2209.12711）；"提供更多信息"在多数
+# 情况下反而降低表现（arXiv:2306.08189）。Anthropic 的方向同向：tell it what to do instead of
+# what not to do。所以祈使否定（不许/不要/不准 + 动词）全部改写成正面写法。
+#
+# **条件后果句（"否则…/…会被丢掉"）不在此列**——它不是禁令，是"为什么要守这条"的理由，
+# 而"给每条规则理由"同样是官方建议。
+
+
+def test_the_integrator_rules_say_what_to_do_not_what_to_avoid():
+    from pmstudio.application.agents.integrator import LIMITS_TEXT
+
+    # 「拿不准」是"不确定"，不是禁令——先剔掉再数
+    scannable = LIMITS_TEXT.replace("拿不准", "")
+    offenders = {
+        word: scannable.count(word) for word in ("不许", "不要", "不准") if word in scannable
+    }
+    assert offenders == {}, f"这些祈使否定还在（改写成正话）：{offenders}"
+
+
+def test_the_rewrite_keeps_every_hard_number_and_consequence():
+    """改写只为更可能被遵守，**不许顺丢信息**：硬数字与"不守会怎样"都要在原地。"""
+
+    from pmstudio.application.agents.integrator import LIMITS_TEXT
+
+    assert "5 道题" in LIMITS_TEXT        # 每批题数上限
+    assert "60 条" in LIMITS_TEXT         # 提案上限
+    assert "84 条" in LIMITS_TEXT         # 留痕上限
+    assert "替你留着" in LIMITS_TEXT       # 超出名额的后果
+    assert "悄悄丢掉" in LIMITS_TEXT       # 重复题的后果（这条理由正是规则的价值）
+    assert "答得上来" in LIMITS_TEXT       # 留痕的理由
+
+
+def test_the_dropped_opinion_rule_is_stated_once():
+    """同一条规矩说两遍就是给自己减分（指令条数本身就是成本，N=80 时全线归零）。"""
+
+    from pmstudio.application.agents.integrator import LIMITS_TEXT
+
+    hits = LIMITS_TEXT.count("dropped_opinions")
+    assert hits == 1, f"dropped_opinions 出现了 {hits} 次——同一件事只讲一遍"
