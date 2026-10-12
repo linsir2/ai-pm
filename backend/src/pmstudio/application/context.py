@@ -111,8 +111,17 @@ def render_seat_catalog(seats: Sequence[SeatDefinition]) -> str:
 
 
 def _entry_line(entry: Entry) -> str:
+    """一条目的渲染：`条目 <id>：正文（E…）`。
+
+    **条目 id 不许用方括号**：方括号在本项目里是出处编号 `[E12]` 的专用格式
+    （`render_materials` / `render_claims` 都用它）。两种身份撞格式的后果真跑踩过——
+    `sim_review` 的提示词原写着"文档里 `[条目编号]` 那种，抄原样"，模型照办，
+    把方括号抄进 `entry_id`，机械筛一律判"指向不存在的条目"（全文与窄化下同样发生）。
+    换成自描述前缀后没有歧义，也不用再靠"别带括号"这种不可靠的自然语言提醒。
+    """
+
     refs = " ".join(str(eid) for eid in entry.refs)
-    return f"[{entry.entry_id}] {entry.text}（{refs}）"
+    return f"条目 {entry.entry_id}：{entry.text}" + (f"（{refs}）" if refs else "")
 
 
 def _block_lines(block: BlockView, *, indent: str = "  ") -> list[str]:
@@ -731,9 +740,9 @@ def render_existing_entries(document: Document) -> str:
     lines: list[str] = []
     for block in document.blocks:
         for entry in block.entries:
-            lines.append(f"- [{entry.entry_id}] {entry.text}")
+            lines.append(f"- 条目 {entry.entry_id}：{entry.text}")
     for entry in document.preference_entries:
-        lines.append(f"- [{entry.entry_id}] （偏好区）{entry.text}")
+        lines.append(f"- 条目 {entry.entry_id}：（偏好区）{entry.text}")
     return "\n".join(lines) or "（文档现在没有任何条目）"
 
 

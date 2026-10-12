@@ -1243,3 +1243,20 @@ async def test_gateway_prefers_the_neutral_trace_id_key(monkeypatch):
     )
 
     assert recorder.rows[0]["trace_id"] == "d-1"
+
+
+def test_no_prompt_tells_the_model_to_copy_a_bracketed_token():
+    """方括号是出处编号 `[E…]` 的专用格式（`render_materials` / `render_claims`）。
+
+    曾经 `sim_review.md` 写着"文档里 `[条目编号]` 那种，抄原样"，模型照办，
+    把方括号抄进 `entry_id`，机械筛一律判"指向不存在的条目"。
+    这条钉住：任何提示词都不许再教模型照抄方括号。
+    """
+
+    offenders = []
+    for path in sorted(PROMPTS.glob("*.md")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "抄原样" in line and "`[" in line:
+                offenders.append(f"{path.stem}:{number}")
+
+    assert offenders == [], f"这些行在教模型照抄方括号（方括号只归出处编号用）：{offenders}"

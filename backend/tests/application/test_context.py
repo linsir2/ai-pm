@@ -1101,3 +1101,29 @@ def test_the_narrowed_state_still_carries_the_gap_list():
     )
 
     assert "READINESS" in text or "补缺口" in text or "s6" in text
+
+
+# ── 条目编号不许再用方括号（2026-10-10 真跑逮到的既有缺陷）────────────────
+#
+# `_entry_line` 把条目渲染成 `[r-01b4e9d1#09] 正文`，而 `sim_review.md` 又教模型
+# "文档里 `[条目编号]` 那种，抄原样"——于是模型把方括号一起抄进 `entry_id`，
+# 机械筛一律判"指向不存在的条目"（真跑 4 persona × 2 上下文，全文与窄化下同样发生）。
+# 根因是**格式撞车**：方括号在本项目里已经是出处编号 `[E12]` 的专用格式
+# （`render_materials` / `render_claims` 都用它）。条目 id 换成"条目 <id>："前缀。
+
+
+def test_the_rendered_document_does_not_put_entry_ids_in_brackets():
+    document = _two_feature_document()
+
+    text = context.render_document(document.view())
+
+    assert "条目 en2：" in text                  # 新格式：自描述前缀，无方括号
+    assert "[en2]" not in text                   # 旧格式必须消失
+    assert "（E1）" in text                       # 出处编号**仍然**用方括号（既有约定不动）
+
+
+def test_render_existing_entries_uses_the_same_unambiguous_format():
+    text = context.render_existing_entries(_two_feature_document())
+
+    assert "条目 en2：" in text
+    assert "[en2]" not in text
