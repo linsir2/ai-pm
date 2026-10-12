@@ -1,8 +1,13 @@
-"""L4 轮次摘要的 SQLite 仓储：CRUD + 最近 N 条。"""
+"""L4 轮次摘要的 SQLite 仓储：**只追加** + 读。
+
+`save` 只插不改（`07 §7.14`）：同一个 round 的摘要写第二次会得到
+`DigestAlreadyWritten`，而不是把原来那份覆盖掉。
+"""
 
 import json
 import sqlite3
 
+from pmstudio.application.errors import DigestAlreadyWritten
 from pmstudio.domain.memory.digest import RoundDigest
 
 
@@ -18,24 +23,30 @@ class SqliteDigestRepository:
         self._connection = connection
 
     def save(self, digest: RoundDigest) -> None:
-        self._connection.execute(
-            "INSERT INTO round_digests"
-            " (id, project_id, round_id, summary, sections, features, outcomes, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT(id) DO UPDATE SET"
-            " summary = excluded.summary, sections = excluded.sections,"
-            " features = excluded.features, outcomes = excluded.outcomes",
-            (
-                f"digest-{digest.round_id}",
-                digest.project_id,
-                digest.round_id,
-                digest.summary,
-                json.dumps(digest.sections_touched, ensure_ascii=False),
-                json.dumps(digest.features_addressed, ensure_ascii=False),
-                json.dumps(digest.key_outcomes, ensure_ascii=False),
-                _now(),
-            ),
-        )
+        """写入一条轮次摘要。**只追加**：同一个 round 写第二次会明确报错。
+
+        不用 `INSERT OR IGNORE`：静默忽略会让"我以为写进去了"和"其实没写"长得一样，
+        而这正是本项目不许的那类假装成功。
+        """
+
+        try:
+            self._connection.execute(
+                "INSERT INTO round_digests"
+                " (id, project_id, round_id, summary, sections, features, outcomes, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"digest-{digest.round_id}",
+                    digest.project_id,
+                    digest.round_id,
+                    digest.summary,
+                    json.dumps(digest.sections_touched, ensure_ascii=False),
+                    json.dumps(digest.features_addressed, ensure_ascii=False),
+                    json.dumps(digest.key_outcomes, ensure_ascii=False),
+                    _now(),
+                ),
+            )
+        except sqlite3.IntegrityError as error:
+            raise DigestAlreadyWritten(digest.round_id) from error
 
     def get(self, round_id: str) -> RoundDigest | None:
         row = self._connection.execute(

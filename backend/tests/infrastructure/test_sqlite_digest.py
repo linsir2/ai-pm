@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from pmstudio.application.errors import DigestAlreadyWritten
 from pmstudio.domain.memory.digest import RoundDigest
 from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
@@ -43,11 +44,21 @@ class TestSqliteDigestRepository:
     def test_get_missing_returns_none(self, repo):
         assert repo.get("nonexistent") is None
 
-    def test_save_replaces_on_conflict(self, repo):
+    def test_save_refuses_to_rewrite_what_is_already_written(self, repo):
+        """同一个 round 的摘要只追加、不改写（`07 §7.14`）。
+
+        **断言语意被有意改写**：原断言是 `loaded.summary == "更新"`（钉的是
+        `ON CONFLICT DO UPDATE` 的覆盖行为），而那正是本轮要废掉的——摘要会进后面每一轮
+        的提示词（`$digests` 带最近 3 轮），回头改一个已写下的摘要就是改历史。
+        规则本身一个字没变，变的是"写第二次会怎样"。
+        """
+
         repo.save(_digest("digest-1", summary="原始"))
-        repo.save(_digest("digest-1", summary="更新"))
-        loaded = repo.get("digest-1")
-        assert loaded.summary == "更新"
+
+        with pytest.raises(DigestAlreadyWritten):
+            repo.save(_digest("digest-1", summary="更新"))
+
+        assert repo.get("digest-1").summary == "原始"
 
     def test_recent_limit(self, repo):
         repo.save(_digest("d-1", "r1"))

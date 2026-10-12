@@ -95,6 +95,22 @@ class UnknownMaterial(ApplicationError):
         )
 
 
+class DigestAlreadyWritten(ApplicationError):
+    """同一个轮次的摘要已经写过了（`07 §7.14`：摘要只追加，不改写）。
+
+    **为什么不容忍覆盖**：摘要会进后面每一轮的提示词（`$digests` 带最近 3 轮）。
+    回头改一个已写下的摘要，等于让"前几轮发生了什么"在读过它的那些轮次之后变样——
+    那就是改历史。真走到重复写入就明确失败，不静默覆盖。
+    """
+
+    def __init__(self, round_id: str) -> None:
+        super().__init__(
+            f"这一轮的摘要已经写过了（{round_id}）——摘要只追加、不改写",
+            code="digest_already_written",
+            round_id=round_id,
+        )
+
+
 class MaterialFrozen(ApplicationError):
     """这份材料已经发过编号：**编号发出即冻结**（`P19`）。
 
