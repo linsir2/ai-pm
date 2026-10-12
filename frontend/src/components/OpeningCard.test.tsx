@@ -99,3 +99,15 @@ describe("OpeningCard · 联网检索词", () => {
     expect(screen.queryByText(/联网检索/)).toBeNull();
   });
 });
+
+
+it("显示分析者这一趟读了什么——批准主张之前看得见依据", () => {
+  draw({ round: round({ analysis_basis: "读了 s5 与 s11 的内容" }) });
+  expect(screen.getByText(/它这一趟读了/)).toBeTruthy();
+  expect(screen.getByText(/s5 与 s11/)).toBeTruthy();
+});
+
+it("没有 analysis_basis 时不渲染那一行（老行回落空串）", () => {
+  draw();
+  expect(screen.queryByText(/它这一趟读了/)).toBeNull();
+});

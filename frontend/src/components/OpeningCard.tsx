@@ -48,6 +48,12 @@ export function OpeningCard({
           有偏差就在这儿改；改完才开跑席位。
         </p>
 
+        {round.analysis_basis ? (
+          <p className="q__why q__why--basis">
+            它这一趟读了：{round.analysis_basis}
+          </p>
+        ) : null}
+
         <RoundMaterials materials={round.materials} />
 
         <ul className="claims">

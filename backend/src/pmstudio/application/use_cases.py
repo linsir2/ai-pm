@@ -622,6 +622,7 @@ class StartRound:
             round_.attach_claims(assigned)
             # 互斥对子在 attach_claims 之后挂（它要核对主张确实存在）：判断只做一次，
             # 做在读用户原话的那一步；装配层随后给覆盖两侧的题目盖章（T8）。
+            round_.note_analysis_basis(analysis.basis)
             round_.attach_contradictions(analysis.contradictions)
             # 席位名单跟着主张一起落：它是这一次判断的产物，重试/刷新都该看得见
             round_.nominate(analysis.seats)

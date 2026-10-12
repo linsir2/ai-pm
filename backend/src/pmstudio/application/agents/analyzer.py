@@ -43,6 +43,10 @@ class Analysis:
     #: **必填**：可选的话就成了"分析者可以没有信封"——那正是这轮要消掉的不对称，
     #: 只是换了个更隐蔽的形式（`use_cases` 目前不读它，填漏了没人会发现）。
     envelope: Envelope
+    #: 分析者交回的「我读了什么才切出这些主张」——原样带到 Round 上，
+    #: 让复述卡能在用户批准主张之前显示它（2026-10-10：这原本是个
+    #: 每轮必填却被整体丢弃的字段，见 `tests/domain/round/test_analysis_basis.py`）。
+    basis: str = ""
     dropped: tuple[DroppedItem, ...] = ()
     #: 本轮输入内部**立场互斥**的主张对子（没判出来就是空）
     contradictions: tuple[Contradiction, ...] = ()
@@ -210,6 +214,7 @@ class ClaimAnalyzer(Agent[Analysis, schemas.ClaimsPacket]):
         return Analysis(
             claims=claims,
             seats=seats,
+            basis=packet.basis,
             dropped=tuple(
                 replace(item, packet_id=packet_id)
                 for item in (

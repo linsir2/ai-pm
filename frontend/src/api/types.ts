@@ -198,6 +198,11 @@ export interface RoundView {
   failure_at_step: string | null;
   /** 「点重试会从哪继续」的人话（后端对着 `RESUME_ROUTES` 写的；认不出 → null，不猜）。 */
   retry_from: string | null;
+  /**
+   * 分析者交回的「我读了什么才切出这些主张」——复述卡在批准主张之前显示它，
+   * 用户据此看出分析者读没读对章节。老行没有 → 空串。
+   */
+  analysis_basis: string;
   /** 放弃这一轮的原因（终点状态；失败另有 failure_reason）。 */
   abandon_reason: string | null;
   confirmed_version_no: number | null;

@@ -4,8 +4,9 @@ import pytest
 
 from pmstudio.application.events import GENERATION_FAILED, ROUND_UPDATED
 from pmstudio.domain.round.step import Step, WaitingOn
-from pmstudio.domain.shared.ids import FeatureSlug
+from pmstudio.domain.shared.ids import FeatureSlug, RoundId
 from pmstudio.harness.errors import ModelCallFailed, PacketParseError
+from tests.application.test_materials import harness_with_material, started_round  # noqa: F401
 from tests.support.builders import PROJECT
 from tests.support.harness import Harness
 
@@ -315,3 +316,17 @@ async def test_a_not_json_failure_also_leaves_a_hint_for_the_retry():
     analyzer_calls = [slots for name, slots in harness.prompts.calls if name == "analyzer"]
     assert "不是合法 JSON" in analyzer_calls[-1]["validation_error"]
     assert harness.rounds.get(round_id).step is Step.CLAIMS_READY
+
+
+async def test_the_analyzers_reading_reaches_the_round():
+    """生产链路：模型交回的 `basis` 要一路落到 Round 上。
+
+    单测拼领域对象不算——这里从**模型交回的报文**走真 `ClaimAnalyzer`
+    → 真 `assign_claims` → `Round.note_analysis_basis`，断言值原样到位。
+    """
+
+    harness = harness_with_material("目标：导出要有权限")
+    round_id = await started_round(harness, material_ids=())
+    stored = harness.rounds.get(RoundId(round_id))
+
+    assert stored.analysis_basis.startswith("读了 s1–s13 全文")

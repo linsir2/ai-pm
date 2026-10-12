@@ -413,3 +413,21 @@ def _document_with_a_long_entry(text: str):
         authorized_new_features=frozenset({FeatureSlug("order-export")}),
     )
     return document
+
+
+async def test_the_opening_card_shows_what_the_analyzer_read():
+    """复述卡要显示「分析者读了什么才切出这些主张」——用户在批准主张之前，
+    能看出分析者有没有读对章节。真跑样例的原文见 test_analysis_basis.py。
+    """
+
+    from pmstudio.application.dto import round_view
+
+    harness = harness_with_material("目标：导出要有权限")
+    round_id = await started_round(harness, material_ids=())
+    stored = harness.rounds.get(RoundId(round_id))
+    stored.note_analysis_basis("读了 s5 与 s11")
+    harness.rounds.save(stored)      # 内存仓储的 get 给的是副本：改完要存回去
+
+    view = round_view(harness.rounds.get(RoundId(round_id)))
+
+    assert view.analysis_basis == "读了 s5 与 s11"

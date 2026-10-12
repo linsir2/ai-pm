@@ -390,6 +390,9 @@ class RoundView:
     sim_review: SimReviewView | None = None
     #: 联网工具现在能不能用（没配密钥就是 False）——复述卡据此决定要不要出现那一栏
     web_search_available: bool = False
+    #: 分析者交回的「我读了什么才切出这些主张」——复述卡在批准主张之前显示它，
+    #: 用户据此看出分析者读没读对章节（老行没有 → 空串）
+    analysis_basis: str = ""
     #: 这一轮攒下的记忆提议（M6）：**提议**，默认不勾；勾了随 `/confirm` 一起生效
     memory_proposals: tuple[MemoryProposalView, ...] = ()
 
@@ -1216,6 +1219,7 @@ def round_view(
         failure_at_step=(
             None if round_.failure is None else round_.failure.at_step.value
         ),
+        analysis_basis=round_.analysis_basis,
         retry_from=(
             None if round_.failure is None else retry_from_label(round_.failure.at_step.value)
         ),

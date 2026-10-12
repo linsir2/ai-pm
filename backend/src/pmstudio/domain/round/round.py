@@ -211,6 +211,7 @@ class Round:
         list_items: tuple[ListItem, ...] = (),
         contradictions: tuple[Contradiction, ...] = (),
         retry_hint: str | None = None,
+        analysis_basis: str = "",
         proposed_offered: int | None = None,
         proposed_accepted: int | None = None,
         proposal_ignore_streak: int = 0,
@@ -235,6 +236,7 @@ class Round:
         self._round_id = round_id
         self._project_id = project_id
         self._user_input = user_input
+        self._analysis_basis = analysis_basis
         self._created_at = created_at
         self._step = step
         self._waiting_on = waiting_on
@@ -1063,6 +1065,23 @@ class Round:
             self._retry_hint = hint
         self._waiting_on = WaitingOn.NONE
         self._step = Step.FAILED
+
+    @property
+    def analysis_basis(self) -> str:
+        """分析者交回的「我读了什么才切出这些主张」。
+
+        模型每轮必填、且写得很好（真跑样例：「…以及现有文档中 s5 (daily-report-generation),
+        s8 (…), s11 (open issues) 的内容进行切分。」），但这一路原本**零消费方**——
+        不落库、不进渲染、不进事件。落在这里，复述卡才能在用户批准主张之前
+        让它看见「分析者读没读对章节」。
+        """
+
+        return self._analysis_basis
+
+    def note_analysis_basis(self, text: str) -> None:
+        """记下分析者读了什么（只在 StartRound.analyze 调一次）。"""
+
+        self._analysis_basis = text
 
     @property
     def retry_hint(self) -> str | None:

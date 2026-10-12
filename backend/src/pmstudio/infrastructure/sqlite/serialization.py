@@ -561,6 +561,7 @@ def _failure_from_json(data: dict | None) -> Failure | None:
 def round_to_payload(round_: Round) -> dict:
     return {
         "user_input": round_.user_input,
+        "analysis_basis": round_.analysis_basis,
         "claims": [claim_to_json(claim) for claim in round_.claims],
         "seats": list(round_.seats),
         # 这一趟实际跑的名单（缩编结果）；老行没有这个键，读回落回 seats
@@ -681,6 +682,8 @@ def round_from_payload(
         round_id=round_id,
         project_id=project_id,
         user_input=payload["user_input"],
+        # 老行没有这个键：回落空串（分析者的"读了什么"是后加的）
+        analysis_basis=payload.get("analysis_basis", ""),
         created_at=created_at,
         step=step,
         waiting_on=waiting_on,
