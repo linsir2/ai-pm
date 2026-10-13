@@ -21,6 +21,7 @@ from datetime import datetime
 
 import pytest
 
+from pmstudio.application import context
 from pmstudio.application.document_window import (
     DocumentWindow,
     document_window,
@@ -28,6 +29,7 @@ from pmstudio.application.document_window import (
 )
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
+from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.ids import (
@@ -69,6 +71,39 @@ def _ledger_with(*eids: str) -> EvidenceLedger:
             eid=EvidenceId(eid),
         )
     return ledger
+
+
+def doc_with_many_chapters() -> Document:
+    """八章各一条共含一个宽泛词（真库 `数据` 命中 29 条、横跨 9 章的缩影）+
+    s11 三条同域条目（单章条目多、不该被误杀）——测章数熔断。"""
+
+    document = Document.new(
+        document_id=DocumentId("doc1"), project_id=PROJECT, title="订单中台", now=NOW
+    )
+    document.apply(
+        [
+            _add("en-1", "同时出现在八章里的宽泛词 s1", refs=("E1",), section="s1"),
+            _add("en-2", "同时出现在八章里的宽泛词 s2", refs=("E2",), section="s2"),
+            _add("en-3", "同时出现在八章里的宽泛词 s3", refs=("E3",), section="s3"),
+            _add("en-4", "同时出现在八章里的宽泛词 s4", refs=("E4",), section="s4"),
+            _add("en-5", "同时出现在八章里的宽泛词 s5", refs=("E5",), section="s5"),
+            _add("en-9", "同时出现在八章里的宽泛词 s6", refs=("E9",), section="s6"),
+            _add("en-10", "同时出现在八章里的宽泛词 s7", refs=("E10",), section="s7"),
+            _add("en-12", "同时出现在八章里的宽泛词 s8", refs=("E12",), section="s8"),
+            # 第六章：条目多但不含那个宽泛词——按章数判时它不该被牵连
+            _add("en-6", "未决问题域里的第一条", refs=("E6",), section="s11"),
+            _add("en-7", "未决问题域里的第二条", refs=("E7",), section="s11"),
+            _add("en-8", "未决问题域里的第三条", refs=("E8",), section="s11"),
+        ],
+        now=NOW,
+        summary="干跑",
+        authorized_new_features=frozenset(),
+    )
+    return document
+
+
+def _all_eids(view: DocumentView) -> frozenset[str]:
+    return visible_eids(context.render_document(view))
 
 
 def doc_with_three_sections() -> Document:
@@ -199,6 +234,36 @@ def test_topic_lens_still_excludes_other_chapters() -> None:
     assert "退款要能按客户名找单" not in window.text, "s4 的不该在"
     assert "日报每天早上九点前发出" not in window.text, "s12 的不该在"
     assert "E1" not in {str(e) for e in window.visible_eids}
+
+
+def test_topic_lens_breaks_when_the_widening_gets_too_wide() -> None:
+    """太宽就回落全文——**不许假装窄化**（2026-10-10 §11.0.63）。
+
+    真库实测：宽泛词当 topic 会让章节级扩张退化到接近全文——
+    `数据` 命中 29 条、横跨 9 章，窄化后仍是 **95%**。那种"窄化"是负收益：
+    既没省 token，又让模型以为只看到了局部。
+
+    按**章数**设熔断，不按条目数：s11 一个章就能有 13 条（真库），按条数会误杀。
+    """
+
+    view = doc_with_many_chapters().view()
+
+    window = document_window(view, topic="同时出现在八章里的宽泛词")
+
+    assert window.text == context.render_document_state(view), "太宽就回落全文，不是 95% 的假窄化"
+    assert len(window.visible_eids) == len(_all_eids(view)), "回落时可引编号回到全量"
+
+
+def test_topic_lens_breaks_on_more_than_the_threshold_of_entries() -> None:
+    """门限按**章数**判：命中一条很长的章（s11 那类）不该被误杀。"""
+
+    view = doc_with_many_chapters().view()
+
+    # 只命中一章、但那章条目很多 → 照窄
+    window = document_window(view, topic="未决问题域里的第一条")
+
+    assert "未决问题域里的第一条" in window.text
+    assert window.text != context.render_document_state(view)
 
 
 def test_topic_lens_falls_back_to_the_full_text_when_the_topic_is_nowhere() -> None:

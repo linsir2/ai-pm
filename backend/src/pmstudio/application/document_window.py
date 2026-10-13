@@ -136,6 +136,26 @@ def widen_to_chapters(
     return frozenset(wanted)
 
 
+#: 窄化最多覆盖几章。**超过就回落全文**：真库实测宽泛词当 topic 时
+#: `数据` 命中 29 条、横跨 9 章，窄化后仍是全文的 **95%**——那种"窄化"是负收益，
+#: 既没省 token，又让模型以为只看到了局部（比看到全文更糟：它会以为自己漏了什么）。
+#: 取 7：十三章的窄化要有意义，至少得省掉三分之一。
+MAX_NARROWED_CHAPTERS = 7
+
+
+def _chapter_count(entry_ids: frozenset[str], view: DocumentView) -> int:
+    """这批条目横跨几章。"""
+
+    return len(
+        {
+            section.section_id
+            for section in view.sections
+            if entry_ids
+            & {str(e.entry_id) for b in section.blocks for e in context._entries_of(b)}
+        }
+    )
+
+
 def document_window(
     view: DocumentView,
     *,
@@ -153,7 +173,9 @@ def document_window(
         hits = entries_matching_topic(view, topic)
         # 命中 0 条 → 回落全文：拿不到收益，但绝不能因此丢依据。
         if hits:
-            keep = widen_to_chapters(hits, view)
+            widened = widen_to_chapters(hits, view)
+            if _chapter_count(widened, view) <= MAX_NARROWED_CHAPTERS:
+                keep = widened
     text = context.render_document_state(
         view, readiness=readiness, feature_slugs=feature_slugs, keep_entry_ids=keep
     )
