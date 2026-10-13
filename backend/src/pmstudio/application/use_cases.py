@@ -101,6 +101,10 @@ from pmstudio.application.discussion import (
     render_thread_history,
     validate_ledger_refs,
 )
+from pmstudio.application.document_window import (
+    document_window,
+    visible_eids,
+)
 from pmstudio.application.dto import (
     SEARCH_LIMIT,
     DiffView,
@@ -917,9 +921,8 @@ class RunSeatRound:
         ledger = self._evidence.get(round_.project_id)
         pending = tuple(self._catalog.by_id(seat_id) for seat_id in round_.pending_seats)
         view = document.view()
-        document_state = render_document_state(
-            view, readiness=self._checker.check(view)
-        )
+        window = document_window(view, readiness=self._checker.check(view))
+        document_state = window.text
         claims_text = render_claims(round_.claims)
         answered_text = render_answers(round_, ledger=ledger)
         # 席位把 `q3` 翻译成 E 编号时，只许翻**本轮**的答案（跨轮同号会把出处指错）
@@ -927,8 +930,15 @@ class RunSeatRound:
         # 历史意见**不再一次性渲染成共用品**：指针式要按席位分流（本席位逐字、其它席位
         # 一行点名），所以把原始 seat_reviews 传下去，由每个席位自己裁（`07 §7.12` 第 1 项）。
         # 顺带省掉一件蠢事：以前 N 个席位人手一份全量历史，其实各不相同也没意义。
-        known_eids = frozenset(evidence.eid for evidence in ledger.evidences())
         external_material = external_material_text(round_, store=self._materials)
+        # **不变量**（`02` §11.0.61）：`known` 必须等于这次提示词里**看得见**的编号，
+        # 不能再是整个账本——账本里有而提示词里没有的（模型在编号空间上外推出来的幻觉，
+        # 真跑 955 个席位引用里占 8 个）以前一律放行。
+        # 四个带编号的槽位都要算进去：文档 / claims / answered / 本轮材料。
+        ledger_ids = frozenset(evidence.eid for evidence in ledger.evidences())
+        known_eids = window.known_eids(ledger) | (
+            visible_eids(claims_text, answered_text, external_material) & ledger_ids
+        )
         #: 这一趟是第几趟（问卷回来后会 +1 再跑）。信封槽位的一部分，见 `_review_one`。
         pass_index = round_.seat_round_count
         # L1 项目上下文：每轮都注入，让席位知道"我们在哪"
@@ -3931,13 +3941,16 @@ class RunInquiry:
                 focus = entry_focus(view, exploration.scope.ref or "")
             except UnknownEntryId:
                 focus = None  # 条目在调研期间被删了：不装作看得见
-        document_state = render_document_state(
-            view, readiness=self._checker.check(view)
-        )
+        window = document_window(view, readiness=self._checker.check(view))
+        document_state = window.text
         memory_text = render_memory(self._memory.get(exploration.project_id).entries)
-        ledger = self._evidence.get(exploration.project_id)
-        known_eids = frozenset(item.eid for item in ledger.evidences())
         scope_text = scope_line(exploration.scope, focus=focus)
+        ledger = self._evidence.get(exploration.project_id)
+        # **不变量**（`02` §11.0.61）：`known` = 这次提示词里看得见的编号，
+        # 不是整个账本。假设的 `based_on` 只能引它真看见的那些。
+        known_eids = window.known_eids(ledger) | (
+            visible_eids(scope_text, memory_text) & window.ledger_ids(ledger)
+        )
 
         repair = retry_hint or ""
         outcome = None
@@ -4396,11 +4409,14 @@ class SayToThread:
         )
         document = self._documents.get(thread.project_id)
         view = document.view()
-        document_state = render_document_state(
-            view, readiness=self._checker.check(view)
+        # 讨论是**有主题信号的**（`thread.topic` 就是发起时选中的那段原文），
+        # 所以按它收窄文档——选区与条目入口发起的必然命中，自由开聊回落全文
+        # （`02` §11.0.61：有信号才切，没信号不猜）。
+        window = document_window(
+            view, readiness=self._checker.check(view), topic=thread.topic
         )
+        document_state = window.text
         ledger = self._evidence.get(thread.project_id)
-        known_eids = frozenset(item.eid for item in ledger.evidences())
         base = len(thread.turns)
         # 本轮用户的话还没落库（模型先跑、跑通才原子记一对），但**它必须出现在这一趟的
         # 提示词里**——不然角色永远在答上一轮（2026-10-10 真跑抓到的 P0：第 2 次追问
@@ -4409,6 +4425,11 @@ class SayToThread:
         # 本轮占一格，"共 N 轮"也算它（跑完就真的有这一轮）。
         pending = Turn(index=base, role="user", text=text, based_on=())
         history = render_thread_history((*thread.turns, pending))
+        # **不变量**（`02` §11.0.61）：`known` = 看得见的编号。历史里上一轮引过的
+        # 编号也看得见，所以它进 `visible`——但文档里没渲染出来的那些进不来。
+        known_eids = window.known_eids(ledger) | (
+            visible_eids(history) & window.ledger_ids(ledger)
+        )
         question = _question_text(thread.question)
         findings = _render_thread_findings(
             thread.findings, explorations=self._explorations
@@ -4502,12 +4523,18 @@ class AssembleCards:
         )
         document = self._documents.get(thread.project_id)
         view = document.view()
-        document_state = render_document_state(
-            view, readiness=self._checker.check(view)
+        # 出卡与发言同一个主题信号、同一条窄化（`02` §11.0.61）。**出卡的 grounding
+        # 是硬二选一**（`grounding=document` → `based_on` 必须来自这里），所以
+        # 窄化后 `known` 必须同源收缩——否则卡会引一个它没看见的编号。
+        window = document_window(
+            view, readiness=self._checker.check(view), topic=thread.topic
         )
+        document_state = window.text
         ledger = self._evidence.get(thread.project_id)
-        known_eids = frozenset(item.eid for item in ledger.evidences())
         thread_text = render_thread_history(thread.turns)
+        known_eids = window.known_eids(ledger) | (
+            visible_eids(thread_text) & window.ledger_ids(ledger)
+        )
         # slot = 已有 cards 数＋1：cards 只增，单调，撞不了；不用另设计数器。
         base = len(thread.cards) + 1
         try:
@@ -4781,16 +4808,19 @@ class RunSimInquiry:
             raise TooManySimInquiries(limit=MAX_SIM_INQUIRIES_PER_ROUND)
         document = self._documents.get(round_.project_id)
         view = document.view()
-        document_state = render_document_state(
-            view, readiness=self._checker.check(view)
-        )
+        window = document_window(view, readiness=self._checker.check(view))
+        document_state = window.text
         memory_text = render_memory(self._memory.get(round_.project_id).entries)
         # 接地三源（`02` §11.0.47）：文档 ＋ 本轮用户的话（带 E 编号）＋ 本轮材料。
         # 只渲染文档时，空文档的项目里模型看不见任何编号——真跑把 s8 当锚点了。
         claims_text = render_claims(round_.claims)
         material_text = external_material_text(round_, store=self._materials)
         ledger = self._evidence.get(round_.project_id)
-        known_eids = frozenset(item.eid for item in ledger.evidences())
+        # **不变量**（`02` §11.0.61）：接地三源都算"看得见"，账本其余部分不算。
+        known_eids = window.known_eids(ledger) | (
+            visible_eids(claims_text, material_text, memory_text)
+            & window.ledger_ids(ledger)
+        )
         doc_keys = frozenset(
             normalize_statement(entry.text) for entry in iter_document_entries(view)
         )

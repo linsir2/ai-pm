@@ -10,7 +10,7 @@ from pmstudio.application.commands import RoundCommand
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug
-from tests.support.builders import PROJECT, ROUND_ID, SEAT
+from tests.support.builders import PROJECT, ROUND_ID, SEAT, document_with_feature
 from tests.support.harness import Harness
 
 CLAIMS_REPLY = json.dumps(
@@ -136,6 +136,9 @@ async def test_sim_loop_run_keep_carry_simulated() -> None:
         now=harness.clock.now(),
     )
     harness.evidences.seed(ledger)
+    # E1 必须**可见**（2026-10-10 §11.0.61）:只进账本的编号模型看不见，
+    # 席位引它就是凭空造编号。默认 `make_document()` 十三章全空，补一条真条目。
+    harness.documents.seed(document_with_feature())
 
     # 第一轮走到底：草案卡（AWAITING_CONFIRM/DRAFT）
     start = harness.start_round()

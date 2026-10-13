@@ -133,6 +133,25 @@ def _entry_line(entry: Entry) -> str:
     return f"条目 {entry.entry_id}：{entry.text}" + (f"（{refs}）" if refs else "")
 
 
+def _kept_block_lines(
+    block: BlockView, kept: Sequence[Entry], *, indent: str = "  "
+) -> list[str]:
+    """`_block_lines` 的窄化版：只渲染留下的条目，块的抬头照旧。
+
+    抬头必须留——模型靠它知道这条属于哪个功能/字段；去掉抬头等于把上下文拆成
+    互不相干的碎片。
+    """
+
+    lines: list[str] = []
+    if block.kind is BlockKind.FEATURE:
+        lines.append(f"{indent}- feature#{block.feature_slug}")
+    elif block.field is not None:
+        lines.append(f"{indent}- {block.field}：")
+    for entry in kept:
+        lines.append(f"{indent}  · {_entry_line(entry)}")
+    return lines
+
+
 def _block_lines(block: BlockView, *, indent: str = "  ") -> list[str]:
     lines: list[str] = []
     if block.kind is BlockKind.FEATURE:
@@ -159,7 +178,10 @@ DIGEST_ENTRY_CHARS = 60
 
 
 def render_document(
-    view: DocumentView, *, feature_slugs: frozenset[str] | None = None
+    view: DocumentView,
+    *,
+    feature_slugs: frozenset[str] | None = None,
+    keep_entry_ids: frozenset[str] | None = None,
 ) -> str:
     """文档现状 → 文本。**默认全文；给了 `feature_slugs` 就只渲染这些功能的块。**
 
@@ -173,10 +195,15 @@ def render_document(
     2. **偏好区照旧**——那是用户显式偏好，与功能无关，窄化不许静默丢它；
     3. **不传参就是全文**——另外 6 个调用方（seat / integration / inquiry /
        discussion-say / discussion-cards / sim_inquiry）的输出必须逐字不变，有用例钉着。
+
+    `keep_entry_ids` 与 `feature_slugs` 是**同一套窄化骨架的另一个过滤维度**：
+    前者按「块属于哪些功能」筛，后者按「留下哪些条目」筛。讨论区用它按线程主题收窄
+    （`02` §11.0.61）。**两个参数都不给就是全文**；`feature_slugs` 优先。
     """
 
+    narrowed = feature_slugs is not None or keep_entry_ids is not None
     lines: list[str] = []
-    if feature_slugs is not None:
+    if narrowed:
         lines.append(NARROWED_NOTE)
     lines.append(f"# {view.title}（v{view.version_no}）")
     for section in view.sections:
@@ -187,9 +214,16 @@ def render_document(
             if feature_slugs is not None and block.feature_slug not in feature_slugs:
                 skipped += len(block.entries)
                 continue
+            if keep_entry_ids is not None:
+                kept = [e for e in _entries_of(block) if str(e.entry_id) in keep_entry_ids]
+                skipped += len(block.entries) - len(kept)
+                if not kept:
+                    continue
+                body.extend(_kept_block_lines(block, kept))
+                continue
             body.extend(_block_lines(block))
         if not body:
-            lines.append("（本节没有点名的功能）" if feature_slugs is not None else "（空）")
+            lines.append("（本节没有点名的功能）" if narrowed else "（空）")
         else:
             lines.extend(body)
         if skipped:
@@ -312,19 +346,22 @@ def render_document_state(
     *,
     readiness: Sequence[ReadinessItem] = (),
     feature_slugs: frozenset[str] | None = None,
+    keep_entry_ids: frozenset[str] | None = None,
 ) -> str:
     """智能体看到的"文档现状" = 文档渲染 + 缺口清单。
 
     缺口必须进提示词，否则就绪度只是个界面上的仪表盘，不改变 AI 行为
     （`01-规格.md` §7.2）——**窄化时也一样**：走查切片要知道自己缺什么。
 
-    `feature_slugs` 原样透传给 `render_document`（见那边的三条规矩）。不传 = 全文，
-    这是另外 6 个调用方的既有行为。要"条目摘要"那种形态用 `render_document_topics`
-    （claims 层走的是那条路，不走这里）。
+    `feature_slugs` / `keep_entry_ids` 原样透传给 `render_document`
+    （见那边的三条规矩）。都不传 = 全文，这是另外 6 个调用方的既有行为。
+    要"条目摘要"那种形态用 `render_document_topics`（claims 层走的是那条路，不走这里）。
     """
 
     gaps = render_readiness(readiness)
-    text = render_document(view, feature_slugs=feature_slugs)
+    text = render_document(
+        view, feature_slugs=feature_slugs, keep_entry_ids=keep_entry_ids
+    )
     return text if not gaps else f"{text}\n\n{gaps}"
 
 

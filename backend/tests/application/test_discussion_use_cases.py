@@ -64,6 +64,15 @@ def _empty_cards_reply() -> str:
 
 
 def _seed_e1(harness: Harness) -> None:
+    """让 E1 **同时进了账本和文档**（2026-10-10 §11.0.61 后必须有）。
+
+    旧版只往账本里记 E1，于是它不出现在提示词任何槽位里——而罐头回复引它，
+    靠的是"known = 全账本"这个漏洞（真跑 955 个引用里 8 个真幻觉就这么静默通过）。
+    `seat_review.md:14` 的标题是「本轮主张（带编号）」、`inquiry.md:40` 明写
+    「不许凭空造 E 编号」——**都是要求可见**，代码却放行全账本。
+
+    现在 E1 是一条真实文档条目的出处（`document_with_feature` 的 `refs=(E1,)`），
+    它就在 `$document_state` 里，模型看得见，引它合法。"""
     ledger = harness.evidences.get(PROJECT)
     ledger.record(
         kind=EvidenceKind.USER_INPUT,
@@ -72,6 +81,7 @@ def _seed_e1(harness: Harness) -> None:
         now=harness.clock.now(),
     )
     harness.evidences.seed(ledger)
+    harness.documents.seed(document_with_feature())
 
 
 async def _start(

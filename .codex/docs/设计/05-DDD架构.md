@@ -184,6 +184,7 @@ backend/src/pmstudio/
 │   ├── repair.py
 │   ├── deliverable.py
 │   ├── evidence_refs.py
+│   ├── document_window.py
 │   ├── exploration.py
 │   ├── discussion.py
 │   ├── material_synthesis.py

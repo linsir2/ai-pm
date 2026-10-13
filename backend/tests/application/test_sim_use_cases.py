@@ -127,6 +127,19 @@ def _seed_e1(harness: Harness) -> None:
         now=harness.clock.now(),
     )
     harness.evidences.seed(ledger)
+    # E1 必须**可见**（2026-10-10 §11.0.61）：只进账本的编号模型看不见，
+    # 引它就是"凭空造 E 编号"（`seat_review.md:14` 规定只能引本轮主张的编号）。
+    # **只在还没有条目时补**：调用方自己定制 one_liner（如去重测那处）时，
+    # 这里覆盖会抹掉人家的意图。默认 `make_document()` 是十三章全空，
+    # 所以判"有没有条目"，不是判"有没有章节"。
+    from pmstudio.application import context as _context
+
+    if not any(
+        list(_context._entries_of(block))
+        for section in harness.documents.get(PROJECT).view().sections
+        for block in section.blocks
+    ):
+        harness.documents.seed(document_with_feature())
 
 
 async def _round_on_draft_card(harness: Harness):  # type: ignore[no-untyped-def]
