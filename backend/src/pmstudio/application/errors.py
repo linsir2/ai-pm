@@ -38,6 +38,21 @@ def unknown_ref_message(
             f"{what}：{listed}；`r-xxxx#01` 是**提案编号**，不是出处编号——"
             "出处编号只在上面那份清单里（形如 E12）"
         )
+    # 提示词里同时可见五套编号（`02` §11.0.60）：章节 `s5`、提案 `r-xxxx#01`、
+    # 功能 `feature#slug`、对话轮次 `t5`、出处 `E12`。只有 E 那种能进 `based_on`。
+    # 这三种（2026-10-10 讨论区真跑实测：模型依次引用过 `s2..s12`、
+    # `feature#order-export`、`t5`/`t6`）错在同一个地方，所以给同一条指引——
+    # **说清哪个是什么，别只说"不存在"**：重装只有一次机会，这行字是唯一一次指引。
+    if any(
+        item.startswith("s") and item[1:].isdigit() for item in unknown
+    ) or any(item.startswith("feature#") for item in unknown) or any(
+        item.startswith("t") and item[1:].isdigit() for item in unknown
+    ):
+        return (
+            f"{what}：{listed}；`s5` 是章节号、`feature#xxx` 是功能标识、"
+            "`t5` 是对话里的第几轮——都不是出处编号。"
+            "出处编号只在上面那份文档清单里，形如 E12；引不到就留空"
+        )
     return f"{what}：{listed}"
 
 

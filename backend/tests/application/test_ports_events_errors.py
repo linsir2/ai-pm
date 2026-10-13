@@ -164,3 +164,42 @@ def test_unknown_ref_message_explains_proposal_ids():
 
     assert "提案编号" in message
     assert "E" in message
+
+
+def test_unknown_ref_message_explains_section_ids():
+    """真跑里模型把章节号 `s5` 当出处编号（2026-10-10 讨论区实测）。
+
+    提示词里同时可见五套编号：`s1..s13` 章节、`r-xxx#01` 提案、`feature#slug` 功能、
+    `t0..tN` 对话轮次、`E1..` 出处——只有最后一种合法。漏掉任何一套，模型就只能
+    收到"编号不存在"，而重装只有一次机会，这条文案是它唯一一次指引。
+    """
+
+    message = unknown_ref_message(["s5", "s12"], what="回答引用了不存在的编号")
+
+    assert "章节" in message
+    assert "E" in message
+
+
+def test_unknown_ref_message_explains_feature_slugs():
+    message = unknown_ref_message(["feature#order-export"], what="回答引用了不存在的编号")
+
+    assert "功能" in message
+    assert "E" in message
+
+
+def test_unknown_ref_message_explains_turn_indices():
+    """`t5` / `t6` 来自 `render_thread_history` 的 `[t5 用户]` 行号（讨论区实测）。"""
+
+    message = unknown_ref_message(["t5", "t6"], what="回答引用了不存在的编号")
+
+    assert "轮次" in message or "对话" in message
+    assert "E" in message
+
+
+def test_unknown_ref_message_still_answers_for_a_bare_number():
+    """不认识的形态不许吞掉——兜底仍是"哪个编号不存在"，只是没有额外指引。"""
+
+    message = unknown_ref_message(["E9999"], what="回答引用了不存在的编号")
+
+    assert "E9999" in message
+    assert "不存在" in message
