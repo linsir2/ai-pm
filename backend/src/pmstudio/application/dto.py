@@ -1403,8 +1403,7 @@ def round_material_views(
             continue
         by_chunk = {chunk.chunk_id: chunk for chunk in packet.parsed.chunks}
         # **按文档顺序**排：卡片是给人读的（原文顺序），不是相关度榜单。
-        # 提示词那一节是 U 型（`context.ushape`，给模型躲中段低谷用的）——两个顺序，
-        # 各自服务各自的人。编号也按文档序发（`StartRound`），所以卡上号码顺序走。
+        # 提示词那一节也是文档序（U 型已撤回）——卡与提示词同一个顺序。
         ordered = sorted(entries, key=lambda item: by_chunk[item[0]].ordinal)
         chunks = tuple(
             RoundMaterialChunkView(
