@@ -134,21 +134,33 @@ def _entry_line(entry: Entry) -> str:
 
 
 def _kept_block_lines(
-    block: BlockView, kept: Sequence[Entry], *, indent: str = "  "
+    block: BlockView, keep_ids: frozenset[str], *, indent: str = "  "
 ) -> list[str]:
-    """`_block_lines` 的窄化版：只渲染留下的条目，块的抬头照旧。
+    """`_block_lines` 的窄化版：只渲染留下的条目，块与子块的抬头照旧。
 
     抬头必须留——模型靠它知道这条属于哪个功能/字段；去掉抬头等于把上下文拆成
-    互不相干的碎片。
+    互不相干的碎片。**子块也要递归**：真库 s5 的功能块下挂着 `field=name` 这类
+    子块，条目住在子块里；拍平会丢掉 `- name：`，模型就分不清这是 name 还是
+    acceptance（2026-10-13 审核抓到）。
     """
 
+    kept_here = [e for e in block.entries if str(e.entry_id) in keep_ids]
+    kept_children = [
+        child
+        for child in block.children
+        if any(str(e.entry_id) in keep_ids for e in _entries_of(child))
+    ]
+    if not kept_here and not kept_children:
+        return []
     lines: list[str] = []
     if block.kind is BlockKind.FEATURE:
         lines.append(f"{indent}- feature#{block.feature_slug}")
     elif block.field is not None:
         lines.append(f"{indent}- {block.field}：")
-    for entry in kept:
+    for entry in kept_here:
         lines.append(f"{indent}  · {_entry_line(entry)}")
+    for child in kept_children:
+        lines.extend(_kept_block_lines(child, keep_ids, indent=indent + "  "))
     return lines
 
 
@@ -220,11 +232,17 @@ def render_document(
                 skipped += len(block.entries)
                 continue
             if keep_entry_ids is not None:
-                kept = [e for e in _entries_of(block) if str(e.entry_id) in keep_entry_ids]
-                skipped += len(block.entries) - len(kept)
-                if not kept:
+                # skipped 按**子树**算：`block.entries` 只有直属条目，子块里的不算在内，
+                # 直接减会算错（真库 s5 功能块的条目全在子块里）。
+                total = len(list(_entries_of(block)))
+                kept_lines = _kept_block_lines(block, keep_entry_ids)
+                kept_count = sum(
+                    1 for e in _entries_of(block) if str(e.entry_id) in keep_entry_ids
+                )
+                skipped += total - kept_count
+                if not kept_lines:
                     continue
-                body.extend(_kept_block_lines(block, kept))
+                body.extend(kept_lines)
                 continue
             body.extend(_block_lines(block))
         if not body:

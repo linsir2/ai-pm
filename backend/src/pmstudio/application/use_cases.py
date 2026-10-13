@@ -930,7 +930,7 @@ class RunSeatRound:
         external_material = external_material_text(round_, store=self._materials)
         # **不变量**（`02` §11.0.61）：`known` 必须等于这次提示词里**看得见**的编号，
         # 不能再是整个账本——账本里有而提示词里没有的（模型在编号空间上外推出来的幻觉，
-        # 真跑 955 个席位引用里占 8 个）以前一律放行。
+        # 真跑 955 个席位引用里占 9 个）以前一律放行。
         # 四个带编号的槽位都要算进去：文档 / claims / answered / 本轮材料。
         ledger_ids = frozenset(evidence.eid for evidence in ledger.evidences())
         known_eids = window.known_eids(ledger) | (

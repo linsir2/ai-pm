@@ -5,7 +5,7 @@
     模型看不见的编号，校验就不该放行。
 
 改造前 5 个调用点全拿「全账本」当 `known_eids`，于是「账本里有、提示词里没有」
-的编号一律放行。真跑实测 955 个席位引用里 **8 个是纯幻觉**（整个提示词里根本
+的编号一律放行。真跑实测 955 个席位引用里 **9 个是纯幻觉**（整个提示词里根本
 没有该编号，模型在编号空间上外推），全部静默通过。窄化之后这条路必须堵死，
 否则窄化就等于悄悄拆掉引用底座。
 
@@ -26,6 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pmstudio.application import context
+from pmstudio.domain.authoring.readiness import ReadinessItem
 from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.ids import EvidenceId
@@ -170,13 +171,16 @@ def _chapter_count(entry_ids: frozenset[str], view: DocumentView) -> int:
 def document_window(
     view: DocumentView,
     *,
-    readiness: Sequence[object] = (),
+    readiness: Sequence[ReadinessItem] = (),
     feature_slugs: frozenset[str] | None = None,
     topic: str | None = None,
 ) -> DocumentWindow:
     """这个智能体这一趟看到的文档 + 它可以引用的编号。
 
     `feature_slugs` 与 `topic` 都是相关性信号；**都没有就是全文**，不猜。
+    **同时给只认 `feature_slugs`**：今天没有调用方会同时给两个（走查只传前者、
+    讨论只传后者），与其猜"两个信号打架时听谁的"，不如写死优先级——真有那一天，
+    这里会先抛出来而不是静默选一边。
     """
 
     keep: frozenset[str] | None = None

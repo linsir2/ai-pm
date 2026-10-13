@@ -5,7 +5,7 @@
     模型看不见的编号，校验就不该放行。
 
 现状违反它——5 个调用点全拿「全账本」当 `known_eids`。真跑实测 955 个席位引用里
-**8 个是纯幻觉**（整个提示词里根本没有该编号，模型在编号空间上外推），
+**9 个是纯幻觉**（整个提示词里根本没有该编号，模型在编号空间上外推），
 现在全部静默通过。
 
 三条不许破的规矩：
@@ -36,6 +36,7 @@ from pmstudio.domain.shared.ids import (
     DocumentId,
     EntryId,
     EvidenceId,
+    FeatureSlug,
     ProjectId,
     RoundId,
 )
@@ -224,6 +225,57 @@ def test_topic_lens_widens_to_the_chapter_so_citations_are_not_starved() -> None
     assert {"E2", "E3"} <= {str(e) for e in window.visible_eids}
 
 
+def test_kept_entries_keep_their_field_header() -> None:
+    """子块里的条目被留下时，**它所属字段的抬头必须一起留**。
+
+    真库形状：s5 的功能块下挂着 `field=name` 这类子块，条目住在子块里。
+    旧的 `_kept_block_lines` 把子块条目拍平到父标题下，`- name：` 丢了——
+    模型就分不清这条是 name 还是 acceptance。引用不断（E 编号还在），
+    但"这条是干什么的"丢了。
+    """
+
+    from pmstudio.domain.shared.target import Target
+
+    document = Document.new(
+        document_id=DocumentId("doc1"), project_id=PROJECT, title="订单中台", now=NOW
+    )
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-f",
+                entry_id=EntryId("en-f1"),
+                op=WriteOp.ADD,
+                target=Target.feature_field(FeatureSlug("order-export"), "name"),
+                text="把订单导出成表格",
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.TEXT,
+            ),
+            WriteInstruction(
+                instruction_id="i-f2",
+                entry_id=EntryId("en-f2"),
+                op=WriteOp.ADD,
+                target=Target.feature_field(FeatureSlug("order-export"), "acceptance"),
+                text="60 秒内完成",
+                refs=(EvidenceId("E2"),),
+                kind=BlockKind.TEXT,
+            ),
+            # s12 放一条毫不相关的——章节级扩张只扩命中条目的章，它不该被带进来
+            _add("en-far", "验收标准：日报准时发送", refs=("E9",), section="s12"),
+        ],
+        now=NOW,
+        summary="干跑",
+        authorized_new_features=frozenset({FeatureSlug("order-export")}),
+    )
+    view = document.view()
+
+    window = document_window(view, topic="把订单导出成表格")
+
+    assert "把订单导出成表格" in window.text
+    assert "- name" in window.text, "字段头必须留，否则分不清这是 name 还是 acceptance"
+    # s12 那条字面不相关——章节级扩张只扩命中条目的章
+    assert "验收标准：日报准时发送" not in window.text
+
+
 def test_topic_lens_still_excludes_other_chapters() -> None:
     """扩张到章为止，不等于摊开全文档——跨章的编号仍然不许出现。"""
 
@@ -327,7 +379,7 @@ def test_topic_lens_falls_back_to_the_full_text_when_the_topic_is_nowhere() -> N
 def test_topic_lens_never_lets_a_citation_outside_the_slice_pass() -> None:
     """**这是整个模块存在的那条不变量。**
 
-    真跑实测：955 个席位引用里 8 个是幻觉——账本里有、提示词里没有，
+    真跑实测：955 个席位引用里 9 个是幻觉——账本里有、提示词里没有，
     现在的校验全部放行。切片之后这条路必须被堵死。
     """
 
