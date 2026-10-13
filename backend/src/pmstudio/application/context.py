@@ -171,8 +171,8 @@ def render_document(
     三条不许破的规矩：
     1. **章节不许消失**——没有点名功能的节写"（本节没有点名的功能）"，再说清略去了几条；
     2. **偏好区照旧**——那是用户显式偏好，与功能无关，窄化不许静默丢它；
-    3. **不传参就是全文**——另外 8 个调用方（claims / seat / integration / inquiry /
-       discussion / sim_inquiry…）的输出必须逐字不变，有用例钉着。
+    3. **不传参就是全文**——另外 6 个调用方（seat / integration / inquiry /
+       discussion-say / discussion-cards / sim_inquiry）的输出必须逐字不变，有用例钉着。
     """
 
     lines: list[str] = []
@@ -319,7 +319,8 @@ def render_document_state(
     （`01-规格.md` §7.2）——**窄化时也一样**：走查切片要知道自己缺什么。
 
     `feature_slugs` 原样透传给 `render_document`（见那边的三条规矩）。不传 = 全文，
-    这是另外 8 个调用方的既有行为。要"条目摘要"那种形态用 `render_document_topics`。
+    这是另外 6 个调用方的既有行为。要"条目摘要"那种形态用 `render_document_topics`
+    （claims 层走的是那条路，不走这里）。
     """
 
     gaps = render_readiness(readiness)

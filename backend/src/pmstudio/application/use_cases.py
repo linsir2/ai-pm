@@ -208,6 +208,7 @@ from pmstudio.domain.discussion.thread import (
     FindingRef,
     QuestionSnapshot,
     ThreadStatus,
+    Turn,
 )
 from pmstudio.domain.exploration.exploration import (
     Exploration,
@@ -4400,12 +4401,18 @@ class SayToThread:
         )
         ledger = self._evidence.get(thread.project_id)
         known_eids = frozenset(item.eid for item in ledger.evidences())
-        history = render_thread_history(thread.turns)
+        base = len(thread.turns)
+        # 本轮用户的话还没落库（模型先跑、跑通才原子记一对），但**它必须出现在这一趟的
+        # 提示词里**——不然角色永远在答上一轮（2026-10-10 真跑抓到的 P0：第 2 次追问
+        # 的提示词里只有第 1 次追问的原文）。这个 pending 与 `say_pair` 里构造的
+        # 是同一个对象形状，所以直接交给 `render_thread_history`：窗口仍然封顶 6 条，
+        # 本轮占一格，"共 N 轮"也算它（跑完就真的有这一轮）。
+        pending = Turn(index=base, role="user", text=text, based_on=())
+        history = render_thread_history((*thread.turns, pending))
         question = _question_text(thread.question)
         findings = _render_thread_findings(
             thread.findings, explorations=self._explorations
         )
-        base = len(thread.turns)
         try:
             outcome = await self._discusser.say(
                 role_title=role_title,

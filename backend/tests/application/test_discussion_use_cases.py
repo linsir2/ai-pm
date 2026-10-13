@@ -149,6 +149,57 @@ async def test_say_appends_pair_and_counts_turn_slot() -> None:
     assert len(harness.gateway.requests) == 2
 
 
+async def test_say_puts_the_current_utterance_into_the_prompt() -> None:
+    """**本轮用户说的话必须出现在这一趟的提示词里**（2026-10-10 真跑抓到的 P0）。
+
+    事务顺序是「模型先跑、校验通过才原子记一对」——顺序本身是对的（先落库会在
+    模型失败时留下孤儿 user 轮），但补上事务时漏了一件事：还没落库的那一轮也得
+    出现在提示词里。漏掉的后果是角色永远在答**上一轮**：第 1 次追问只看得到开场
+    问卷快照，第 2 次追问看到的是第 1 次追问。
+
+    取证方式照 `test_say_renders_findings_into_the_prompt`——留样记的是槽位值。
+    """
+
+    harness = Harness(replies={"discussion": _say_reply()})
+    harness.seed_project()
+    started = await _start(harness)
+
+    await harness.say_to_thread()(
+        discussion_id=DiscussionId(started.thread_id), text="我想做导出"
+    )
+
+    prompt = "\n".join(message.content for message in harness.gateway.requests[-1].messages)
+    assert "我想做导出" in prompt
+
+
+async def test_say_history_window_stays_capped_with_the_current_utterance_in_it() -> None:
+    """本轮发言占窗口**一格**，窗口仍是 6 条 + 一行照实说明（不许变成 7 行）。
+
+    为什么不是 7 行：`render_thread_history` 的说明写「共 N 轮，只带了最近 6 轮」
+    ——它存在的意义就是不让模型以为前面没了（`application/discussion.py:68`）。
+    窗口涨到 7 行，这句说明就成了假话。
+
+    「共 N 轮」里的 N 算本轮：模型跑完就真的会落这一轮，说 7 是诚实的。
+    """
+
+    harness = Harness(replies={"discussion": _say_reply()})
+    harness.seed_project()
+    started = await _start(harness)
+    thread_id = DiscussionId(started.thread_id)
+    for i in range(3):  # 喂满 6 轮（每轮 user+assistant 成对）
+        await harness.say_to_thread()(discussion_id=thread_id, text=f"第{i + 1}次追问")
+
+    await harness.say_to_thread()(discussion_id=thread_id, text="第4次追问：本轮原文")
+
+    prompt = "\n".join(message.content for message in harness.gateway.requests[-1].messages)
+    assert "第4次追问：本轮原文" in prompt
+    # 窗口没涨：6 条历史 + 1 行说明
+    assert "共 7 轮" in prompt and "只带了最近 6 轮" in prompt
+    # 被挤出去的是最早那条，不是本轮
+    assert "第1次追问" not in prompt
+    assert "第3次追问" in prompt
+
+
 async def test_say_repairs_once_then_succeeds() -> None:
     harness = Harness(replies={"discussion": [_bad_ref_reply(), _say_reply()]})
     harness.seed_project()
