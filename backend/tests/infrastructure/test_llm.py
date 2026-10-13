@@ -1351,10 +1351,15 @@ def test_no_prompt_gets_a_tail_instruction_card():
         assert "## 动手前" not in after, f"{name}.md 又冒出了末尾指令卡"
 
 
-def test_the_analyzer_wording_still_points_at_the_sections_above():
-    """"上面「当前文档」"这类指向必须和实际顺序一致——搬过家就必须改口，
-    没搬家就不许乱改。现在搬回来了，原话恢复。"""
+def test_the_analyzer_wording_matches_where_the_sections_actually_are():
+    """提示词里"上面「当前文档」"这类指向必须和节的实际顺序一致。
+
+    搬过家就改口；**没搬家但措辞改了也要同步**——2026-10-10（§J-A）改检索词阶梯时
+    把「上面「当前文档」」写成「「当前文档」那节」（那一节仍在它前面，两种说法都成立），
+    这条钉的是"指示代词与真实顺序不打架"，不是钉某一种说法。
+    """
 
     text = (PROMPTS / "analyzer.md").read_text(encoding="utf-8")
 
-    assert "上面「当前文档」" in text
+    assert "当前文档" in text and ("上面「当前文档」" in text or "「当前文档」那节" in text)
+    assert "本轮的外部材料" in text

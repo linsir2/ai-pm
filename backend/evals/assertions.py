@@ -172,6 +172,42 @@ def check(assertion: dict, view: RoundView) -> str | None:
             f"实际 {count} 条"
         )
 
+    if kind == "claims_routed_to":
+        """**分析层**的归位判据：这一轮的主张里，落在指定章节的有几条。
+
+        与 `draft_section_has_kind` 的分工：那条判的是**整合层**的产出（草案里有没有
+        一条 s6 steps 提案），这条判**分析层**的路由。为什么要分开——`07 §7.13` 的教训：
+        整合层的方差会盖住分析层的改进，你可能改对了却测不出、或改错了却碰巧绿。
+        """
+
+        section = assertion["section"]
+        count = sum(1 for claim in view.claims if claim.target_label == section)
+        limit = assertion["count"]
+        if count >= limit:
+            return None
+        routed = sorted({claim.target_label for claim in view.claims})
+        return (
+            f"主张里只有 {count} 条落在 {section}（至少要 {limit} 条）"
+            f"——这一轮的主张去了：{'、'.join(routed[:8]) or '（一条都没有）'}"
+        )
+
+    if kind == "web_queries_exact":
+        """负控：不该提名时**一条都不许提名**。
+
+        与 `web_queries_at_least` 成对存在。提名要花用户额度（还要他逐条勾），
+        误提名的代价和漏提名一样真实。
+        """
+
+        count = len(view.web_queries)
+        limit = assertion["count"]
+        if count == limit:
+            return None
+        nominated = "、".join(query.query for query in view.web_queries)
+        return (
+            f"这条输入没有外部客观事实，应该提名 {limit} 条，实际 {count} 条"
+            f"（{nominated}）"
+        )
+
     if kind == "draft_section_has_kind":
         # 2026-10-03（P36 · M4）：草案里有没有一条**落在这一章、这个块类型**的提案。
         # 用来看"该写的写了没"（第 6 章 `s6` + `kind=steps`：跨功能/端到端流程）。

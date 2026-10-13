@@ -1,0 +1,8 @@
+{
+  "name": "edge-no-external-facts",
+  "input": "这个功能必须在月底前上线，只给内部运营用，先不做权限细分。",
+  "note": "负控：输入里没有任何外部客观事实（不涉法规、标准、第三方接口），分析者应该一条检索词都不提名。和 09-edge-external-facts 是一对：web_queries_at_least:1 管正控，web_queries_exact:0 管负控。为什么必须成对：arXiv:2607.24801 实测 few-shot 换召回要付 OOD 代价（Granite 4 Tiny 的 ID 准确率 +57.6pp、OOD -32.6pp），只测正控会把该查的查了误读成修好了，实际可能变成什么都查。2026-10-10（§J-A）补：原先 09 的 note 写着负控断言见 M3b 用例，但那个用例在 evals/cases/ 里不存在——负控一直是空的。",
+  "extra_assertions": [
+    {"type": "web_queries_exact", "count": 0}
+  ]
+}
