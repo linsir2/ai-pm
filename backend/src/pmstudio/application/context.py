@@ -168,6 +168,9 @@ def _block_lines(block: BlockView, *, indent: str = "  ") -> list[str]:
 #: 窄化渲染的开场一句：明说这是切片。否则模型会对自己没看到的部分下判断——
 #: 本项目一贯纪律是"不许假装完整"（与 `02` §11.0.53 同一条：不留空节、照实说略去了什么）。
 NARROWED_NOTE = "（以下是这份文档的走查切片，不是全文：只有点名的功能展开了）"
+#: 条目窄化（讨论区按主题）的开场一句。**与上一条分开写**：说"功能展开了"会让
+#: 模型拿功能找对应，而这里收窄的维度是条目——措辞错就等于给了它一个错的预期。
+NARROWED_ENTRIES_NOTE = "（以下是这份文档的走查切片，不是全文：只有相关条目展开了）"
 #: 摘要形态的开场一句：明说每条目只留了一句。否则模型会以为自己看到了全文。
 DIGEST_NOTE = "（以下是文档摘要：十三章骨架齐全，每条目只留一句，不是逐字全文）"
 
@@ -204,7 +207,9 @@ def render_document(
     narrowed = feature_slugs is not None or keep_entry_ids is not None
     lines: list[str] = []
     if narrowed:
-        lines.append(NARROWED_NOTE)
+        lines.append(
+            NARROWED_NOTE if feature_slugs is not None else NARROWED_ENTRIES_NOTE
+        )
     lines.append(f"# {view.title}（v{view.version_no}）")
     for section in view.sections:
         lines.append(f"## {section.section_id} {section.title}")
@@ -223,11 +228,21 @@ def render_document(
                 continue
             body.extend(_block_lines(block))
         if not body:
-            lines.append("（本节没有点名的功能）" if narrowed else "（空）")
+            # 空节的说明**按窄化维度分开写**（2026-10-10）：feature 窄化下说"没有点名的功能"
+            # 是对的；条目窄化（讨论区按主题）下这一节只是**没展开**，说成"没有功能"会让
+            # 模型以为它不存在。两句话都会进提示词，措辞错就会误导。
+            lines.append(
+                "（本节没有点名的功能）"
+                if feature_slugs is not None
+                else ("（本节本次未展开）" if narrowed else "（空）")
+            )
         else:
             lines.extend(body)
         if skipped:
-            lines.append(f"  ·（另见本节 {skipped} 条与功能无关的条目，本次未展开）")
+            # "与功能无关"只在 feature 窄化下成立；条目窄化下这些条目只是**没被选中**，
+            # 说它们"无关"会让模型更敢断言"文档里没有"（真跑第 2 轮踩到）。
+            reason = "与功能无关的条目" if feature_slugs is not None else ""
+            lines.append(f"  ·（另见本节 {skipped} 条{reason}，本次未展开）")
     if view.preference_entries:
         lines.append("## 偏好区（不进正文 / 不进交付）")
         lines.extend(f"- {_entry_line(entry)}" for entry in view.preference_entries)

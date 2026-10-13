@@ -71,6 +71,19 @@ def repair_note(error: PacketParseError) -> str:
             "不能是字符串或数字。没内容就不要写占位符——要么给一条真内容，"
             "要么把这一项删掉（有问题就把它写成**对应容器里**的一条正经内容）。"
         )
+    elif "candidates" in details:
+        # 引用类错误（`resolve_evidence_refs` 抛的）。`candidates_for` 的 docstring 写着
+        # "带 candidates 供重装"——它被算出来就是为了这一步，但这里一直没消费它，
+        # 引用类错误落到 GENERIC「请按上面的硬规矩重新切一遍」（模型看了等于没看）。
+        # 窄化上线后这半截线才显形（`02` §11.0.64）：模型引了切片外的编号，重装时
+        # 拿不到任何可用候选，连着错两次整轮就失败（真跑 1/6）。
+        picks = [c for group in details["candidates"] for c in group]  # type: ignore[union-attr]
+        hint = f"最接近的可选编号：{'、'.join(picks[:5])}。" if picks else ""
+        lines.append(
+            "引用的编号不在**这一次给你看的那份文档**里。只能引上面正文里出现过的"
+            f"编号（形如 E12）；一个都引不到就**留空**——讨论的 based_on 可以留空，"
+            f"调研的 based_on 留空时 grounding 写 invented。{hint}"
+        )
     elif "errors" in details:
         lines.append("过不了 schema 的字段（逐条改）：\n" + _schema_guidance(details["errors"]))
     elif "offset" in details:

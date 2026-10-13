@@ -26,7 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pmstudio.application import context
-from pmstudio.domain.authoring.views import BlockView, DocumentView
+from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.ids import EvidenceId
 
@@ -73,40 +73,51 @@ def visible_eids(*texts: str) -> frozenset[EvidenceId]:
     return frozenset(found)
 
 
-def _entries(block: BlockView) -> list[object]:
-    return list(context._entries_of(block))
+#: 相对阈值：字面重合度达到**最高分一半以上**的条目算相关。
+#:
+#: 为什么是相对的而不是固定数字（真库 p-310828e4 实测）：
+#: · `≥2` 会让长 topic 命中 21 条、横跨 8 章 → 撞章数熔断回落，白窄一场；
+#: · `≥3` 又让短 topic（`订单`）一条都不中 → 回到"永远回落"。
+#: 相对阈值**自我标定**：长 topic 上它等价于逐字命中（真库实测与旧行为同一个
+#: 结果：1 章 / 42%），短 topic 上它把命中从 0 救回 45%。
+RELATIVE_MATCH = 0.5
 
 
 def entries_matching_topic(view: DocumentView, topic: str) -> frozenset[str]:
     """主题命中的条目 id 集合；**命中 0 条时给空集**（由调用方回落全文）。
 
-    怎么算命中：主题是"话题词"，它几乎不会整句出现在某条条目里。所以先试
-    最长的一段前缀逐级缩短——真库实测「选区原文」能逐字命中，「用户手打的主题」
-    命中 0 条并回落全文。
+    匹配用**字面重合度**——`context._block_score`，与材料挑块**同一把尺子**
+    （2-gram 滑窗，不需要分词库）。原来那版是"取前缀 + 整句包含"，有两个洞
+    （`04` §L）：只取前缀（topic 中间出现的词永远试不到）、且短于 6 字直接短路。
+    真库后果：`订单`（2 字）永远命中 0 条、窄化在真库上几乎不可能被触发。
+    这个坑项目为材料挑块早踩过并解决了——那条 docstring 写着
+    「要求整句命中等于永远不命中」。**修法就是复用，不是另写一套。**
+
+    相关 = 重合度 ≥ 最高分 × `RELATIVE_MATCH`。不按绝对分：那需要按语料标定，
+    换一份文档就失效。
     """
 
     probe = " ".join(topic.split())
     if not probe:
         return frozenset()
     all_entries = [
-        entry for section in view.sections for block in section.blocks
+        entry
+        for section in view.sections
+        for block in section.blocks
         for entry in context._entries_of(block)
     ]
     if not all_entries:
         return frozenset()
-    # 从长到短试：整句 → 前 20 字 → 前 10 字。太短会命中一堆无关条目。
-    probes = [probe, probe[:20], probe[:10]]
-    best: frozenset[str] = frozenset()
-    for candidate in probes:
-        if len(candidate) < 6:
-            break
-        hit = frozenset(
-            str(e.entry_id) for e in all_entries if candidate in e.text
-        )
-        if hit:
-            return hit
-        best = best or hit
-    return best
+    scores = {
+        str(entry.entry_id): context._block_score(entry.text, probe)
+        for entry in all_entries
+    }
+    best = max(scores.values())
+    if best == 0:
+        return frozenset()
+    return frozenset(
+        entry_id for entry_id, score in scores.items() if score >= best * RELATIVE_MATCH
+    )
 
 
 def widen_to_chapters(

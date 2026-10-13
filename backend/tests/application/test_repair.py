@@ -41,6 +41,45 @@ def test_seat_id_outside_the_catalog_gets_the_prefix_rule():
     assert "frontend_interactions" not in note
 
 
+def test_unknown_evidence_ref_gets_the_candidates_to_use_instead():
+    """引用类错误要把**可见的相近编号**递到模型眼前。
+
+    `candidates_for` 的 docstring 写着"带 candidates 供重装"——它被算出来就是为了
+    这一步，但 `repair_note` 一直没消费它，引用类错误落到 GENERIC
+    「请按上面的硬规矩重新切一遍」（模型看了等于没看）。
+    窄化上线后这半截线才显形：模型引了切片外的编号，重装时拿不到可用候选，
+    连着错两次整轮就失败（真跑 1/6）。
+    """
+
+    note = repair_note(
+        PacketParseError(
+            "回答引用了不存在的编号：E31",
+            purpose="discussion",
+            local_id="based_on",
+            candidates=[("E30", "E32")],
+        )
+    )
+
+    assert "E32" in note, "可见的候选必须递过去"
+    assert "留空" in note, "要给出「引不到就别写」的出路"
+
+
+def test_unknown_evidence_ref_without_candidates_still_says_the_rule():
+    """没有候选（编号空间里孤零零一个）时也要说清规矩，不许退回 GENERIC。"""
+
+    note = repair_note(
+        PacketParseError(
+            "回答引用了不存在的编号：E9999",
+            purpose="discussion",
+            local_id="based_on",
+            candidates=[()],
+        )
+    )
+
+    assert "只能引" in note
+    assert "重新切一遍" not in note, "不许退回那句等于没说的 GENERIC"
+
+
 def test_schema_failure_lists_the_field_paths():
     note = repair_note(
         PacketParseError(

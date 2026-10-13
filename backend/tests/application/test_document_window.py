@@ -266,6 +266,53 @@ def test_topic_lens_breaks_on_more_than_the_threshold_of_entries() -> None:
     assert window.text != context.render_document_state(view)
 
 
+def test_topic_matching_uses_overlap_not_verbatim_so_short_topics_hit() -> None:
+    """**短 topic 必须能命中**——原来的探针只取前缀且短于 6 字就短路（`04` §L）。
+
+    真库后果：`订单`（2 字）命中 0 条、永远回落全文，本该窄化到 45%。
+    项目为材料挑块早解决过同一件事（`context._block_score` 的 docstring：
+    「要求整句命中等于永远不命中」）——**这次修法就是复用它**。
+
+    语义换成：**相关 = 字面重合度达到最高分一半以上的条目**。
+    相对阈值自我标定，不需要任何魔法绝对阈值。
+    """
+
+    view = doc_with_three_sections().view()
+
+    # 「退款」两字出现在 en-a 里，也出现在 en-b2 的「退款」…不，en-b2 是告警；
+    # 用只出现在一条里的短词，钉住"短词也能命中"
+    window = document_window(view, topic="退款")
+
+    assert "退款要能按客户名找单" in window.text
+    assert "不是全文" in window.text, "命中就该窄化，不是回落"
+
+
+def test_topic_matching_relative_threshold_reproduces_verbatim_behavior() -> None:
+    """长 topic 的行为**逐字不变**——相对阈值在长文本上等价于逐字命中（零回归）。
+
+    真库实测：选区整条当 topic 时，相对阈值与旧的逐字匹配给出**同一个**结果
+    （1 章 / 42%）。
+    """
+
+    view = doc_with_three_sections().view()
+
+    window = document_window(view, topic="日报每天早上九点前发出")
+
+    # 同章另两条（en-b/en-b2 在 s11）不该进——它们的字面重合度远低于一半
+    assert "告警阈值还没定" not in window.text
+    assert "E2" not in {str(e) for e in window.visible_eids}
+
+
+def test_topic_matching_gives_nothing_for_a_single_character() -> None:
+    """一个字构不成 2-gram → 空集 → 回落全文（`_query_grams` 的既有口径）。"""
+
+    view = doc_with_three_sections().view()
+
+    window = document_window(view, topic="款")
+
+    assert window.text == context.render_document_state(view)
+
+
 def test_topic_lens_falls_back_to_the_full_text_when_the_topic_is_nowhere() -> None:
     """匹配不上就回落全文——拿不到收益，但绝不能因此丢依据。"""
 
