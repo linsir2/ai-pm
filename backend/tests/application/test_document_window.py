@@ -44,12 +44,14 @@ NOW = datetime(2026, 9, 22, 10, 0)
 PROJECT = ProjectId("p1")
 
 
-def _add(entry_id: str, text: str, *, refs: tuple[str, ...] = ()) -> WriteInstruction:
+def _add(
+    entry_id: str, text: str, *, refs: tuple[str, ...] = (), section: str = "s4"
+) -> WriteInstruction:
     return WriteInstruction(
         instruction_id=f"i-{entry_id}",
         entry_id=EntryId(entry_id),
         op=WriteOp.ADD,
-        target=Target.body("s4"),
+        target=Target.body(section),
         text=text,
         refs=tuple(EvidenceId(r) for r in refs),
         kind=BlockKind.TEXT,
@@ -70,7 +72,11 @@ def _ledger_with(*eids: str) -> EvidenceLedger:
 
 
 def doc_with_three_sections() -> Document:
-    """s4 放三条：一句在 s1 的话、一句在 s4 的话、一句在 s8 的话。"""
+    """三条分居 **三章**：s4 一条、s11 两条、s12 一条。
+
+    s11 故意放两条（真库 s11「未决问题」也是这个形状）——章节级窄化要能把
+    它们一起展开；三条挤在一章里就测不出"扩张到章"与"只给命中那条"的区别。
+    """
 
     document = Document.new(
         document_id=DocumentId("doc1"), project_id=PROJECT, title="订单中台", now=NOW
@@ -78,8 +84,9 @@ def doc_with_three_sections() -> Document:
     document.apply(
         [
             _add("en-a", "退款要能按客户名找单", refs=("E1",)),
-            _add("en-b", "本期不做多语言与 PDF 附件", refs=("E2", "E3")),
-            _add("en-c", "日报每天早上九点前发出", refs=("E4",)),
+            _add("en-b", "告警阈值还没定", refs=("E2",), section="s11"),
+            _add("en-b2", "告警触达渠道也没定", refs=("E3",), section="s11"),
+            _add("en-c", "日报每天早上九点前发出", refs=("E4",), section="s12"),
         ],
         now=NOW,
         summary="干跑",
@@ -159,6 +166,39 @@ def test_topic_lens_keeps_the_skeleton_so_the_model_can_say_it_was_not_shown() -
     window = document_window(doc_with_three_sections().view(), topic="日报每天早上九点前发出")
 
     assert "## s4 范围与边界" in window.text, "章节标题必须在，即使它没被展开"
+
+
+def test_topic_lens_widens_to_the_chapter_so_citations_are_not_starved() -> None:
+    """窄化到**章**，不是命中的那一条（2026-10-10 §11.0.61 补）。
+
+    真库实测：s11「未决问题」13 条，命中 1 条时条目级只给 **1 个**可引编号——
+    讨论一涉及该章就只能说"没给我看"，真跑里卡片因此掉成 `invented`
+    （而 s5 里其实有 `exceptions` 字段的条目，条目级看不见它）。
+    s5 的账是：条目级 15 个可引 → 章节级 71 个。
+
+    所以命中后要扩张到**它所在的章**：章是文档自己的组织单位，
+    代价有上界（一章最多占全文 28%），收益是引用不再被饿死。
+    """
+
+    view = doc_with_three_sections().view()
+
+    window = document_window(view, topic="告警阈值还没定")
+
+    # 同章的另一条也必须进——否则这一章只有 1 个可引编号
+    assert "告警触达渠道也没定" in window.text
+    assert {"E2", "E3"} <= {str(e) for e in window.visible_eids}
+
+
+def test_topic_lens_still_excludes_other_chapters() -> None:
+    """扩张到章为止，不等于摊开全文档——跨章的编号仍然不许出现。"""
+
+    view = doc_with_three_sections().view()
+
+    window = document_window(view, topic="告警阈值还没定")
+
+    assert "退款要能按客户名找单" not in window.text, "s4 的不该在"
+    assert "日报每天早上九点前发出" not in window.text, "s12 的不该在"
+    assert "E1" not in {str(e) for e in window.visible_eids}
 
 
 def test_topic_lens_falls_back_to_the_full_text_when_the_topic_is_nowhere() -> None:

@@ -109,6 +109,33 @@ def entries_matching_topic(view: DocumentView, topic: str) -> frozenset[str]:
     return best
 
 
+def widen_to_chapters(
+    entry_ids: frozenset[str], view: DocumentView
+) -> frozenset[str]:
+    """把这批条目扩张到**它们所在的章**。
+
+    为什么必须扩张（2026-10-10 真库实测）：条目级窄化会**饿死引用**——
+    s11「未决问题」13 条，命中 1 条时只给 **1 个**可引编号，真跑里讨论一涉及
+    该章就只能说"没给我们看"，卡片因此掉成 `invented`（而 s5 里其实有
+    `exceptions` 字段的条目，条目级看不见它）。s5 的账：条目级 15 个可引 →
+    章节级 71 个。
+
+    为什么扩张到**章**而不是更大：章是文档自己的组织单位，代价有上界
+    （真库六章实测占全文 1%–28%）。再往上（全文）就等于没窄化。
+
+    为什么不是整棵功能子树：那要先判"这条目挂不挂 feature"，而 s1–s4/s8/s11/s12
+    的条目是章节级的、根本不挂 feature——分支写出来是为少数条目服务，
+    多数条目还得分流，判据①「删优先于排」。
+    """
+
+    wanted: set[str] = set()
+    for section in view.sections:
+        chapter = {str(e.entry_id) for b in section.blocks for e in context._entries_of(b)}
+        if chapter & entry_ids:
+            wanted |= chapter
+    return frozenset(wanted)
+
+
 def document_window(
     view: DocumentView,
     *,
@@ -126,7 +153,7 @@ def document_window(
         hits = entries_matching_topic(view, topic)
         # 命中 0 条 → 回落全文：拿不到收益，但绝不能因此丢依据。
         if hits:
-            keep = hits
+            keep = widen_to_chapters(hits, view)
     text = context.render_document_state(
         view, readiness=readiness, feature_slugs=feature_slugs, keep_entry_ids=keep
     )
