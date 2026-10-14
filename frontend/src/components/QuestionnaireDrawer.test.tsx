@@ -168,4 +168,36 @@ describe("问卷题的「聊聊」（M13 补上快照上线）", () => {
 
     expect(screen.queryByRole("button", { name: "聊聊" })).toBeNull();
   });
+
+  it("C6 矛盾题置顶：最需要拍板的先答（后端顺序不动，stable 排）", () => {
+    const base = round();
+    const conflict = {
+      ...base.questions[1]!,
+      question_id: "q9",
+      kind: "conflict",
+      title: "口径打架了",
+    };
+    draw({ round: { ...base, questions: [...base.questions, conflict] } });
+
+    const titles = document.querySelectorAll(".q .q__title");
+    expect(titles[0]!.textContent).toBe("口径打架了");
+    // 非矛盾题相对顺序不变
+    expect(titles[1]!.textContent).toBe("保存几年？");
+  });
+});
+
+describe("问卷题的去处可点（跳文档）", () => {
+  it("给了 onOpenTarget：点去处调到它，载荷是那条 target_label（防死文本）", () => {
+    const props = draw({ onOpenTarget: vi.fn() });
+
+    fireEvent.click(screen.getByRole("button", { name: "s8" }));
+
+    expect(props.onOpenTarget).toHaveBeenCalledWith("s8");
+  });
+
+  it("没给就不出按钮（老消费者不受影响）", () => {
+    draw();
+
+    expect(screen.queryByRole("button", { name: "s8" })).toBeNull();
+  });
 });

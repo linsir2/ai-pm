@@ -26,6 +26,7 @@ export function DraftDrawer({
   onDig,
   onSimInquiry,
   onSimReview,
+  onOpenTarget,
   onCollapse,
 }: {
   round: RoundView;
@@ -44,12 +45,15 @@ export function DraftDrawer({
   onSimInquiry: () => void;
   /** 草案卡上的"模拟评测"：轮内动作，模拟使用者走查（M11）。 */
   onSimReview: () => void;
+  /** 提案的去处可点：跳到文档那一条（传了才出按钮，老消费者不受影响）。 */
+  onOpenTarget?: (label: string) => void;
   onCollapse: () => void;
 }) {
   const draft: DraftView | null = round.draft;
   if (draft === null) return null;
   const total = draft.proposals.length;
   const memory: MemoryProposalView[] = round.memory_proposals ?? [];
+  const advisories = groupAdvisories(round.advisories);
 
   return (
     <aside className="drawer" role="dialog" aria-modal="false" aria-labelledby="drawer-title">
@@ -64,29 +68,68 @@ export function DraftDrawer({
       </header>
 
       <div className="drawer__body">
-        {groupAdvisories(round.advisories).map((advisory) => (
-          <Banner kind="warn" key={advisory.text}>
-            {advisory.count > 1 && `${advisory.count} 条 · `}
-            跑出本轮去处：{advisory.text}
+        {advisories.length === 1 && (
+          <Banner kind="warn" key={advisories[0]!.text}>
+            {advisories[0]!.count > 1 && `${advisories[0]!.count} 条 · `}
+            跑出本轮去处：{advisories[0]!.text}
           </Banner>
-        ))}
+        )}
+        {advisories.length > 1 && (
+          <details className="q__whybox advisory-fold">
+            <summary className="muted small">
+              {advisories.length} 类跑出本轮去处的标注（席位替你判断的，确认前看一眼）
+            </summary>
+            {advisories.map((advisory) => (
+              <Banner kind="warn" key={advisory.text}>
+                {advisory.count > 1 && `${advisory.count} 条 · `}
+                跑出本轮去处：{advisory.text}
+              </Banner>
+            ))}
+          </details>
+        )}
 
         {draft.groups.length === 0 && <p className="muted small">这一轮没有候选。</p>}
 
-        {draft.groups.map(([title, proposals]) => (
-          <section className="loop__group" key={title}>
-            <p className="loop__label">{title}</p>
-            {proposals.map((proposal) => (
-              <Proposal
-                key={proposal.proposal_id}
-                proposal={proposal}
-                accepted={accepted.includes(proposal.proposal_id)}
-                doc={doc}
-                onToggle={() => onToggle(proposal.proposal_id)}
-              />
-            ))}
-          </section>
-        ))}
+        {draft.groups.map(([title, proposals]) => {
+          // "它提议的"默认不勾——默认折叠，需要时再展开逐条看
+          const foldable =
+            proposals.length > 0 &&
+            proposals.every((proposal) => proposal.origin_type === "proposed");
+          if (!foldable) {
+            return (
+              <section className="loop__group" key={title}>
+                <p className="loop__label">{title}</p>
+                {proposals.map((proposal) => (
+                  <Proposal
+                    key={proposal.proposal_id}
+                    proposal={proposal}
+                    accepted={accepted.includes(proposal.proposal_id)}
+                    doc={doc}
+                    onToggle={() => onToggle(proposal.proposal_id)}
+                    onOpenTarget={onOpenTarget}
+                  />
+                ))}
+              </section>
+            );
+          }
+          return (
+            <details className="loop__group" key={title}>
+              <summary className="loop__label">
+                {title} · {proposals.length} 条（默认不勾）
+              </summary>
+              {proposals.map((proposal) => (
+                <Proposal
+                  key={proposal.proposal_id}
+                  proposal={proposal}
+                  accepted={accepted.includes(proposal.proposal_id)}
+                  doc={doc}
+                  onToggle={() => onToggle(proposal.proposal_id)}
+                  onOpenTarget={onOpenTarget}
+                />
+              ))}
+            </details>
+          );
+        })}
 
         {draft.gaps.length > 0 && (
           <div className="loop__group">
@@ -125,6 +168,9 @@ export function DraftDrawer({
           {memory.length > 0 && `  记忆：勾了 ${memoryAccepted.length} / ${memory.length} 条。`}
         </p>
         <div className="row">
+          <button type="button" className="btn btn--primary" disabled={pending} onClick={onSubmit}>
+            {pending ? "正在写入…" : `确认写入 ${accepted.length} 条`}
+          </button>
           {/* C4：本批全接受要有，但"它提议的"那组单独计——别让人一条条点 */}
           <button
             type="button"
@@ -142,6 +188,8 @@ export function DraftDrawer({
           >
             全不勾
           </button>
+        </div>
+        <div className="row drawer__foot-sub">
           <button
             type="button"
             className="btn btn--sm btn--ghost"
@@ -165,9 +213,6 @@ export function DraftDrawer({
             disabled={pending}
           >
             模拟评测
-          </button>
-          <button type="button" className="btn btn--primary" disabled={pending} onClick={onSubmit}>
-            {pending ? "正在写入…" : `确认写入 ${accepted.length} 条`}
           </button>
         </div>
       </footer>
@@ -216,7 +261,12 @@ function MemoryRow({
           <span className="tag">{MEMORY_KIND_TEXT[item.kind] ?? item.kind}</span>
           <EvidenceChip eids={item.refs} />
         </div>
-        {item.reason !== "" && <p className="prop__rationale">为什么记它：{item.reason}</p>}
+        {item.reason !== "" && (
+          <details className="prop__rationalebox">
+            <summary className="muted small">为什么记它</summary>
+            <p className="prop__rationale">为什么记它：{item.reason}</p>
+          </details>
+        )}
       </div>
     </article>
   );
@@ -227,11 +277,13 @@ function Proposal({
   accepted,
   doc,
   onToggle,
+  onOpenTarget,
 }: {
   proposal: ProposalView;
   accepted: boolean;
   doc: DocumentView | null;
   onToggle: () => void;
+  onOpenTarget?: (label: string) => void;
 }) {
   return (
     <article className={proposal.origin_type === "proposed" ? "prop prop--proposed" : "prop"}>
@@ -253,12 +305,26 @@ function Proposal({
           {proposal.simulation_based === true && (
             <span className="tag">模拟评测依据</span>
           )}
-          <span className="muted small">{targetText(proposal.target_label, doc?.sections)}</span>
+          {onOpenTarget !== undefined ? (
+            <button
+              type="button"
+              className="targetlink"
+              onClick={() => onOpenTarget(proposal.target_label)}
+              title="跳到文档那一条"
+            >
+              {targetText(proposal.target_label, doc?.sections)}
+            </button>
+          ) : (
+            <span className="muted small">{targetText(proposal.target_label, doc?.sections)}</span>
+          )}
           <EvidenceChip eids={proposal.eids} />
           {proposal.kind !== null && <span className="tag">{proposal.kind}</span>}
         </div>
         {proposal.rationale !== null && (
-          <p className="prop__rationale">它为什么这么判断：{proposal.rationale}</p>
+          <details className="prop__rationalebox">
+            <summary className="muted small">它为什么这么判断</summary>
+            <p className="prop__rationale">它为什么这么判断：{proposal.rationale}</p>
+          </details>
         )}
         {proposal.warning !== null && <p className="prop__warn">⚠ {proposal.warning}</p>}
       </div>

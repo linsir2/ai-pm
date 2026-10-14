@@ -119,14 +119,11 @@ export function DocumentPane({
 
         <section className="chapter">
           <header className="chapter__head">
-            <div className="chapter__kicker">
-              <span className="mono">{section.section_id}</span>
-              <span className="muted small">{doc.title}</span>
-              <span className="topbar__spacer" />
+            <div className="chapter__title-row">
+              <h2 className="chapter__title">{section.title}</h2>
               <span className={statusClass(status)} />
               <span className="muted small">{STATUS_TEXT[status]}</span>
             </div>
-            <h2 className="chapter__title">{section.title}</h2>
             {purpose !== null && <p className="chapter__purpose muted small">{purpose}</p>}
           </header>
 

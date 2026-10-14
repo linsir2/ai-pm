@@ -54,4 +54,67 @@ describe("TopBar", () => {
 
     expect(props.onExport).toHaveBeenCalledTimes(1);
   });
+
+  it("文档折叠开关：点调 onToggleDoc，aria-pressed 跟着 docOpen 走", () => {
+    const props = {
+      onSelectProject: vi.fn(),
+      onExport: vi.fn(),
+      onToggleTheme: vi.fn(),
+      onToggleDoc: vi.fn(),
+    };
+    const { rerender } = render(
+      <TopBar
+        projects={[project]}
+        project={project}
+        connection="open"
+        theme="light"
+        docOpen={true}
+        {...props}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "文档" });
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(button);
+    expect(props.onToggleDoc).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <TopBar
+        projects={[project]}
+        project={project}
+        connection="open"
+        theme="light"
+        docOpen={false}
+        {...props}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "文档" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+  });
+
+  it("没传折叠回调就不出按钮（列表页顶栏保持干净）", () => {
+    draw();
+
+    expect(screen.queryByRole("button", { name: "文档" })).toBeNull();
+  });
+
+  it("灵感箱入口只留页签一个（顶栏不再有第二个入口）", () => {
+    render(
+      <TopBar
+        projects={[project]}
+        project={project}
+        connection="open"
+        theme="light"
+        onSelectProject={vi.fn()}
+        onExport={vi.fn()}
+        onToggleTheme={vi.fn()}
+        libraryCount={3}
+        onOpenLibrary={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("灵感箱")).toBeNull();
+    expect(screen.getByText("材料库")).toBeTruthy();
+  });
 });

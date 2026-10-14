@@ -4,6 +4,7 @@
    依据都来自后端 block 的 `field` 与 `kind`（`domain/authoring/schema.py` 是真相源）。 */
 
 import type { BlockView, DocumentView, Entry } from "../api/types";
+import { parseTarget } from "../labels";
 import { fieldTitle } from "../state/schema";
 
 export const FEATURE_HOME = "s5";
@@ -96,7 +97,7 @@ function firstText(entries: Entry[]): string | null {
 
 /** 一条内容落在哪一章（点编号想滚到那条内容时，得先切到它那一章）。
 
-   只做"换个摆法"：顺着投影走一遍，不做判断、不猜。 */
+    只做"换个摆法"：顺着投影走一遍，不做判断、不猜。 */
 export function sectionOfEntry(doc: DocumentView | null, entryId: string): string | null {
   if (doc === null) return null;
   if (doc.preference_entries.some((entry) => entry.entry_id === entryId)) {
@@ -111,4 +112,37 @@ export function sectionOfEntry(doc: DocumentView | null, entryId: string): strin
     if (walk(section.blocks)) return section.section_id;
   }
   return null;
+}
+
+/** 去处 → 文档落点（点去处跳转的唯一解析）。
+
+    回落链不跳空：功能字段 → 字段块 → 功能块 → 章；章节槽 → 槽块 → 章；
+    形状不认 / 章不在文档里 → null（调用方说实话，不假跳）。 */
+export function resolveTarget(
+  doc: DocumentView | null,
+  label: string,
+): { sectionId: string; blockId: string | null } | null {
+  if (doc === null) return null;
+  const parsed = parseTarget(label);
+  if (parsed === null) return null;
+  if (parsed.zone === "preference") return { sectionId: "preference", blockId: null };
+
+  const section = doc.sections.find((item) => item.section_id === parsed.sectionId);
+  if (section === undefined) return null;
+
+  if (parsed.slug !== null) {
+    const feature = listFeatures(doc).find((item) => item.slug === parsed.slug);
+    if (feature === undefined) return { sectionId: parsed.sectionId, blockId: null };
+    if (parsed.field !== null) {
+      const field = fieldBlock(feature.block, parsed.field);
+      if (field !== null) return { sectionId: parsed.sectionId, blockId: field.block_id };
+    }
+    return { sectionId: parsed.sectionId, blockId: feature.blockId };
+  }
+
+  if (parsed.field !== null) {
+    const slot = section.blocks.find((block) => block.field === parsed.field);
+    if (slot !== undefined) return { sectionId: parsed.sectionId, blockId: slot.block_id };
+  }
+  return { sectionId: parsed.sectionId, blockId: null };
 }

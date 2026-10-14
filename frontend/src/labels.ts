@@ -2,7 +2,7 @@
    加一个映射之前先问：后端有没有这个值？没有就别在前端发明。 */
 
 import type { SectionView } from "./api/types";
-import { fieldTitle } from "./state/schema";
+import { fieldTitle, slotTitle } from "./state/schema";
 
 export const CLAIM_LABEL_TEXT: Record<string, string> = {
   fact: "事实",
@@ -48,13 +48,6 @@ export const STEP_TEXT: Record<string, string> = {
   done: "这一轮写完了",
   failed: "这一轮失败了",
   abandoned: "这一轮已放弃",
-};
-
-export const WAITING_TEXT: Record<string, string> = {
-  none: "没人需要动手",
-  opening_card: "等你在复述卡上纠正",
-  questionnaire: "等你交问卷",
-  draft_card: "等你勾草案",
 };
 
 export const ORIGIN_TEXT: Record<string, string> = {
@@ -103,23 +96,46 @@ export function stepText(step: string): string {
   return STEP_TEXT[step] ?? step;
 }
 
-export function waitingText(waitingOn: string): string {
-  return WAITING_TEXT[waitingOn] ?? waitingOn;
-}
-
 export function opinionFormText(form: string): string {
   return OPINION_FORM_TEXT[form] ?? form;
 }
 
-/** `s5` / `s5/feat-slug` / `s5/feat-slug.acceptance` / `preference` → 人话。 */
+/** `Target.label()` 的形状表（与后端 `target_from_label` 同构；形状不认返回 null，不猜）。
+
+    五种合法形态：`preference` / `s5` / `s8.performance`（章节槽，**无斜杠**）/
+    `s5/slug` / `s5/slug.field`。残缺（`s5/`、`s5/x.`、`.` 开头、空串）一律 null。 */
+export type ParsedTarget =
+  | { zone: "preference" }
+  | { zone: "body"; sectionId: string; slug: string | null; field: string | null };
+
+export function parseTarget(label: string): ParsedTarget | null {
+  const text = label.trim();
+  if (text === "") return null;
+  if (text === "preference") return { zone: "preference" };
+  const [head, dot, field] = splitTriple(text, ".");
+  if (dot !== "" && field === "") return null; // `s5/x.` 写了点没写字段名
+  const [sectionId, slash, slug] = splitTriple(head, "/");
+  if (slash !== "" && slug === "") return null; // `s5/` 写了斜杠没写功能名
+  if (sectionId === "") return null; // `.performance` 这种没有章名
+  return { zone: "body", sectionId, slug: slash === "" ? null : slug, field: dot === "" ? null : field };
+}
+
+/** `s5` / `s5/feat-slug` / `s5/feat-slug.acceptance` / `s8.performance` / `preference` → 人话。 */
 export function targetText(target: string, sections?: SectionView[]): string {
-  if (target === "preference") return "偏好区";
-  const [sectionPart, rest] = splitOnce(target, "/");
-  const title = sectionTitle(sectionPart ?? target, sections);
-  if (rest === undefined) return title;
-  const [slug, fieldPart] = splitOnce(rest, ".");
-  const field = fieldTitle(fieldPart ?? null);
-  return field === null ? `${title} · ${slug}` : `${title} · ${slug} · ${field}`;
+  const parsed = parseTarget(target);
+  if (parsed === null) return target; // 形状不认：照实显示原值，不编
+  if (parsed.zone === "preference") return "偏好区";
+  const title = sectionTitle(parsed.sectionId, sections);
+  const fieldText =
+    parsed.field === null
+      ? null
+      : parsed.slug === null
+        ? (slotTitle(parsed.sectionId, parsed.field) ?? parsed.field)
+        : (fieldTitle(parsed.field) ?? parsed.field);
+  if (parsed.slug !== null) {
+    return fieldText === null ? `${title} · ${parsed.slug}` : `${title} · ${parsed.slug} · ${fieldText}`;
+  }
+  return fieldText === null ? title : `${title} · ${fieldText}`;
 }
 
 /** `s5` / `s5/feat-slug` / `s5/feat-slug.acceptance` / `preference` → `s5` / `preference`。 */
@@ -143,6 +159,13 @@ function splitOnce(value: string, separator: string): [string, string | undefine
   const at = value.indexOf(separator);
   if (at < 0) return [value, undefined];
   return [value.slice(0, at), value.slice(at + separator.length)];
+}
+
+/** 三段切法（给 parseTarget 用）：`[前, 分隔符, 后]`，没有分隔符时后两段都是空串。 */
+function splitTriple(value: string, separator: string): [string, string, string] {
+  const at = value.indexOf(separator);
+  if (at < 0) return [value, "", ""];
+  return [value.slice(0, at), separator, value.slice(at + separator.length)];
 }
 
 function sectionTitle(sectionId: string, sections?: SectionView[]): string {

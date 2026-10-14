@@ -243,3 +243,57 @@ it("相同的告警合并成一条并带条数（不再三句一样的话摆三�
   expect(banners).toHaveLength(1);            // 一条，不是三条
   expect(banners[0]!.textContent).toContain("3 条");   // 条数说清楚
 });
+
+it("多条**不同**的告警折成一行计数，明细在 DOM（防黄条刷屏）", () => {
+  const base = roundWith([proposal]);
+  const round = {
+    ...base,
+    advisories: [
+      "s3：这条落在 s3，不在本轮去处里（席位替你判断的，确认前请看一眼）",
+      "s10：这条落在 s10，不在本轮去处里（席位替你判断的，确认前请看一眼）",
+    ],
+  } as RoundView;
+
+  const { container } = render(
+    <EvidenceScope index={new Map()} onJump={() => undefined}>
+      <DraftDrawer
+        round={round}
+        doc={null}
+        accepted={[]}
+        memoryAccepted={[]}
+        pending={false}
+        onToggle={() => undefined}
+        onToggleMemory={() => undefined}
+        onSetAccepted={() => undefined}
+        onSubmit={() => undefined}
+        onDig={() => undefined}
+        onSimInquiry={() => undefined}
+        onSimReview={() => undefined}
+        onCollapse={() => undefined}
+      />
+    </EvidenceScope>,
+  );
+
+  const folded = container.querySelector("details.advisory-fold:not([open])");
+  expect(folded).toBeTruthy();
+  expect(folded!.querySelector("summary")!.textContent).toContain("2");
+  // 明细仍在 DOM（点开就能看）
+  expect(container.textContent).toContain("s3");
+  expect(container.textContent).toContain("s10");
+});
+
+describe("草案提案的去处可点（跳文档）", () => {
+  it("给了 onOpenTarget：点去处调到它，载荷是那条 target_label（防死文本）", () => {
+    const props = draw({ onOpenTarget: vi.fn() });
+
+    fireEvent.click(screen.getByRole("button", { name: "s5" }));
+
+    expect(props.onOpenTarget).toHaveBeenCalledWith("s5");
+  });
+
+  it("没给就不出按钮（老消费者与老测试不受影响）", () => {
+    draw();
+
+    expect(screen.queryByRole("button", { name: "s5" })).toBeNull();
+  });
+});

@@ -18,23 +18,6 @@ function FolderIcon() {
   );
 }
 
-function BulbIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.4"
-      aria-hidden="true"
-    >
-      <path d="M8 1.5a4.5 4.5 0 0 1 2.5 8.24V11h-5V9.74A4.5 4.5 0 0 1 8 1.5Z" />
-      <path d="M6.5 13.5h3" />
-    </svg>
-  );
-}
-
 export function TopBar({
   projects,
   project,
@@ -46,10 +29,10 @@ export function TopBar({
   onHome,
   libraryCount = 0,
   onOpenLibrary,
-  inboxCount = 0,
-  onOpenInbox,
   theme,
   onToggleTheme,
+  docOpen = true,
+  onToggleDoc,
   search = null,
 }: {
   projects: ProjectSummaryView[];
@@ -61,11 +44,12 @@ export function TopBar({
   /** 材料库入口（顶栏）：显示库里有几份，点开抽屉。 */
   libraryCount?: number;
   onOpenLibrary?: () => void;
-  /** 灵感箱入口（顶栏）：未处理数徽标，点开切到灵感箱页签。 */
-  inboxCount?: number;
-  onOpenInbox?: () => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  /** 文档列开着没（折叠开关的状态；不传就不出这个按钮）。 */
+  docOpen?: boolean;
+  /** 文档列折叠开关：想看才打开（右列 Codex 化之后文档默认让位）。 */
+  onToggleDoc?: () => void;
   /** 搜索框（F6）：有项目才有；没项目时传 null，顶栏就不显示它。 */
   search?: {
     query: string;
@@ -140,27 +124,29 @@ export function TopBar({
               {libraryCount > 0 && <span className="topbar__action-count">{libraryCount}</span>}
             </button>
           )}
-          {onOpenInbox !== undefined && (
-            <button
-              type="button"
-              className="topbar__action"
-              onClick={onOpenInbox}
-              title="讨论卡与调研候选统一过目"
-            >
-              <BulbIcon />
-              灵感箱
-              {inboxCount > 0 && <span className="topbar__badge">{inboxCount}</span>}
-            </button>
-          )}
-          <button type="button" className="btn btn--sm" onClick={onExport}>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onExport}>
             导出
           </button>
+          {onToggleDoc !== undefined && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={onToggleDoc}
+              aria-pressed={docOpen}
+              title="文档列收起 / 展开（想看才打开）"
+            >
+              文档
+            </button>
+          )}
         </>
       )}
 
-      <span className={`conn conn--${connection}`}>
+      <span className={`conn conn--${connection}`} title={connectionText}>
         <span className="conn__dot" aria-hidden="true" />
-        <span className="muted small conn__label" role="status">
+        <span
+          className={connection === "open" ? "muted small conn__label sr-only" : "muted small conn__label"}
+          role="status"
+        >
           {connectionText}
         </span>
       </span>

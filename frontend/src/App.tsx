@@ -16,16 +16,14 @@ import {
 import type { ExplorationAnchor } from "./api/payload";
 import { discussionTopic } from "./state/discussions";
 import type { DiscussionAnchor } from "./state/discussions";
-import { inboxCount } from "./state/inbox";
 import { limitsOf } from "./state/schema";
-import { BottomStrip } from "./components/BottomStrip";
 import { DocumentPane } from "./components/DocumentPane";
 import { EditScope } from "./components/EditContext";
 import { EvidenceScope } from "./components/EvidenceContext";
 import { DiscussionScope } from "./components/DiscussionContext";
 import { ExplorationScope } from "./components/ExplorationContext";
 import { jumpToChunk, jumpToEntry, jumpToEvidence } from "./components/jump";
-import { sectionOfEntry } from "./document/structure";
+import { resolveTarget, sectionOfEntry } from "./document/structure";
 import { LoopColumn } from "./components/LoopColumn";
 import type { LoopTab } from "./components/LoopColumn";
 import { MaterialLibrary } from "./components/MaterialLibrary";
@@ -68,6 +66,11 @@ export default function App() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
+  /** 顶层视图：项目列表 ⇄ 工作区。**纯 UI 态，不进 URL、不进后端**——
+      `?project=` 才是要留着刷新恢复的那一个（两者性质不同，混在一起就要回答
+      "刷新时有 view=projects 没 project 该去哪"）。 */
+  /** 文档列开着没（想看才打开；默认开，顶栏可收）。纯 UI 态。 */
+  const [docOpen, setDocOpen] = useState(true);
   /** 顶层视图：项目列表 ⇄ 工作区。**纯 UI 态，不进 URL、不进后端**——
       `?project=` 才是要留着刷新恢复的那一个（两者性质不同，混在一起就要回答
       "刷新时有 view=projects 没 project 该去哪"）。 */
@@ -133,6 +136,25 @@ export default function App() {
       targetId.startsWith("block-") ? targetId : `block-${targetId}`,
     );
   }, []);
+
+  /** 点去处（问卷/草案）：跳到文档那一条；文档列收着就展开；指不到位置就说实话。 */
+  const openTarget = useCallback(
+    (label: string) => {
+      const hit = resolveTarget(doc, label);
+      if (hit === null) {
+        data.notify(`这条去处现在指不到文档里的位置（${label}）`);
+        return;
+      }
+      setDocOpen(true);
+      setActiveSection(hit.sectionId);
+      if (hit.sectionId === "preference") {
+        setPendingScroll("sec-preference");
+        return;
+      }
+      if (hit.blockId !== null) setPendingScroll(`block-${hit.blockId}`);
+    },
+    [doc, data],
+  );
 
   /** 点搜索结果（F6）：按命中类型各走各的跳法——条目 / 功能 / 编号 / 席位发言。 */
   const pickSearchHit = useCallback(
@@ -293,7 +315,7 @@ export default function App() {
       <EditScope value={editApi}>
         <ExplorationScope value={researchApi}>
         <DiscussionScope value={discussionApi}>
-        <div className="shell">
+        <div className={docOpen ? "shell" : "shell shell--nodoc"}>
           <TopBar
             projects={projects}
             project={project}
@@ -301,10 +323,10 @@ export default function App() {
             onSelectProject={data.selectProject}
             onExport={() => void data.exportMarkdown()}
             onHome={() => setListing(true)}
+            docOpen={docOpen}
+            onToggleDoc={() => setDocOpen((open) => !open)}
             libraryCount={data.materials.length}
             onOpenLibrary={() => setLibraryOpen(true)}
-            inboxCount={inboxCount(data.discussions, data.explorations)}
-            onOpenInbox={() => setLoopTab("tray")}
             theme={theme}
             onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
             search={
@@ -393,6 +415,7 @@ export default function App() {
             }
             onCloseDiscussion={(threadId) => void data.closeDiscussion(threadId)}
             onDiscussQuestion={setDiscussionAnchor}
+            onOpenTarget={openTarget}
             history={
               readingHistory && data.historyRound !== null
                 ? { roundId: data.historyRound.round_id, onBack: data.backToLatest }
@@ -458,30 +481,18 @@ export default function App() {
             onAbandon={() => {
               if (shownRound !== null) void data.abandon(shownRound.round_id);
             }}
-          />
-
-          <BottomStrip
-            projectId={project.project_id}
-            mode={mode}
-            pending={data.pending}
-            drawerOpen={
-              !drafts.collapsed &&
-              (mode === "questionnaire" || mode === "draft") &&
-              round !== null
-            }
-            value={data.roundInput}
-            onChange={data.setRoundInput}
-            pendingSeedCount={data.pendingSeeds.length}
-            materials={data.pendingMaterials}
-            onMaterialUploaded={data.addMaterial}
-            onMaterialRemove={data.removeMaterial}
-            libraryCount={data.materials.length}
-            onOpenLibrary={() => setLibraryOpen(true)}
-            onStartRound={() => void data.startRound()}
-            onOpenDrawer={() => drafts.setCollapsed(false)}
-            onRetry={() => {
-              if (round !== null) void data.retry(round.round_id);
-            }}
+            composerProjectId={project.project_id}
+            composerMode={mode}
+            composerPending={data.pending}
+            composerValue={data.roundInput}
+            composerOnChange={data.setRoundInput}
+            composerOnStartRound={() => void data.startRound()}
+            composerPendingSeedCount={data.pendingSeeds.length}
+            composerMaterials={data.pendingMaterials}
+            composerOnMaterialUploaded={data.addMaterial}
+            composerOnMaterialRemove={data.removeMaterial}
+            composerLibraryCount={data.materials.length}
+            composerOnOpenLibrary={() => setLibraryOpen(true)}
           />
 
           {versionsOpen && (

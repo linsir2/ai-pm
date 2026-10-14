@@ -33,6 +33,11 @@ function cardGroundingText(card: CardView): string {
   return card.grounding === "document" ? "文档里有据" : "凭空推演";
 }
 
+/** 过目动作的样式：收下一类是主色轻链，其余灰字轻链（不再是一排边框按钮）。 */
+function actionClass(action: string): string {
+  return action === "keep-seed" ? "btn--link btn--link--primary" : "btn--link";
+}
+
 export function InboxTray({
   threads,
   explorations,
@@ -85,11 +90,13 @@ export function InboxTray({
       <div className="loop__head">
         <h2 className="loop__title">灵感箱</h2>
       </div>
-      <p className="muted small">
-        讨论聊出来的卡与调研带回来的候选都在这；「收下」是唯一的回流路径，其余什么都不动文档。
-      </p>
 
-      {empty && <p className="muted small">还没有可过目的东西</p>}
+      {empty && (
+        <>
+          <p className="muted small">还没有可过目的东西</p>
+          <p className="muted small">去条目点「调研」，或开条讨论聊出卡。</p>
+        </>
+      )}
 
       {running.length > 0 && (
         <section className="loop__group">
@@ -151,7 +158,7 @@ export function InboxTray({
                     <button
                       key={action}
                       type="button"
-                      className={action === "dismiss" ? "btn btn--ghost btn--sm" : "btn btn--sm"}
+                      className={actionClass(action)}
                       disabled={pending}
                       onClick={() => {
                         if (action === "keep-seed") onKeepCard(thread.thread_id, card.card_id, "seed");
@@ -165,7 +172,7 @@ export function InboxTray({
                   ))}
                   <button
                     type="button"
-                    className="btn btn--ghost btn--sm"
+                    className="btn--link"
                     disabled={busy}
                     onClick={() => onVerify(card.statement)}
                   >
@@ -173,7 +180,7 @@ export function InboxTray({
                   </button>
                   <button
                     type="button"
-                    className="btn btn--ghost btn--sm"
+                    className="btn--link"
                     disabled={pending}
                     onClick={() => onDiscuss(card.statement)}
                   >
@@ -201,22 +208,25 @@ export function InboxTray({
                 {(candidate.falsification !== null ||
                   candidate.evidence_needed !== null ||
                   candidate.next_step !== null) && (
-                  <div className="prop__rationale">
-                    {candidate.falsification !== null && (
-                      <p>证伪它：{candidate.falsification}</p>
-                    )}
-                    {candidate.evidence_needed !== null && (
-                      <p>需要证据：{candidate.evidence_needed}</p>
-                    )}
-                    {candidate.next_step !== null && <p>下一步：{candidate.next_step}</p>}
-                  </div>
+                  <details className="prop__rationalebox">
+                    <summary className="muted small">怎么证伪 / 还缺什么</summary>
+                    <div className="prop__rationale">
+                      {candidate.falsification !== null && (
+                        <p>证伪它：{candidate.falsification}</p>
+                      )}
+                      {candidate.evidence_needed !== null && (
+                        <p>需要证据：{candidate.evidence_needed}</p>
+                      )}
+                      {candidate.next_step !== null && <p>下一步：{candidate.next_step}</p>}
+                    </div>
+                  </details>
                 )}
                 <div className="prop__foot">
                   {candidateActions(candidate).map((action) => (
                     <button
                       key={action}
                       type="button"
-                      className={action === "dismiss" ? "btn btn--ghost btn--sm" : "btn btn--sm"}
+                      className={actionClass(action)}
                       disabled={pending}
                       onClick={() => {
                         if (action === "keep-seed") onKeepSeed(item.exploration_id, candidate);
@@ -230,7 +240,7 @@ export function InboxTray({
                   ))}
                   <button
                     type="button"
-                    className="btn btn--ghost btn--sm"
+                    className="btn--link"
                     disabled={pending}
                     onClick={() => onDiscuss(candidate.statement)}
                   >

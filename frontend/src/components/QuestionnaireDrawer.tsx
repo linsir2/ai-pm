@@ -17,6 +17,7 @@ export function QuestionnaireDrawer({
   onSubmit,
   onSkipAll,
   onDiscuss,
+  onOpenTarget,
   onCollapse,
 }: {
   round: RoundView;
@@ -31,6 +32,8 @@ export function QuestionnaireDrawer({
    * 传了才有这个入口（没传就是这一版没接讨论）。
    */
   onDiscuss?: (anchor: DiscussionAnchor) => void;
+  /** 题行上的去处可点：跳到文档那一条（传了才出按钮，老消费者不受影响）。 */
+  onOpenTarget?: (label: string) => void;
   onCollapse: () => void;
 }) {
   const unanswered = unansweredCount(round, drafts);
@@ -38,6 +41,10 @@ export function QuestionnaireDrawer({
   const conflicts = round.questions.filter((question) => question.kind === "conflict").length;
   // 归因对不上号的留痕：新通道里 `source === "assembly"` 的那些
   const unattributed = round.dropped.filter((item) => item.source === "assembly");
+  // 矛盾题置顶：最需要拍板的先答（stable 排序，后端顺序不动）
+  const ordered = [...round.questions].sort(
+    (a, b) => (b.kind === "conflict" ? 1 : 0) - (a.kind === "conflict" ? 1 : 0),
+  );
 
   return (
     <aside className="drawer" role="dialog" aria-modal="false" aria-labelledby="drawer-title">
@@ -54,8 +61,8 @@ export function QuestionnaireDrawer({
 
       <div className="drawer__body">
         {round.answer_sets.length > 0 && (
-          <section className="drawer__history" aria-label="本轮前几批你答过的">
-            <h3 className="drawer__subtitle">本轮前几批答过的</h3>
+          <details className="drawer__history" aria-label="本轮前几批你答过的">
+            <summary className="drawer__subtitle">本轮前几批答过的</summary>
             {round.answer_sets.map((batch) => (
               <div className="drawer__batch" key={batch.form_id}>
                 <span className="muted small">{answerBatchSummary(batch)}</span>
@@ -69,7 +76,7 @@ export function QuestionnaireDrawer({
                 )}
               </div>
             ))}
-          </section>
+          </details>
         )}
         {unattributed.length > 0 && (
           <p className="drawer__note" aria-label="未能解析的归因">
@@ -78,7 +85,7 @@ export function QuestionnaireDrawer({
             ），这几条没算作「谁问的」——题目本身没受影响。
           </p>
         )}
-        {round.questions.map((question) => (
+        {ordered.map((question) => (
           <Question
             key={question.question_id}
             question={question}
@@ -86,6 +93,7 @@ export function QuestionnaireDrawer({
             draft={drafts[question.question_id]}
             onChange={(draft) => onChange(question.question_id, draft)}
             onDiscuss={onDiscuss}
+            onOpenTarget={onOpenTarget}
           />
         ))}
       </div>
@@ -115,12 +123,14 @@ function Question({
   draft,
   onChange,
   onDiscuss,
+  onOpenTarget,
 }: {
   question: QuestionView;
   doc: DocumentView | null;
   draft: AnswerDraft | undefined;
   onChange: (draft: AnswerDraft) => void;
   onDiscuss?: (anchor: DiscussionAnchor) => void;
+  onOpenTarget?: (label: string) => void;
 }) {
   const current: AnswerDraft = draft ?? { selected: [], text: "" };
   const multiple = question.type === "multi";
@@ -141,14 +151,33 @@ function Question({
         <span className={`tag tag--${question.kind === "conflict" ? "conflict" : "open"}`}>
           {QUESTION_KIND_TEXT[question.kind] ?? question.kind}
         </span>
-        <span className="muted small">{QUESTION_TYPE_TEXT[question.type] ?? question.type}</span>
-        <span className="muted small mono">{question.question_id}</span>
         <span className="topbar__spacer" />
-        <span className="muted small">{targetText(question.target_label, doc?.sections)}</span>
+        {onOpenTarget !== undefined ? (
+          <button
+            type="button"
+            className="targetlink"
+            onClick={() => onOpenTarget(question.target_label)}
+            title={`${QUESTION_TYPE_TEXT[question.type] ?? question.type} · ${question.question_id} · 跳到文档`}
+          >
+            {targetText(question.target_label, doc?.sections)}
+          </button>
+        ) : (
+          <span
+            className="muted small"
+            title={`${QUESTION_TYPE_TEXT[question.type] ?? question.type} · ${question.question_id}`}
+          >
+            {targetText(question.target_label, doc?.sections)}
+          </span>
+        )}
       </div>
 
       <h3 className="q__title">{question.title}</h3>
-      {question.why.trim() !== "" && <p className="q__why">{question.why}</p>}
+      {question.why.trim() !== "" && (
+        <details className="q__whybox">
+          <summary className="muted small">为什么问</summary>
+          <p className="q__why">{question.why}</p>
+        </details>
+      )}
 
       {question.options.length > 0 && (
         <div className="options" role={multiple ? "group" : "radiogroup"}>

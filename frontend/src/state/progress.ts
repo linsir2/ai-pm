@@ -1,96 +1,30 @@
 /* 本轮执行进度：全部从后端投影的字段推出来，不猜、不编。
    能读的就这几样：step / waiting_on / seat_round_count / claims / questions / draft。 */
 
-import type { LimitsView, RoundView } from "../api/types";
-import { limitsOf } from "./schema";
+import type { RoundView } from "../api/types";
+import { stepText } from "../labels";
 
-export type ProgressState = "done" | "active" | "todo";
+/** 「轮到你」的那几件事（后端 `waiting_on` 的枚举）。`none` 不在其中——
+    "没人需要动手"是设计语言，不到用户眼前。 */
+const USER_WAIT_TEXT: Record<string, string> = {
+  opening_card: "等你在复述卡上纠正",
+  questionnaire: "等你交问卷",
+  draft_card: "等你勾草案",
+};
 
-export interface ProgressStep {
-  key: string;
-  text: string;
-  state: ProgressState;
-  detail: string | null;
-}
-
-export function roundProgress(
-  round: RoundView | null,
-  limits: LimitsView | null = null,
-): ProgressStep[] {
-  if (round === null) return [];
-
-  // 席位轮上限的真相源在后端（`GET /schema`）；调用方没给就用已经存下的那一份。
-  const maxSeatRounds = (limits ?? limitsOf()).max_seat_rounds;
-  const done = round.step === "done";
-  const openingDone = round.seats.length > 0;
-  const seatsDone = round.seat_packets.length > 0 && round.seat_packets.every(isCompleted);
-  // 席位轮只有出了草案（或整轮结束）才算 done；出了问卷不等于完成（答完可能再跑一轮）
-  const seatsFullyDone = seatsDone && (round.draft !== null || done);
-  const integrated = round.questions.length > 0 || round.draft !== null;
-
-  return [
-    {
-      key: "claims",
-      text: "主张",
-      state: round.claims.length > 0 ? "done" : "active",
-      detail: round.claims.length > 0 ? `${round.claims.length} 条` : null,
-    },
-    {
-      key: "opening",
-      text: "复述",
-      state: openingDone ? "done" : round.waiting_on === "opening_card" ? "active" : "todo",
-      detail: openingDone ? `${round.seats.length} 个席位` : null,
-    },
-    {
-      key: "seats",
-      text: "席位轮",
-      state: seatsFullyDone ? "done" : openingDone ? "active" : "todo",
-      detail: `${Math.min(round.seat_round_count, maxSeatRounds)} / ${maxSeatRounds} 轮`,
-    },
-    {
-      key: "integration",
-      text: "整合",
-      state: integrated || done ? "done" : seatsDone ? "active" : "todo",
-      detail:
-        round.draft === null
-          ? round.questions.length > 0
-            ? `${round.questions.length} 题`
-            : null
-          : `${round.draft.proposals.length} 条候选`,
-    },
-    {
-      key: "questionnaire",
-      text: "问卷",
-      state:
-        round.waiting_on === "questionnaire"
-          ? "active"
-          : round.questions.length > 0
-            ? "done"
-            : "todo",
-      detail: round.questions.length > 0 ? `${round.questions.length} 题` : "没有要问的",
-    },
-    {
-      key: "draft",
-      text: "草案",
-      state:
-        round.draft === null
-          ? "todo"
-          : round.waiting_on === "draft_card"
-            ? "active"
-            : "done",
-      detail: round.draft === null ? null : `${round.draft.proposals.length} 条`,
-    },
-    {
-      key: "confirm",
-      text: "确认",
-      state: done ? "done" : round.step === "awaiting_confirm" ? "active" : "todo",
-      detail: round.confirmed_version_no === null ? null : `v${round.confirmed_version_no}`,
-    },
-  ];
-}
-
-function isCompleted(packet: { status: string }): boolean {
-  return packet.status === "completed";
+/** 状态行那一句：**waiting 优先于 step**（等你是最该说的事），一步只说一句——
+    "等你回答 · 等你交问卷"这种叠句不再出现。 */
+export function statusText(round: RoundView): string {
+  if (round.step === "done") return "这一轮写完了";
+  if (round.step === "failed") return "这一轮失败了";
+  // 放弃由失败行说「已放弃：<原因>」，这里不再叠一句
+  if (round.step === "abandoned") return "";
+  // 席位在跑时不报 waiting（此刻的 waiting_on 多是 none，报"等谁"会误导）
+  if (round.step !== "seats_running") {
+    const wait = USER_WAIT_TEXT[round.waiting_on];
+    if (wait !== undefined) return wait;
+  }
+  return stepText(round.step);
 }
 
 /**
@@ -105,6 +39,28 @@ export function roundOrdinal(
   const index = rounds.findIndex((item) => item.round_id === roundId);
   if (index < 0) return null;
   return rounds.length - index;
+}
+
+/** 这个轮从开局到现在多久（"开局 X 分钟"）：拿 rounds 列表里同 round_id 的 created_at 现算。
+    找不到 / 时间在未来就是 null——界面回落成不显示，不编一个数。
+    **口径**：这是时间年龄（含等人时间），不是"有效运行时长"——后端没存每步时间戳，
+    写"已跑"就是撒谎（真跑 19 分钟里大半在等用户）。 */
+export function roundElapsed(
+  rounds: readonly { round_id: string; created_at: string }[],
+  roundId: string | null,
+  now: number,
+): string | null {
+  if (roundId === null) return null;
+  const head = rounds.find((item) => item.round_id === roundId);
+  if (head === undefined) return null;
+  const ms = now - Date.parse(head.created_at);
+  if (Number.isNaN(ms) || ms < 0) return null;
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "刚刚开局";
+  if (minutes < 60) return `开局 ${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `开局 ${hours} 小时`;
+  return `开局 ${Math.floor(hours / 24)} 天`;
 }
 
 /** 主张的标签分布（分析者那一格要显示的"3 种标签"）。 */

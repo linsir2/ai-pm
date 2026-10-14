@@ -14,7 +14,6 @@ import {
   cardStatusText,
   resolveRoleId,
   roleChoices,
-  roleOptionOf,
   threadStatusText,
   turnsLeft,
 } from "../state/discussions";
@@ -71,8 +70,6 @@ export function DiscussionTray({
 
   const roles = roleChoices(anchorRole, roleOptionsProp);
   const trimmed = topic.trim();
-  // 选中项的 focus 当提示行（`roleOptionOf` 认不出就照实给空 focus，不编）
-  const selectedFocus = roleOptionOf(roleId, roleOptionsProp).focus;
 
   return (
     <div className="loop__scroll">
@@ -80,8 +77,7 @@ export function DiscussionTray({
         <h2 className="loop__title">讨论区</h2>
       </div>
       <p className="muted small">
-        讨论不写文档：它是挂在这个项目上的自由对话。聊出想法之后「总结成卡」，
-        收下的卡才会作为材料流回下一轮（凭空推演的默认不勾选）。
+        讨论不写文档；聊出想法「总结成卡」，收下才回流下一轮。
       </p>
 
       <section className="loop__group">
@@ -96,12 +92,13 @@ export function DiscussionTray({
           placeholder="想跟谁聊什么？（自由主题，不限文档里有没有这条）"
           onChange={(event) => setTopic(event.target.value)}
         />
-        <fieldset className="seats">
+        <fieldset className="seats seats--compact">
           <legend className="loop__label">请谁</legend>
           {roles.map((role) => (
             <label
               className={roleId === role.role_id ? "seat seat--on" : "seat"}
               key={role.role_id}
+              title={role.focus !== "" ? `它管什么：${role.focus}` : undefined}
             >
               <input
                 type="radio"
@@ -112,24 +109,24 @@ export function DiscussionTray({
               />
               <span>
                 <span className="seat__title">{role.title}</span>
-                {role.focus !== "" && <span className="seat__focus">它管什么：{role.focus}</span>}
+                {role.focus !== "" && <span className="seat__focus">{role.focus}</span>}
               </span>
             </label>
           ))}
-        </fieldset>
-        <label className={runInquiry ? "seat seat--on" : "seat"}>
-          <input
-            type="checkbox"
-            checked={runInquiry}
-            onChange={() => setRunInquiry((on) => !on)}
-          />
-          <span>
-            <span className="seat__title">先跑一轮调研</span>
-            <span className="seat__focus">
-              围绕主题先出一趟假设与盲区（进灵感箱过目），当这次讨论的开题底稿
+          <label className={runInquiry ? "seat seat--on" : "seat"}>
+            <input
+              type="checkbox"
+              checked={runInquiry}
+              onChange={() => setRunInquiry((on) => !on)}
+            />
+            <span>
+              <span className="seat__title">先跑一轮调研</span>
+              <span className="seat__focus">
+                先出一趟假设与盲区（进灵感箱过目），当这次讨论的开题底稿
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+        </fieldset>
         <div className="prop__foot">
           <button
             type="button"
@@ -140,9 +137,6 @@ export function DiscussionTray({
             开聊
           </button>
         </div>
-        {selectedFocus !== "" && (
-          <p className="muted small">它管什么：{selectedFocus}</p>
-        )}
       </section>
 
       {threads.length === 0 && (

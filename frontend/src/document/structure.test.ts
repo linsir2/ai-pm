@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockView, DocumentView } from "../api/types";
-import { chapterAnchors, groupFields, listFeatures, sectionOfEntry } from "./structure";
+import { chapterAnchors, groupFields, listFeatures, resolveTarget, sectionOfEntry } from "./structure";
 
 function entry(id: string, text: string) {
   return { entry_id: id, text, refs: ["E1"] };
@@ -121,5 +121,73 @@ describe("sectionOfEntry", () => {
     expect(sectionOfEntry(doc, "en-pref")).toBe("preference");
     expect(sectionOfEntry(doc, "不存在")).toBeNull();
     expect(sectionOfEntry(null, "en-ac1")).toBeNull();
+  });
+});
+
+describe("resolveTarget（去处 → 文档落点；点去处跳转的唯一解析）", () => {
+  const targetDoc = {
+    sections: [
+      { section_id: "s3", title: "用户与受众", blocks: [] },
+      { section_id: "s5", title: "功能需求", blocks: [orderExport] },
+      {
+        section_id: "s8",
+        title: "非功能需求",
+        blocks: [
+          block({ block_id: "b-s8-perf", kind: "text", field: "performance" }),
+          block({ block_id: "b-s8-avail", kind: "text", field: "availability" }),
+        ],
+      },
+    ],
+    preference_entries: [],
+  } as unknown as DocumentView;
+
+  it("功能字段：落到那个字段的块（最精确）", () => {
+    expect(resolveTarget(targetDoc, "s5/order-export.main_flow")).toEqual({
+      sectionId: "s5",
+      blockId: "b-flow",
+    });
+  });
+
+  it("功能级：落到功能块", () => {
+    expect(resolveTarget(targetDoc, "s5/order-export")).toEqual({
+      sectionId: "s5",
+      blockId: "b-feature-1",
+    });
+  });
+
+  it("字段块不在时回落到功能块；功能也找不到回落到章（回落链不跳空）", () => {
+    expect(resolveTarget(targetDoc, "s5/order-export.nope")).toEqual({
+      sectionId: "s5",
+      blockId: "b-feature-1",
+    });
+    expect(resolveTarget(targetDoc, "s5/nope.rules")).toEqual({
+      sectionId: "s5",
+      blockId: null,
+    });
+  });
+
+  it("章节槽：落到槽块；槽还没建就落到章", () => {
+    expect(resolveTarget(targetDoc, "s8.performance")).toEqual({
+      sectionId: "s8",
+      blockId: "b-s8-perf",
+    });
+    expect(resolveTarget(targetDoc, "s8.observability")).toEqual({
+      sectionId: "s8",
+      blockId: null,
+    });
+  });
+
+  it("章级与偏好区", () => {
+    expect(resolveTarget(targetDoc, "s3")).toEqual({ sectionId: "s3", blockId: null });
+    expect(resolveTarget(targetDoc, "preference")).toEqual({
+      sectionId: "preference",
+      blockId: null,
+    });
+  });
+
+  it("形状不认 / 章不在文档里 → null（调用方说实话，不假跳）", () => {
+    expect(resolveTarget(targetDoc, "s5/")).toBeNull();
+    expect(resolveTarget(targetDoc, "s99")).toBeNull();
+    expect(resolveTarget(null, "s5")).toBeNull();
   });
 });

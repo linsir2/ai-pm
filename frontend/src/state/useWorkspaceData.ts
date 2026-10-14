@@ -334,6 +334,8 @@ export function useWorkspaceData() {
             buildStart(input, pendingMaterials, pendingSeeds),
           ),
         });
+        // 立刻刷一次轮次列表：不等 SSE——否则新轮会短暂显示成"本轮"、开局时长也拿不到
+        void api.rounds(projectId).then(setRounds).catch(() => undefined);
         // **成功才清**（有意修正旧行为：以前一提交就清，失败后用户得重打一遍）。
         setPendingMaterials([]); // 材料已经随这一轮发出去了
         setRoundInput("");

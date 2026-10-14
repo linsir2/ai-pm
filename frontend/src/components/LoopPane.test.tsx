@@ -5,7 +5,7 @@
    旧写法拿文本当 React key → 控制台一串 "same key" 警告，行可能被丢掉或复制。
    这一份钉两件事：**所有行都画出来**，而且**不再出现重复 key 警告**。 */
 
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DroppedView, RoundView } from "../api/types";
@@ -34,6 +34,7 @@ function round(over: Partial<RoundView>): RoundView {
     seat_packets: [],
     dropped: [],
     questions: [],
+    asked_questions: [],
     list_items: [],
     draft: null,
     advisories: [],
@@ -57,12 +58,16 @@ function round(over: Partial<RoundView>): RoundView {
   } as unknown as RoundView;
 }
 
-function draw(round_: RoundView) {
+function draw(
+  round_: RoundView,
+  props: { elapsed?: string | null; pending?: string | null } = {},
+) {
   return render(
     <EvidenceScope index={new Map()} onJump={() => undefined}>
       <LoopPane
         round={round_}
-        pending={null}
+        pending={props.pending ?? null}
+        elapsed={props.elapsed ?? null}
         onRetry={() => undefined}
         onAbandon={() => undefined}
         onOpenQuestionnaire={() => undefined}
@@ -104,5 +109,165 @@ describe("闭环区的列表（P29 F1/F2）", () => {
     expect(spy.mock.calls.some(([message]) =>
       String(message).includes("same key"))).toBe(false);
     spy.mockRestore();
+  });
+});
+
+describe("对话流折叠纪律（Trae 式：标题行常显，明细点展）", () => {
+  function claimed(): RoundView {
+    return round({
+      claims: [
+        {
+          claim_id: "c1",
+          eid: "E1",
+          label: "need",
+          target_label: "s5",
+          text: "做导出",
+          raw_span: "做导出",
+          assumption_note: null,
+        },
+        {
+          claim_id: "c2",
+          eid: "E2",
+          label: "fact",
+          target_label: "s2",
+          text: "有数据",
+          raw_span: "有数据",
+          assumption_note: null,
+        },
+      ],
+    });
+  }
+
+  it("C1 主张默认收：标题行露计数，明细在没打开的 details 里（防全展回潮）", () => {
+    const { container } = draw(claimed());
+
+    const folded = container.querySelector("details.claims-fold:not([open])");
+    expect(folded).toBeTruthy();
+    expect(folded!.querySelector("summary")!.textContent).toContain("2 条");
+    // 明细仍在 DOM（证据可点），只是默认不摊平
+    expect(container.querySelectorAll(".claims .claim")).toHaveLength(2);
+  });
+
+  it("C10 时间线标题是叙述体（防回退名词体）", () => {
+    const { container } = draw(
+      claimed(),
+    );
+
+    expect(container.textContent).toContain("已切出 2 条主张");
+  });
+
+  it("C3 在跑席位由后端 pending stub 卡表示（'正在交回…'），交完翻'已完成'（防假圈/漏活态）", () => {
+    const running = draw(
+      round({
+        step: "seats_running",
+        waiting_on: "none",
+        seats: ["seat.a", "seat.b"],
+        active_seats: ["seat.a", "seat.b"],
+        seat_round_count: 1,
+        seat_packets: [
+          {
+            seat_id: "seat.a",
+            title: "业务规则",
+            status: "completed",
+            pass_index: 1,
+            packet_id: null,
+            basis: "读了文档",
+            opinions: [],
+            judgment_count: 0,
+            question_count: 0,
+          },
+          {
+            seat_id: "seat.b",
+            title: "前端交互",
+            status: "pending",
+            pass_index: 1,
+            packet_id: null,
+            basis: "",
+            opinions: [],
+            judgment_count: 0,
+            question_count: 0,
+          },
+        ],
+      }),
+      { pending: "seat" },
+    );
+
+    expect(running.container.textContent).toContain("正在交回");
+    expect(running.container.textContent).toContain("业务规则");
+    expect(running.container.textContent).toContain("前端交互");
+  });
+
+  it("C4 留痕默认收：标题行露条数，明细仍在 DOM（防 16 条全展）", () => {
+    const { container } = draw(
+      round({
+        seats: ["seat.a"],
+        dropped: [drop("seat.a:O1", "没交代去向"), drop("seat.a:O2", "去处写错")],
+      }),
+    );
+
+    const folded = container.querySelector("details.drops-fold:not([open])");
+    expect(folded).toBeTruthy();
+    expect(folded!.querySelector("summary")!.textContent).toContain("2 条");
+    expect(container.querySelectorAll("ul.drops li.drop")).toHaveLength(2);
+  });
+
+  it("C5-note 清单重复时留一行提示，行数不动（不断言改不动）", () => {
+    const { container } = draw(
+      round({ list_items: ["同一件事", "同一件事", "另一件"] }),
+    );
+
+    expect(container.querySelectorAll(".loop__group .entry")).toHaveLength(3);
+    expect(container.textContent).toContain("重复");
+  });
+
+  it("C7 答过的批进时间线、答案直接可见（防答完无痕/藏进折叠行）", () => {
+    const { container } = draw(
+      round({
+        answer_sets: [
+          { form_id: "f1", answered: 1, skipped: 1, answers: ["用不用云 → 用云；备注：预算已批"] },
+          { form_id: "f2", answered: 2, skipped: 0, answers: ["范围 → 全量", "时机 → 月底"] },
+        ],
+      }),
+    );
+
+    // 节点「你 · 答过 2 批」：批次头复用 answerBatchSummary，答案串就是「题目 → 选项」整串
+    expect(container.querySelector(".answers")).toBeTruthy();
+    expect(container.textContent).toContain("答过 2 批");
+    expect(container.textContent).toContain("第 1 批 · 已答 1 · 跳过 1");
+    expect(container.textContent).toContain("第 2 批 · 已答 2");
+    expect(container.textContent).toContain("用不用云 → 用云");
+    expect(container.textContent).toContain("月底");
+    // 旧的底部折叠行退休
+    expect(container.querySelector("details.history-fold")).toBeNull();
+  });
+
+  it("C11 整合按钮只在该动作可做时出现（等答/等确认），做完不留死按钮", () => {
+    const draft = {
+      draft_id: "d1",
+      groups: [{}, {}],
+      proposals: [{ proposal_id: "p1", op: "add" }],
+    } as unknown as RoundView["draft"];
+    const questionsQ = [{ question_id: "q1" }] as unknown as RoundView["questions"];
+
+    const asking = draw(round({ step: "awaiting_answers", waiting_on: "questionnaire", questions: questionsQ }));
+    expect(within(asking.container).getByRole("button", { name: /查看问卷/ })).toBeTruthy();
+
+    const confirming = draw(round({ step: "awaiting_confirm", waiting_on: "draft_card", draft }));
+    expect(within(confirming.container).getByRole("button", { name: /查看草案/ })).toBeTruthy();
+
+    const done = draw(round({ step: "done", waiting_on: "none", draft, questions: questionsQ }));
+    expect(within(done.container).queryByRole("button", { name: /查看草案/ })).toBeNull();
+    expect(within(done.container).queryByRole("button", { name: /查看问卷/ })).toBeNull();
+  });
+
+  it("C8b 跑动中才显示开局时长，停了就不显示（防'已跑 28805 分钟'这种谎言）", () => {
+    const shown = draw(round({}), { elapsed: "开局 3 分钟", pending: "seat" });
+    expect(shown.container.textContent).toContain("开局 3 分钟");
+
+    const idle = draw(round({}), { elapsed: "开局 3 分钟" });
+    expect(idle.container.textContent).not.toContain("开局");
+
+    const hidden = draw(round({}));
+    expect(hidden.container.textContent).not.toContain("开局");
   });
 });

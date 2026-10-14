@@ -3,15 +3,17 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 
 import { ApiError } from "../api/client";
-import type { CandidateView, ExplorationView } from "../api/types";
+import type { CandidateView, ExplorationView, RoundView } from "../api/types";
 import { useWorkspaceData } from "./useWorkspaceData";
 
 // 全仓首个 vi.mock：factory 会被 hoist 到文件顶，顶层变量一律用 vi.hoisted 包
 //（inline 的 vi.fn() / import 进来的 ApiError 在 factory 里直接引用会炸）。
 // 其余导出走 importOriginal 原样透出，只换掉 api 单例。
-const { keepCandidate, startExploration } = vi.hoisted(() => ({
+const { keepCandidate, startExploration, startRound, rounds } = vi.hoisted(() => ({
   keepCandidate: vi.fn(),
   startExploration: vi.fn(),
+  startRound: vi.fn(),
+  rounds: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -22,6 +24,8 @@ vi.mock("../api/client", async (importOriginal) => {
       schema: async () => null,
       keepCandidate,
       startExploration,
+      startRound,
+      rounds,
     },
   };
 });
@@ -118,4 +122,61 @@ it("拿去验证失败：探索列表原样，错误可见（不假装跑过）"
 
   expect(result.current.explorations).toEqual([]);
   expect(result.current.state.error).toContain("同一项目同时只允许一趟调研");
+});
+
+it("起轮成功后立刻刷新轮次列表（新轮不再显示成本轮、开局时长不丢）", async () => {
+  const started = {
+    round_id: "r-new",
+    project_id: "p1",
+    user_input: "做个导出",
+    step: "started",
+    waiting_on: "none",
+    seat_round_count: 0,
+    seats: [],
+    active_seats: [],
+    nominated_seats: [],
+    available_seats: [],
+    claims: [],
+    seat_packets: [],
+    dropped: [],
+    questions: [],
+    asked_questions: [],
+    list_items: [],
+    draft: null,
+    advisories: [],
+    failure_reason: null,
+    failure_at_step: null,
+    retry_from: null,
+    abandon_reason: null,
+    confirmed_version_no: null,
+    form_id: null,
+    answer_sets: [],
+    materials: [],
+    web_queries: [],
+    web_queries_chosen: [],
+    web_search_available: false,
+    write_scope: [],
+    contradictions: [],
+    proposed_offered: null,
+    proposed_accepted: null,
+    proposal_ignore_streak: 0,
+    analysis_basis: "",
+  } as unknown as RoundView;
+  startRound.mockResolvedValue(started);
+  rounds.mockResolvedValue([{ round_id: "r-new" }]);
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+  await act(async () => {
+    result.current.selectProject("p1");
+  });
+  rounds.mockClear(); // 清掉 selectProject 那一次；只看 startRound 之后有没有刷
+  await act(async () => {
+    result.current.setRoundInput("做个导出");
+  });
+  await act(async () => {
+    await result.current.startRound();
+  });
+
+  expect(rounds).toHaveBeenCalledWith("p1");
+  expect(result.current.rounds.map((item) => item.round_id)).toEqual(["r-new"]);
 });

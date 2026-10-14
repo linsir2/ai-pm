@@ -46,56 +46,61 @@ export function SeatPacketCard({
               <span className="muted"> · 第 {packet.pass_index} 轮</span>
             </p>
           ) : (
-            <p className="packet__counts">
-              {packet.judgment_count > 0 && <span>判断 {packet.judgment_count} 条</span>}
-              {packet.question_count > 0 && <span>疑问 {packet.question_count} 个</span>}
-              <span className="muted">第 {packet.pass_index} 轮</span>
-            </p>
-          )}
-
-          {drops.length > 0 && (
-            <div className="packet__drops">
-              <p className="packet__counts packet__counts--drops">
-                {dropHeadline(packet, drops)}
-              </p>
-              <ul className="drops">
-                {drops.map((item) => (
-                  <li className="drop" key={`${item.handle}-${item.reason}`}>
-                    <span className="mono small">{item.handle}</span>
-                    <span className="drop__reason">{item.reason}</span>
+            <details className="packet__opinions">
+              <summary className="packet__counts">
+                {packet.judgment_count > 0 && <span>判断 {packet.judgment_count} 条</span>}
+                {packet.question_count > 0 && <span>疑问 {packet.question_count} 个</span>}
+                <span className="muted">第 {packet.pass_index} 轮</span>
+              </summary>
+              <ul className="opinions">
+                {packet.opinions.map((opinion) => (
+                  <li
+                    className={`opinion opinion--${opinion.form}`}
+                    key={opinion.local_id}
+                    data-eid={opinion.eid ?? undefined}
+                  >
+                    <div className="opinion__head">
+                      <span className={opinion.form === "question" ? "tag" : "tag tag--decision"}>
+                        {opinionFormText(opinion.form)}
+                      </span>
+                      <span className="opinion__about">{opinion.about}</span>
+                    </div>
+                    <span className="opinion__claim">{opinion.claim}</span>
+                    {opinion.because.trim() !== "" && (
+                      <span className="opinion__because">理由：{opinion.because}</span>
+                    )}
+                    {opinion.basis_note !== null && (
+                      <span className="opinion__because">{opinion.basis_note}</span>
+                    )}
+                    <div className="prop__foot">
+                      <EvidenceChip eids={opinion.eids} />
+                      {opinion.eid !== null && <EvidenceChip eids={[opinion.eid]} />}
+                    </div>
                   </li>
                 ))}
               </ul>
-            </div>
+            </details>
           )}
 
-          <ul className="opinions">
-            {packet.opinions.map((opinion) => (
-              <li
-                className={`opinion opinion--${opinion.form}`}
-                key={opinion.local_id}
-                data-eid={opinion.eid ?? undefined}
-              >
-                <div className="opinion__head">
-                  <span className={opinion.form === "question" ? "tag" : "tag tag--decision"}>
-                    {opinionFormText(opinion.form)}
-                  </span>
-                  <span className="opinion__about">{opinion.about}</span>
-                </div>
-                <span className="opinion__claim">{opinion.claim}</span>
-                {opinion.because.trim() !== "" && (
-                  <span className="opinion__because">理由：{opinion.because}</span>
-                )}
-                {opinion.basis_note !== null && (
-                  <span className="opinion__because">{opinion.basis_note}</span>
-                )}
-                <div className="prop__foot">
-                  <EvidenceChip eids={opinion.eids} />
-                  {opinion.eid !== null && <EvidenceChip eids={[opinion.eid]} />}
-                </div>
-              </li>
-            ))}
-          </ul>
+          {drops.length > 0 && (
+            <details className="q__whybox drops-fold">
+              <summary className="muted small">留痕 {drops.length} 条</summary>
+              <div className="packet__drops">
+                <p className="packet__counts packet__counts--drops">
+                  {dropHeadline(packet, drops)}
+                </p>
+                <ul className="drops">
+                  {drops.map((item) => (
+                    <li className="drop" key={`${item.handle}-${item.reason}`}>
+                      <span className="mono small">{item.handle}</span>
+                      <span className="drop__reason">{item.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </details>
+          )}
+
         </>
       )}
     </article>

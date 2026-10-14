@@ -79,7 +79,10 @@ export function MaterialPicker({
 
   return (
     <div className="materials">
-      <div className="materials__row">
+      <div
+        className="materials__row"
+        title="材料是外部材料，不是你说的话；它进提示词、不直接写文档"
+      >
         <button
           type="button"
           className="btn btn--ghost btn--sm"
@@ -97,7 +100,7 @@ export function MaterialPicker({
         >
           + 粘贴网址
         </button>
-        <span className="muted small">
+        <span className="sr-only">
           材料是<strong>外部材料</strong>，不是你说的话；它进提示词、不直接写文档
         </span>
         <input

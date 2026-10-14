@@ -1,6 +1,8 @@
 /* 复述卡：它把你的话复述回来 —— 标签对不对、去处对不对、这一轮请谁。
    只改标签与去处（改文本归文档，见 01-规格 §5 的硬约束）。 */
 
+import type { ReactNode } from "react";
+
 import type { ClaimEdit } from "../api/payload";
 import { seatNominationSummary, selectableLabels, targetOptions } from "../api/payload";
 import type { DocumentView, RoundView } from "../api/types";
@@ -15,6 +17,7 @@ export function OpeningCard({
   seats,
   webQueries,
   pending,
+  historyNav,
   onChangeClaim,
   onToggleSeat,
   onToggleWebQuery,
@@ -26,6 +29,8 @@ export function OpeningCard({
   seats: string[];
   webQueries: string[];
   pending: boolean;
+  /** 头部右端的跨轮入口（"这个项目走过 N 轮"）；不传就不出。 */
+  historyNav?: ReactNode;
   onChangeClaim: (claimId: string, edit: ClaimEdit) => void;
   onToggleSeat: (seatId: string) => void;
   onToggleWebQuery: (query: string) => void;
@@ -40,12 +45,13 @@ export function OpeningCard({
     <section className="pane-card" aria-label="复述卡">
       <header className="drawer__head">
         <h2 className="drawer__title">复述 · 我读到的 {round.claims.length} 件事</h2>
+        <span className="topbar__spacer" />
+        {historyNav}
       </header>
 
       <div className="drawer__body">
         <p className="q__why">
-          下面是它从你这段话里切出来的主张，每条带一个标签（决定怎么处理）和一个去处（决定写进哪）。
-          有偏差就在这儿改；改完才开跑席位。
+          核对标签与去处，改完才开跑席位。
         </p>
 
         {round.analysis_basis ? (
@@ -66,6 +72,18 @@ export function OpeningCard({
             return (
               <li className="claim" key={claim.claim_id} data-eid={claim.eid}>
                 <p className="claim__text">{claim.text}</p>
+                <details className="q__whybox">
+                  <summary className="muted small">原话</summary>
+                  <p className="claim__raw">原话「{claim.raw_span}」</p>
+                  {claim.assumption_note !== null && (
+                    <p className="claim__raw">猜测升格成的假设：{claim.assumption_note}</p>
+                  )}
+                  {claim.label === "guess" && (
+                    <p className="claim__note">
+                      这条是猜测：它带了"失败后果 + 怎么验证"的假设，标签改不动（改假设归文档）。
+                    </p>
+                  )}
+                </details>
                 <div className="claim__controls">
                   <label className="claim__field">
                     <span className="sr-only">标签</span>
@@ -107,15 +125,6 @@ export function OpeningCard({
                   </label>
                   <EvidenceChip eids={[claim.eid]} />
                 </div>
-                <p className="claim__raw">原话「{claim.raw_span}」</p>
-                {claim.assumption_note !== null && (
-                  <p className="claim__raw">猜测升格成的假设：{claim.assumption_note}</p>
-                )}
-                {claim.label === "guess" && (
-                  <p className="claim__note">
-                    这条是猜测：它带了"失败后果 + 怎么验证"的假设，标签改不动（改假设归文档）。
-                  </p>
-                )}
               </li>
             );
           })}
@@ -126,8 +135,7 @@ export function OpeningCard({
           <p className="seat__note">
             {summary.source === "agent" ? (
               <>
-                这 {summary.nominated} 个是<strong>分析席位读完你这段话之后挑的</strong>
-                （每条都写了理由）；不合适的就取消勾选。
+                分析席位按你这段话挑了 {summary.nominated} 个，每条有理由；不合适取消勾选。
                 {summary.available > 0 && ` 目录里还有 ${summary.available} 个可以自己加。`}
               </>
             ) : (
@@ -149,7 +157,7 @@ export function OpeningCard({
                   checked={on}
                   onChange={() => onToggleSeat(seat.seat_id)}
                 />
-                <span>
+                <span title={`它管什么：${seat.focus}`}>
                   <span className="seat__title">
                     {seat.title}
                     <span className="seat__tag">
@@ -161,7 +169,6 @@ export function OpeningCard({
                     </span>
                   </span>
                   {seat.why.trim() !== "" && <span className="seat__why">{seat.why}</span>}
-                  <span className="seat__focus">它管什么：{seat.focus}</span>
                 </span>
               </label>
             );
@@ -196,8 +203,7 @@ export function OpeningCard({
             {round.web_search_available ? (
               <>
                 <p className="seat__note">
-                  这几条是<strong>分析席位建议去外面查的</strong>（每条写了为什么）。联网要花额度，
-                  所以<strong>默认一条都不查</strong>——你要哪条就勾哪条，勾了才真去查。
+                  分析席位建议查 {round.web_queries.length} 条，默认不查；勾了才查。
                 </p>
                 {round.web_queries.map((item) => {
                   const on = webQueries.includes(item.query);

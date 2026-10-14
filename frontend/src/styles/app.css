@@ -76,18 +76,38 @@ a {
 
 .shell {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 400px;
-  grid-template-rows: 56px minmax(0, 1fr) auto;
+  grid-template-columns: 208px minmax(0, 1fr) 500px;
+  grid-template-rows: 48px minmax(0, 1fr);
   grid-template-areas:
     "top top top"
-    "nav doc loop"
-    "nav foot foot";
+    "nav doc loop";
   height: 100vh;
+}
+
+/* 文档列收起（想看才打开）：左栏 + 右列，文档不占位 */
+.shell--nodoc {
+  grid-template-columns: 208px minmax(0, 1fr);
+  grid-template-areas:
+    "top top"
+    "nav loop";
+}
+
+.shell--nodoc .doc {
+  display: none;
+}
+
+/* 折叠后右列独占宽屏：内容居中限宽，别让草案条目拉成 1600px 一行 */
+.shell--nodoc .loop {
+  padding-inline: max(0px, calc((100% - 780px) / 2));
+}
+
+.shell--nodoc .loop__composer {
+  padding-inline: var(--space-4);
 }
 
 .shell--plain {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 56px minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr);
   grid-template-areas:
     "top"
     "doc";
@@ -97,8 +117,8 @@ a {
   grid-area: top;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: 0 var(--space-4);
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
   background: var(--surface);
   border-bottom: var(--hairline);
   min-width: 0;
@@ -389,19 +409,6 @@ a {
   color: var(--ink);
 }
 
-.topbar__badge {
-  display: inline-block;
-  min-width: 18px;
-  padding: 0 4px;
-  border-radius: var(--radius-full);
-  background: var(--primary);
-  color: var(--on-primary);
-  font-size: var(--step-0);
-  line-height: 18px;
-  text-align: center;
-  font-family: var(--font-mono);
-}
-
 .topbar__action-count {
   font-family: var(--font-mono);
   font-size: var(--step-0);
@@ -454,12 +461,12 @@ a {
 .rail__readiness {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border: var(--hairline);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  margin-bottom: var(--space-4);
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--app-bg);
+  margin-bottom: var(--space-3);
 }
 
 .rail__readiness-text {
@@ -481,10 +488,7 @@ a {
 }
 
 .rail__head {
-  font-size: var(--step-1);
-  letter-spacing: 0.08em;
-  color: var(--open);
-  margin: 0 0 var(--space-2) 8px;
+  display: none;
 }
 
 .rail__head-count {
@@ -582,6 +586,7 @@ a {
 .rail__twisty--empty {
   cursor: default;
   text-align: center;
+  visibility: hidden;
 }
 
 .rail__item--flush {
@@ -618,7 +623,7 @@ a {
 
 .doc__inner {
   position: relative;
-  max-width: 60em;
+  max-width: 52em;
   margin-inline: auto;
   min-height: 100%;
   padding: var(--space-5) var(--space-6) var(--space-7);
@@ -687,21 +692,54 @@ a {
 
 .chapter__title {
   font-family: var(--font-doc);
-  font-size: var(--step-6);
+  font-size: var(--step-5);
   line-height: 1.35;
   margin: 0;
   letter-spacing: 0.01em;
 }
 
+.chapter__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.chapter__title-row .chapter__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chapter__purpose {
   margin: var(--space-2) 0 0;
   max-width: 68ch;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .drawer__history {
   border-bottom: var(--hairline);
   padding-bottom: var(--space-3);
   margin-bottom: var(--space-3);
+}
+
+details.drawer__history > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.drawer__history > summary::before {
+  content: "▸ ";
+  font-size: var(--step-0);
+  color: var(--empty);
+}
+
+details.drawer__history[open] > summary::before {
+  content: "▾ ";
 }
 
 .drawer__subtitle {
@@ -732,9 +770,10 @@ a {
   align-items: center;
 }
 
+/* 跨轮入口（2026-10-14）：从独立一行收进 Round 标题行右端；展开是下拉浮层。 */
 .rounds {
-  border-bottom: var(--hairline);
-  padding: var(--space-2) var(--space-4);
+  position: relative;
+  flex: none;
 }
 
 .rounds__toggle {
@@ -744,14 +783,30 @@ a {
   cursor: pointer;
   color: var(--open);
   font-size: var(--step-1);
+  white-space: nowrap;
+}
+
+.rounds__toggle:hover {
+  color: var(--primary-dark);
 }
 
 .rounds__list {
   list-style: none;
-  margin: var(--space-2) 0 0;
-  padding: 0;
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-2));
+  z-index: 20;
+  width: min(420px, calc(100vw - 2 * var(--space-4)));
+  max-height: 50vh;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
   display: grid;
   gap: var(--space-1);
+  background: var(--surface);
+  border: var(--hairline);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--ink) 10%, transparent);
 }
 
 .rounds__row {
@@ -784,7 +839,7 @@ a {
 .search {
   position: relative;
   flex: 1;
-  max-width: 460px;
+  max-width: 300px;
 }
 
 .search__input {
@@ -949,7 +1004,7 @@ a {
   border: var(--hairline);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-3) var(--space-4);
   margin-top: var(--space-4);
   scroll-margin-top: var(--space-6);
 }
@@ -1514,11 +1569,6 @@ a {
   margin: 0;
 }
 
-.loop__hint {
-  font-size: var(--step-1);
-  color: var(--open);
-}
-
 .loop__group {
   margin-top: var(--space-4);
 }
@@ -1540,35 +1590,39 @@ a {
   background: var(--border);
 }
 
+/* 状态行（2026-10-14 轻量化）：标题行下的一条素字，不再是边框盒。 */
 .statusline {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  margin: 0 var(--space-4) var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: var(--hairline);
-  border-radius: var(--radius-md);
-  background: var(--surface);
   font-size: var(--step-1);
+  color: var(--open);
+  line-height: 1.5;
 }
 
 .statusline__step {
-  font-weight: 600;
+  color: var(--ink);
 }
 
 .statusline__wait {
   color: var(--open);
 }
 
+.statusline__meta {
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
+  color: var(--open);
+}
+
 .statusline__fail {
   flex-basis: 100%;
   color: var(--conflict);
-  font-size: var(--step-2);
-  line-height: 1.6;
+  font-size: var(--step-1);
+  line-height: 1.5;
 }
 
-/* 闭环区：Round 头 + 竖排步骤栏 + 内容流并排 */
+/* 闭环区：Round 头（标题行 + 状态行） + 内容流 */
 .loop__round {
   display: flex;
   flex-direction: column;
@@ -1578,110 +1632,26 @@ a {
 
 .loop__round-head {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
+  flex-direction: column;
+  gap: 2px;
   padding: var(--space-3) var(--space-4) var(--space-2);
   min-width: 0;
 }
 
-.loop__round-title {
-  font-family: var(--font-doc);
-  font-size: var(--step-5);
-  margin: 0;
-  line-height: 1.3;
-  white-space: nowrap;
-}
-
-.loop__split {
-  display: grid;
-  grid-template-columns: 104px minmax(0, 1fr);
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-/* ── 本轮执行进度（竖排 rail）────────────────────────────── */
-.steps {
-  list-style: none;
-  margin: 0;
-  padding: var(--space-2) var(--space-2) var(--space-4) var(--space-3);
+.loop__headrow {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.step {
-  position: relative;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: var(--step-1);
-  color: var(--open);
-}
-
-/* 步骤之间的连线（对齐参考图的时间线样式） */
-.step::before {
-  content: "";
-  position: absolute;
-  left: 9.5px;
-  top: 24px;
-  bottom: -16px;
-  width: 1px;
-  background: var(--border);
-}
-
-.step:last-child::before {
-  display: none;
-}
-
-.step__dot {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--open);
-  font-size: var(--step-0);
-  font-family: var(--font-mono);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-}
-
-.step__body {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: baseline;
+  gap: var(--space-2);
   min-width: 0;
 }
 
-.step--done {
-  color: var(--open);
-}
-
-.step--done .step__dot {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--on-primary);
-}
-
-.step--active {
-  color: var(--ink);
-}
-
-.step--active .step__dot {
-  background: var(--surface);
-  border-color: var(--primary);
-  color: var(--primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
-}
-
-.step__detail {
-  font-family: var(--font-mono);
-  font-size: var(--step-0);
-  color: var(--open);
+.loop__round-title {
+  font-family: var(--font-ui);
+  font-size: var(--step-4);
+  font-weight: 600;
+  margin: 0;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
 .timeline {
@@ -1690,9 +1660,10 @@ a {
   padding: 0;
 }
 
+/* 节点（2026-10-14 轻量化）：去编号圆，只留发丝竖线；缩进收到 26px。 */
 .node {
   position: relative;
-  padding: 0 0 var(--space-5) 34px;
+  padding: 0 0 var(--space-5) 26px;
 }
 
 .node:last-child {
@@ -1702,8 +1673,8 @@ a {
 .node::before {
   content: "";
   position: absolute;
-  left: 9px;
-  top: 22px;
+  left: 8px;
+  top: 20px;
   bottom: 0;
   width: 1px;
   background: var(--border);
@@ -1711,22 +1682,6 @@ a {
 
 .node:last-child::before {
   display: none;
-}
-
-.node__index {
-  position: absolute;
-  left: 0;
-  top: 1px;
-  width: 19px;
-  height: 19px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--open);
-  font-size: var(--step-0);
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .node__head {
@@ -1753,6 +1708,32 @@ a {
   font-size: var(--step-0);
   color: var(--open);
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 「你 · 答过 N 批」：答案直接可读（不折进 details）；批与批之间一条细线 */
+.answer-batch + .answer-batch {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: var(--hairline);
+}
+
+.answer-batch__head {
+  margin: 0 0 var(--space-1);
+  font-family: var(--font-mono);
+}
+
+.answer-batch__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.answer {
+  font-size: var(--step-2);
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
@@ -1825,6 +1806,34 @@ a {
   font-size: var(--step-1);
   color: var(--open);
   line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 席位意见默认收起：标题行就是计数行 */
+.packet__opinions {
+  margin-top: var(--space-2);
+}
+
+.packet__opinions > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.packet__opinions > summary::before {
+  content: "▸ ";
+  font-size: var(--step-0);
+  color: var(--empty);
+}
+
+.packet__opinions[open] > summary::before {
+  content: "▾ ";
+}
+
+.packet__opinions > summary::-webkit-details-marker {
+  display: none;
 }
 
 .packet__counts {
@@ -1885,34 +1894,9 @@ a {
   line-height: 1.6;
 }
 
-.foot {
-  grid-area: foot;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 400px;
-  border-top: var(--hairline);
-  background: var(--surface);
-  min-width: 0;
-}
-
-.foot__left {
-  max-width: 60em;
-  width: 100%;
-  margin-inline: auto;
-  padding: var(--space-3) var(--space-6) var(--space-4);
-  min-width: 0;
-}
-
-.foot__right {
-  border-left: var(--hairline);
-  padding: var(--space-3) var(--space-4) var(--space-4);
-  display: flex;
-  align-items: flex-start;
-  min-width: 0;
-}
-
 .input__box {
   width: 100%;
-  min-height: 72px;
+  min-height: 56px;
   max-height: 220px;
   resize: vertical;
   padding: var(--space-3) var(--space-4);
@@ -2003,6 +1987,31 @@ a {
   font-size: var(--step-1);
 }
 
+/* 流内动作（2026-10-14）：不是按钮，是行尾的静音链；收下一类走主色。
+   与 `.targetlink`（跳文档的去处，点线下划）不同物：一个触发动作，一个换位置。 */
+.btn--link {
+  border: 0;
+  padding: 2px 0;
+  background: none;
+  font: inherit;
+  font-size: var(--step-1);
+  color: var(--open);
+  cursor: pointer;
+}
+
+.btn--link:hover:not(:disabled) {
+  color: var(--primary-dark);
+}
+
+.btn--link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn--link--primary {
+  color: var(--primary);
+}
+
 .drawer {
   position: absolute;
   inset: 0;
@@ -2016,6 +2025,39 @@ a {
   animation: slide-in var(--dur-mid) var(--ease-out) both;
 }
 
+/* 右列 Codex 化：loop 直属抽屉（问卷/草案/模拟/评测）不再悬浮盖住线程，
+   而是长在流里（DOM 顺序即流顺序，flex 把线程区自动压小）。
+   overlay-slot 那四个（版本/记忆/材料库/调研确认）不在 .loop 下，保持悬浮。 */
+.loop > .drawer {
+  position: static;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 62%;
+  border-top: var(--hairline);
+  border-left: 0;
+  box-shadow: none;
+  animation: none;
+}
+
+/* 右底 composer（旧 BottomStrip 整块搬入）：常驻 loop 底，只在 round 页签渲染 */
+.loop__composer {
+  flex: none;
+  border-top: var(--hairline);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.loop__composer .input__box {
+  min-height: 48px;
+}
+
+@media (max-width: 480px) {
+  .loop__composer {
+    padding: var(--space-2) var(--space-3);
+  }
+}
+
 .drawer__head {
   display: flex;
   align-items: center;
@@ -2025,8 +2067,8 @@ a {
 }
 
 .drawer__title {
-  font-family: var(--font-doc);
-  font-size: var(--step-4);
+  font-family: var(--font-ui);
+  font-size: var(--step-3);
   font-weight: 600;
   margin: 0;
 }
@@ -2072,6 +2114,73 @@ a {
   background: var(--surface);
 }
 
+.drawer__foot-sub {
+  margin-top: var(--space-2);
+}
+
+/* 草案"它提议的"组默认折叠：summary 就是组标题行 */
+details.loop__group > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.loop__group > summary::before {
+  content: "▸ ";
+  font-size: var(--step-0);
+  color: var(--empty);
+}
+
+details.loop__group[open] > summary::before {
+  content: "▾ ";
+}
+
+/* 提案/记忆的"为什么"默认收起 */
+.prop__rationalebox {
+  flex-basis: 100%;
+  margin-top: var(--space-1);
+}
+
+.prop__rationalebox > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.prop__rationalebox > summary::before {
+  content: "▸";
+  font-size: var(--step-0);
+  color: var(--empty);
+}
+
+.prop__rationalebox[open] > summary::before {
+  content: "▾";
+}
+
+.prop__rationalebox .prop__rationale {
+  margin-top: var(--space-1);
+}
+
+/* 去处链接（问卷题头 / 草案提案）：点它跳到文档那一条。
+   轻链样式——与文档区页内锚点同一套语言，不做成 pill（pill 是编号的）。 */
+.targetlink {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--step-1);
+  color: var(--open);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  text-align: left;
+}
+
+.targetlink:hover {
+  color: var(--primary-dark);
+}
+
 .pane-card {
   position: absolute;
   inset: 0;
@@ -2101,6 +2210,10 @@ a {
   align-items: center;
   gap: var(--space-2);
   margin-bottom: 3px;
+}
+
+.claim__head .chips {
+  justify-content: flex-start;
 }
 
 .claim__text {
@@ -2251,6 +2364,29 @@ a {
   margin-top: 2px;
 }
 
+/* 讨论区"请谁"：四张小卡压紧，标题与说明各一行 */
+.seats--compact {
+  gap: 6px;
+  margin-top: var(--space-3);
+}
+
+.seats--compact .seat {
+  padding: 8px 0;
+  border: 0;
+  border-radius: 0;
+  border-bottom: var(--hairline);
+  background: none;
+}
+
+.seats--compact .seat--on {
+  background: none;
+}
+
+.seats--compact .seat--on .seat__title {
+  color: var(--primary);
+  font-weight: 600;
+}
+
 .q + .q {
   margin-top: var(--space-5);
   padding-top: var(--space-4);
@@ -2281,7 +2417,41 @@ a {
   font-size: var(--step-2);
   color: var(--open);
   line-height: 1.65;
-  margin: 0 0 var(--space-3);
+  margin: var(--space-1) 0 0;
+}
+
+/* "为什么问"默认收起：题面只留一行展开入口 */
+.q__whybox {
+  margin: 0 0 var(--space-2);
+}
+
+.q__whybox > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 折叠行统一：chevron 在行尾（Trae 式），展开时转向下 */
+.q__whybox > summary::before {
+  content: none;
+}
+
+.q__whybox > summary::after {
+  content: "›";
+  font-size: var(--step-1);
+  color: var(--empty);
+  transition: transform var(--dur-micro) var(--ease-out);
+}
+
+.q__whybox[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+/* pending stub 卡（"正在交回…"）：唯一的在跑指示器（后端为每个在跑席位合成 stub） */
+.packet--pending .packet__state--running {
+  animation: pulse 1.2s ease-in-out infinite;
 }
 
 .q__meta {
@@ -2559,7 +2729,11 @@ a {
 
 @media (max-width: 1240px) {
   .shell {
-    grid-template-columns: 176px minmax(0, 1fr) 340px;
+    grid-template-columns: 152px minmax(0, 1fr) 425px;
+  }
+
+  .shell--nodoc {
+    grid-template-columns: 152px minmax(0, 1fr);
   }
 
   .conn__label {
@@ -2575,13 +2749,50 @@ a {
 @media (max-width: 980px) {
   .shell {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 48px auto minmax(0, 1fr) minmax(280px, 45vh) auto;
+    grid-template-rows: 48px auto minmax(0, 1fr) minmax(320px, 62vh);
     grid-template-areas:
       "top"
       "nav"
       "doc"
-      "loop"
-      "foot";
+      "loop";
+  }
+
+  .shell--nodoc {
+    grid-template-rows: 48px auto minmax(0, 1fr);
+    grid-template-areas:
+      "top"
+      "nav"
+      "loop";
+  }
+
+  /* 窄屏 loop 矮：composer 收紧，把高度让给线程 */
+  .loop__composer {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .loop__composer .input__box {
+    min-height: 40px;
+  }
+
+  /* 窄屏堆叠时不再做内部三段 flex 切分：loop 整块滚，composer 吸底。
+     固定高度 + 内部多层收缩在小视口下必然有人漫出来（实测），正常流则不可能重叠。 */
+  .loop {
+    overflow: auto;
+  }
+
+  .loop__round {
+    flex: none;
+  }
+
+  .loop__scroll {
+    flex: none;
+    overflow: visible;
+  }
+
+  .loop__composer {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
   }
 
   .rail {
@@ -2634,15 +2845,6 @@ a {
   }
 
   .loop {
-    border-left: 0;
-    border-top: var(--hairline);
-  }
-
-  .foot {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .foot__right {
     border-left: 0;
     border-top: var(--hairline);
   }

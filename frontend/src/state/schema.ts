@@ -97,3 +97,13 @@ export function sectionPurpose(
 ): string | null {
   return schema?.sections.find((item) => item.section_id === sectionId)?.purpose ?? null;
 }
+
+/** 章节槽的中文名（如 s8.performance → 性能）；认不出返回 null，由调用方回落原值。 */
+export function slotTitle(
+  sectionId: string,
+  field: string,
+  schema: SchemaView | null = current,
+): string | null {
+  const section = schema?.sections.find((item) => item.section_id === sectionId);
+  return section?.slots.find((slot) => slot.name === field)?.title ?? null;
+}

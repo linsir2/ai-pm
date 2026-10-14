@@ -8,6 +8,7 @@ import type {
   CandidateView,
   DocumentView,
   ExplorationView,
+  MaterialSummaryView,
   RoundHeadView,
   RoundView,
   SchemaView,
@@ -16,11 +17,12 @@ import type {
 import type { DiscussionAnchor } from "../state/discussions";
 import { discussionTurnLimit, roleOptions } from "../state/discussions";
 import { inboxCount } from "../state/inbox";
-import { roundOrdinal } from "../state/progress";
+import { roundElapsed, roundOrdinal } from "../state/progress";
 import type { RoundDrafts } from "../state/useRoundDrafts";
 import { DiscussionTray } from "./DiscussionTray";
 import { DraftDrawer } from "./DraftDrawer";
 import { InboxTray } from "./InboxTray";
+import { LoopComposer } from "./LoopComposer";
 import { LoopPane } from "./LoopPane";
 import { OpeningCard } from "./OpeningCard";
 import { QuestionnaireDrawer } from "./QuestionnaireDrawer";
@@ -81,6 +83,19 @@ export function LoopColumn({
   onDismissDiscussionCard,
   onCloseDiscussion,
   onDiscussQuestion,
+  onOpenTarget,
+  composerProjectId,
+  composerMode,
+  composerPending,
+  composerValue,
+  composerOnChange,
+  composerOnStartRound,
+  composerPendingSeedCount = 0,
+  composerMaterials = [],
+  composerOnMaterialUploaded,
+  composerOnMaterialRemove,
+  composerLibraryCount = 0,
+  composerOnOpenLibrary,
 }: {
   round: RoundView | null;
   doc: DocumentView | null;
@@ -149,6 +164,21 @@ export function LoopColumn({
   onCloseDiscussion: (threadId: string) => void;
   /** 问卷题行上的「聊聊」：只把锚点交上去（不直接发请求）。 */
   onDiscussQuestion: (anchor: DiscussionAnchor) => void;
+  /** 问卷/草案里去处的跳转（到文档那一条）：不传就不出可点去处。 */
+  onOpenTarget?: (label: string) => void;
+  /** 右底 composer（旧 BottomStrip 整块搬入）：与旧 foot 收到的 mode 同一个值。 */
+  composerProjectId: string;
+  composerMode: AwaitingMode;
+  composerPending: string | null;
+  composerValue: string;
+  composerOnChange: (text: string) => void;
+  composerOnStartRound: () => void;
+  composerPendingSeedCount?: number;
+  composerMaterials?: MaterialSummaryView[];
+  composerOnMaterialUploaded?: (material: MaterialSummaryView) => void;
+  composerOnMaterialRemove?: (materialId: string) => void;
+  composerLibraryCount?: number;
+  composerOnOpenLibrary?: () => void;
 }) {
   const showTabs = mode !== "opening";
   const onTray = tab === "tray" && showTabs;
@@ -159,6 +189,14 @@ export function LoopColumn({
   const drawerOpen =
     history == null &&
     !drafts.collapsed && (mode === "questionnaire" || mode === "draft") && round !== null;
+  // 跨轮入口（"这个项目走过 N 轮"）：不进独立一行，进 LoopPane/OpeningCard 头部右端。
+  const historyNav = (
+    <RoundHistory
+      rounds={rounds}
+      currentRoundId={round?.round_id ?? null}
+      onView={onViewRound}
+    />
+  );
 
   return (
     <div className="loop">
@@ -236,11 +274,6 @@ export function LoopColumn({
         />
       ) : (
         <>
-          <RoundHistory
-            rounds={rounds}
-            currentRoundId={round?.round_id ?? null}
-            onView={onViewRound}
-          />
           {history != null && (
             <div className="loop__history">
               <span className="muted small">
@@ -259,6 +292,7 @@ export function LoopColumn({
               seats={drafts.seats}
               webQueries={drafts.webQueries}
               pending={pending === "opening"}
+              historyNav={historyNav}
               onChangeClaim={drafts.changeClaim}
               onToggleSeat={drafts.toggleSeat}
               onToggleWebQuery={drafts.toggleWebQuery}
@@ -279,6 +313,8 @@ export function LoopColumn({
               pending={pending}
               limits={schema?.limits ?? null}
               ordinal={roundOrdinal(rounds, round.round_id)}
+              elapsed={roundElapsed(rounds, round.round_id, Date.now())}
+              historyNav={historyNav}
               onRetry={onRetry}
               onAbandon={onAbandon}
               onOpenQuestionnaire={() => drafts.setCollapsed(false)}
@@ -296,6 +332,7 @@ export function LoopColumn({
               onSubmit={onSubmitAnswers}
               onSkipAll={onSkipAll}
               onDiscuss={onDiscussQuestion}
+              onOpenTarget={onOpenTarget}
               onCollapse={() => drafts.setCollapsed(true)}
             />
           )}
@@ -314,6 +351,7 @@ export function LoopColumn({
               onDig={onDig}
               onSimInquiry={onSimInquiry}
               onSimReview={onSimReview}
+              onOpenTarget={onOpenTarget}
               onCollapse={() => drafts.setCollapsed(true)}
             />
           )}
@@ -339,6 +377,25 @@ export function LoopColumn({
               pending={reviewPending}
               onRun={onRunReview}
               onClose={onCloseReview}
+            />
+          )}
+
+          {onRound && mode !== "opening" && (
+            <LoopComposer
+              projectId={composerProjectId}
+              composerMode={composerMode}
+              pending={composerPending}
+              drawerOpen={drawerOpen}
+              value={composerValue}
+              onChange={composerOnChange}
+              onStartRound={composerOnStartRound}
+              pendingSeedCount={composerPendingSeedCount}
+              materials={composerMaterials}
+              onMaterialUploaded={composerOnMaterialUploaded}
+              onMaterialRemove={composerOnMaterialRemove}
+              libraryCount={composerLibraryCount}
+              onOpenLibrary={composerOnOpenLibrary}
+              onOpenDrawer={() => drafts.setCollapsed(false)}
             />
           )}
         </>
