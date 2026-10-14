@@ -38,7 +38,7 @@ export interface State {
 
 export type Action =
   | { type: "loaded"; workspace: WorkspaceView }
-  | { type: "round"; round: RoundView }
+  | { type: "round"; round: RoundView; expectRoundId?: string }
   | { type: "document"; document: DocumentView }
   | { type: "event"; event: WorkspaceEvent }
   | { type: "connection"; state: Connection["state"] }
@@ -83,7 +83,15 @@ export function reduce(state: State, action: Action): State {
         error: null,
       };
 
-    case "round":
+    case "round": {
+      // 迟到回包不许倒灌：带期望来的，只落在"现在看的还是当初那一轮"时。
+      // 比对必须在这里——reducer 永远看到最新 state，hook 闭包/ref 都会过期。
+      if (
+        action.expectRoundId !== undefined &&
+        state.round?.round_id !== action.expectRoundId
+      ) {
+        return state;
+      }
       return {
         ...state,
         round: action.round,
@@ -91,6 +99,7 @@ export function reduce(state: State, action: Action): State {
         roundStale: false,
         error: null,
       };
+    }
 
     case "document":
       return { ...state, document: action.document, documentStale: false };

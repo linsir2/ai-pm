@@ -330,3 +330,31 @@ async def test_the_analyzers_reading_reaches_the_round():
     stored = harness.rounds.get(RoundId(round_id))
 
     assert stored.analysis_basis.startswith("读了 s1–s13 全文")
+
+
+async def test_starting_a_round_with_another_projects_material_is_a_404():
+    """串项目带料 = 读别人的东西：按"资源不在"处理（404），且不建轮、不记账。"""
+
+    from pmstudio.application.errors import UnknownMaterial
+    from pmstudio.domain.shared.ids import ProjectId
+
+    harness = Harness(replies={"claims": claims_reply()})
+    harness.seed_project()
+    # 别家的那份直接用解析器读一份、存进别的项目（不走上传用例：那要求项目先存在）
+    draft = harness.parser.parse(
+        filename="别家的.md", media_type="text/markdown", data="# 别家".encode()
+    )
+    foreign = harness.materials.put(
+        project_id=ProjectId("p2"),
+        parsed=draft,
+        sha256="f" * 64,
+        content="# 别家".encode(),
+        now=harness.clock.now(),
+    )
+
+    with pytest.raises(UnknownMaterial):
+        await harness.start_round().create(
+            project_id=PROJECT, user_input=INPUT, material_ids=[foreign.material_id]
+        )
+
+    assert harness.rounds.all_rounds() == ()  # pick 在事务外失败，零写入

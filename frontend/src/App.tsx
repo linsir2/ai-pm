@@ -88,6 +88,24 @@ export default function App() {
     window.localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
+  // 切项目：把**属于某个项目**的 UI 态清干净。数据侧由 `useWorkspaceData.selectProject`
+  // 负责（它清自己那份 useState）；这里的开关与锚点活在 App，得自己清——
+  // 尤其是 `researchAnchor` / `discussionAnchor`：它们带着上一个项目的原文，
+  // 不清就会拿旧文字在新项目里发起动作。`theme` / `listing` / `docOpen` 是全局或布局偏好，不动。
+  useEffect(() => {
+    setVersionsOpen(false);
+    setLibraryOpen(false);
+    setReadinessOpen(false);
+    setMemoryOpen(false);
+    setResearchAnchor(null);
+    setDiscussionAnchor(null);
+    setLoopTab("round");
+    setSimOpen(false);
+    setReviewOpen(false);
+    setActiveSection("s1");
+    setPendingScroll(null);
+  }, [state.projectId]);
+
   // 从功能子树点进来：先切到 s5，等它渲染出来再滚过去。
   useEffect(() => {
     if (pendingScroll === null) return;
@@ -127,6 +145,17 @@ export default function App() {
       })();
     },
     [data, doc, shownRound, state.projectId],
+  );
+
+  // 建项目成功就进工作区（createProject 成功返回 summary，失败返回 null）。
+  const enterCreated = useCallback(
+    (title: string) =>
+      void data
+        .createProject(title)
+        .then((summary) => {
+          if (summary !== null) setListing(false);
+        }),
+    [data],
   );
 
   /** 点树上的一个节点：切到它所在的那一章，再滚到它。 */
@@ -269,7 +298,7 @@ export default function App() {
               setListing(false);
               data.selectProject(projectId);
             }}
-            onCreate={(title) => void data.createProject(title)}
+            onCreate={enterCreated}
             pending={data.pending !== null}
             error={data.bootError}
             booting={data.booting}
@@ -299,7 +328,7 @@ export default function App() {
               <Skeleton lines={6} label="正在读项目列表" />
             ) : (
               <Onboarding
-                onCreate={(title) => void data.createProject(title)}
+                onCreate={enterCreated}
                 error={data.bootError}
                 pending={data.pending !== null}
               />

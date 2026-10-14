@@ -23,6 +23,32 @@ describe("reduce", () => {
     expect(state.round?.waiting_on).toBe("draft_card");
   });
 
+  it("带 expectRoundId 的 round 回包：期望命中才落（迟到但对得上）", () => {
+    const state = reduce(
+      { ...initialState, projectId: "p1", round },
+      {
+        type: "round",
+        round: { ...round, waiting_on: "draft_card" } as never,
+        expectRoundId: "r1",
+      },
+    );
+    expect(state.round?.waiting_on).toBe("draft_card");
+  });
+
+  it("带 expectRoundId 的 round 回包：新轮已落地时旧回包丢弃（不倒灌）", () => {
+    const r2 = { ...round, round_id: "r2", waiting_on: "questionnaire" };
+    const state = reduce(
+      { ...initialState, projectId: "p1", round: r2 as never },
+      {
+        type: "round",
+        round: { ...round, waiting_on: "draft_card" } as never,
+        expectRoundId: "r1",
+      },
+    );
+    expect(state.round?.round_id).toBe("r2");
+    expect(state.round?.waiting_on).toBe("questionnaire");
+  });
+
   it("packet.emitted 只把该席位状态改成 completed 并置 roundStale（opinions 真源在 GET /round）", () => {
     const base = reduce(
       { ...initialState, projectId: "p1" },

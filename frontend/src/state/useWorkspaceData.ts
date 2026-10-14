@@ -97,32 +97,69 @@ export function useWorkspaceData() {
 
   const loadWorkspace = useCallback(async (projectId: string) => {
     const workspace = await api.workspace(projectId);
+    // 归属 guard：快速切换时先选的后返回，晚到回包必须丢弃——否则 URL 是 B、
+    // 显示是 A、写走的还是 B（写读 `selected.current`）。`selected` 是同步权威，
+    // `state.projectId` 在 reset 窗口是 null 会误杀，所以比它。
+    if (selected.current !== projectId) return workspace;
     dispatch({ type: "loaded", workspace });
+    // 四个只读投影各管各的归属：晚到的不许覆盖新项目（也不许清空它——新 load 拥有 state）。
+    const owned = <T,>(apply: (value: T) => void) =>
+      (value: T) => {
+        if (selected.current === projectId) apply(value);
+      };
+    const ownedClear = (clear: () => void) => () => {
+      if (selected.current === projectId) clear();
+    };
     // 轮次列表是**另一个只读投影**（不是工作区的一部分）；它失败不该把工作区打崩
     void api
       .rounds(projectId)
-      .then(setRounds)
-      .catch(() => setRounds([]));
+      .then(owned(setRounds))
+      .catch(ownedClear(() => setRounds([])));
     // 材料库同理：它是另一个只读投影，失败不该把工作区打崩
     void api
       .materials(projectId)
-      .then(setMaterials)
-      .catch(() => setMaterials([]));
+      .then(owned(setMaterials))
+      .catch(ownedClear(() => setMaterials([])));
     // 探索列表（过目台）同理：独立 catch，失败置空不崩工作区
     void api
       .explorations(projectId)
-      .then(setExplorations)
-      .catch(() => setExplorations([]));
+      .then(owned(setExplorations))
+      .catch(ownedClear(() => setExplorations([])));
     // 讨论线程列表（讨论 tab）同理
     void api
       .discussions(projectId)
-      .then(setDiscussions)
-      .catch(() => setDiscussions([]));
+      .then(owned(setDiscussions))
+      .catch(ownedClear(() => setDiscussions([])));
     return workspace;
   }, []);
 
   const refreshDocument = useCallback(async (projectId: string) => {
     dispatch({ type: "document", document: await api.document(projectId) });
+  }, []);
+
+  /**
+   * 清掉**属于某个项目**的本地状态：切项目 / 新建项目时调。
+   *
+   * 为什么必须显式清：这些是 `useState`，不在 reducer 里，`reset` 管不到它们。
+   * 不清的后果是**串数据**——上个项目没发出去的输入、待带的种子/材料、搜索词、
+   * 只看历史轮，会跟着切到新项目（起轮甚至会把旧项目的种子一起发出去）。
+   *
+   * 轮次 / 材料 / 探索 / 讨论四个列表也一并清：正常切成功后 `loadWorkspace` 会覆盖，
+   * 但它**失败时**（网络断）不会，留着就是上一个项目的数据假扮成这一个的。
+   */
+  const clearProjectScoped = useCallback(() => {
+    setSearchQuery("");
+    setSearchResults(null);
+    setSearchPending(false);
+    setPendingMaterials([]);
+    setPendingSeeds([]);
+    setRoundInput("");
+    setHistoryRound(null);
+    setBootError(null);
+    setRounds([]);
+    setMaterials([]);
+    setExplorations([]);
+    setDiscussions([]);
   }, []);
 
   const selectProject = useCallback(
@@ -132,12 +169,13 @@ export function useWorkspaceData() {
       url.searchParams.set(PROJECT_PARAM, projectId);
       window.history.replaceState(null, "", url);
       dispatch({ type: "reset" });
+      clearProjectScoped();
       setBooting(true);
       void loadWorkspace(projectId)
         .catch((error: unknown) => setBootError(describe(error)))
         .finally(() => setBooting(false));
     },
-    [loadWorkspace],
+    [clearProjectScoped, loadWorkspace],
   );
 
   // 启动：至少要有项目才有工作区；没有就停在"建一个项目"那一步。
@@ -253,10 +291,19 @@ export function useWorkspaceData() {
   useEffect(() => {
     const round = state.round;
     if (round === null || !state.roundStale) return;
+    const projectId = state.projectId;
     void api
       .getRound(round.round_id)
-      .then((fresh) => dispatch({ type: "round", round: fresh }))
-      .catch((error: unknown) => dispatch({ type: "error", message: describe(error) }));
+      .then((fresh) => {
+        // 同 loadWorkspace 的归属 guard：切走后的晚到回包不许盖掉新项目。
+        if (selected.current !== projectId) return;
+        // 同项目内新轮已落地时旧回包也不许倒灌：期望写在动作里，reducer 拿最新 state 比。
+        dispatch({ type: "round", round: fresh, expectRoundId: round.round_id });
+      })
+      .catch((error: unknown) => {
+        if (selected.current !== projectId) return;
+        dispatch({ type: "error", message: describe(error) });
+      });
   }, [state.roundStale, state.round]);
 
   // `exploration.updated` 只置 stale（事件 payload 只有 id 与状态）：列表真身从这里读回来。
@@ -266,9 +313,17 @@ export function useWorkspaceData() {
     if (projectId === null || !state.explorationStale) return;
     void api
       .explorations(projectId)
-      .then(setExplorations)
-      .catch((error: unknown) => dispatch({ type: "error", message: describe(error) }))
-      .finally(() => dispatch({ type: "explorations" }));
+      .then((list) => {
+        if (selected.current === projectId) setExplorations(list);
+      })
+      .catch((error: unknown) => {
+        if (selected.current === projectId) {
+          dispatch({ type: "error", message: describe(error) });
+        }
+      })
+      .finally(() => {
+        if (selected.current === projectId) dispatch({ type: "explorations" });
+      });
   }, [state.explorationStale, state.projectId]);
 
   // `discussion.updated` 同样只置 stale：线程真身从这里读回来，读完清信号。
@@ -277,9 +332,17 @@ export function useWorkspaceData() {
     if (projectId === null || !state.discussionStale) return;
     void api
       .discussions(projectId)
-      .then(setDiscussions)
-      .catch((error: unknown) => dispatch({ type: "error", message: describe(error) }))
-      .finally(() => dispatch({ type: "discussions" }));
+      .then((list) => {
+        if (selected.current === projectId) setDiscussions(list);
+      })
+      .catch((error: unknown) => {
+        if (selected.current === projectId) {
+          dispatch({ type: "error", message: describe(error) });
+        }
+      })
+      .finally(() => {
+        if (selected.current === projectId) dispatch({ type: "discussions" });
+      });
   }, [state.discussionStale, state.projectId]);
 
   /** 跑一个长时间动作：串行、出错只提示、成功就把新的这一轮换进状态。 */
@@ -300,9 +363,17 @@ export function useWorkspaceData() {
     [pending],
   );
 
+  /**
+   * 建项目：成功返回新 summary（调用方凭它决定进不进工作区），失败返回 null。
+   *
+   * 与 `selectProject` 同序：ref → URL → reset → clear → booting → load。
+   * 错误进 `bootError`（两处创建屏只渲染它，没有 toast 可接 `state.error`）。
+   */
   const createProject = useCallback(
-    async (title: string) => {
+    async (title: string): Promise<ProjectSummaryView | null> => {
       dispatch({ type: "error", message: null });
+      setBootError(null);
+      setBooting(true);
       try {
         const summary = await api.createProject(title);
         setProjects((list) => [summary, ...list]);
@@ -310,12 +381,18 @@ export function useWorkspaceData() {
         const url = new URL(window.location.href);
         url.searchParams.set(PROJECT_PARAM, summary.project_id);
         window.history.replaceState(null, "", url);
+        dispatch({ type: "reset" });
+        clearProjectScoped(); // 新项目从干净状态开始（同一个 hook 实例）
         await loadWorkspace(summary.project_id);
+        return summary;
       } catch (error) {
-        dispatch({ type: "error", message: describe(error) });
+        setBootError(describe(error));
+        return null;
+      } finally {
+        setBooting(false);
       }
     },
-    [loadWorkspace],
+    [clearProjectScoped, loadWorkspace],
   );
 
   /** 起轮：输入、材料与调研种子都从本地状态读（输入框已上提到这里）。 */
@@ -721,7 +798,12 @@ export function useWorkspaceData() {
     abandoning.current = true;
     dispatch({ type: "error", message: null });
     try {
-      dispatch({ type: "round", round: await api.abandonRound(roundId) });
+      // abandon 不进 run() 串行闸：带着期望发，新轮已落地时旧回包由 reducer 丢弃。
+      dispatch({
+        type: "round",
+        round: await api.abandonRound(roundId),
+        expectRoundId: roundId,
+      });
     } catch (error) {
       dispatch({ type: "error", message: describe(error) });
     } finally {

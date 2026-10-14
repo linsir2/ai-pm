@@ -397,7 +397,9 @@ class StartRound:
         seed_ids: Sequence[str] = (),
     ) -> RoundId:
         # 材料在**事务外**读（只读查询），选块是纯函数——所以下面那个事务里只有写入。
-        picked, packets = self._pick_materials(material_ids, query=user_input)
+        picked, packets = self._pick_materials(
+            material_ids, query=user_input, project_id=project_id
+        )
         # 种子同样是事务外的只读校验：必须存在、同项目、跑完了、且被收下为「下一轮输入」
         seeds = self._resolve_seeds(project_id, seed_ids)
         with self._uow:
@@ -452,7 +454,11 @@ class StartRound:
         return round_id
 
     def _pick_materials(
-        self, material_ids: Sequence[str], *, query: str
+        self,
+        material_ids: Sequence[str],
+        *,
+        query: str,
+        project_id: ProjectId,
     ) -> tuple[tuple[tuple[str, MaterialChunk], ...], dict[str, MaterialPacket]]:
         """按用户挑的 id 读材料 → 选块（`select_chunks` 是唯一决策点）。
 
@@ -467,6 +473,10 @@ class StartRound:
             packet = self._materials.get(material_id)
             if packet is None:
                 raise ShapeError(f"找不到这份材料：{material_id}", material_id=material_id)
+            if packet.project_id != str(project_id):
+                # 串项目带料 = 读别人的东西：与删/重解析同一口径，按"资源不在"404，
+                # 不按"形状错"422（`test_delete_material.py` 的跨项目用例即此语义）。
+                raise UnknownMaterial(material_id)
             packets[material_id] = packet
         picked = select_chunks(
             [packets[item] for item in dict.fromkeys(material_ids)], query=query

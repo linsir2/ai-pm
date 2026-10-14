@@ -124,6 +124,33 @@ it("拿去验证失败：探索列表原样，错误可见（不假装跑过）"
   expect(result.current.state.error).toContain("同一项目同时只允许一趟调研");
 });
 
+it("切项目把上一个项目的项目级状态清干净（输入/搜索/待带种子/历史轮）", async () => {
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+  await act(async () => {
+    result.current.selectProject("p1");
+  });
+  await act(async () => {
+    result.current.setRoundInput("上个项目没发出去的草稿");
+    result.current.setSearchQuery("上个项目的搜索词");
+  });
+  await act(async () => {
+    await result.current.keepCandidate("x-1", "H1", "seed"); // 收下为种子：进输入框 + pendingSeeds
+  });
+  expect(result.current.roundInput).toContain("运营按客户名找单");
+  expect(result.current.pendingSeeds).toEqual(["exploration:x-1#H1"]);
+
+  await act(async () => {
+    result.current.selectProject("p2");
+  });
+
+  expect(result.current.roundInput).toBe("");
+  expect(result.current.searchQuery).toBe("");
+  expect(result.current.searchResults).toBeNull();
+  expect(result.current.pendingSeeds).toEqual([]);
+  expect(result.current.pendingMaterials).toEqual([]);
+});
+
 it("起轮成功后立刻刷新轮次列表（新轮不再显示成本轮、开局时长不丢）", async () => {
   const started = {
     round_id: "r-new",

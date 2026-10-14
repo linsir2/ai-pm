@@ -100,7 +100,7 @@ class UnknownEvidenceId(ApplicationError):
 
 
 class UnknownMaterial(ApplicationError):
-    """这个项目里没有这份材料（删/重解析时给错了 id）——资源不在，404。"""
+    """这个项目里没有这份材料（删/重解析/起轮带料时给错了 id）——资源不在，404。"""
 
     def __init__(self, material_id: object) -> None:
         super().__init__(
