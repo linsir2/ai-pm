@@ -106,6 +106,10 @@ class DropSource(StrEnum):
     #: 工具这一趟的：检索失败 / 没搜到结果 / 搜到了但预算带不进去（C-2b）。
     #: 与席位意见无关，所以 `seat_id` 恒为 None——闭环区会把它单列一句。
     TOOL = "tool"
+    #: 编排层跳过的整个席位：两次都交不出可用报文，本轮不再请它（`02` §11.0.67）。
+    #: 与上面四个"条目级"不同，这是席位级的——`handle` 直接写 `seat_id`，
+    #: `packet_id` 为 None（不来自模型回包，TOOL 同例）。
+    SKIPPED = "skipped"
 
 
 def widened(target: Target) -> Target:
@@ -205,6 +209,9 @@ class Round:
         dropped: tuple[DroppedItem, ...] = (),
         abandon_reason: str | None = None,
         active_seats: tuple[str, ...] = (),
+        #: 本轮跳过的席位（`02` §11.0.67）：`pending_seats` 不再含它们，
+        #: 答后第二趟也不再请；下一轮编制照旧。
+        skipped_seats: tuple[str, ...] = (),
         deferred: tuple[Question, ...] = (),
         carried_sources: dict[str, str] | None = None,
         questionnaire_history: tuple[Questionnaire, ...] = (),
@@ -254,6 +261,7 @@ class Round:
         self._dropped = tuple(dropped)
         self._abandon_reason = abandon_reason
         self._active_seats = tuple(active_seats)
+        self._skipped_seats = tuple(skipped_seats)
         #: 轮内未决队列：本批被 5 题上限挤掉的题（下一批优先问；出草案时落 s11）
         self._deferred = tuple(deferred)
         #: 这一轮把哪些 s11 未决条目问回来了（question_id → entry_id）：答完要机械撤下它们
@@ -482,6 +490,25 @@ class Round:
         """
 
         return self._active_seats or self._seats
+
+    @property
+    def skipped_seats(self) -> tuple[str, ...]:
+        """本轮跳过的席位（`02` §11.0.67）：两次都交不出可用报文，本轮不再请。"""
+
+        return self._skipped_seats
+
+    def skip_seat(self, seat_id: str) -> None:
+        """跳过一个席位：只在席位轮里调（`RunSeatRound` 失败分支）。
+
+        幂等：崩溃重试/重复进入时第二次调用直接返回——跳过是事实记录，
+        不是计数（`note_dropped` 的留痕追加语义不受影响，那是另一条）。
+        """
+
+        self._require_step(Step.SEATS_RUNNING)
+        if seat_id not in self.active_seats:
+            raise UnknownSeat(seat_id=seat_id)
+        if seat_id not in self._skipped_seats:
+            self._skipped_seats = self._skipped_seats + (seat_id,)
 
     def abandon(self, reason: str) -> None:
         """放弃这一轮：幂等、终点，**只记第一次**的原因。
@@ -724,10 +751,14 @@ class Round:
 
     @property
     def pending_seats(self) -> tuple[str, ...]:
-        """这一轮还没交回意见的席位。崩了重进只补这些，不重跑已交回的（计划 §3.11）。"""
+        """这一轮还没交回意见的席位。崩了重进只补这些，不重跑已交回的（计划 §3.11）。
+        跳过的也不补：`skip_seat` 是本轮内的永久决定（`02` §11.0.67）。"""
 
         done = {review.seat_id for review in self.current_reviews}
-        return tuple(seat for seat in self.active_seats if seat not in done)
+        skipped = set(self._skipped_seats)
+        return tuple(
+            seat for seat in self.active_seats if seat not in done and seat not in skipped
+        )
 
     def revise_claims(self, claims: tuple[Claim, ...] | list[Claim]) -> None:
         """开场卡纠正：只改标签 / 去处 / 假设 / 决策者，不改文本、原话片段与编号。"""

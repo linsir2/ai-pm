@@ -568,6 +568,8 @@ def round_to_payload(round_: Round) -> dict:
         "seats": list(round_.seats),
         # 这一趟实际跑的名单（缩编结果）；老行没有这个键，读回落回 seats
         "active_seats": list(round_.active_seats),
+        # 本轮跳过的席位（§11.0.67）；老行没有这个键 → 读侧回落为空
+        "skipped_seats": list(round_.skipped_seats),
         "nominated_seats": [
             {"seat_id": item.seat_id, "why": item.why} for item in round_.nominated_seats
         ],
@@ -692,6 +694,8 @@ def round_from_payload(
         claims=tuple(claim_from_json(item) for item in payload["claims"]),
         seats=tuple(payload["seats"]),
         active_seats=tuple(payload.get("active_seats") or payload["seats"]),
+        # 老行里没有这个键（跳过席位是后加的，§11.0.67）：空——谁都不跳过
+        skipped_seats=tuple(str(item) for item in payload.get("skipped_seats") or ()),
         # 老行里没有这个键（席位提名是后加的）：给空元组，读回来照样能跑
         nominated_seats=tuple(
             SeatNomination(seat_id=item["seat_id"], why=item["why"])

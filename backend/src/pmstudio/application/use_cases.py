@@ -979,7 +979,12 @@ class RunSeatRound:
             for seat, result in zip(pending, results, strict=True)
             if isinstance(result, BaseException)
         ]
-        if failures:
+        if failures and any(
+            not isinstance(error, (PacketParseError, DomainError))
+            for _, error in failures
+        ):
+            # 有网关类（超时 / 5xx 等）失败：那是 infra 瞬时错，不是模型交不出东西——
+            # 照旧整轮失败可重试（resume 只补没交回的席位，代价已经最小）。下面一字不动。
             reason = "；".join(
                 f"{seat.seat_id}：{getattr(error, 'message', str(error))}"
                 for seat, error in failures
@@ -1001,6 +1006,52 @@ class RunSeatRound:
                     f"席位失败：{reason}", purpose="seat_review"
                 ) from first_error
             raise first_error
+        if failures:
+            # 全是内容错（两次都交不出可用报文）：记名跳过这些席位，整轮继续
+            # （`02` §11.0.67）。网关错不在这里——上面已经整轮失败了。
+            with self._uow:
+                round_ = self._rounds.get(round_id)
+                for seat, error in failures:
+                    round_.skip_seat(seat.seat_id)
+                    round_.note_dropped(
+                        (
+                            DroppedItem(
+                                handle=seat.seat_id,
+                                reason=(
+                                    "两次尝试都未能交回可用报文，已跳过"
+                                    f"（{getattr(error, 'message', str(error))}）"
+                                ),
+                                source=DropSource.SKIPPED,
+                                seat_id=seat.seat_id,
+                                pass_index=round_.seat_round_count,
+                                packet_id=None,
+                            ),
+                        )
+                    )
+                self._round_writer.save(round_)
+            round_ = self._rounds.get(round_id)
+            if not round_.current_reviews:
+                # 本趟一个都没交回：零疑问，照旧判死（`02` §7"一条疑问都没有时"口径）。
+                reason = "；".join(
+                    f"{seat.seat_id}：{getattr(error, 'message', str(error))}"
+                    for seat, error in failures
+                )
+                fail_round(
+                    rounds=self._rounds,
+                    round_writer=self._round_writer,
+                    uow=self._uow,
+                    events=self._events,
+                    clock=self._clock,
+                    round_id=round_id,
+                    reason=f"本轮所有席位都未能交回可用意见：{reason}",
+                )
+                first_error = failures[0][1]
+                if isinstance(first_error, DomainError):
+                    raise PacketParseError(
+                        f"本轮所有席位都未能交回可用意见：{reason}",
+                        purpose="seat_review",
+                    ) from first_error
+                raise first_error
 
         # 汇合点：席位齐了才编号（按席位顺序，且幂等——重进这里不会重复占号）
         round_ = self._rounds.get(round_id)
@@ -1705,6 +1756,13 @@ class IntegrateRound:
             )
             questions = assembled.questions
             gaps = list(gaps)
+            # 跳过的席位要在这里点名（`02` §11.0.67）：`skipped_seats` 是轮级的，
+            # 后续每趟整合都带——问卷路没有 gaps 通道所以只落在草案卡，闭环区留痕折叠行两边都有。
+            for seat_id in round_.skipped_seats:
+                gaps.append(
+                    f"席位{self._catalog.by_id(seat_id).title}（{seat_id}）"
+                    "未能交回可用意见，已跳过；本轮缺少该席位的视角"
+                )
             if assembled.degrade_reason is not None:
                 gaps.append(
                     f"{assembled.degrade_reason}：{degraded} 条席位疑问未归并，"

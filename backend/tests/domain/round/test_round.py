@@ -631,3 +631,37 @@ def test_narrowed_seats_must_stay_inside_the_roster():
 
     with pytest.raises(UnknownSeat):
         round_.submit_answers(answer_skipped(), active_seats=("seat.z",))
+
+
+def test_skip_seat_excludes_it_from_pending_seats():
+    round_ = round_with_seat_list((SEAT, "seat.permissions"))
+
+    round_.skip_seat("seat.permissions")
+
+    assert round_.skipped_seats == ("seat.permissions",)
+    assert round_.pending_seats == (SEAT,)
+
+
+def test_skip_seat_unknown_seat_raises():
+    round_ = round_with_seats()
+
+    with pytest.raises(UnknownSeat):
+        round_.skip_seat("seat.mystery")
+
+
+def test_skip_seat_is_idempotent():
+    round_ = round_with_seats()
+
+    round_.skip_seat(SEAT)
+    round_.skip_seat(SEAT)
+
+    assert round_.skipped_seats == (SEAT,)
+    assert round_.pending_seats == ()
+
+
+def test_skip_seat_rejected_outside_seats_running():
+    round_ = round_with_seats()
+    round_.integrate(questionnaire=make_questionnaire())
+
+    with pytest.raises(IllegalStepTransition):
+        round_.skip_seat(SEAT)

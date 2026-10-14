@@ -637,3 +637,55 @@ async def test_a_placeholder_proposal_is_repacked_and_can_be_saved():
     assert integration_calls(harness) == 2
     assert [item.source for item in round_.dropped] == [DropSource.INTEGRATOR]
     assert not any("形状不对" in gap for gap in round_.draft.gaps)
+
+
+#: 内容字段写坏两次都救不回来的席位包（与 test_seat_round.UNPARSABLE 同形，这里自带一份，
+#: 免得 application 测试之间互相 import 回包常量）。
+TWICE_BAD_SEAT_REPLY = json.dumps(
+    {
+        "basis": "读了 s1–s13 与 E1",
+        "opinions": [
+            {
+                "local_id": "O1",
+                "form": "judgment",
+                "about": "量级与耗时的关系",
+                "claim": None,
+                "because": "单次导出的常见上限是 60 秒",
+                "evidence_refs": ["E1"],
+            }
+        ],
+    },
+    ensure_ascii=False,
+)
+
+SECOND_SEAT = "seat.permissions"
+
+
+async def test_skipped_seat_is_named_in_draft_gaps():
+    """跳过的席位：留痕折叠行之外，草案卡缺口行也要点名（不静默缺席）。"""
+
+    from tests.support.builders import make_seat
+
+    harness = Harness(
+        replies={
+            "claims": CLAIMS_REPLY,
+            "integration": draft_reply(refs=["E2"], dropped=[]),
+            "opinion_dispositions": dispositions_reply(),
+        },
+        seat_replies={
+            SEAT: SEAT_REPLY,
+            SECOND_SEAT: [TWICE_BAD_SEAT_REPLY, TWICE_BAD_SEAT_REPLY],
+        },
+        seats=(make_seat(), make_seat(SECOND_SEAT, title="权限与角色")),
+    )
+    harness.seed_project()
+    start = harness.start_round()
+    round_id = await start.create(project_id=PROJECT, user_input="导出要快一点")
+    await start.analyze(round_id=round_id)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT, SECOND_SEAT))
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.draft is not None
+    assert any("权限与角色" in gap and "跳过" in gap for gap in round_.draft.gaps)

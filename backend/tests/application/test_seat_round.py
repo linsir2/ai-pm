@@ -441,3 +441,58 @@ async def test_seat_known_counts_visible_eids_but_not_ledger_only_ones():
 
     assert EvidenceId("E2") in known  # 文本里看得见 → 算
     assert EvidenceId("E1") not in known  # 账本里有、文本里没出现 → 不算
+
+
+async def test_run_seat_round_skips_a_twice_bad_seat_and_continues_with_the_rest():
+    """④：一个席位两次都交不出可用报文 → 记名跳过它，其余席位照常汇合（不判死整轮）。"""
+
+    from pmstudio.domain.round.round import DropSource
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={
+            SEAT: SEAT_REPLY,
+            SECOND_SEAT: [UNPARSABLE_SEAT_REPLY, UNPARSABLE_SEAT_REPLY],
+        },
+        seats=(make_seat(), make_seat(SECOND_SEAT, title="权限与角色")),
+    )
+    harness.seed_project()
+    round_id = await started_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT, SECOND_SEAT))
+
+    await harness.run_seat_round()(round_id=round_id)  # 不抛
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.SEATS_RUNNING
+    assert round_.skipped_seats == (SECOND_SEAT,)
+    assert round_.pending_seats == ()
+    assert len(round_.current_reviews) == 1
+    assert GENERATION_FAILED not in harness.events.names
+    skipped = [item for item in round_.dropped if item.source is DropSource.SKIPPED]
+    assert len(skipped) == 1
+    assert skipped[0].seat_id == SECOND_SEAT
+    # 汇合点照常：交回的那个席位判断占了 E2
+    assert harness.evidences.get(PROJECT).evidences()[-1].eid == EvidenceId("E2")
+
+
+async def test_run_seat_round_fails_when_all_seats_are_twice_bad():
+    """全军覆没（本趟零交回）→ 照旧整轮失败：零疑问才判死（`02` §7 口径）。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={
+            SEAT: [UNPARSABLE_SEAT_REPLY, UNPARSABLE_SEAT_REPLY],
+            SECOND_SEAT: [UNPARSABLE_SEAT_REPLY, UNPARSABLE_SEAT_REPLY],
+        },
+        seats=(make_seat(), make_seat(SECOND_SEAT, title="权限与角色")),
+    )
+    harness.seed_project()
+    round_id = await started_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT, SECOND_SEAT))
+
+    with pytest.raises(PacketParseError):
+        await harness.run_seat_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.FAILED
+    assert "所有席位" in round_.failure.reason

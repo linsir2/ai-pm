@@ -662,3 +662,41 @@ def test_round_payload_without_abandon_key_still_loads():
     )
 
     assert loaded.abandon_reason is None
+
+
+def test_round_payload_skipped_seats_round_trip():
+    round_ = make_round(seats=("seat.a", "seat.b"))
+    round_.skip_seat("seat.b")
+
+    payload = serialization.round_to_payload(round_)
+    loaded = serialization.round_from_payload(
+        payload,
+        round_id=round_.round_id,
+        project_id=round_.project_id,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+
+    assert loaded.skipped_seats == ("seat.b",)
+    assert loaded.pending_seats == ("seat.a",)
+
+
+def test_round_payload_without_skipped_seats_key_still_loads():
+    """老行（没有 skipped_seats 键）必须读得回来：给空，pending 不变。"""
+
+    round_ = make_round(seats=("seat.a", "seat.b"))
+    payload = serialization.round_to_payload(round_)
+    payload.pop("skipped_seats", None)  # 假装这是新字段出现之前存下的行
+
+    loaded = serialization.round_from_payload(
+        payload,
+        round_id=round_.round_id,
+        project_id=round_.project_id,
+        created_at=round_.created_at,
+        step=round_.step,
+        waiting_on=round_.waiting_on,
+    )
+
+    assert loaded.skipped_seats == ()
+    assert loaded.pending_seats == ("seat.a", "seat.b")
