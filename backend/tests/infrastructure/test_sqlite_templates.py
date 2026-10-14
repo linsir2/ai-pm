@@ -10,12 +10,16 @@ from pmstudio.infrastructure.sqlite.repositories import SqliteTemplateRepository
 
 
 def test_templates_table_created_and_round_trips(tmp_path):
+    from pmstudio.infrastructure.templates.loader import TEMPLATES_DIR, load_template_file
+
     connection = database.connect(tmp_path / "pm.db")
     repo = SqliteTemplateRepository(connection)
 
     repo.save(standard_template(), builtin=True)
     repo.save(standard_template(), builtin=True)  # seed 幂等：重复种不炸
-    assert [template.template_id for template in repo.list()] == ["standard"]
+    repo.save(load_template_file(TEMPLATES_DIR / "light.toml"), builtin=True)
+    # 内置按标题排（标准版在前）：画廊默认选 standard，它得是第一张卡
+    assert [template.template_id for template in repo.list()] == ["standard", "light"]
 
     got = repo.get("standard")
     assert got == standard_template()
@@ -105,3 +109,38 @@ def test_template_json_round_trip():
     template = standard_template()
     assert serialization.template_from_json(serialization.template_to_json(template)) == template
     assert json.loads(json.dumps(serialization.template_to_json(template)))
+
+
+def test_project_summary_carries_template_ref(tmp_path):
+    """列表/摘要带模板 id 与名（首页密行渲染用；读行快照，零新查询）。"""
+
+    from pmstudio.domain.authoring.document import Document
+    from pmstudio.domain.shared.ids import DocumentId, ProjectId
+    from pmstudio.infrastructure.sqlite.repositories import (
+        SqliteDocumentRepository,
+        SqliteWorkspaceIndex,
+    )
+    from pmstudio.infrastructure.templates.loader import TEMPLATES_DIR, load_template_file
+    from tests.support.builders import NOW, PROJECT, make_document
+
+    connection = database.connect(tmp_path / "pm.db")
+    docs = SqliteDocumentRepository(connection)
+    docs.save(make_document())
+    docs.save(
+        Document.new(
+            document_id=DocumentId("doc-light"),
+            project_id=ProjectId("p-light"),
+            title="轻项目",
+            now=NOW,
+            template=load_template_file(TEMPLATES_DIR / "light.toml"),
+        )
+    )
+    index = SqliteWorkspaceIndex(connection)
+
+    standard = index.summary(PROJECT)
+    assert (standard.template_id, standard.template_title) == ("standard", "标准版")
+    light = index.summary(ProjectId("p-light"))
+    assert (light.template_id, light.template_title) == ("light", "轻量版")
+    by_id = {item.project_id: item for item in index.list_summaries()}
+    assert by_id["p-light"].template_title == "轻量版"
+    connection.close()

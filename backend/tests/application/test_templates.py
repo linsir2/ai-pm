@@ -108,3 +108,23 @@ async def test_create_project_with_custom_template_builds_its_roots():
     document = harness.documents.get(ProjectId(summary.project_id))
     assert [str(block.block_id) for block in document.blocks] == ["s5", "s11", "s13"]
     assert document.template.template_id == template_id
+
+
+async def test_starting_a_round_on_non_standard_template_is_rejected_explicitly():
+    """非 standard 模板跑轮：引擎还没迁完（切片 2），明确拒绝，不烧调用、不报含糊错。"""
+
+    from pmstudio.application.errors import TemplateRoundsUnsupported
+    from pmstudio.domain.shared.ids import ProjectId
+
+    harness = Harness(replies={})
+    template_id = await harness.create_template()(
+        title="自建", sections=triple_sections()
+    )
+    summary = await harness.create_project()(title="自建项目", template_id=template_id)
+
+    with pytest.raises(TemplateRoundsUnsupported):
+        await harness.start_round().create(
+            project_id=ProjectId(summary.project_id), user_input="写点东西"
+        )
+
+    assert harness.rounds.all_rounds() == ()

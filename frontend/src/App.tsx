@@ -149,14 +149,16 @@ export default function App() {
 
   // 建项目成功就进工作区（createProject 成功返回 summary，失败返回 null）。
   const enterCreated = useCallback(
-    (title: string) =>
+    (title: string, templateId: string) =>
       void data
-        .createProject(title)
+        .createProject(title, templateId)
         .then((summary) => {
           if (summary !== null) setListing(false);
         }),
     [data],
   );
+
+  const templates = data.schema?.templates ?? [];
 
   /** 点树上的一个节点：切到它所在的那一章，再滚到它。 */
   const openNode = useCallback((sectionId: string, targetId: string) => {
@@ -304,6 +306,7 @@ export default function App() {
             booting={data.booting}
             limits={limitsOf(data.schema)}
             model={data.model}
+            templates={templates}
           />
         </main>
       </div>
@@ -331,6 +334,7 @@ export default function App() {
                 onCreate={enterCreated}
                 error={data.bootError}
                 pending={data.pending !== null}
+                templates={templates}
               />
             )}
           </div>

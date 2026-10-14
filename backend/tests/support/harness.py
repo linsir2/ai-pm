@@ -79,7 +79,12 @@ class InMemoryProjectFactory:
         self._evidences.seed(EvidenceLedger.empty(project_id))
         self._index.set_summary(
             ProjectSummaryView(
-                project_id=str(project_id), title=title, version_no=1, updated_at=now
+                project_id=str(project_id),
+                title=title,
+                version_no=1,
+                updated_at=now,
+                template_id=template.template_id,
+                template_title=template.title,
             )
         )
         return document_id
@@ -322,11 +327,19 @@ class Harness:
         self.templates.save(load_template_file(TEMPLATES_DIR / "light.toml"), builtin=True)
 
     def seed_project(self, *, title: str = "订单中台") -> ProjectId:
+        from pmstudio.domain.shared.template import standard_template
+
+        standard = standard_template()
         self.documents.seed(make_document(title=title))
         self.evidences.seed(EvidenceLedger.empty(PROJECT))
         self.index.set_summary(
             ProjectSummaryView(
-                project_id=str(PROJECT), title=title, version_no=1, updated_at=self.clock.now()
+                project_id=str(PROJECT),
+                title=title,
+                version_no=1,
+                updated_at=self.clock.now(),
+                template_id=standard.template_id,
+                template_title=standard.title,
             )
         )
         return PROJECT

@@ -342,6 +342,9 @@ export interface ProjectSummaryView {
   title: string;
   version_no: number;
   updated_at: string;
+  /** 建项目时选的模板（后端行快照里带出来；首页密行渲染用）。 */
+  template_id: string;
+  template_title: string;
 }
 
 /** 模板（一套章节集 + 三锚点；`02` §11.0.68）。创建页选择器（切片 2）读它。 */

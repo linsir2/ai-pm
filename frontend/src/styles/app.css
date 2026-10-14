@@ -354,6 +354,108 @@ a {
   opacity: 1;
 }
 
+/* 首页分栏（Word/WPS 起始屏同构）：左导航壳 + 右内容（上画廊下密行）。
+   左栏现在三项，全是页内锚点——多用户那天导航变视图，壳不动。
+   窄屏（980 以下）导航折成顶上一横排，不挤内容。 */
+.home--split {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: var(--space-6);
+  max-width: 80em;
+}
+
+.home__nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-self: start;
+  position: sticky;
+  top: var(--space-4);
+}
+
+.home__navlink {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--open);
+  font-size: var(--step-2);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.home__navlink:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  color: var(--ink);
+}
+
+.home__main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* 页眉一行小字（替代原来的四格属性条）：项目数·更新·模型·上限，
+   一眼扫完，不占版面。 */
+.home__meta {
+  margin: 0;
+  color: var(--open);
+  font-size: var(--step-1);
+}
+
+/* 模板画廊：横排卡，点选。选中态只用 primary 的边框 + 淡底——
+   缺口/矛盾/开放是语义色，不挪用；primary 是品牌不是状态。 */
+.tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+
+.tpl-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: flex-start;
+  padding: var(--space-3);
+  border: var(--hairline);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tpl-card:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.tpl-card--picked {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.tpl-card__title {
+  font-weight: 600;
+  font-size: var(--step-3);
+}
+
+.tpl-card__meta {
+  color: var(--open);
+  font-size: var(--step-1);
+}
+
+@media (max-width: 980px) {
+  .home--split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .home__nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
 .topbar__spacer {
   flex: 1;
 }

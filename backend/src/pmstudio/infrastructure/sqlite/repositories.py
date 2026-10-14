@@ -35,7 +35,7 @@ from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import DiscussionId, ExplorationId, ProjectId, RoundId
-from pmstudio.domain.shared.template import DocumentTemplate
+from pmstudio.domain.shared.template import DocumentTemplate, standard_template
 from pmstudio.infrastructure.sqlite import serialization as ser
 
 
@@ -357,53 +357,82 @@ class SqliteEvidenceRepository:
         )
 
 
+def _template_ref(template_raw: object) -> tuple[str, str]:
+    """行快照 → (template_id, template_title)。缺/坏 → STANDARD。
+
+    缺：老库补列前存下的行（ADDED_COLUMNS 给 `'{}'`，truthy 字符串，判空不够——
+    `test_sqlite_templates.py` 钉住这一坑）。坏：JSON 炸（memory repo 同款容错：
+    读投影不该被一行坏数据打崩整个列表）。
+    """
+
+    try:
+        data = json.loads(template_raw) if template_raw else {}
+        template_id = str(data.get("template_id") or "")
+        title = str(data.get("title") or "")
+        if template_id and title:
+            return template_id, title
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        pass
+    standard = standard_template()
+    return standard.template_id, standard.title
+
+
 class SqliteWorkspaceIndex:
     """只读查询投影：摘要、列表、最新一轮。不产生第二份真相源。"""
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
-
     def summary(self, project_id: ProjectId) -> ProjectSummaryView:
         row = self._connection.execute(
             """
             SELECT d.project_id AS project_id, d.title AS title,
-                   MAX(v.version_no) AS version_no, d.updated_at AS updated_at
+                   MAX(v.version_no) AS version_no, d.updated_at AS updated_at,
+                   d.template AS template
             FROM documents d
             LEFT JOIN document_versions v ON v.project_id = d.project_id
             WHERE d.project_id = ?
-            GROUP BY d.project_id, d.title, d.updated_at
+            GROUP BY d.project_id, d.title, d.updated_at, d.template
             """,
             (str(project_id),),
         ).fetchone()
         if row is None:
             raise UnknownProject(project_id)
+        template_id, template_title = _template_ref(row["template"])
         return ProjectSummaryView(
             project_id=row["project_id"],
             title=row["title"],
             version_no=int(row["version_no"] or 1),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            template_id=template_id,
+            template_title=template_title,
         )
 
     def list_summaries(self) -> tuple[ProjectSummaryView, ...]:
         rows = self._connection.execute(
             """
             SELECT d.project_id AS project_id, d.title AS title,
-                   MAX(v.version_no) AS version_no, d.updated_at AS updated_at
+                   MAX(v.version_no) AS version_no, d.updated_at AS updated_at,
+                   d.template AS template
             FROM documents d
             LEFT JOIN document_versions v ON v.project_id = d.project_id
-            GROUP BY d.project_id, d.title, d.updated_at
+            GROUP BY d.project_id, d.title, d.updated_at, d.template
             ORDER BY d.updated_at DESC
             """
         ).fetchall()
-        return tuple(
-            ProjectSummaryView(
-                project_id=row["project_id"],
-                title=row["title"],
-                version_no=int(row["version_no"] or 1),
-                updated_at=datetime.fromisoformat(row["updated_at"]),
+        summaries: list[ProjectSummaryView] = []
+        for row in rows:
+            template_id, template_title = _template_ref(row["template"])
+            summaries.append(
+                ProjectSummaryView(
+                    project_id=row["project_id"],
+                    title=row["title"],
+                    version_no=int(row["version_no"] or 1),
+                    updated_at=datetime.fromisoformat(row["updated_at"]),
+                    template_id=template_id,
+                    template_title=template_title,
+                )
             )
-            for row in rows
-        )
+        return tuple(summaries)
 
     def latest_round_id(self, project_id: ProjectId) -> RoundId | None:
         return SqliteRoundRepository(self._connection).latest_round_id(project_id)
@@ -625,7 +654,9 @@ class SqliteTemplateRepository:
 
     def list(self) -> tuple[DocumentTemplate, ...]:
         rows = self._connection.execute(
-            "SELECT spec FROM templates ORDER BY builtin DESC, template_id"
+            # 内置在前（画廊默认选 standard，它得排第一）；同组按标题排，不按 id
+            # （按 id 的话 light 永在 standard 前面，默认高亮落在第二张卡上）。
+            "SELECT spec FROM templates ORDER BY builtin DESC, title"
         ).fetchall()
         return tuple(
             ser.template_from_json(json.loads(row["spec"])) for row in rows

@@ -650,3 +650,24 @@ def test_light_template_wrong_roots_are_rejected_naming_the_template():
 
     assert exc.value.invariant == DInvariant.D1
     assert "轻量版" in exc.value.message
+
+
+def test_light_document_view_shows_its_own_six_sections():
+    """`view()` 读自家模板：画廊承诺 6 章，工作区就得是 6 章（不能显示 13 章撒谎）。"""
+
+    document = Document.new(
+        document_id=DocumentId("doc1"),
+        project_id=ProjectId("p1"),
+        title="t",
+        now=NOW,
+        template=_light_template(),
+    )
+
+    assert [str(section.section_id) for section in document.view().sections] == [
+        "s1",
+        "s2",
+        "s4",
+        "s5",
+        "s11",
+        "s13",
+    ]

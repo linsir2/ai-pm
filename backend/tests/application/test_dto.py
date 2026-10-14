@@ -431,7 +431,12 @@ def test_workspace_view_carries_project_document_and_round():
         document_id=DocumentId("doc1"), project_id=ProjectId("p1"), title="订单中台", now=NOW
     )
     project = dto.ProjectSummaryView(
-        project_id="p1", title="订单中台", version_no=1, updated_at=NOW
+        project_id="p1",
+        title="订单中台",
+        version_no=1,
+        updated_at=NOW,
+        template_id="standard",
+        template_title="标准版",
     )
     view = dto.workspace_view(project=project, document=document.view(), round_=make_round())
     assert view.project.title == "订单中台"
@@ -446,7 +451,12 @@ def test_workspace_view_carries_readiness_items():
         document_id=DocumentId("doc1"), project_id=ProjectId("p1"), title="订单中台", now=NOW
     )
     project = dto.ProjectSummaryView(
-        project_id="p1", title="订单中台", version_no=1, updated_at=NOW
+        project_id="p1",
+        title="订单中台",
+        version_no=1,
+        updated_at=NOW,
+        template_id="standard",
+        template_title="标准版",
     )
     items = ReadinessChecker().check(document.view())
 
@@ -467,7 +477,12 @@ def test_workspace_view_without_readiness_is_empty():
     )
     view = dto.workspace_view(
         project=dto.ProjectSummaryView(
-            project_id="p1", title="订单中台", version_no=1, updated_at=NOW
+            project_id="p1",
+            title="订单中台",
+            version_no=1,
+            updated_at=NOW,
+            template_id="standard",
+            template_title="标准版",
         ),
         document=document.view(),
         round_=None,

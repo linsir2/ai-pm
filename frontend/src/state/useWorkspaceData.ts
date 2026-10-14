@@ -370,12 +370,12 @@ export function useWorkspaceData() {
    * 错误进 `bootError`（两处创建屏只渲染它，没有 toast 可接 `state.error`）。
    */
   const createProject = useCallback(
-    async (title: string): Promise<ProjectSummaryView | null> => {
+    async (title: string, templateId?: string): Promise<ProjectSummaryView | null> => {
       dispatch({ type: "error", message: null });
       setBootError(null);
       setBooting(true);
       try {
-        const summary = await api.createProject(title);
+        const summary = await api.createProject(title, templateId);
         setProjects((list) => [summary, ...list]);
         selected.current = summary.project_id;
         const url = new URL(window.location.href);

@@ -46,7 +46,14 @@ vi.mock("../api/client", async (importOriginal) => {
 vi.mock("./useEvents", () => ({ useEvents: () => ({ connection: "idle" as const }) }));
 
 function summary(project_id: string): ProjectSummaryView {
-  return { project_id, title: `项目${project_id}`, version_no: 1, updated_at: "2026-10-15T00:00:00" };
+  return {
+    project_id,
+    title: `项目${project_id}`,
+    version_no: 1,
+    updated_at: "2026-10-15T00:00:00",
+    template_id: "standard",
+    template_title: "标准版",
+  };
 }
 
 function ws(project_id: string): WorkspaceView {

@@ -15,6 +15,8 @@ const project = {
   title: "订单中台",
   version_no: 3,
   updated_at: "2026-10-02T00:00:00+00:00",
+  template_id: "standard",
+  template_title: "标准版",
 } as ProjectSummaryView;
 
 function draw(connection: "open" | "lost" | "idle" = "open") {

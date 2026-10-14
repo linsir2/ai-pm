@@ -143,6 +143,7 @@ from pmstudio.application.dto import (
 from pmstudio.application.errors import (
     MaterialFrozen,
     MaterialTooLarge,
+    TemplateRoundsUnsupported,
     UnknownEntryId,
     UnknownEvidenceId,
     UnknownExploration,
@@ -400,6 +401,11 @@ class StartRound:
         material_ids: Sequence[str] = (),
         seed_ids: Sequence[str] = (),
     ) -> RoundId:
+        document = self._documents.get(project_id)  # 项目不存在就地失败
+        if document.template.template_id != STANDARD_TEMPLATE_ID:
+            # 非 standard 模板跑轮：引擎（席位/整合/提示词）还没迁完，切片 2 才做。
+            # 现在放行只会烧掉模型调用再报含糊错（孤儿块 → UnknownBlock），明确拒掉。
+            raise TemplateRoundsUnsupported(document.template.title)
         # 材料在**事务外**读（只读查询），选块是纯函数——所以下面那个事务里只有写入。
         picked, packets = self._pick_materials(
             material_ids, query=user_input, project_id=project_id
@@ -407,7 +413,7 @@ class StartRound:
         # 种子同样是事务外的只读校验：必须存在、同项目、跑完了、且被收下为「下一轮输入」
         seeds = self._resolve_seeds(project_id, seed_ids)
         with self._uow:
-            self._documents.get(project_id)  # 项目不存在就地失败
+            self._documents.get(project_id)
             round_id = RoundId(self._ids.new("r"))
             round_ = Round.start(
                 round_id=round_id,

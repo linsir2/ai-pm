@@ -121,6 +121,17 @@ class UnknownTemplate(ApplicationError):
         )
 
 
+class TemplateRoundsUnsupported(ApplicationError):
+    """这个模板还不能跑轮（引擎迁移是切片 2）——能力未到，409，不烧调用。"""
+
+    def __init__(self, template_title: object) -> None:
+        super().__init__(
+            f"模板「{template_title}」还不能跑轮，先用标准版开轮",
+            code="template_rounds_unsupported",
+            template_title=str(template_title),
+        )
+
+
 class DigestAlreadyWritten(ApplicationError):
     """同一个轮次的摘要已经写过了（`07 §7.14`：摘要只追加，不改写）。
 

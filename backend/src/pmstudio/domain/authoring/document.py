@@ -37,7 +37,6 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.sections import (
     FEATURE_HOME,
-    SECTIONS,
     section_slot,
     slot_block_id,
 )
@@ -213,7 +212,7 @@ class Document:
                     spec = field_spec(block.field)
                     field_title = spec.title
                 else:
-                    slot = section_slot(block.parent_id, block.field)
+                    slot = self._template.slot(block.parent_id, block.field)
                     field_title = None if slot is None else slot.title
             return BlockView(
                 block_id=block.block_id,
@@ -235,7 +234,8 @@ class Document:
                     build(block) for block in children.get(BlockId(spec.section_id), ())
                 ),
             )
-            for spec in SECTIONS
+            # 读自家模板的章节（不是全局 SECTIONS）：画廊承诺几章，这里就是几章
+            for spec in self._template.sections
         )
         return DocumentView(
             document_id=self._document_id,

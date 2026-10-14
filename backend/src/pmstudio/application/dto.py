@@ -404,6 +404,10 @@ class ProjectSummaryView:
     title: str
     version_no: int
     updated_at: datetime
+    #: 建项目时选的模板（行快照里带的定义；首页密行渲染用，`02` §11.0.68）。
+    #: REQUIRED：构造时就必须想清楚，不许留空——缺省 standard 由调用方显式传。
+    template_id: str
+    template_title: str
 
 
 @dataclass(frozen=True, slots=True)
