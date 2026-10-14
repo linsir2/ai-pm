@@ -37,13 +37,16 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.sections import (
     FEATURE_HOME,
-    SECTION_IDS,
-    SECTION_SLOTS,
     SECTIONS,
     section_slot,
     slot_block_id,
 )
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template import (
+    DocumentTemplate,
+    TemplateRole,
+    standard_template,
+)
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 
 
@@ -59,6 +62,9 @@ class Document:
         preference_entries: tuple[Entry, ...] = (),
         tombstones: tuple[Block, ...] = (),
         created_at: datetime,
+        #: 本文档的模板（行内存快照的形状）。`None` = 老调用点/老行 → STANDARD，
+        #: 与现行 13 章逐字节同义——所以 2085 个旧测试一字不用改。
+        template: DocumentTemplate | None = None,
     ) -> None:
         self._document_id = document_id
         self._project_id = project_id
@@ -68,6 +74,7 @@ class Document:
         self._versions = tuple(versions)
         self._tombstones = tuple(tombstones)
         self._created_at = created_at
+        self._template = template if template is not None else standard_template()
         self._validate()
 
     @classmethod
@@ -78,22 +85,26 @@ class Document:
         project_id: ProjectId,
         title: str,
         now: datetime,
+        template: DocumentTemplate | None = None,
     ) -> "Document":
-        # 13 章根 + 章节槽（s8 的六块）：槽是骨架，空的，不算内容
-        blocks = tuple(Block.section(spec.section_id) for spec in SECTIONS) + tuple(
+        resolved = template if template is not None else standard_template()
+        # 章节根 + 章节槽：槽是骨架，空的，不算内容（ shapes 来自模板，不是全局常量）
+        blocks = tuple(
+            Block.section(spec.section_id) for spec in resolved.sections
+        ) + tuple(
             Block(
-                block_id=slot_block_id(section_id, slot.name),
-                parent_id=BlockId(str(section_id)),
+                block_id=slot_block_id(section.section_id, slot.name),
+                parent_id=BlockId(str(section.section_id)),
                 kind=slot.kind,
                 field=slot.name,
             )
-            for section_id, slots in SECTION_SLOTS.items()
-            for slot in slots
+            for section in resolved.sections
+            for slot in section.slots
         )
         version = Version(
             version_no=1,
             trigger=VersionTrigger.MANUAL,
-            summary="初始化 13 章骨架",
+            summary=f"初始化 {len(resolved.sections)} 章骨架",
             changed_block_ids=tuple(block.block_id for block in blocks),
             created_at=now,
             snapshot=Snapshot(blocks=blocks),
@@ -105,6 +116,7 @@ class Document:
             blocks=blocks,
             versions=(version,),
             created_at=now,
+            template=resolved,
         )
 
     # —— 只读 ——
@@ -119,6 +131,12 @@ class Document:
     @property
     def title(self) -> str:
         return self._title
+
+    @property
+    def template(self) -> DocumentTemplate:
+        """本文档的模板（行内存快照的形状）。老行读回即 STANDARD。"""
+
+        return self._template
 
     @property
     def blocks(self) -> tuple[Block, ...]:
@@ -344,13 +362,17 @@ class Document:
             raise DuplicateBlockId(block_ids=[str(value) for value in ids])
         if not self._versions:
             raise ShapeError("文档至少要有一个版本")
+        # 章节集与顺序闸：读自家模板的规格，不是全局常量（`02` §11.0.68）。
+        # 引擎行为（gaps/归位/导出）仍读全局——那是切片 2 的债，这里只管形状。
+        template = self._template
         roots = [block for block in self._blocks if block.kind is BlockKind.SECTION]
         root_ids = [str(block.block_id) for block in roots]
-        expected = [str(section_id) for section_id in SECTION_IDS]
+        expected = [str(section_id) for section_id in template.section_ids]
         if sorted(root_ids) != sorted(expected):
-            raise SectionSetViolation(roots=root_ids)
+            raise SectionSetViolation(template_title=template.title, roots=root_ids)
         if root_ids != expected:
-            raise SectionOrderViolation(roots=root_ids)
+            raise SectionOrderViolation(template_title=template.title, roots=root_ids)
+        feature_home = template.anchor(TemplateRole.FEATURE)
         by_id = {block.block_id: block for block in self._blocks}
         slugs = [
             block.feature_slug for block in self._blocks if block.kind is BlockKind.FEATURE
@@ -365,20 +387,22 @@ class Document:
             if block.kind is BlockKind.FEATURE:
                 if block.feature_slug is None:
                     raise ShapeError("功能根缺少 feature_slug", block_id=str(block.block_id))
-                if block.parent_id != FEATURE_HOME:
+                if block.parent_id != feature_home:
                     raise FeatureNotAllowedHere(
-                        section_id=block.parent_id, feature_slug=block.feature_slug
+                        section_id=block.parent_id,
+                        feature_slug=block.feature_slug,
+                        feature_home=feature_home,
                     )
             if block.field is not None:
                 parent = by_id.get(block.parent_id) if block.parent_id is not None else None
                 if parent is not None and parent.kind is BlockKind.FEATURE:
                     field_spec(block.field)
                     continue
-                # 章节槽（s8 的六块）：field 名必须命中该章的槽表
+                # 章节槽：field 名必须命中该章在模板里的槽表（不是全局 `SECTION_SLOTS`）
                 if (
                     parent is not None
                     and parent.kind is BlockKind.SECTION
-                    and section_slot(parent.block_id, block.field) is not None
+                    and template.slot(parent.block_id, block.field) is not None
                 ):
                     continue
                 if parent is None:

@@ -6,11 +6,14 @@ from pathlib import Path
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 #: 11 = 删 observations.sections/features/create
 #:     at（死字段销账）。
-USER_VERSION = 11
+#: 12 = 模板库：`templates` 表（CREATE TABLE IF NOT EXISTS 自建）+
+#:     `documents.template` 列（老库 ALTER 补）。
+USER_VERSION = 12
 
 #: `CREATE TABLE IF NOT EXISTS` 补不了**已有**表的列，所以老库要靠这里的 `ALTER TABLE`（幂等）。
 #: 留样表本身是可丢的（`02` §5.3：要清就 DELETE），但**不主动删数据**。
 ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "documents": (("template", "TEXT NOT NULL DEFAULT '{}'"),),
     "model_calls": (
         ("attempt", "INTEGER NOT NULL DEFAULT 1"),
         ("ok", "INTEGER NOT NULL DEFAULT 1"),

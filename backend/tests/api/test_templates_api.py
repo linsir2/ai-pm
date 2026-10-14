@@ -1,0 +1,105 @@
+"""模板库 API：列模板 / 建模板 / 取模板 / 建项目时选模板。"""
+
+from pmstudio.api.app import create_app
+from tests.support.api_client import async_client
+from tests.support.harness import Harness
+
+
+def make_client():  # type: ignore[no-untyped-def]
+    harness = Harness(replies={})
+    return create_app(harness.api_services(model_name="openai/gpt-4o-mini")), harness
+
+
+def triple_sections():
+    return [
+        {"id": "s5", "title": "功能", "purpose": "摆设", "role": "feature"},
+        {"id": "s11", "title": "未决", "purpose": "摆设", "role": "open_questions"},
+        {"id": "s13", "title": "版本", "purpose": "摆设", "role": "version_history"},
+    ]
+
+
+async def test_list_templates_returns_seeded_builtins():
+    app, _ = make_client()
+    async with async_client(app) as client:
+        response = await client.get("/api/templates")
+
+    assert response.status_code == 200
+    ids = [item["template_id"] for item in response.json()]
+    assert "standard" in ids and "light" in ids
+
+
+async def test_create_template_then_create_project_with_it():
+    app, _ = make_client()
+    async with async_client(app) as client:
+        created = await client.post(
+            "/api/templates", json={"title": "自建", "sections": triple_sections()}
+        )
+        assert created.status_code == 201
+        template_id = created.json()["template_id"]
+        # id 服务端盖（调用方不许自选）：测试缝是顺序号、生产是 uuid，只断前缀族。
+        assert template_id.startswith("tpl")
+
+        got = await client.get(f"/api/templates/{template_id}")
+        assert got.status_code == 200
+        assert len(got.json()["sections"]) == 3
+
+        project = await client.post(
+            "/api/projects", json={"title": "轻项目", "template_id": template_id}
+        )
+        assert project.status_code == 201
+        workspace = await client.get(
+            f"/api/projects/{project.json()['project_id']}/workspace"
+        )
+        # 切片 1 只证明"建得出来 + 读得回来"：块数断言在应用层
+        # （`Document.view()` 仍读全局 SECTIONS，渲染迁移是切片 2）。
+        assert workspace.status_code == 200
+        assert workspace.json()["project"]["title"] == "轻项目"
+
+
+async def test_create_project_without_template_id_still_builds_13():
+    """老客户端只传 title：缺省 standard，行为与今天一致。"""
+
+    app, _ = make_client()
+    async with async_client(app) as client:
+        project = await client.post("/api/projects", json={"title": "标准项目"})
+        workspace = await client.get(
+            f"/api/projects/{project.json()['project_id']}/workspace"
+        )
+
+    assert project.status_code == 201
+    assert len(workspace.json()["document"]["sections"]) == 13
+
+
+async def test_create_project_with_unknown_template_is_404():
+    app, _ = make_client()
+    async with async_client(app) as client:
+        response = await client.post(
+            "/api/projects", json={"title": "坏项目", "template_id": "nope"}
+        )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "unknown_template"
+
+
+async def test_create_template_with_bad_anchors_is_409():
+    app, _ = make_client()
+    async with async_client(app) as client:
+        response = await client.post(
+            "/api/templates",
+            json={
+                "title": "坏",
+                "sections": [
+                    {"id": "s5", "title": "功能", "purpose": "摆设", "role": "feature"}
+                ],
+            },
+        )
+
+    assert response.status_code == 409
+
+
+async def test_get_unknown_template_is_404():
+    app, _ = make_client()
+    async with async_client(app) as client:
+        response = await client.get("/api/templates/nope")
+
+    assert response.status_code == 404

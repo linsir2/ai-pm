@@ -15,6 +15,8 @@ import type {
   RoundHeadView,
   SchemaView,
   SearchResultsView,
+  TemplateSectionView,
+  TemplateView,
   ThreadView,
   VersionListView,
   WorkspaceView,
@@ -196,10 +198,24 @@ export const api = {
 
   listProjects: () => request<ProjectSummaryView[]>("/projects"),
 
-  createProject: (title: string) =>
+  createProject: (title: string, templateId?: string) =>
     request<ProjectSummaryView>("/projects", {
       method: "POST",
-      body: JSON.stringify({ title }),
+      body: JSON.stringify(
+        templateId === undefined ? { title } : { title, template_id: templateId },
+      ),
+    }),
+
+  /** 模板库（`02` §11.0.68）：创建页选择器（切片 2）用；parity 双向门要求每个端点都有 client。 */
+  listTemplates: () => request<TemplateView[]>("/templates"),
+
+  getTemplate: (templateId: string) =>
+    request<TemplateView>(`/templates/${encodeURIComponent(templateId)}`),
+
+  createTemplate: (title: string, sections: TemplateSectionView[]) =>
+    request<TemplateView>("/templates", {
+      method: "POST",
+      body: JSON.stringify({ title, sections }),
     }),
 
   workspace: (projectId: string) =>

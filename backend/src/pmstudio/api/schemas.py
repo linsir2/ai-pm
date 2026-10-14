@@ -7,6 +7,27 @@ from pydantic import BaseModel, Field
 
 class CreateProjectRequest(BaseModel):
     title: str = Field(min_length=1, max_length=80)
+    #: 模板 id（`02` §11.0.68）：缺省 standard，老客户端只传 title 照样能建。
+    template_id: str = "standard"
+
+
+class TemplateSlotRequest(BaseModel):
+    name: str
+    title: str
+    kind: str
+
+
+class TemplateSectionRequest(BaseModel):
+    id: str
+    title: str
+    purpose: str
+    role: str = "plain"
+    slots: list[TemplateSlotRequest] = Field(default_factory=list)
+
+
+class TemplateCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
+    sections: list[TemplateSectionRequest] = Field(min_length=1)
 
 
 class TargetRequest(BaseModel):

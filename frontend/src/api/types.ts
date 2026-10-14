@@ -344,6 +344,21 @@ export interface ProjectSummaryView {
   updated_at: string;
 }
 
+/** 模板（一套章节集 + 三锚点；`02` §11.0.68）。创建页选择器（切片 2）读它。 */
+export interface TemplateSectionView {
+  section_id: string;
+  title: string;
+  purpose: string;
+  role: string;
+  slots: { name: string; title: string; kind: string }[];
+}
+
+export interface TemplateView {
+  template_id: string;
+  title: string;
+  sections: TemplateSectionView[];
+}
+
 export interface ReadinessItemView {
   section_id: string;
   code: string;
@@ -500,6 +515,8 @@ export interface SchemaView {
   discussion_roles: DiscussionRoleSchema[];
   /** 五个固定模拟使用者（M11）：评测选择器读它；老后端为 undefined（回落空表）。 */
   personas?: PersonaSchemaView[];
+  /** 模板库（`02` §11.0.68）：创建页选择器（切片 2）读它；老后端为 undefined。 */
+  templates?: TemplateView[];
 }
 
 /** `GET /schema` 里的一个模拟使用者（M11）。 */

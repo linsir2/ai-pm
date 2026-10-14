@@ -52,6 +52,9 @@ EXPECTED_PATHS = {
     "/api/discussions/{discussion_id}/run-round",
     "/api/discussions/{discussion_id}/join",
     "/api/discussions/{discussion_id}/abort-run",
+    # 模板库（`02` §11.0.68，切片 1）：列表+新建（同路径）+ 取全文；创建项目时选模板
+    "/api/templates",
+    "/api/templates/{template_id}",
 }
 
 

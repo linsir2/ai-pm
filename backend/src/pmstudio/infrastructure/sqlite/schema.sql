@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS documents (
   project_id         TEXT PRIMARY KEY,
   document_id        TEXT NOT NULL,
   title              TEXT NOT NULL,
+  template           TEXT NOT NULL DEFAULT '{}',
   blocks             TEXT NOT NULL,
   preference_entries TEXT NOT NULL,
   tombstones         TEXT NOT NULL,
@@ -30,6 +31,17 @@ CREATE TABLE IF NOT EXISTS rounds (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_rounds_project ON rounds(project_id, created_at);
+
+-- 模板库（`02` §11.0.68）：定义时来源。行内快照（`documents.template`）才是运行真相，
+-- 所以这里允许 seed 反复覆盖 builtin 行，老项目不受影响。
+CREATE TABLE IF NOT EXISTS templates (
+  template_id TEXT PRIMARY KEY,
+  title       TEXT NOT NULL,
+  spec        TEXT NOT NULL,
+  builtin     INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS evidence_ledgers (
   project_id TEXT PRIMARY KEY REFERENCES documents(project_id) ON DELETE CASCADE,

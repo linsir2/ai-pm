@@ -1,0 +1,115 @@
+# 标准模板：现行 13 章的逐字转录（`domain/shared/sections.py`）。
+#
+# 体例纪律：本文件是"定义"，`standard_template()` 是"同源算出"——
+# `test_template_loader.py` 用"解析本文件 == standard_template()" 钉死两者不漂，
+# 改一边不改另一边会红。role 映射见 `template.py::_ROLE_BY_SECTION_ID`。
+template_id = "standard"
+title = "标准版"
+
+[[sections]]
+id = "s1"
+title = "背景与问题"
+purpose = "为什么现在要做：现状有什么问题、不做会付出什么代价。"
+role = "backbone"
+
+[[sections]]
+id = "s2"
+title = "目标与非目标"
+purpose = "要达成什么、明确不做什么；目标要能被验收。"
+role = "backbone"
+
+[[sections]]
+id = "s3"
+title = "用户与受众"
+purpose = "给谁用：有哪些角色、各自在什么场景、痛点是什么。"
+role = "backbone"
+
+[[sections]]
+id = "s4"
+title = "范围与边界"
+purpose = "本期做到哪、本期不做哪、边界情况谁来处理。"
+role = "backbone"
+
+[[sections]]
+id = "s5"
+title = "功能需求"
+purpose = "每个功能一棵子树；必填 6 项：名称、一句话描述、服务的目标、面向角色、异常与边界、验收标准。"
+role = "feature"
+
+[[sections]]
+id = "s6"
+title = "业务流程与交互"
+purpose = "主流程与异常路径，按步骤写清谁在什么时候做什么。"
+role = "steps"
+
+[[sections]]
+id = "s7"
+title = "数据与接口"
+purpose = "有哪些实体、和外部怎么对接。"
+role = "plain"
+
+[[sections]]
+id = "s8"
+title = "非功能需求"
+purpose = "六项表态：性能、可用性、安全、兼容、可观测、成本，各要有内容。"
+role = "plain"
+
+[[sections.slots]]
+name = "performance"
+title = "性能"
+kind = "nfr"
+
+[[sections.slots]]
+name = "availability"
+title = "可用性"
+kind = "nfr"
+
+[[sections.slots]]
+name = "security"
+title = "安全"
+kind = "nfr"
+
+[[sections.slots]]
+name = "compatibility"
+title = "兼容"
+kind = "nfr"
+
+[[sections.slots]]
+name = "observability"
+title = "可观测"
+kind = "nfr"
+
+[[sections.slots]]
+name = "cost"
+title = "成本"
+kind = "nfr"
+
+[[sections]]
+id = "s9"
+title = "技术方案与约束"
+purpose = "关键决策与备选，写清为什么这么选。"
+role = "decision"
+
+[[sections]]
+id = "s10"
+title = "假设、约束与依赖"
+purpose = "假设要写「错了会怎样」；依赖要写「失联怎么办」。"
+role = "backbone"
+
+[[sections]]
+id = "s11"
+title = "风险与开放问题"
+purpose = "还没定的都放这儿；堵住交付的要标出来。"
+role = "open_questions"
+
+[[sections]]
+id = "s12"
+title = "上线、验收与迭代"
+purpose = "怎么上线、怎么算验收通过、后续怎么迭代。"
+role = "backbone"
+
+[[sections]]
+id = "s13"
+title = "版本历史"
+purpose = "不用手写，导出时由版本表生成。"
+role = "version_history"

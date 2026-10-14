@@ -9,7 +9,12 @@ from pmstudio.application.dto import (
     MaterialPacket,
     material_summary_view,
 )
-from pmstudio.application.errors import UnknownExploration, UnknownProject, UnknownRound
+from pmstudio.application.errors import (
+    UnknownExploration,
+    UnknownProject,
+    UnknownRound,
+    UnknownTemplate,
+)
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.exploration.exploration import Exploration
 from pmstudio.domain.memory.digest import RoundDigest
@@ -19,6 +24,7 @@ from pmstudio.domain.memory.observations import RoundObservation
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.ids import ExplorationId, ProjectId, RoundId
+from pmstudio.domain.shared.template import DocumentTemplate
 
 
 class _InMemoryRepository:
@@ -402,3 +408,22 @@ class InMemoryInspirationRepository:
         items = [i for i in self._items.values() if i.project_id == project_id]
         items.sort(key=lambda i: i.item_id, reverse=True)
         return tuple(items[:limit])
+
+
+class InMemoryTemplateRepository:
+    """模板库替身：内存字典。`get`  miss 抛 `UnknownTemplate`（与真实现同语义）。"""
+
+    def __init__(self) -> None:
+        self._items: dict[str, DocumentTemplate] = {}
+
+    def save(self, template: DocumentTemplate, *, builtin: bool) -> None:
+        self._items[template.template_id] = template
+
+    def list(self) -> tuple[DocumentTemplate, ...]:
+        return tuple(self._items.values())
+
+    def get(self, template_id: str) -> DocumentTemplate:
+        try:
+            return self._items[template_id]
+        except KeyError:
+            raise UnknownTemplate(template_id) from None

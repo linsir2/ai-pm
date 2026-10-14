@@ -4,9 +4,9 @@ from enum import StrEnum
 
 
 class DInvariant(StrEnum):
-    D1 = "D1"  # 十三章固定，不可增删重排
+    D1 = "D1"  # 章节集由模板决定，不再是固定的十三章；不许动的是该模板的集与序
     D2 = "D2"  # block id 永久稳定；删除留墓碑，编号不复用
-    D3 = "D3"  # 只有 s5 能长 feature 子树，且需用户授权
+    D3 = "D3"  # 只有模板的 feature 锚点章能长 feature 子树，且需用户授权
     D4 = "D4"  # 同一父节点下字段名唯一
     D5 = "D5"  # 被手改过的 block 不能被静默覆盖
     D6 = "D6"  # 一次写入=一版；版本只增不改；回退产生新版本

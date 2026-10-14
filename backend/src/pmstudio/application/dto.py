@@ -42,6 +42,7 @@ from pmstudio.domain.services.scope_guard import ScopeGuard
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS
+from pmstudio.domain.shared.template import DocumentTemplate
 
 SEAT_COMPLETED = "completed"
 SEAT_PENDING = "pending"
@@ -991,6 +992,63 @@ class RoleSchemaView:
 
 
 @dataclass(frozen=True, slots=True)
+class TemplateSectionSchemaView:
+    section_id: str
+    title: str
+    purpose: str
+    role: str
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateSchemaView:
+    template_id: str
+    title: str
+    sections: tuple[TemplateSectionSchemaView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateSectionView:
+    section_id: str
+    title: str
+    purpose: str
+    role: str
+    slots: tuple[SlotSchemaView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateView:
+    """模板全文（库表行 + 创建回显）。槽要全——创建页预览读它。"""
+
+    template_id: str
+    title: str
+    sections: tuple[TemplateSectionView, ...]
+
+
+def template_view(template: DocumentTemplate) -> TemplateView:
+    """领域模板 → 视图。"""
+
+    return TemplateView(
+        template_id=template.template_id,
+        title=template.title,
+        sections=tuple(
+            TemplateSectionView(
+                section_id=str(section.section_id),
+                title=section.title,
+                purpose=section.purpose,
+                role=section.role.value,
+                slots=tuple(
+                    SlotSchemaView(name=slot.name, title=slot.title, kind=slot.kind.value)
+                    for slot in section.slots
+                ),
+            )
+            for section in template.sections
+        ),
+    )
+
+
+
+
+@dataclass(frozen=True, slots=True)
 class SchemaView:
     """`GET /schema`：现行结构（13 章 + 功能字段表 + 上限常量 + 讨论角色）。
 
@@ -1004,13 +1062,19 @@ class SchemaView:
     discussion_roles: tuple[RoleSchemaView, ...]
     #: 五个固定模拟使用者（M11）：评测选择器读它
     personas: tuple[PersonaSchemaView, ...]
+    #: 模板库全文（`02` §11.0.68）：创建页的选择器读它。**只读投影**，不是真相源——
+    #: 真相源是各文档行内的快照（`Document.template`）。
+    templates: tuple[TemplateSchemaView, ...] = ()
 
 
-def schema_view(*, discussion_roles: tuple = (), personas: tuple = ()) -> SchemaView:
+def schema_view(
+    *, discussion_roles: tuple = (), personas: tuple = (), templates: tuple = ()
+) -> SchemaView:
     """把三张表、三个常量与讨论角色读出来。纯函数：无 IO、不开事务、不碰任何仓储。
 
     `discussion_roles` 按鸭子类型读 `.role_id/.title/.focus`——application 不 import
     infrastructure（分层守卫），形状由 `DiscussionRole` 保证，调用方注入元组。
+    `templates` 同理读 `.template_id/.title/.sections[].section_id/.title/.purpose/.role`。
     """
 
     return SchemaView(
@@ -1056,6 +1120,22 @@ def schema_view(*, discussion_roles: tuple = (), personas: tuple = ()) -> Schema
                 situation=persona.situation,
             )
             for persona in personas
+        ),
+        templates=tuple(
+            TemplateSchemaView(
+                template_id=template.template_id,
+                title=template.title,
+                sections=tuple(
+                    TemplateSectionSchemaView(
+                        section_id=str(section.section_id),
+                        title=section.title,
+                        purpose=section.purpose,
+                        role=section.role.value,
+                    )
+                    for section in template.sections
+                ),
+            )
+            for template in templates
         ),
     )
 

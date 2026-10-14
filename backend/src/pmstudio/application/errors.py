@@ -110,6 +110,17 @@ class UnknownMaterial(ApplicationError):
         )
 
 
+class UnknownTemplate(ApplicationError):
+    """没有这个模板（创建项目/取模板时给错了 id）——资源不在，404。"""
+
+    def __init__(self, template_id: object) -> None:
+        super().__init__(
+            f"没有这个模板：{template_id}",
+            code="unknown_template",
+            template_id=str(template_id),
+        )
+
+
 class DigestAlreadyWritten(ApplicationError):
     """同一个轮次的摘要已经写过了（`07 §7.14`：摘要只追加，不改写）。
 

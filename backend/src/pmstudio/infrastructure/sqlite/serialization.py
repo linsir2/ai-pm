@@ -82,7 +82,14 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.label import ClaimLabel, Zone
 from pmstudio.domain.shared.memory import MemoryChange, MemoryKind, MemoryOp
+from pmstudio.domain.shared.sections import SlotSpec
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template import (
+    DocumentTemplate,
+    TemplatedSection,
+    TemplateRole,
+    standard_template,
+)
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 
 
@@ -200,11 +207,60 @@ def version_from_row(row: dict) -> Version:
     )
 
 
+def template_to_json(template: DocumentTemplate) -> dict:
+    """模板规格全文 JSON（行内存快照的形状；`documents.template` 列存它）。"""
+
+    return {
+        "template_id": template.template_id,
+        "title": template.title,
+        "sections": [
+            {
+                "section_id": str(section.section_id),
+                "title": section.title,
+                "purpose": section.purpose,
+                "role": section.role.value,
+                "slots": [
+                    {"name": slot.name, "title": slot.title, "kind": slot.kind.value}
+                    for slot in section.slots
+                ],
+            }
+            for section in template.sections
+        ],
+    }
+
+
+def template_from_json(data: dict) -> DocumentTemplate:
+    """行内快照读回。形状坏了直接炸（行是自己写的，读不回就是 bug，不是用户错）。"""
+
+    return DocumentTemplate(
+        template_id=str(data["template_id"]),
+        title=str(data["title"]),
+        sections=tuple(
+            TemplatedSection(
+                section_id=SectionId(str(item["section_id"])),
+                title=str(item["title"]),
+                purpose=str(item["purpose"]),
+                role=TemplateRole(str(item.get("role", "plain"))),
+                slots=tuple(
+                    SlotSpec(
+                        name=str(slot["name"]),
+                        title=str(slot["title"]),
+                        kind=BlockKind(str(slot["kind"])),
+                    )
+                    for slot in item.get("slots", ())
+                ),
+            )
+            for item in data["sections"]
+        ),
+    )
+
+
 def document_to_row(document: Document, *, now: datetime) -> dict:
     return {
         "project_id": str(document.project_id),
         "document_id": str(document.document_id),
         "title": document.title,
+        "template": template_to_json(document.template),
         "blocks": [block_to_json(block) for block in document.blocks],
         "preference_entries": [
             entry_to_json(entry) for entry in document.preference_entries
@@ -220,6 +276,12 @@ def document_from_row(row: dict, versions: tuple[Version, ...]) -> Document:
         document_id=DocumentId(row["document_id"]),
         project_id=ProjectId(row["project_id"]),
         title=row["title"],
+        # 老行没有 template 键 → STANDARD（与现行 13 章逐字节同义）。
+        template=(
+            template_from_json(row["template"])
+            if row.get("template") is not None
+            else standard_template()
+        ),
         blocks=tuple(block_from_json(item) for item in row["blocks"]),
         preference_entries=tuple(
             entry_from_json(item) for item in row["preference_entries"]

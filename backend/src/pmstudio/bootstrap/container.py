@@ -22,6 +22,7 @@ from pmstudio.application.use_cases import (
     CloseDiscussion,
     ConfirmDraft,
     CreateProject,
+    CreateTemplate,
     DeleteMaterial,
     DigRound,
     DismissCandidate,
@@ -34,6 +35,7 @@ from pmstudio.application.use_cases import (
     GetEvidence,
     GetRound,
     GetSchema,
+    GetTemplate,
     GetVersionDiff,
     GetVersions,
     GetWorkspace,
@@ -47,6 +49,7 @@ from pmstudio.application.use_cases import (
     ListMaterials,
     ListProjects,
     ListRounds,
+    ListTemplates,
     ReparseMaterial,
     RetryExploration,
     RetryRound,
@@ -96,9 +99,11 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteExplorationRepository,
     SqliteMemoryRepository,
     SqliteRoundRepository,
+    SqliteTemplateRepository,
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
+from pmstudio.infrastructure.templates.loader import TEMPLATES_DIR, load_template_dir
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
 from pmstudio.infrastructure.tools.tavily import TavilySearchGateway
@@ -157,6 +162,12 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     observations_repo = SqliteObservationRepository(connection)
     digest_repo = SqliteDigestRepository(connection)
     inspiration_repo = SqliteInspirationRepository(connection)
+    template_repo = SqliteTemplateRepository(connection)
+    # 内置模板 seed（幂等 upsert）：TOML 是定义源，表是运行时源。
+    # 改 TOML 发版即改内置；自定义模板（builtin=0）id 不同，seed 碰不到。
+    # 老项目行内存的是全文快照，库里怎么变都不影响它们。
+    for builtin_template in load_template_dir(TEMPLATES_DIR).values():
+        template_repo.save(builtin_template, builtin=True)
     uow = SqliteUnitOfWork(connection)
     prompts = FilePromptLibrary(PROMPTS_DIR)
     if gateway is None:
@@ -498,7 +509,12 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             events=bus,
         ),
         list_discussions=ListDiscussions(discussions=discussions),
-        create_project=CreateProject(factory=factory, index=index, clock=clock, ids=ids),
+        create_project=CreateProject(
+            factory=factory, index=index, clock=clock, ids=ids, templates=template_repo
+        ),
+        create_template=CreateTemplate(templates=template_repo, ids=ids),
+        list_templates=ListTemplates(templates=template_repo),
+        get_template=GetTemplate(templates=template_repo),
         workspace=GetWorkspace(
             documents=documents,
             rounds=rounds,
@@ -514,7 +530,11 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         list_projects=ListProjects(index=index),
         get_round=get_round,
         # 复用 175 行已加载的那份角色表（同一进程只 `load_discussion_roles()` 一次）
-        get_schema=GetSchema(discussion_roles=discussion_roles, personas=personas),
+        get_schema=GetSchema(
+            discussion_roles=discussion_roles,
+            personas=personas,
+            templates=template_repo.list(),
+        ),
         list_rounds=ListRounds(index=index),
         search=SearchProject(
             documents=documents, evidence=evidences, index=index, materials=material_search

@@ -21,9 +21,15 @@ from pmstudio.domain.shared.ids import (
     EvidenceId,
     FeatureSlug,
     ProjectId,
+    SectionId,
 )
 from pmstudio.domain.shared.invariants import DInvariant
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template import (
+    DocumentTemplate,
+    TemplatedSection,
+    TemplateRole,
+)
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 
 NOW = datetime(2026, 9, 22, 10, 0, 0)
@@ -569,3 +575,78 @@ def test_D6_rollback_keeps_tombstones_for_ids_that_stay_deleted():
         "feat-order-export",
         "feat-order-export.name",
     ]
+
+
+def _light_template():
+    """6 章轻量模板（与 `light.toml` 同形）。
+
+    内联构造而不是读 TOML：domain 测试不碰 infrastructure；
+    TOML 解析由 loader 测试覆盖，两边各管各的。
+    """
+
+    def section(
+        section_id: str, title: str, role: TemplateRole = TemplateRole.PLAIN
+    ) -> TemplatedSection:
+        return TemplatedSection(
+            section_id=SectionId(section_id), title=title, purpose="摆设", role=role
+        )
+
+    return DocumentTemplate(
+        template_id="light",
+        title="轻量版",
+        sections=(
+            section("s1", "背景与问题", TemplateRole.BACKBONE),
+            section("s2", "目标与非目标", TemplateRole.BACKBONE),
+            section("s4", "范围与边界", TemplateRole.BACKBONE),
+            section("s5", "功能需求", TemplateRole.FEATURE),
+            section("s11", "风险与开放问题", TemplateRole.OPEN_QUESTIONS),
+            section("s13", "版本历史", TemplateRole.VERSION_HISTORY),
+        ),
+    )
+
+
+def test_new_document_with_light_template_builds_six_roots():
+    document = Document.new(
+        document_id=DocumentId("doc1"),
+        project_id=ProjectId("p1"),
+        title="t",
+        now=NOW,
+        template=_light_template(),
+    )
+
+    assert [str(block.block_id) for block in document.blocks] == [
+        "s1",
+        "s2",
+        "s4",
+        "s5",
+        "s11",
+        "s13",
+    ]
+    assert document.template.template_id == "light"
+    assert document.versions[0].summary == "初始化 6 章骨架"
+
+
+def test_light_template_wrong_roots_are_rejected_naming_the_template():
+    template = _light_template()
+    document = Document.new(
+        document_id=DocumentId("doc1"),
+        project_id=ProjectId("p1"),
+        title="t",
+        now=NOW,
+        template=template,
+    )
+    blocks = tuple(block for block in document.blocks if block.block_id != BlockId("s4"))
+
+    with pytest.raises(SectionSetViolation) as exc:
+        Document(
+            document_id=DocumentId("doc1"),
+            project_id=ProjectId("p1"),
+            title="t",
+            blocks=blocks,
+            versions=document.versions,
+            created_at=NOW,
+            template=template,
+        )
+
+    assert exc.value.invariant == DInvariant.D1
+    assert "轻量版" in exc.value.message

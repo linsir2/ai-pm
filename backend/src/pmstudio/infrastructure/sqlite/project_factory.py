@@ -7,6 +7,7 @@ from pmstudio.application.ports import IdGenerator
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.ids import DocumentId, ProjectId
+from pmstudio.domain.shared.template import DocumentTemplate
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
@@ -19,14 +20,20 @@ class SqliteProjectFactory:
         self._connection = connection
         self._ids = ids
 
-    def create(self, *, project_id: ProjectId, title: str, now: datetime) -> DocumentId:
+    def create(
+        self, *, project_id: ProjectId, title: str, now: datetime, template: DocumentTemplate
+    ) -> DocumentId:
         document_id = DocumentId(self._ids.new("doc"))
         documents = SqliteDocumentRepository(self._connection)
         evidences = SqliteEvidenceRepository(self._connection)
         with SqliteUnitOfWork(self._connection):
             documents.save(
                 Document.new(
-                    document_id=document_id, project_id=project_id, title=title, now=now
+                    document_id=document_id,
+                    project_id=project_id,
+                    title=title,
+                    now=now,
+                    template=template,
                 )
             )
             evidences.save(EvidenceLedger.empty(project_id))

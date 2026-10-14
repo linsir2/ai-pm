@@ -26,6 +26,8 @@ CODE_STATUS = {
     "unknown_role": 404,
     # 讨论 panel（M18）：同一线程已经有一轮在跑
     "discussion_busy": 409,
+    # 模板库（`02` §11.0.68）：给错模板 id = "资源不在"，与材料同档
+    "unknown_template": 404,
     # 工具层（C-2）：材料读不了 = 422（是内容问题，不是服务器故障）；太大 = 413
     "unsupported_material": 422,
     "material_too_large": 413,

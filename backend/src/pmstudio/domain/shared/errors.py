@@ -34,6 +34,16 @@ class ShapeError(DomainError):
 
 
 # —— authoring ——
+class BadTemplateDefinition(InvariantViolation):
+    """模板本身形状不对（锚点缺/重复、章节 id 重复、空模板、id 为空）。
+
+    定义时炸，不进库（`02` §11.0.68）：坏模板进库等于给以后每个项目埋雷。
+    """
+
+    def __init__(self, message: str, **details: object) -> None:
+        super().__init__(message, invariant=DInvariant.D1, **details)
+
+
 class UnknownSection(InvariantViolation):
     def __init__(self, section_id: object) -> None:
         super().__init__(
@@ -42,19 +52,25 @@ class UnknownSection(InvariantViolation):
 
 
 class SectionSetViolation(InvariantViolation):
-    def __init__(self, **details: object) -> None:
-        super().__init__("13 章骨架必须完整且不多不少", invariant=DInvariant.D1, **details)
+    def __init__(self, *, template_title: object = "13 章", **details: object) -> None:
+        super().__init__(
+            f"{template_title}骨架必须完整且不多不少",
+            invariant=DInvariant.D1,
+            **details,
+        )
 
 
 class SectionOrderViolation(InvariantViolation):
-    def __init__(self, **details: object) -> None:
-        super().__init__("13 章顺序不可变", invariant=DInvariant.D1, **details)
+    def __init__(self, *, template_title: object = "13 章", **details: object) -> None:
+        super().__init__(f"{template_title}顺序不可变", invariant=DInvariant.D1, **details)
 
 
 class FeatureNotAllowedHere(InvariantViolation):
-    def __init__(self, *, section_id: object, feature_slug: object) -> None:
+    def __init__(
+        self, *, section_id: object, feature_slug: object, feature_home: object = "s5"
+    ) -> None:
         super().__init__(
-            f"功能子树只能长在 s5，{section_id} 不行",
+            f"功能子树只能长在 {feature_home}，{section_id} 不行",
             invariant=DInvariant.D3,
             section_id=str(section_id),
             feature_slug=str(feature_slug),

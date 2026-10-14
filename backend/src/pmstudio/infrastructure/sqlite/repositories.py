@@ -21,6 +21,7 @@ from pmstudio.application.errors import (
     UnknownExploration,
     UnknownProject,
     UnknownRound,
+    UnknownTemplate,
 )
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.discussion.thread import Discussion, ThreadStatus
@@ -34,6 +35,7 @@ from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import DiscussionId, ExplorationId, ProjectId, RoundId
+from pmstudio.domain.shared.template import DocumentTemplate
 from pmstudio.infrastructure.sqlite import serialization as ser
 
 
@@ -63,6 +65,14 @@ class SqliteDocumentRepository:
                 "blocks": json.loads(row["blocks"]),
                 "preference_entries": json.loads(row["preference_entries"]),
                 "tombstones": json.loads(row["tombstones"]),
+                # 老库补列前存下的行没有 template（ADDED_COLUMNS 给 '{}'）→
+                # 当缺失回 STANDARD（`document_from_row` 的 `.get` 回落）。
+                # `'{}'` 是 truthy 字符串，必须一并判空，否则 `from_json` 炸 KeyError。
+                "template": (
+                    json.loads(row["template"]) or None
+                    if "template" in row.keys() and row["template"]
+                    else None
+                ),
             },
             versions,
         )
@@ -71,12 +81,13 @@ class SqliteDocumentRepository:
         row = ser.document_to_row(document, now=datetime.now(UTC))
         self._connection.execute(
             """
-            INSERT INTO documents (project_id, document_id, title, blocks,
+            INSERT INTO documents (project_id, document_id, title, template, blocks,
                                    preference_entries, tombstones, created_at, updated_at)
-            VALUES (:project_id, :document_id, :title, :blocks, :preference_entries,
+            VALUES (:project_id, :document_id, :title, :template, :blocks, :preference_entries,
                     :tombstones, :created_at, :updated_at)
             ON CONFLICT(project_id) DO UPDATE SET
                 title = excluded.title,
+                template = excluded.template,
                 blocks = excluded.blocks,
                 preference_entries = excluded.preference_entries,
                 tombstones = excluded.tombstones,
@@ -84,6 +95,7 @@ class SqliteDocumentRepository:
             """,
             {
                 **row,
+                "template": json.dumps(row["template"], ensure_ascii=False),
                 "blocks": json.dumps(row["blocks"], ensure_ascii=False),
                 "preference_entries": json.dumps(
                     row["preference_entries"], ensure_ascii=False
@@ -585,3 +597,44 @@ class SqliteMemoryRepository:
                 _now(),
             ),
         )
+
+
+class SqliteTemplateRepository:
+    """模板库表：定义时来源。读只给 `DocumentTemplate`，不做 validate
+    （入库前调用方已断过；行内快照的 validate 在 `Document` 构造里）。"""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def save(self, template: DocumentTemplate, *, builtin: bool) -> None:
+        self._connection.execute(
+            "INSERT INTO templates (template_id, title, spec, builtin, created_at,"
+            " updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(template_id) DO UPDATE SET title = excluded.title,"
+            " spec = excluded.spec, builtin = excluded.builtin,"
+            " updated_at = excluded.updated_at",
+            (
+                template.template_id,
+                template.title,
+                json.dumps(ser.template_to_json(template), ensure_ascii=False),
+                1 if builtin else 0,
+                _now(),
+                _now(),
+            ),
+        )
+
+    def list(self) -> tuple[DocumentTemplate, ...]:
+        rows = self._connection.execute(
+            "SELECT spec FROM templates ORDER BY builtin DESC, template_id"
+        ).fetchall()
+        return tuple(
+            ser.template_from_json(json.loads(row["spec"])) for row in rows
+        )
+
+    def get(self, template_id: str) -> DocumentTemplate:
+        row = self._connection.execute(
+            "SELECT spec FROM templates WHERE template_id = ?", (template_id,)
+        ).fetchone()
+        if row is None:
+            raise UnknownTemplate(template_id)
+        return ser.template_from_json(json.loads(row["spec"]))

@@ -14,6 +14,7 @@ from pmstudio.application.use_cases import (
     AssembleCards,
     CloseDiscussion,
     CreateProject,
+    CreateTemplate,
     DeleteMaterial,
     DigRound,
     DismissCandidate,
@@ -26,6 +27,7 @@ from pmstudio.application.use_cases import (
     GetEvidence,
     GetRound,
     GetSchema,
+    GetTemplate,
     GetVersionDiff,
     GetVersions,
     GetWorkspace,
@@ -38,6 +40,7 @@ from pmstudio.application.use_cases import (
     ListMaterials,
     ListProjects,
     ListRounds,
+    ListTemplates,
     ReparseMaterial,
     RollbackVersion,
     SayToThread,
@@ -71,6 +74,9 @@ class ApiServices:
     close_discussion: CloseDiscussion
     list_discussions: ListDiscussions
     create_project: CreateProject
+    create_template: CreateTemplate
+    get_template: GetTemplate
+    list_templates: ListTemplates
     workspace: GetWorkspace
     list_projects: ListProjects
     get_round: GetRound

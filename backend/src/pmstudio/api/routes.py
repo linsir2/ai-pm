@@ -21,6 +21,7 @@ from pmstudio.api.schemas import (
     StartDiscussionRequest,
     StartExplorationRequest,
     StartRoundRequest,
+    TemplateCreateRequest,
 )
 from pmstudio.api.sse import as_json, event_stream
 from pmstudio.application.commands import RoundCommand
@@ -64,8 +65,33 @@ async def schema(request: Request):  # type: ignore[no-untyped-def]
 
 @router.post("/projects", status_code=201)
 async def create_project(request: Request, body: CreateProjectRequest):  # type: ignore[no-untyped-def]
-    summary = await services_of(request).create_project(title=body.title)
+    summary = await services_of(request).create_project(
+        title=body.title, template_id=body.template_id
+    )
     return as_json(summary)
+
+
+@router.get("/templates")
+async def list_templates(request: Request):  # type: ignore[no-untyped-def]
+    """模板库全文（创建页的选择器读它）。"""
+
+    return as_json(await services_of(request).list_templates())
+
+
+@router.post("/templates", status_code=201)
+async def create_template(request: Request, body: TemplateCreateRequest):  # type: ignore[no-untyped-def]
+    template = await services_of(request).create_template(
+        title=body.title,
+        sections=[item.model_dump() for item in body.sections],
+    )
+    return as_json(
+        await services_of(request).get_template(template_id=template)
+    )
+
+
+@router.get("/templates/{template_id}")
+async def get_template(request: Request, template_id: str):  # type: ignore[no-untyped-def]
+    return as_json(await services_of(request).get_template(template_id=template_id))
 
 
 @router.get("/projects")

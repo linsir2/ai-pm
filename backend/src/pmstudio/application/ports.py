@@ -25,6 +25,7 @@ from pmstudio.domain.shared.ids import (
     ProjectId,
     RoundId,
 )
+from pmstudio.domain.shared.template import DocumentTemplate
 
 if TYPE_CHECKING:
     from pmstudio.application.commands import RoundCommand
@@ -231,13 +232,24 @@ class WorkspaceIndex(Protocol):
 
 @runtime_checkable
 class ProjectFactory(Protocol):
-    """建项目：造一份 13 章空骨架文档 + 空账本并落库。
+    """建项目：造一份空骨架文档 + 空账本并落库（骨架形状由传进来的模板定）。
 
     它与 `DocumentWriter` 是两回事：它**只能造空文档**，改已有文档仍然只有
     `ProposalCommitter` 一条路（"AI 不写文档"这条不变式靠这个划分保住）。
     """
 
-    def create(self, *, project_id: ProjectId, title: str, now: datetime) -> DocumentId: ...
+    def create(
+        self, *, project_id: ProjectId, title: str, now: datetime, template: DocumentTemplate
+    ) -> DocumentId: ...
+
+
+@runtime_checkable
+class TemplateRepository(Protocol):
+    """模板库表：定义时来源。只存取，不校验（入库前调用方已 `validate` 过）。"""
+
+    def save(self, template: DocumentTemplate, *, builtin: bool) -> None: ...
+    def list(self) -> tuple[DocumentTemplate, ...]: ...
+    def get(self, template_id: str) -> DocumentTemplate: ...
 
 
 @runtime_checkable

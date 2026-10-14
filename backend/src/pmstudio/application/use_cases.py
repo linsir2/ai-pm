@@ -7,7 +7,7 @@
 import asyncio
 import hashlib
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -121,6 +121,7 @@ from pmstudio.application.dto import (
     RoundView,
     SchemaView,
     SearchResultsView,
+    TemplateView,
     ThreadView,
     VersionListView,
     WorkspaceView,
@@ -133,6 +134,7 @@ from pmstudio.application.dto import (
     round_view,
     schema_view,
     search_hits,
+    template_view,
     thread_view,
     used_by_entries,
     version_summary_view,
@@ -179,6 +181,7 @@ from pmstudio.application.ports import (
     RoundCanceller,
     SeatCatalog,
     SeatDefinition,
+    TemplateRepository,
     WebFetcher,
     WebSearchGateway,
     WorkspaceIndex,
@@ -306,6 +309,7 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.label import ClaimLabel, Zone
 from pmstudio.domain.shared.sections import FEATURE_HOME, SECTION_IDS
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template import STANDARD_TEMPLATE_ID, template_from_dict
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.harness.errors import (
     ApplicationError,
@@ -3018,7 +3022,10 @@ def _manual_note(op: WriteOp, *, existing_text: str | None, text: str) -> str:
 
 
 class CreateProject:
-    """建项目 = 建一份空骨架文档（计划 §3.5：v1 不建 Project 聚合）。"""
+    """建项目 = 按选定模板建一份空骨架文档（计划 §3.5：v1 不建 Project 聚合）。
+
+    `template_id` 缺省 standard：老客户端只传 title 照样能建，行为与今天逐字节一致。
+    """
 
     def __init__(
         self,
@@ -3027,16 +3034,65 @@ class CreateProject:
         index: WorkspaceIndex,
         clock: Clock,
         ids: IdGenerator,
+        templates: TemplateRepository,
     ) -> None:
         self._factory = factory
         self._index = index
         self._clock = clock
         self._ids = ids
+        self._templates = templates
 
-    async def __call__(self, *, title: str) -> ProjectSummaryView:
+    async def __call__(
+        self, *, title: str, template_id: str = STANDARD_TEMPLATE_ID
+    ) -> ProjectSummaryView:
+        template = self._templates.get(template_id)
         project_id = ProjectId(self._ids.new("p"))
-        self._factory.create(project_id=project_id, title=title, now=self._clock.now())
+        self._factory.create(
+            project_id=project_id, title=title, now=self._clock.now(), template=template
+        )
         return self._index.summary(project_id)
+
+
+class CreateTemplate:
+    """往模板库里加一套自定义模板：`validate` 过才进库，不过的连 id 都不占。
+
+    id 服务端盖（`tpl-` + 随机）：调用方不许自选——自选会撞 builtin（standard/light）。
+    """
+
+    def __init__(self, *, templates: TemplateRepository, ids: IdGenerator) -> None:
+        self._templates = templates
+        self._ids = ids
+
+    async def __call__(self, *, title: str, sections: Sequence[Mapping[str, object]]) -> str:
+        template = template_from_dict(
+            {
+                "template_id": self._ids.new("tpl"),
+                "title": title,
+                "sections": list(sections),
+            }
+        )
+        self._templates.save(template, builtin=False)
+        return template.template_id
+
+
+class ListTemplates:
+    """列出库里全部模板（builtin 在前，供创建项目时选）。"""
+
+    def __init__(self, *, templates: TemplateRepository) -> None:
+        self._templates = templates
+
+    async def __call__(self) -> tuple[TemplateView, ...]:
+        return tuple(template_view(item) for item in self._templates.list())
+
+
+class GetTemplate:
+    """取一套模板的全文（创建页预览 / 调试用）。"""
+
+    def __init__(self, *, templates: TemplateRepository) -> None:
+        self._templates = templates
+
+    async def __call__(self, *, template_id: str) -> TemplateView:
+        return template_view(self._templates.get(template_id))
 
 
 class GetWorkspace:
@@ -3500,15 +3556,25 @@ class GetSchema:
 
     `discussion_roles` 与 `personas` 都是**构造时注入的元组**（不是仓储）：
     两张表随进程加载一次，读 schema 只是把它们摆出来，所以这里依然拿不到任何 IO 端口。
+    `templates` 同理：库表在装配时读一次（模板库只增不改，读时快照足够）。
     """
 
-    def __init__(self, *, discussion_roles: tuple = (), personas: tuple = ()) -> None:
+    def __init__(
+        self,
+        *,
+        discussion_roles: tuple = (),
+        personas: tuple = (),
+        templates: tuple = (),
+    ) -> None:
         self._discussion_roles = discussion_roles
         self._personas = personas
+        self._templates = templates
 
     async def __call__(self) -> SchemaView:
         return schema_view(
-            discussion_roles=self._discussion_roles, personas=self._personas
+            discussion_roles=self._discussion_roles,
+            personas=self._personas,
+            templates=self._templates,
         )
 
 

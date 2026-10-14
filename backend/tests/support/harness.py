@@ -49,6 +49,7 @@ from tests.support.fakes import (
     InMemoryMemoryRepository,
     InMemoryObservationRepository,
     InMemoryRoundRepository,
+    InMemoryTemplateRepository,
 )
 
 
@@ -64,11 +65,15 @@ class InMemoryProjectFactory:
         self._index = index
         self._ids = ids
 
-    def create(self, *, project_id, title, now):  # type: ignore[no-untyped-def]
+    def create(self, *, project_id, title, now, template=None):  # type: ignore[no-untyped-def]
         document_id = DocumentId(self._ids.new("doc"))
         self._documents.seed(
             Document.new(
-                document_id=document_id, project_id=project_id, title=title, now=now
+                document_id=document_id,
+                project_id=project_id,
+                title=title,
+                now=now,
+                template=template,
             )
         )
         self._evidences.seed(EvidenceLedger.empty(project_id))
@@ -307,6 +312,14 @@ class Harness:
         self.observations = InMemoryObservationRepository()
         self.digests = InMemoryDigestRepository()
         self.inspirations = InMemoryInspirationRepository()
+        self.templates = InMemoryTemplateRepository()
+        # 生产在启动时把 TOML 内置模板 seed 进库；测试镜像同一件事——
+        # 否则默认 `template_id="standard"` 的创建全炸（与 `tools` 用真 TOML 同一理由）。
+        from pmstudio.domain.shared.template import standard_template
+        from pmstudio.infrastructure.templates.loader import TEMPLATES_DIR, load_template_file
+
+        self.templates.save(standard_template(), builtin=True)
+        self.templates.save(load_template_file(TEMPLATES_DIR / "light.toml"), builtin=True)
 
     def seed_project(self, *, title: str = "订单中台") -> ProjectId:
         self.documents.seed(make_document(title=title))
@@ -741,8 +754,27 @@ class Harness:
         from pmstudio.application.use_cases import CreateProject
 
         return CreateProject(
-            factory=self.factory, index=self.index, clock=self.clock, ids=self.ids
+            factory=self.factory,
+            index=self.index,
+            clock=self.clock,
+            ids=self.ids,
+            templates=self.templates,
         )
+
+    def create_template(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import CreateTemplate
+
+        return CreateTemplate(templates=self.templates, ids=self.ids)
+
+    def list_templates(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import ListTemplates
+
+        return ListTemplates(templates=self.templates)
+
+    def get_template(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import GetTemplate
+
+        return GetTemplate(templates=self.templates)
 
     def get_round(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetRound
@@ -794,7 +826,11 @@ class Harness:
     def get_schema(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetSchema
 
-        return GetSchema(discussion_roles=self.discussion_roles, personas=self.personas)
+        return GetSchema(
+            discussion_roles=self.discussion_roles,
+            personas=self.personas,
+            templates=tuple(self.templates.list()),
+        )
 
     def list_rounds(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import ListRounds
@@ -958,6 +994,9 @@ class Harness:
             close_discussion=self.close_discussion(),
             list_discussions=self.list_discussions(),
             create_project=self.create_project(),
+            create_template=self.create_template(),
+            list_templates=self.list_templates(),
+            get_template=self.get_template(),
             workspace=self.get_workspace(),
             list_projects=self.list_projects(),
             get_round=self.get_round(),

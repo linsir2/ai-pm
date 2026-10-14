@@ -1,0 +1,40 @@
+# 轻量模板（作者起草，2026-10-15）：6 章，只保留"说清要做什么"的最小集。
+# 三锚点必存（拍板）：功能 s5 / 开放问题 s11 / 版本历史 s13，一个不少。
+template_id = "light"
+title = "轻量版"
+
+[[sections]]
+id = "s1"
+title = "背景与问题"
+purpose = "为什么现在要做：现状有什么问题、不做会付出什么代价。"
+role = "backbone"
+
+[[sections]]
+id = "s2"
+title = "目标与非目标"
+purpose = "要达成什么、明确不做什么；目标要能被验收。"
+role = "backbone"
+
+[[sections]]
+id = "s4"
+title = "范围与边界"
+purpose = "本期做到哪、本期不做哪、边界情况谁来处理。"
+role = "backbone"
+
+[[sections]]
+id = "s5"
+title = "功能需求"
+purpose = "每个功能一棵子树；必填 6 项：名称、一句话描述、服务的目标、面向角色、异常与边界、验收标准。"
+role = "feature"
+
+[[sections]]
+id = "s11"
+title = "风险与开放问题"
+purpose = "还没定的都放这儿；堵住交付的要标出来。"
+role = "open_questions"
+
+[[sections]]
+id = "s13"
+title = "版本历史"
+purpose = "不用手写，导出时由版本表生成。"
+role = "version_history"
