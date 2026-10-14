@@ -1,5 +1,6 @@
-/* 发起调研的能力（M8）：条目工具行（EntryList 在 6 处渲染）用它，免得一路传 props。
-   点「调研」只是打开发起抽屉；真发请求是抽屉上「开始调研」之后的事（入口与动作分开）。 */
+/* 发起调研的能力（M8）：选区浮条与讨论区顶部用它，免得一路传 props。
+   点「调研这段」/「发起调研」只是打开发起抽屉；真发请求是抽屉上「开始调研」之后的事
+   （入口与动作分开）。 */
 
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";

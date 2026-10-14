@@ -57,4 +57,16 @@ describe("ResearchDrawer", () => {
     const button = screen.getByRole("button", { name: /调研/ }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
   });
+
+  it("超长选段：全文照显示，并说明只取前 500 字发往后端（防静默截断）", () => {
+    draw({ anchor: { kind: "entry", ref: "e1", focus: `导${"出".repeat(600)}` } });
+
+    expect(screen.getByText(/仅前 500 字作补充说明/)).toBeTruthy();
+  });
+
+  it("500 字以内不显示截断说明", () => {
+    draw();
+
+    expect(screen.queryByText(/仅前 500 字/)).toBeNull();
+  });
 });

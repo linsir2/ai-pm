@@ -96,7 +96,7 @@ describe("LoopComposer", () => {
 });
 
 describe("composer 页签隔离（T7，LoopColumn 层）", () => {
-  function drawColumn(tab: "round" | "discussion") {
+  function drawColumn(tab: "round" | "discussion" | "tray", research = vi.fn()) {
     const noop = vi.fn();
     render(
       <LoopColumn
@@ -126,7 +126,7 @@ describe("composer 页签隔离（T7，LoopColumn 层）", () => {
         onRetry={noop}
         onAbandon={noop}
         onViewRound={noop}
-        onStartResearch={noop}
+        onStartResearch={research}
         onRetryExploration={noop}
         onAbandonExploration={noop}
         onKeepSeed={noop}
@@ -150,6 +150,7 @@ describe("composer 页签隔离（T7，LoopColumn 层）", () => {
         composerOnStartRound={noop}
       />,
     );
+    return research;
   }
 
   it("T7a round 页签有 composer（防搬丢输入）", () => {
@@ -162,6 +163,19 @@ describe("composer 页签隔离（T7，LoopColumn 层）", () => {
     drawColumn("discussion");
 
     expect(screen.queryByLabelText("这一轮的想法")).toBeNull();
+  });
+
+  it("T10 整份文档调研入口在讨论页签（M17：从灵感箱底部搬过来，防回归）", () => {
+    const research = drawColumn("discussion");
+
+    fireEvent.click(screen.getByRole("button", { name: "发起调研（整份文档）" }));
+    expect(research).toHaveBeenCalledTimes(1);
+  });
+
+  it("T11 灵感箱页签没有发起按钮（入口只在讨论区）", () => {
+    drawColumn("tray");
+
+    expect(screen.queryByRole("button", { name: "发起调研（整份文档）" })).toBeNull();
   });
 });
 

@@ -51,7 +51,6 @@ export function InboxTray({
   onDismissCard,
   onDiscuss,
   onVerify,
-  onStartDocument,
 }: {
   /** 讨论卡的数据源（state=new 的卡进箱）：全部线程，最新在前。 */
   threads: ThreadView[];
@@ -69,7 +68,6 @@ export function InboxTray({
   onDiscuss: (topic: string) => void;
   /** 拿去验证（M13）：拿卡片原话起一趟聚焦调研（候选照常回这个箱）。 */
   onVerify: (statement: string) => void;
-  onStartDocument: () => void;
 }) {
   const running = explorations.filter((item) => item.status === "running");
   const failed = explorations.filter((item) => item.status === "failed");
@@ -94,7 +92,7 @@ export function InboxTray({
       {empty && (
         <>
           <p className="muted small">还没有可过目的东西</p>
-          <p className="muted small">去条目点「调研」，或开条讨论聊出卡。</p>
+          <p className="muted small">去讨论区发起调研，或开条讨论聊出卡。</p>
         </>
       )}
 
@@ -268,15 +266,6 @@ export function InboxTray({
           </ul>
         </section>
       )}
-
-      <div className="loop__actions">
-        <button type="button" className="btn" disabled={busy} onClick={onStartDocument}>
-          发起调研（整份文档）
-        </button>
-        {isRunning(explorations) && (
-          <span className="input__hint">同一项目同时只允许一趟调研。</span>
-        )}
-      </div>
     </div>
   );
 }

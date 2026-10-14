@@ -90,7 +90,6 @@ function draw(over: Partial<Parameters<typeof InboxTray>[0]> = {}) {
     onDismissCard: vi.fn(),
     onDiscuss: vi.fn(),
     onVerify: vi.fn(),
-    onStartDocument: vi.fn(),
     ...over,
   };
   render(<InboxTray {...props} />);
@@ -241,22 +240,13 @@ describe("InboxTray", () => {
     expect(screen.getByText("超出上限，已截断 3 条")).toBeTruthy();
   });
 
-  it("有调研在跑时不能再发起（同项目同时只允许一趟）", () => {
+  it("发起按钮已搬去讨论区：箱底不再有「发起调研（整份文档）」（M17 需求变更）", () => {
     draw({
       explorations: [exploration({ status: "running", candidates: [] })],
     });
 
-    const start = screen.getByRole("button", { name: "发起调研（整份文档）" }) as HTMLButtonElement;
-    expect(start.disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "发起调研（整份文档）" })).toBeNull();
     expect(screen.getByText(/调研在跑/)).toBeTruthy();
-  });
-
-  it("点『发起调研（整份文档）』调到 onStartDocument", () => {
-    const props = draw({ explorations: [] });
-
-    fireEvent.click(screen.getByRole("button", { name: "发起调研（整份文档）" }));
-
-    expect(props.onStartDocument).toHaveBeenCalledTimes(1);
   });
 
   it("有动作在途时全部点不动（防连点）", () => {

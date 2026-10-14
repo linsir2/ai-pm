@@ -2,6 +2,7 @@
    它是发起卡，不是结果——结果在闭环区的「过目台」上逐条过目。 */
 
 import type { ExplorationAnchor } from "../api/payload";
+import { truncateFocus } from "../api/payload";
 
 export function ResearchDrawer({
   anchor,
@@ -36,6 +37,11 @@ export function ResearchDrawer({
             <article className="prop">
               <div>
                 <p className="prop__text">{anchor.focus}</p>
+                {truncateFocus(anchor.focus) !== anchor.focus && (
+                  <p className="muted small">
+                    （选段过长，仅前 500 字作补充说明；完整条目已由编号带入）
+                  </p>
+                )}
                 <div className="prop__foot">
                   <span className="tag">{anchor.ref}</span>
                 </div>

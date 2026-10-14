@@ -274,3 +274,48 @@ describe("DiscussionTray", () => {
     expect(props.onClose).not.toHaveBeenCalled();
   });
 });
+
+describe("DiscussionTray · 顶部发起调研（M17：从灵感箱底部搬过来）", () => {
+  function runningExploration() {
+    return {
+      exploration_id: "x-1",
+      project_id: "p1",
+      kind: "inquiry",
+      status: "running",
+      scope_kind: "document",
+      scope_ref: null,
+      scope_text: null,
+      created_at: "2026-10-05T10:00:00+00:00",
+      failure_reason: null,
+      abandon_reason: null,
+      overflow_count: 0,
+      candidates: [],
+    } as never;
+  }
+
+  it("D1 点「发起调研（整份文档）」把请求交出去", () => {
+    const props = draw({ onStartResearch: vi.fn() });
+
+    fireEvent.click(screen.getByRole("button", { name: "发起调研（整份文档）" }));
+    expect(props.onStartResearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("D2 有调研在跑：按钮禁用 + 照实说只允许一趟", () => {
+    draw({
+      onStartResearch: vi.fn(),
+      explorations: [runningExploration()],
+      explorationsPending: false,
+    });
+
+    expect(
+      (screen.getByRole("button", { name: "发起调研（整份文档）" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByText(/同一项目同时只允许一趟调研/)).toBeTruthy();
+  });
+
+  it("D3 没传 onStartResearch 就不出这一行（旧调用方不受影响）", () => {
+    draw({});
+
+    expect(screen.queryByRole("button", { name: "发起调研（整份文档）" })).toBeNull();
+  });
+});

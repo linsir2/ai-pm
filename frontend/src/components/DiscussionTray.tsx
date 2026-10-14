@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 
-import type { ThreadView } from "../api/types";
+import type { ExplorationView, ThreadView } from "../api/types";
 import { REVIEW_ACTION_TEXT } from "../labels";
 import {
   canAssemble,
@@ -18,6 +18,7 @@ import {
   turnsLeft,
 } from "../state/discussions";
 import type { DiscussionAnchor, DiscussionRoleOption } from "../state/discussions";
+import { isRunning } from "../state/explorations";
 import { EvidenceChip } from "./EvidenceChip";
 
 export function DiscussionTray({
@@ -35,6 +36,9 @@ export function DiscussionTray({
   onDismiss,
   onVerify,
   onClose,
+  onStartResearch,
+  explorations = [],
+  explorationsPending = false,
 }: {
   threads: ThreadView[];
   /** 角色选项（`/schema` 的 `discussion_roles`，或离线回落那一条）。 */
@@ -53,6 +57,12 @@ export function DiscussionTray({
   /** 拿去验证（M13）：拿卡片原话起一趟聚焦调研；候选进灵感箱。 */
   onVerify: (statement: string) => void;
   onClose: (threadId: string) => void;
+  /** 整份文档调研的发起（M17：从灵感箱底部搬过来，与"讨论/调研一体"）。
+      不传就不出这一行。 */
+  onStartResearch?: () => void;
+  /** 按钮忙闲的依据（与灵感箱同一口径：动作在途或有趟在跑就禁用）。 */
+  explorations?: ExplorationView[];
+  explorationsPending?: boolean;
 }) {
   const anchorTopic = anchor?.topic ?? "";
   const anchorRole = anchor?.role_id ?? null;
@@ -70,6 +80,7 @@ export function DiscussionTray({
 
   const roles = roleChoices(anchorRole, roleOptionsProp);
   const trimmed = topic.trim();
+  const researchBusy = explorationsPending || isRunning(explorations);
 
   return (
     <div className="loop__scroll">
@@ -79,6 +90,26 @@ export function DiscussionTray({
       <p className="muted small">
         讨论不写文档；聊出想法「总结成卡」，收下才回流下一轮。
       </p>
+
+      {onStartResearch !== undefined && (
+        <section className="loop__group">
+          <p className="loop__label">发起调研</p>
+          <p className="muted small">整份文档还没想透的，先跑一趟调研再聊；候选回灵感箱过目。</p>
+          <div className="loop__actions">
+            <button
+              type="button"
+              className="btn btn--sm"
+              disabled={researchBusy}
+              onClick={onStartResearch}
+            >
+              发起调研（整份文档）
+            </button>
+            {isRunning(explorations) && (
+              <span className="input__hint">同一项目同时只允许一趟调研。</span>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="loop__group">
         <p className="loop__label">开一条讨论</p>

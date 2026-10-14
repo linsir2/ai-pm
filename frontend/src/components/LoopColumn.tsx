@@ -139,7 +139,7 @@ export function LoopColumn({
   onAbandon: () => void;
   /** 切过去只读看某一轮（复用已有的 `viewRound`）。 */
   onViewRound: (roundId: string) => void;
-  /** 发起调研（整份文档；条目入口在文档的条目工具行上）。 */
+  /** 发起调研（整份文档；讨论区顶部，M17 从灵感箱底部搬过来）。 */
   onStartResearch: () => void;
   onRetryExploration: (explorationId: string) => void;
   onAbandonExploration: (explorationId: string) => void;
@@ -252,6 +252,9 @@ export function LoopColumn({
           onDismiss={onDismissDiscussionCard}
           onVerify={onVerifyCard}
           onClose={onCloseDiscussion}
+          onStartResearch={onStartResearch}
+          explorations={explorations}
+          explorationsPending={explorationsPending}
         />
       ) : onTray ? (
         <InboxTray
@@ -270,7 +273,6 @@ export function LoopColumn({
             onDiscussQuestion({ topic, role_id: null });
             onTabChange("discussion");
           }}
-          onStartDocument={onStartResearch}
         />
       ) : (
         <>

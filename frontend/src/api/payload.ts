@@ -300,13 +300,27 @@ export interface ExplorationBody {
   scope: { kind: "entry" | "document"; ref: string | null; text: string | null };
 }
 
+/** 后端 `ExplorationScopeRequest.text` 的 `max_length=500`（码点）。
+    超了直接 422，所以这里中央截断——任何长度的选段/条目都发得出去。
+    截的是"补充说明"，完整条目后端按 `ref` 自己读（entry-scope），不丢信息。 */
+export const FOCUS_LIMIT = 500;
+
+export function truncateFocus(text: string): string {
+  const chars = Array.from(text);
+  if (chars.length <= FOCUS_LIMIT) return text;
+  return `${chars.slice(0, FOCUS_LIMIT - 1).join("")}…`;
+}
+
 export function buildExplorationBody(anchor: ExplorationAnchor): ExplorationBody {
   if (anchor.kind === "entry") {
-    return { kind: "inquiry", scope: { kind: "entry", ref: anchor.ref, text: anchor.focus } };
+    return {
+      kind: "inquiry",
+      scope: { kind: "entry", ref: anchor.ref, text: truncateFocus(anchor.focus) },
+    };
   }
   return {
     kind: "inquiry",
-    scope: { kind: "document", ref: null, text: anchor.focus ?? null },
+    scope: { kind: "document", ref: null, text: anchor.focus === undefined ? null : truncateFocus(anchor.focus) },
   };
 }
 

@@ -656,29 +656,46 @@ a {
   color: var(--open);
 }
 
-.discuss-handle {
+/* 选段动作条（M17）：文档里选中一段后浮出的小 pill，两个动作并排。
+   全输入设备可用——不再按断点隐藏，定位数学本来就 clamp 在栏内。 */
+.selbar {
   position: absolute;
   z-index: 30;
-  height: 28px;
-  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: stretch;
   border: var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+  overflow: hidden;
   transition: opacity 80ms ease;
 }
 
-.discuss-handle[hidden] {
+.selbar[hidden] {
   display: none;
 }
 
-@media (max-width: 979px) {
-  .discuss-handle {
-    display: none;
-  }
+.selbar button {
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.selbar button + button {
+  border-left: var(--hairline);
+}
+
+.selbar button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.selbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .chapter__kicker {

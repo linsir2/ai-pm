@@ -490,6 +490,21 @@ describe("buildExplorationBody", () => {
       scope: { kind: "document", ref: null, text: "导出按客户名筛会不会被滥用" },
     });
   });
+
+  it("超长 focus 中央截断（码点 500 + …，镜像后端 cap）：任何长度都发得出去", () => {
+    const long = `导${"出".repeat(600)}`;
+    const body = buildExplorationBody({ kind: "entry", ref: "e1", focus: long });
+
+    expect(Array.from(body.scope.text ?? "").length).toBeLessThanOrEqual(500);
+    expect(body.scope.text?.endsWith("…")).toBe(true);
+  });
+
+  it("500 字以内原样不动（不截不断）", () => {
+    const exact = "导".repeat(500);
+    const body = buildExplorationBody({ kind: "entry", ref: "e1", focus: exact });
+
+    expect(body.scope.text).toBe(exact);
+  });
 });
 
 describe("materialHitTarget", () => {
