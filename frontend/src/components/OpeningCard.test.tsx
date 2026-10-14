@@ -111,3 +111,36 @@ it("没有 analysis_basis 时不渲染那一行（老行回落空串）", () => 
   draw();
   expect(screen.queryByText(/它这一趟读了/)).toBeNull();
 });
+
+describe("OpeningCard · 目录里自己加的席位要能取消（2026-10-14 修复）", () => {
+  const extra = {
+    seat_id: "seat.permissions",
+    title: "权限与角色",
+    focus: "谁看得见、谁改得动",
+    always_on: false,
+    matched_keywords: [] as string[],
+    why: "",
+  };
+
+  it("还没加：按钮是「+ 加上」，点了把席位递出去", () => {
+    const props = draw({
+      round: round({ available_seats: [extra] as never }),
+      seats: [],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "+ 加上" }));
+    expect(props.onToggleSeat).toHaveBeenCalledWith("seat.permissions");
+  });
+
+  it("加上了：按钮变「已加上 · 取消」且**点得动**，再点一次就移除（防加得上删不掉）", () => {
+    const props = draw({
+      round: round({ available_seats: [extra] as never }),
+      seats: ["seat.permissions"],
+    });
+
+    const button = screen.getByRole("button", { name: "已加上 · 取消" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(props.onToggleSeat).toHaveBeenCalledWith("seat.permissions");
+  });
+});

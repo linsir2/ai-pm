@@ -380,3 +380,64 @@ async def test_run_seat_round_drops_a_placeholder_and_traces_it_instead_of_faili
     assert len(traces) == 1
     assert traces[0].seat_id == SEAT
     assert traces[0].handle == f"{SEAT}:opinions[2]"
+
+
+#: 引用了账本里没有的编号（真跑 2026-10-14：E23 是新一号空间外推出来的幻觉）
+BAD_REF_SEAT_REPLY = json.dumps(
+    {
+        "basis": "读了 s1–s13 全文与 E1",
+        "opinions": [
+            {
+                "local_id": "O1",
+                "form": "judgment",
+                "about": "导出的性能上限",
+                "claim": "单次导出应在 60 秒内完成",
+                "because": "量级在 1 万级，同步实现可满足",
+                "evidence_refs": ["E99"],  # 账本里没有这个编号
+            }
+        ],
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_run_seat_round_salvages_a_hallucinated_ref_instead_of_failing():
+    """引用了不存在的编号：重装一次仍犯 → 最后一次摘掉该编号 + 留痕，整轮不判死。
+
+    2026-10-14 修复：以前这类错一次就把整轮（所有席位）打死，真跑连着两轮全失败。
+    """
+
+    harness = Harness(
+        replies={"claims": claims_reply()}, seat_replies={SEAT: BAD_REF_SEAT_REPLY}
+    )
+    harness.seed_project()
+    round_id = await started_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    await harness.run_seat_round()(round_id=round_id)  # 不再抛
+
+    round_ = harness.rounds.get(round_id)
+    assert len(round_.current_reviews) == 1
+    opinion = round_.current_reviews[0].opinions[0]
+    assert opinion.evidence_refs == ()  # E99 摘掉
+    assert "E99" in (opinion.basis_note or "")
+    assert any("E99" in item.reason for item in round_.dropped)  # 留痕说清了
+
+
+async def test_seat_known_counts_visible_eids_but_not_ledger_only_ones():
+    """known 补齐的两半都不破：提示词里看得见的编号算数（哪怕不在原来四处），
+    账本里有但提示词里没出现的仍不算（§11.0.61）。"""
+
+    from pmstudio.application.use_cases import _seat_known_eids
+
+    harness = Harness(replies={"claims": claims_reply()}, seat_replies={SEAT: SEAT_REPLY})
+    harness.seed_project()
+    round_id = await started_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+    await harness.run_seat_round()(round_id=round_id)
+    ledger = harness.evidences.get(PROJECT)  # E1=主张、E2=席位判断
+
+    known = _seat_known_eids(frozenset(), "本席位上一趟：出处编号 E2", ledger=ledger)
+
+    assert EvidenceId("E2") in known  # 文本里看得见 → 算
+    assert EvidenceId("E1") not in known  # 账本里有、文本里没出现 → 不算

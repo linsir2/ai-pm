@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
 from pmstudio.application.agents.definitions import DISCUSSER_CARDS, DISCUSSER_SAY
-from pmstudio.application.evidence_refs import resolve_evidence_refs
+from pmstudio.application.evidence_refs import resolve_evidence_refs, resolve_refs_lenient
 from pmstudio.domain.discussion.card import Card, Grounding
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import EvidenceId
@@ -88,6 +88,7 @@ class Discusser(Agent[SayOutcome, schemas.DiscussionReply]):
         turn_slot: str,
         known_eids: frozenset[EvidenceId] = frozenset(),
         validation_error: str = "",
+        lenient: bool = False,
     ) -> SayOutcome:
         outcome = await self._call(
             slots={
@@ -109,7 +110,7 @@ class Discusser(Agent[SayOutcome, schemas.DiscussionReply]):
         )
         text, refs = say_from_packet(
             outcome.packet, known_eids=known_eids, turn_slot=turn_slot,
-            purpose=self.definition.purpose,
+            purpose=self.definition.purpose, lenient=lenient,
         )
         return SayOutcome(text=text, refs=refs, envelope=outcome)
 
@@ -125,6 +126,7 @@ class Discusser(Agent[SayOutcome, schemas.DiscussionReply]):
         assemble_slot: str,
         known_eids: frozenset[EvidenceId] = frozenset(),
         validation_error: str = "",
+        lenient: bool = False,
     ) -> CardsOutcome:
         outcome = await call_structured(
             self.CARDS,
@@ -156,7 +158,7 @@ class Discusser(Agent[SayOutcome, schemas.DiscussionReply]):
             )
         cards = cards_from_packet(
             outcome.packet, known_eids=known_eids,
-            purpose=self.cards_definition.purpose,
+            purpose=self.cards_definition.purpose, lenient=lenient,
         )
         return CardsOutcome(cards=cards, envelope=outcome)
 
@@ -167,8 +169,12 @@ def say_from_packet(
     known_eids: frozenset[EvidenceId],
     turn_slot: str,
     purpose: str = "discussion",
+    lenient: bool = False,
 ) -> tuple[str, tuple[EvidenceId, ...]]:
-    """线形状 →（正文，规范引用）。空正文不算成功（走重装那一环）。"""
+    """线形状 →（正文，规范引用）。空正文不算成功（走重装那一环）。
+
+    `lenient`（最后一次尝试）：不存在的编号摘掉、正文照收（`02` §11.0.2）。
+    """
 
     text = packet.text.strip()
     if not text:
@@ -177,6 +183,13 @@ def say_from_packet(
             purpose=purpose,
             turn_slot=turn_slot,
         )
+    if lenient:
+        return text, resolve_refs_lenient(
+            packet.based_on,
+            known=known_eids,
+            what="回答引用了不存在的编号",
+            local_id=turn_slot,
+        ).kept
     refs = resolve_evidence_refs(
         packet.based_on,
         known=known_eids,
@@ -192,8 +205,13 @@ def cards_from_packet(
     *,
     known_eids: frozenset[EvidenceId],
     purpose: str = "discussion_cards",
+    lenient: bool = False,
 ) -> tuple[Card, ...]:
-    """线形状 → 领域对象。空包与超 3 都抛 `PacketParseError`（走重装那一环）。"""
+    """线形状 → 领域对象。空包与超 3 都抛 `PacketParseError`（走重装那一环）。
+
+    `lenient`（最后一次尝试）：`document` 卡里不存在的编号摘掉，摘空则降级成 `invented`
+    （文档接地必须有据，领域不放行无据的 document）。
+    """
 
     if not packet.cards:
         raise PacketParseError(
@@ -216,13 +234,23 @@ def cards_from_packet(
                 purpose=purpose,
                 local_id=local_id,
             ) from error
-        refs = resolve_evidence_refs(
-            draft.based_on,
-            known=known_eids,
-            what="灵感卡引用了不存在的编号",
-            local_id=local_id,
-            purpose=purpose,
-        )
+        if lenient:
+            refs = resolve_refs_lenient(
+                draft.based_on,
+                known=known_eids,
+                what="灵感卡引用了不存在的编号",
+                local_id=local_id,
+            ).kept
+            if grounding is Grounding.DOCUMENT and not refs:
+                grounding = Grounding.INVENTED
+        else:
+            refs = resolve_evidence_refs(
+                draft.based_on,
+                known=known_eids,
+                what="灵感卡引用了不存在的编号",
+                local_id=local_id,
+                purpose=purpose,
+            )
         try:
             cards.append(
                 Card(

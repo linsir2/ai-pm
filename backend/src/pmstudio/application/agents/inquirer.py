@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pmstudio.application.agents import schemas
 from pmstudio.application.agents.definitions import INQUIRER
 from pmstudio.application.context import NO_MEMORY_TEXT
-from pmstudio.application.evidence_refs import resolve_evidence_refs
+from pmstudio.application.evidence_refs import resolve_evidence_refs, resolve_refs_lenient
 from pmstudio.domain.exploration.item import BlindSpot, Grounding, Hypothesis
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import EvidenceId
@@ -53,6 +53,7 @@ class Inquirer(Agent[InquiryOutcome, schemas.InquiryPacket]):
         known_eids: frozenset[EvidenceId] = frozenset(),
         validation_error: str = "",
         packet_slot: str = "",
+        lenient: bool = False,
     ) -> InquiryOutcome:
         outcome = await self._call(
             slots={
@@ -69,7 +70,7 @@ class Inquirer(Agent[InquiryOutcome, schemas.InquiryPacket]):
             produced_by="inquirer",
         )
         hypotheses, blind_spots = inquiry_from_packet(
-            outcome.packet, known_eids=known_eids
+            outcome.packet, known_eids=known_eids, lenient=lenient
         )
         return InquiryOutcome(
             hypotheses=hypotheses, blind_spots=blind_spots, envelope=outcome
@@ -77,9 +78,16 @@ class Inquirer(Agent[InquiryOutcome, schemas.InquiryPacket]):
 
 
 def inquiry_from_packet(
-    packet: schemas.InquiryPacket, *, known_eids: frozenset[EvidenceId]
+    packet: schemas.InquiryPacket,
+    *,
+    known_eids: frozenset[EvidenceId],
+    lenient: bool = False,
 ) -> tuple[tuple[Hypothesis, ...], tuple[BlindSpot, ...]]:
-    """线形状 → 领域对象。空结果与坏形状都抛 `PacketParseError`（走重装那一环）。"""
+    """线形状 → 领域对象。空结果与坏形状都抛 `PacketParseError`（走重装那一环）。
+
+    `lenient`（最后一次尝试）：假设 `based_on` 里不存在的编号摘掉，不判死整趟；
+    摘空后 `grounding=document` 降级成 `invented`（文档接地**必须**有据，不放行无据的 document）。
+    """
 
     if not packet.hypotheses and not packet.blind_spots:
         raise PacketParseError(
@@ -99,12 +107,24 @@ def inquiry_from_packet(
                 purpose=INQUIRER.purpose,
                 local_id=local_id,
             ) from error
-        refs = resolve_evidence_refs(
-            draft.based_on,
-            known=known_eids,
-            what="假设引用了不存在的编号",
-            local_id=local_id,
-        )
+        if lenient:
+            resolved = resolve_refs_lenient(
+                draft.based_on,
+                known=known_eids,
+                what="假设引用了不存在的编号",
+                local_id=local_id,
+            )
+            refs = resolved.kept
+            if grounding is Grounding.DOCUMENT and not refs:
+                # 摘空了：文档接地必须带编号，降级成"凭空推演"（领域不放行无据的 document）
+                grounding = Grounding.INVENTED
+        else:
+            refs = resolve_evidence_refs(
+                draft.based_on,
+                known=known_eids,
+                what="假设引用了不存在的编号",
+                local_id=local_id,
+            )
         try:
             hypotheses.append(
                 Hypothesis(

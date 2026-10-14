@@ -24,7 +24,7 @@ from pmstudio.application.agents.schemas import (
     IntegrationPacket,
     Overflow,
 )
-from pmstudio.application.agents.seat import SeatReviewer
+from pmstudio.application.agents.seat import SalvagedRef, SeatReviewer
 from pmstudio.application.agents.sim_inquirer import (
     SimInquiryAgent,
     SimInquiryOutcome,
@@ -102,6 +102,7 @@ from pmstudio.application.discussion import (
     validate_ledger_refs,
 )
 from pmstudio.application.document_window import (
+    DocumentWindow,
     document_window,
     visible_eids,
 )
@@ -1063,6 +1064,13 @@ class RunSeatRound:
             round_id=round_id,
             seat_id=seat.seat_id,
         )
+        # known 补齐（2026-10-14）：提示词里**看得见**的编号都得算数——本席位上一趟自己的
+        # 「出处编号 E12」、项目记忆的「出处：E…」、观察索引的引用，以前只算文档 / claims /
+        # 已答 / 材料四处，这些"看得见却判不存在"的合法引用会被误杀（§11.0.61 的完整面）。
+        seat_known = _seat_known_eids(
+            known_eids, previous, project_memory, observations_index, ledger=ledger
+        )
+        allowed_eids = _render_allowed_eids(seat_known)
         validation_error = ""
         for attempt in range(1, MAX_SEAT_ATTEMPTS + 1):
             try:
@@ -1076,11 +1084,15 @@ class RunSeatRound:
                     project_context=project_context,
                     observations_index=observations_index,
                     external_material=external_material,
-                    known_eids=known_eids,
+                    known_eids=seat_known,
                     answer_eids=answer_eids or {},
                     round_id=round_id,
                     validation_error=validation_error,
                     packet_slot=f"p{pass_index}a{attempt}",
+                    allowed_eids=allowed_eids,
+                    # 最后一次尝试：引用了不存在的编号不再判死整轮，摘掉该编号 + 留痕
+                    # （`02` §11.0.2 口径；上面几次仍抛错，给它自纠的机会）。
+                    lenient=attempt == MAX_SEAT_ATTEMPTS,
                 )
             except PacketParseError as error:
                 # 解析错也是**可修复的错**：只重跑这个席位（其余席位不动）。
@@ -1137,6 +1149,16 @@ class RunSeatRound:
                 _discarded_items(
                     review.seat_id,
                     outcome.discarded,
+                    pass_index=round_.seat_round_count,
+                    packet_id=outcome.envelope.packet_id,
+                )
+            )
+            # 最后兜底里摘掉的"不存在的编号"也要留痕（2026-10-14）：正文照收、依据摘了，
+            # 但用户得知道这条意见原本引了个不存在的编号（不静默）。
+            round_.note_dropped(
+                _salvage_items(
+                    review.seat_id,
+                    outcome.salvaged,
                     pass_index=round_.seat_round_count,
                     packet_id=outcome.envelope.packet_id,
                 )
@@ -1316,6 +1338,64 @@ def _truncation_items(
         )
         for item in overflow
     ]
+
+
+def _salvage_items(
+    seat_id: str,
+    salvaged: tuple[SalvagedRef, ...],
+    *,
+    pass_index: int,
+    packet_id: str | None = None,
+) -> list[DroppedItem]:
+    """降级时从某条意见上摘掉"不存在的编号"的留痕（2026-10-14）。
+
+    正文照收、依据摘了——用户得看见"这条原本引了个不存在/看不见的编号"，
+    否则它落到「它提议的」会像模型本来就没给依据（那是另一回事）。
+    """
+
+    return [
+        DroppedItem(
+            handle=f"{seat_id}:{item.local_id}",
+            reason=(
+                f"这条意见引用了不存在的编号 {'、'.join(item.dropped)}：编号已摘掉，"
+                "正文照收（按无依据处理，草案里归到「它提议的」）"
+            ),
+            source=DropSource.ASSEMBLY,
+            seat_id=seat_id,
+            pass_index=pass_index,
+            packet_id=packet_id,
+        )
+        for item in salvaged
+    ]
+
+
+def _seat_known_eids(
+    known_eids: frozenset[EvidenceId],
+    *texts: str,
+    ledger: EvidenceLedger,
+) -> frozenset[EvidenceId]:
+    """席位这一趟**可引用**的编号 = 原来四处 + 另外三处"看得见"的（§11.0.61 完整面）。
+
+    传进来的 `texts` 是本席位这一趟提示词里除文档/claims/已答/材料之外的带编号槽位
+    （本席位上一趟的意见、项目记忆、观察索引）。判定同一条不变量的另一半：
+    **凡是提示词里看得见的编号都算数**——`visible_eids(文本) ∩ 账本` 才是合法集合，
+    光扫文本不看账本会把正文里随便一个 "E数字" 也收进来。
+    """
+
+    return known_eids | (visible_eids(*texts) & DocumentWindow.ledger_ids(ledger))
+
+
+def _render_allowed_eids(known: frozenset[EvidenceId]) -> str:
+    """给席位看的"可引编号清单"（提示词那一节正文）。
+
+    空集也要明说——没有可引的编号时，判断要么写成 question、要么走 basis_note，
+    别让它对着空清单硬编一个（这正是幻觉的来源）。
+    """
+
+    if not known:
+        return "（这一轮没有任何可引用的编号：判断请写 question，或用 basis_note 说明是纯经验判断）"
+    ordered = sorted(known, key=lambda eid: int(str(eid)[1:]))
+    return "、".join(str(eid) for eid in ordered)
 
 
 def _discarded_items(
@@ -3962,6 +4042,9 @@ class RunInquiry:
                     known_eids=known_eids,
                     validation_error=repair,
                     packet_slot=f"a{attempt}",
+                    # 最后一次尝试：不存在的编号摘掉、不判死整趟（`02` §11.0.2）；
+                    # 上面几次仍抛错，给它重装自纠的机会。
+                    lenient=attempt == MAX_INQUIRY_ATTEMPTS,
                 )
                 validate_inquiry(
                     outcome.hypotheses, outcome.blind_spots, known_eids=known_eids
@@ -4466,6 +4549,8 @@ class SayToThread:
                 turn_slot=f"s{base + 1}",
                 known_eids=known_eids,
                 validation_error=repair,
+                # 最后一次尝试：不存在的编号摘掉、正文照收（`02` §11.0.2）
+                lenient=True,
             )
             # 第二次的账本成员检查失败就地抛（线程不动，照 say 两次失败同款）。
             validate_ledger_refs(outcome.refs, known_eids=known_eids)
@@ -4563,6 +4648,8 @@ class AssembleCards:
                 assemble_slot=f"c{base + 1}",
                 known_eids=known_eids,
                 validation_error=repair,
+                # 最后一次尝试：不存在的编号摘掉、不判死（`02` §11.0.2）
+                lenient=True,
             )
         stamped = tuple(
             Card(

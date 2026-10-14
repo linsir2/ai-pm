@@ -316,3 +316,42 @@ async def test_seat_accepts_zero_padded_evidence_ids():
     )
 
     assert outcome.review.opinions[0].evidence_refs == (EvidenceId("E8"),)
+
+
+async def test_seat_reviewer_lenient_salvages_unknown_ref_keeping_the_opinion():
+    """降级（最后一次尝试）：不存在的编号摘掉、写进 basis_note、报回 salvaged；正文照收。
+
+    这是 2026-10-14 的修复口径：一个幻觉编号不该把整轮打掉（`02` §11.0.2）。
+    """
+    reply = json.dumps(
+        {
+            "basis": "读了文档",
+            "opinions": [
+                {
+                    "local_id": "O1",
+                    "form": "judgment",
+                    "about": "性能上限",
+                    "claim": "60 秒内完成",
+                    "because": "同类做法",
+                    "evidence_refs": ["E4", "E23"],  # E23 账本里没有
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    reviewer = SeatReviewer(model=gateway_for(reply), prompts=RecordingPrompts())
+
+    outcome = await reviewer.review(
+        seat=make_seat(),
+        document_state="# 文档",
+        claims="…",
+        opinions_so_far="…",
+        answered="…",
+        known_eids=KNOWN,
+        lenient=True,
+    )
+
+    opinion = outcome.review.opinions[0]
+    assert opinion.evidence_refs == (EvidenceId("E4"),)  # E23 摘掉、E4 留下
+    assert "E23" in (opinion.basis_note or "")
+    assert [(item.local_id, item.dropped) for item in outcome.salvaged] == [("O1", ("E23",))]

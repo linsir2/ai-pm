@@ -57,6 +57,11 @@ def _bad_ref_reply() -> str:
     )
 
 
+def _empty_reply() -> str:
+    """结构错（空结果）：引用错已改成降级，逼 failed 要用结构性失败。"""
+    return json.dumps({"basis": "读了文档", "hypotheses": [], "blind_spots": []}, ensure_ascii=False)
+
+
 def _filled(harness: Harness) -> None:
     harness.seed_project()
     harness.documents.seed(document_with_feature())
@@ -162,7 +167,7 @@ async def test_stale_running_row_is_abandoned_on_the_next_start() -> None:
 
 async def test_runner_retry_resumes_a_failed_run() -> None:
     harness = Harness(
-        replies={"inquiry": [_bad_ref_reply(), _bad_ref_reply(), _good_reply()]}
+        replies={"inquiry": [_empty_reply(), _empty_reply(), _good_reply()]}
     )
     _filled(harness)
     runner = harness.exploration_runner()

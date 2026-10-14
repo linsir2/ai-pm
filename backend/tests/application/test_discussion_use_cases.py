@@ -39,6 +39,11 @@ def _bad_ref_reply() -> str:
     )
 
 
+def _empty_say_reply() -> str:
+    """结构错：空回答（不是编号问题）——降级修不了它，两试皆败仍判死。"""
+    return json.dumps({"text": "", "based_on": []}, ensure_ascii=False)
+
+
 def _cards_reply_2() -> str:
     return json.dumps(
         {
@@ -222,8 +227,24 @@ async def test_say_repairs_once_then_succeeds() -> None:
     assert len(harness.gateway.requests) == 2
 
 
-async def test_say_fails_twice_leaves_thread_untouched() -> None:
+async def test_say_salvages_a_hallucinated_ref_on_the_last_try() -> None:
+    """引用了不存在的编号：重装一次仍犯 → 最后一次摘掉该编号、正文照收（2026-10-14）。"""
     harness = Harness(replies={"discussion": [_bad_ref_reply(), _bad_ref_reply()]})
+    harness.seed_project()
+    started = await _start(harness)
+
+    view = await harness.say_to_thread()(
+        discussion_id=DiscussionId(started.thread_id), text="我想做导出"
+    )
+
+    assert len(view.turns) == 2  # 不再判死；这一对记下来了
+    assert len(harness.gateway.requests) == 2
+    assert view.turns[1].based_on == ()  # E99 摘掉
+
+
+async def test_say_fails_twice_on_a_structural_error_leaves_thread_untouched() -> None:
+    """结构错（空回答）两试皆败 → 照旧判死、线程不动（降级只对"编号不认识"这一类）。"""
+    harness = Harness(replies={"discussion": [_empty_say_reply(), _empty_say_reply()]})
     harness.seed_project()
     started = await _start(harness)
     with pytest.raises(PacketParseError) as caught:
@@ -553,3 +574,35 @@ async def test_discussion_material_sorts_to_simulated() -> None:
     )
     assert _material_kind(packet).value == "simulated"
     assert _material_kind(make_material_packet()).value == "external"
+
+
+def _cards_bad_ref_reply() -> str:
+    """document 卡引了不存在的编号：降级应把编号摘掉、把 grounding 降成 invented。"""
+    return json.dumps(
+        {
+            "cards": [
+                {
+                    "statement": "有据但还是摘了",
+                    "grounding": "document",
+                    "based_on": ["E99"],
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_assemble_salvages_a_hallucinated_card_ref_as_invented() -> None:
+    """卡引用不存在的编号：重装一次仍犯 → 最后一次摘编号、document 降成 invented（不判死）。"""
+    harness = Harness(
+        replies={"discussion_cards": [_cards_bad_ref_reply(), _cards_bad_ref_reply()]}
+    )
+    harness.seed_project()
+    started = await _start(harness)
+
+    view = await harness.assemble_cards()(discussion_id=DiscussionId(started.thread_id))
+
+    assert len(view.cards) == 1  # 不再判死
+    card = view.cards[0]
+    assert card.based_on == ()  # E99 摘掉
+    assert card.grounding == "invented"  # 文档接地摘空 → 降级凭空推演

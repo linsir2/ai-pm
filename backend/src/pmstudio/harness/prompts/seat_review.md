@@ -40,6 +40,9 @@ $project_memory
 ## 本轮的外部材料（**不是用户说的话**）
 $external_material
 
+## 本轮可引用的编号（evidence_refs 只能用这些，别的一个都不许写）
+$allowed_eids
+
 ## 意见只有两种形态
 - question：我判断这里缺一个信息，**而且这个信息只有用户能给**。
 - judgment：我判断这里应该是什么，依据是什么。

@@ -183,9 +183,8 @@ export function OpeningCard({
                     type="button"
                     className="btn btn--sm"
                     onClick={() => onToggleSeat(seat.seat_id)}
-                    disabled={seats.includes(seat.seat_id)}
                   >
-                    {seats.includes(seat.seat_id) ? "已加上" : "+ 加上"}
+                    {seats.includes(seat.seat_id) ? "已加上 · 取消" : "+ 加上"}
                   </button>
                   <span>
                     <span className="seat__title">{seat.title}</span>

@@ -5,7 +5,11 @@
 后一种是另一个命名空间（该判死，只是提示要说清楚）。
 """
 
-from pmstudio.application.evidence_refs import candidates_for, normalize_ref
+from pmstudio.application.evidence_refs import (
+    candidates_for,
+    normalize_ref,
+    resolve_refs_lenient,
+)
 from pmstudio.domain.shared.ids import EvidenceId
 
 KNOWN = frozenset(
@@ -38,3 +42,20 @@ def test_candidates_point_at_neighbours():
 
 def test_candidates_are_empty_when_there_is_no_number():
     assert candidates_for("seat.data_scale:O1", known=KNOWN) == ()
+
+
+def test_lenient_keeps_known_and_drops_unknown():
+    # 降级版：认得的留下（含写法归一 E08→E8），认不得的摘掉而不是判死
+    resolved = resolve_refs_lenient(
+        ["E08", "E23", "E27"], known=KNOWN, what="意见引用了不存在的编号", local_id="O1"
+    )
+    assert resolved.kept == (EvidenceId("E8"), EvidenceId("E27"))
+    assert resolved.dropped == ("E23",)
+
+
+def test_lenient_all_known_drops_nothing():
+    resolved = resolve_refs_lenient(
+        ["E1"], known=KNOWN, what="意见引用了不存在的编号", local_id="O1"
+    )
+    assert resolved.kept == (EvidenceId("E1"),)
+    assert resolved.dropped == ()

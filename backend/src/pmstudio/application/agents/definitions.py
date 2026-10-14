@@ -55,6 +55,7 @@ SEAT_REVIEWER = AgentDefinition(
         "project_context",
         "observations_index",
         "external_material",
+        "allowed_eids",
         "schema_json",
         "validation_error",
     ),

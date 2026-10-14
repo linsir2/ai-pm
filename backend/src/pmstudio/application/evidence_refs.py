@@ -11,6 +11,7 @@
 
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from pmstudio.application.errors import unknown_ref_message
 from pmstudio.domain.shared.ids import EvidenceId
@@ -81,3 +82,35 @@ def resolve_evidence_refs(
             candidates=[candidates_for(item, known=known) for item in unknown],
         )
     return refs
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedRefs:
+    """引用解析结果：`kept` 是落回账本的规范编号，`dropped` 是摘掉的原始串（留痕要报）。"""
+
+    kept: tuple[EvidenceId, ...]
+    dropped: tuple[str, ...]
+
+
+def resolve_refs_lenient(
+    raw_refs: Sequence[str],
+    *,
+    known: frozenset[EvidenceId],
+    what: str,
+    local_id: str,
+) -> ResolvedRefs:
+    """**降级版解析**：认得的留下、认不得的摘掉（不抛）。
+
+    给"重装一次仍犯"的**最后一次尝试**用（`02` §11.0.2 口径）：结构错（空结果 / 形状）
+    照旧判死，只有"编号不认识"这一类可降级——正文还在、依据摘掉，留痕由调用方记
+    （席位写进 `Round.dropped`，模拟调研写进 `ref_drops`）。
+
+    与 `resolve_evidence_refs` 的分工：那个是"照旧判死"的严格版，负责第一次尝试与
+    重装的报错文案；这个是"最后兜底"的宽松版。两版都走同一套 `normalize_ref`——
+    归一化只有一处，别在这里另写一套。
+    """
+
+    refs = tuple(EvidenceId(normalize_ref(ref, known=known)) for ref in raw_refs)
+    kept = tuple(ref for ref in refs if ref in known)
+    dropped = tuple(str(ref) for ref in refs if ref not in known)
+    return ResolvedRefs(kept=kept, dropped=dropped)

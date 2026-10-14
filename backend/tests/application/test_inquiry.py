@@ -157,18 +157,23 @@ async def test_unknown_exploration_is_a_resource_error() -> None:
         harness.explorations.get(ExplorationId("x-9"))
 
 
-async def test_invalid_ref_retries_once_then_fails_with_reason() -> None:
+async def test_invalid_ref_retries_once_then_salvages_instead_of_failing() -> None:
+    """引用了不存在的编号：重装一次仍犯 → 最后一次摘掉该编号、降级为 invented，不判死整趟。
+
+    2026-10-14 修复：以前这类错一次就把整趟调研打死（`02` §11.0.2 口径）。
+    """
     harness = Harness(replies={"inquiry": [_bad_ref_reply(), _bad_ref_reply()]})
     _filled(harness)
     use = harness.run_inquiry()
     xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
     view = await use.execute(xid)
 
-    assert view.status == "failed"
-    assert "两次" in (view.failure_reason or "")
+    assert view.status == "done"  # 不再 failed
     assert len(harness.gateway.requests) == 2
-    assert "E99" in harness.prompts.last("inquiry")["validation_error"]
-    assert harness.explorations.get(xid).status.value == "failed"
+    assert "E99" in harness.prompts.last("inquiry")["validation_error"]  # 重装那次说了原因
+    # 文档接地摘空 → 降级成"凭空推演"（领域不放行无据的 document）
+    assert view.candidates[0].grounding == "invented"
+    assert view.candidates[0].based_on == ()
 
 
 async def test_numeric_claim_triggers_one_repair_then_succeeds() -> None:
@@ -194,7 +199,8 @@ async def test_empty_produce_is_not_success() -> None:
 
 
 async def test_retry_resumes_failed_and_hands_the_reason_to_the_next_attempt() -> None:
-    harness = Harness(replies={"inquiry": [_bad_ref_reply(), _bad_ref_reply(), _good_reply()]})
+    # 引火索用**结构性失败**（空结果）——引用错已改成降级，不再能把一趟调研逼到 failed。
+    harness = Harness(replies={"inquiry": [_empty_reply(), _empty_reply(), _good_reply()]})
     _filled(harness)
     use = harness.run_inquiry()
     xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
@@ -202,10 +208,10 @@ async def test_retry_resumes_failed_and_hands_the_reason_to_the_next_attempt() -
     assert first.status == "failed"
 
     hint = await harness.retry_exploration().resume(xid)
-    assert hint is not None and "E99" in hint
+    assert hint is not None and "空结果" in hint
     second = await use.execute(xid, retry_hint=hint)
     assert second.status == "done"
-    assert "E99" in harness.prompts.last("inquiry")["validation_error"]
+    assert "空结果" in harness.prompts.last("inquiry")["validation_error"]
 
 
 async def test_keep_as_material_creates_one_material_and_is_idempotent() -> None:
