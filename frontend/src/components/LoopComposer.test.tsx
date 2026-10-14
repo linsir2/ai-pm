@@ -136,6 +136,9 @@ describe("composer 页签隔离（T7，LoopColumn 层）", () => {
         onDismissCard={noop}
         onVerifyCard={noop}
         onStartDiscussion={noop}
+        onRunPanelRound={async () => null}
+        onJoinPanel={noop}
+        onAbortPanelRun={noop}
         onSayToThread={noop}
         onAssembleCards={noop}
         onKeepDiscussionCard={noop}

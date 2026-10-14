@@ -724,7 +724,7 @@ def test_schema_view_freezes_the_shape():
         max_open_items_per_batch=3,
         max_sim_review_personas=3,
         max_sim_review_features=2,
-        max_discussion_turns=12,
+        max_discussion_turns=30,
     )
 
 

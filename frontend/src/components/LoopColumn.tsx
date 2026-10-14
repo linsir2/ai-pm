@@ -14,7 +14,7 @@ import type {
   SchemaView,
   ThreadView,
 } from "../api/types";
-import type { DiscussionAnchor } from "../state/discussions";
+import type { DiscussionAnchor, PanelStart } from "../state/discussions";
 import { discussionTurnLimit, roleOptions } from "../state/discussions";
 import { inboxCount } from "../state/inbox";
 import { roundElapsed, roundOrdinal } from "../state/progress";
@@ -77,6 +77,9 @@ export function LoopColumn({
   onDismissCard,
   onVerifyCard,
   onStartDiscussion,
+  onRunPanelRound,
+  onJoinPanel,
+  onAbortPanelRun,
   onSayToThread,
   onAssembleCards,
   onKeepDiscussionCard,
@@ -156,7 +159,10 @@ export function LoopColumn({
   discussionsPending?: boolean;
   /** 问卷里点「聊聊」带过来的题面与问的人（null = 自由开聊）。 */
   discussionAnchor?: DiscussionAnchor | null;
-  onStartDiscussion: (anchor: { topic: string; role_id: string }, runInquiry: boolean) => void;
+  onStartDiscussion: (anchor: PanelStart, runInquiry: boolean) => Promise<string | null>;
+  onRunPanelRound: (threadId: string, signal?: AbortSignal) => Promise<ThreadView | null>;
+  onJoinPanel: (threadId: string, roleId: string) => void;
+  onAbortPanelRun: (threadId: string) => void;
   onSayToThread: (threadId: string, text: string) => void;
   onAssembleCards: (threadId: string) => void;
   onKeepDiscussionCard: (threadId: string, cardId: string, as: "seed" | "material") => void;
@@ -245,7 +251,10 @@ export function LoopColumn({
           turnLimit={discussionTurnLimit(schema?.limits)}
           anchor={discussionAnchor}
           pending={discussionsPending}
-          onStart={onStartDiscussion}
+          onStartPanel={onStartDiscussion}
+          onRunRound={onRunPanelRound}
+          onJoin={onJoinPanel}
+          onAbortRun={onAbortPanelRun}
           onSay={onSayToThread}
           onCards={onAssembleCards}
           onKeep={onKeepDiscussionCard}

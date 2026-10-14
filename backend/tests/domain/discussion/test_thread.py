@@ -1,6 +1,7 @@
 """讨论线程 Thread＋Card 的不变量 T1–T5 与领域行为。
 
-T1 open 门；T2 turns 原子成对；T3 close 终态幂等；T4 turns≤12、cards≤6；
+T1 open 门；T2 turns 原子成对（M18 起 agent turns 按 round/author 有序追加）；
+T3 close 终态幂等；T4 rounds≤5、panel≤4、turns≤30、cards≤6；
 T5 卡只能被过目一次：new → kept|dismissed，单向、幂等（收种子/收材料/忽略）。
 """
 
@@ -16,9 +17,13 @@ from pmstudio.domain.discussion.card import (
 )
 from pmstudio.domain.discussion.thread import (
     MAX_DISCUSSION_TURNS,
+    MAX_PANEL_ROUNDS,
+    MAX_PANEL_SIZE,
     Discussion,
     FindingRef,
+    Participant,
     QuestionSnapshot,
+    RoundSummary,
     ThreadStatus,
 )
 from pmstudio.domain.shared.errors import (
@@ -37,13 +42,21 @@ def start_thread(**over: object) -> Discussion:
         "discussion_id": DiscussionId("d-1"),
         "project_id": ProjectId("p-1"),
         "topic": "怎么让日报更好写",
-        "role_id": "dlg.challenger",
-        "role_title": "反方",
+        "participants": (
+            Participant(role_id="dlg.challenger", role_title="反方", joined_round=1),
+        ),
         "question": None,
         "now": NOW,
     }
     fields.update(over)
     return Discussion.start(**fields)  # type: ignore[arg-type]
+
+
+def panel_of(*pairs: tuple[str, str]) -> tuple[Participant, ...]:
+    return tuple(
+        Participant(role_id=role_id, role_title=title, joined_round=1)
+        for role_id, title in pairs
+    )
 
 
 def doc_card(card_id: str = "C1", **over: object) -> Card:
@@ -128,11 +141,13 @@ def test_T3_bad_say_after_close_raises() -> None:
         thread.say_pair(user_text="关了还说", assistant_text="不回", based_on=())
 
 
-# —— T4：turns≤12、cards≤6 ——
+# —— T4：rounds≤5、panel≤4、turns≤30、cards≤6 ——
 
 
 def test_T4_ok_threads_and_cards_have_caps() -> None:
-    assert MAX_DISCUSSION_TURNS == 12
+    assert MAX_DISCUSSION_TURNS == 30
+    assert MAX_PANEL_ROUNDS == 5
+    assert MAX_PANEL_SIZE == 4
     assert MAX_CARDS_PER_THREAD == 6
 
     thread = start_thread()
@@ -143,12 +158,12 @@ def test_T4_ok_threads_and_cards_have_caps() -> None:
     assert len(thread.cards) == MAX_CARDS_PER_THREAD
 
 
-def test_T4_bad_13th_turn_raises_thread_full() -> None:
+def test_T4_bad_31st_turn_raises_thread_full() -> None:
     thread = start_thread()
     say(thread, n=MAX_DISCUSSION_TURNS // 2)
 
     with pytest.raises(ThreadFull) as exc_info:
-        thread.say_pair(user_text="第13轮", assistant_text="满了", based_on=())
+        thread.say_pair(user_text="第31条", assistant_text="满了", based_on=())
     assert exc_info.value.invariant == "T4"
     assert len(thread.turns) == MAX_DISCUSSION_TURNS
 
@@ -306,8 +321,7 @@ def test_finding_ref_needs_both_ids() -> None:
 def test_start_ok_snapshot_carries_question_title_and_seat() -> None:
     thread = start_thread(
         topic="问卷第2题：日报模板太死",
-        role_id="seat.devil",
-        role_title="魔鬼代言人",
+        participants=panel_of(("seat.devil", "魔鬼代言人")),
         question=QuestionSnapshot(title="日报模板太死怎么办？", why="三个人都这么说"),
     )
 
@@ -317,6 +331,104 @@ def test_start_ok_snapshot_carries_question_title_and_seat() -> None:
     assert thread.question.title == "日报模板太死怎么办？"
 
 
+
 def test_start_rejects_empty_topic() -> None:
     with pytest.raises(ShapeError):
         start_thread(topic="   ")
+
+
+# —— Panel：多角色同场（M18） ——
+
+
+def test_panel_start_records_participants_joined_round_1() -> None:
+    thread = start_thread(
+        participants=panel_of(("dlg.challenger", "反方"), ("dlg.user_voice", "用户之声"))
+    )
+
+    assert [(p.role_id, p.role_title, p.joined_round) for p in thread.participants] == [
+        ("dlg.challenger", "反方", 1),
+        ("dlg.user_voice", "用户之声", 1),
+    ]
+    # 首位即旧 role_id/role_title：单成员 panel 就是今天的行为，无迁移
+    assert thread.role_id == "dlg.challenger"
+    assert thread.role_title == "反方"
+
+
+def test_panel_start_rejects_empty_duplicate_and_oversize() -> None:
+    with pytest.raises(ShapeError):
+        start_thread(participants=())
+    with pytest.raises(ShapeError):
+        start_thread(
+            participants=panel_of(("dlg.challenger", "反方"), ("dlg.challenger", "反方"))
+        )
+    with pytest.raises(ShapeError):
+        start_thread(
+            participants=tuple(
+                Participant(role_id=f"dlg.x{i}", role_title="X", joined_round=1)
+                for i in range(MAX_PANEL_SIZE + 1)
+            )
+        )
+
+
+def test_append_agent_turn_records_author_and_round() -> None:
+    thread = start_thread(
+        participants=panel_of(("dlg.challenger", "反方"), ("dlg.user_voice", "用户之声"))
+    )
+    thread.append_agent_turn(role_id="dlg.user_voice", text="用户会骂", based_on=(), round=1)
+    thread.append_agent_turn(role_id="dlg.challenger", text="先泼冷水", based_on=(), round=1)
+
+    assert [(t.author, t.round, t.role) for t in thread.turns] == [
+        ("dlg.user_voice", 1, "assistant"),
+        ("dlg.challenger", 1, "assistant"),
+    ]
+
+
+def test_append_agent_turn_rejects_unknown_closed_and_full() -> None:
+    thread = start_thread()
+    with pytest.raises(ShapeError):
+        thread.append_agent_turn(role_id="dlg.nobody", text="混入", based_on=(), round=1)
+    thread.close()
+    with pytest.raises(ThreadClosed):
+        thread.append_agent_turn(
+            role_id="dlg.challenger", text="关了还说", based_on=(), round=1
+        )
+
+
+def test_append_summary_follows_round_order_and_caps_rounds() -> None:
+    thread = start_thread()
+    with pytest.raises(ShapeError):
+        thread.append_summary(RoundSummary(index=2, agreed=(), disagreed=(), open=()))
+    for index in range(1, MAX_PANEL_ROUNDS + 1):
+        thread.append_summary(
+            RoundSummary(index=index, agreed=(f"共识{index}",), disagreed=(), open=())
+        )
+    assert len(thread.summaries) == MAX_PANEL_ROUNDS
+    with pytest.raises(ThreadFull):
+        thread.append_summary(
+            RoundSummary(index=MAX_PANEL_ROUNDS + 1, agreed=(), disagreed=(), open=())
+        )
+
+
+def test_join_adds_for_next_round_only() -> None:
+    thread = start_thread()
+    thread.append_summary(RoundSummary(index=1, agreed=(), disagreed=(), open=("未决",)))
+    thread.join(role_id="dlg.user_voice", role_title="用户之声")
+
+    assert [(p.role_id, p.joined_round) for p in thread.participants] == [
+        ("dlg.challenger", 1),
+        ("dlg.user_voice", 2),
+    ]
+    with pytest.raises(ShapeError):
+        thread.join(role_id="dlg.user_voice", role_title="用户之声")  # 重复加入
+    thread.close()
+    with pytest.raises(ThreadClosed):
+        thread.join(role_id="dlg.analogist", role_title="类比者")
+
+
+def test_say_pair_marks_current_round() -> None:
+    thread = start_thread()
+    thread.say_pair(user_text="第一问", assistant_text="第一答", based_on=())
+    assert [t.round for t in thread.turns] == [1, 1]
+    thread.append_summary(RoundSummary(index=1, agreed=(), disagreed=(), open=()))
+    thread.say_pair(user_text="第二问", assistant_text="第二答", based_on=())
+    assert [t.round for t in thread.turns] == [1, 1, 2, 2]

@@ -22,6 +22,7 @@ EXPECTED_PROMPTS = (
     "analyzer",
     "discussion_cards",
     "discussion_say",
+    "discussion_synthesis",
     "inquiry",
     "integrator",
     "memory_curator",

@@ -1,14 +1,20 @@
 /* 讨论区的判断（M9）：纯函数。组件只负责把这里的结果画出来。
    数据一律来自后端的 `ThreadView` 投影，这里不拼、不猜。 */
 
-import type { CardView, LimitsView, QuestionView, SchemaView, ThreadView } from "../api/types";
+import type {
+  CardView,
+  LimitsView,
+  SchemaView,
+  ThreadView,
+  TurnView,
+} from "../api/types";
 
 /**
  * 一条线程最多几条轮次。**离线回落值**：真相源是 `/schema.limits.max_discussion_turns`
- * （后端 `domain/discussion/thread.py` 的 `MAX_DISCUSSION_TURNS`，M13 起随 schema 下发）。
+ * （后端 `domain/discussion/thread.py` 的 `MAX_DISCUSSION_TURNS`，M18 起 30）。
  * 拿不到 schema 时用它——同 `FALLBACK_LIMITS` 的纪律：后端不变时它就是同一份值。
  */
-export const FALLBACK_DISCUSSION_TURNS = 12;
+export const FALLBACK_DISCUSSION_TURNS = 30;
 
 /** 讨论轮上限：schema 有就用后端的，没有回落（与 `reviewLimits` 同一形状）。 */
 export function discussionTurnLimit(limits: LimitsView | null | undefined): number {
@@ -36,41 +42,20 @@ export interface DiscussionRoleOption {
 /**
  * 拿不到 `/schema` 时的离线回落：**只有默认那一个**。
  *
- * 为什么不是三条：`role_id` 是后端必填项（`StartDiscussion` 认 `dlg.*` 与 `seat.*`），
- * 回落空了连 `resolveRoleId` 的默认值都发不出去；抄齐三条才是第二个真相源
+ * 为什么不是三条：`role_ids` 是后端必填项（`StartDiscussion` 认 `dlg.*` 与 `seat.*`），
+ * 回落空了连一个合法名单都拼不出来；抄齐三条才是第二个真相源
  * （后端改了角色表，界面还摆着旧的）。
  */
 const FALLBACK_ROLES: DiscussionRoleOption[] = [
   { role_id: "dlg.challenger", title: "反方", focus: "找漏洞、要反例、泼冷水" },
 ];
 
-/** `/schema` 里那份角色表 → 开聊卡的选项（照抄，不排序不补）。 */
+/** `/schema` 里那份角色表 → 开跑卡的选项（照抄，不排序不补）。 */
 export function roleOptions(schema: SchemaView | null): DiscussionRoleOption[] {
   return schema?.discussion_roles ?? FALLBACK_ROLES;
 }
 
-/** 没指定时的默认角色：反方（`dlg.challenger`，与后端 roles.toml 第一条同序）。 */
-export const DEFAULT_ROLE_ID = "dlg.challenger";
-
-/**
- * 开聊要请谁（`resolveRoleId`）：
- * 1. 显式给的赢（问卷里"谁问的"不抢）；
- * 2. 没说就用问卷题的 `asked_by[0]`——**席位 id 照收**，后端认 `seat.*`；
- * 3. 两边都没有就默认反方。
- */
-export function resolveRoleId(
-  explicit?: string | null,
-  question?: QuestionView | null,
-): string {
-  if (explicit !== undefined && explicit !== null && explicit.trim() !== "") {
-    return explicit;
-  }
-  const asked = question?.asked_by[0];
-  if (asked !== undefined && asked.trim() !== "") return asked;
-  return DEFAULT_ROLE_ID;
-}
-
-/** 角色 id → 开聊卡上的那条；不在表里就**照实显示原值**（不猜中文名）。
+/** 角色 id → 开跑卡上的那条；不在表里就**照实显示原值**（不猜中文名）。
  *
  *  问卷入口带来的 `seat.*` 席位 id 就是这条路径——那张表在 `available_seats` 里，
  *  这里不重复抄一份；`MaterialPicker` 同一口径（认不出就显示 id 本身）。 */
@@ -110,6 +95,29 @@ export interface DiscussionAnchor {
    * 自由开聊 / 选区 / 条目入口都不带（undefined = 不是从问卷来）。
    */
   question?: { title: string; why: string | null } | null;
+}
+
+/** 开跑一个 panel（M18）：锚点 + 名单。轮数是前端循环的计数，不进后端。 */
+export interface PanelStart {
+  topic: string;
+  role_ids: string[];
+  question?: { title: string; why: string | null } | null;
+}
+
+/**
+ * 开跑默认勾选（M18）：锚点带来的表外席位排最前（M13"预选在问的那个人身上"不断），
+ * 后面跟选项表原序；去重后截到 4 个（`PANEL_SIZE_MAX`，超了开跑也发不出去）。
+ */
+export function defaultPanelRoles(
+  anchorRoleId: string | null,
+  options: DiscussionRoleOption[],
+): string[] {
+  const anchor = anchorRoleId?.trim() ?? "";
+  const ids = anchor === "" ? [] : [anchor];
+  for (const option of roleChoices(anchorRoleId, options)) {
+    if (!ids.includes(option.role_id)) ids.push(option.role_id);
+  }
+  return ids.slice(0, PANEL_SIZE_MAX);
 }
 
 /** 卡上的过目动作（与后端 keep/dismiss 两个端点一一对应；M12）。 */
@@ -172,4 +180,57 @@ const STATUS_TEXT: Record<string, string> = {
 
 export function threadStatusText(status: string): string {
   return STATUS_TEXT[status] ?? status;
+}
+
+/** panel 一次几人（M18）：与后端 `MAX_PANEL_SIZE` 同值；界面先拦，后端再拦。 */
+export const PANEL_SIZE_MIN = 1;
+export const PANEL_SIZE_MAX = 4;
+/** 一次开跑几轮（M18）：默认 3，上限 5（后端 `MAX_PANEL_ROUNDS`）。 */
+export const PANEL_ROUNDS_DEFAULT = 3;
+export const PANEL_ROUNDS_MIN = 1;
+export const PANEL_ROUNDS_MAX = 5;
+
+/** 开跑 panel 校验：回人话（组件只负责显示，不自己定规则）。 */
+export function validatePanel(roleIds: string[], rounds: number): string | null {
+  const ids = roleIds.map((id) => id.trim()).filter((id) => id !== "");
+  if (ids.length < PANEL_SIZE_MIN) return "至少请一个人";
+  if (ids.length > PANEL_SIZE_MAX) return `一次最多请 ${PANEL_SIZE_MAX} 个人`;
+  if (new Set(ids).size !== ids.length) return "同一个角色不能请两次";
+  if (!Number.isInteger(rounds) || rounds < PANEL_ROUNDS_MIN || rounds > PANEL_ROUNDS_MAX) {
+    return `轮数只能是 ${PANEL_ROUNDS_MIN}–${PANEL_ROUNDS_MAX}`;
+  }
+  return null;
+}
+
+/** 还能拉谁进来（M18）：已在场的排除。 */
+export function joinableRoles(
+  options: DiscussionRoleOption[],
+  thread: ThreadView,
+): DiscussionRoleOption[] {
+  const inside = new Set(thread.participants.map((member) => member.role_id));
+  return options.filter((option) => !inside.has(option.role_id));
+}
+
+/** 发言人 id → 显示名（M18）：`user` 显示"你"，在场成员显示标题，陌生 id 照实显示原值。 */
+export function authorTitle(thread: ThreadView, author: string): string {
+  if (author === "user") return "你";
+  const member = thread.participants.find((item) => item.role_id === author);
+  return member?.role_title ?? author;
+}
+
+/** 按轮次分组 turns（M18 副栏渲染用）：轮次取 turns 与 summaries 的并集——
+    有综合但没 turns 的轮次（异常/中断）也要把它那一组画出来，不许静默漏。 */
+export function roundsOf(thread: ThreadView): { round: number; turns: TurnView[] }[] {
+  const groups = new Map<number, TurnView[]>();
+  for (const turn of thread.turns) {
+    const list = groups.get(turn.round);
+    if (list === undefined) groups.set(turn.round, [turn]);
+    else list.push(turn);
+  }
+  for (const summary of thread.summaries) {
+    if (!groups.has(summary.index)) groups.set(summary.index, []);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([round, turns]) => ({ round, turns }));
 }

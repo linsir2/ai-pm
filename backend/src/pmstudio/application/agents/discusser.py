@@ -10,7 +10,11 @@ say 单调用请求内跑完（不读 memory：讨论是灵感阶段，接地只
 from dataclasses import dataclass
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.agents.definitions import DISCUSSER_CARDS, DISCUSSER_SAY
+from pmstudio.application.agents.definitions import (
+    DISCUSSER_CARDS,
+    DISCUSSER_SAY,
+    DISCUSSER_SYNTHESIS,
+)
 from pmstudio.application.evidence_refs import resolve_evidence_refs, resolve_refs_lenient
 from pmstudio.domain.discussion.card import Card, Grounding
 from pmstudio.domain.shared.errors import DomainError
@@ -58,6 +62,19 @@ class CardsOutcome:
         return self.envelope.discarded
 
 
+@dataclass(frozen=True, slots=True)
+class SynthesisOutcome:
+    """一轮的综合：共识 / 分歧 / 未决三组清单 + 信封。
+
+    只归纳发言里出现过的内容，不开新观点、不带出处编号（引用归卡片管）。
+    """
+
+    agreed: tuple[str, ...]
+    disagreed: tuple[str, ...]
+    open: tuple[str, ...]
+    envelope: Envelope
+
+
 class Discusser(Agent[SayOutcome, schemas.DiscussionReply]):
     definition = DISCUSSER_SAY
 
@@ -68,6 +85,15 @@ class Discusser(Agent[SayOutcome, schemas.DiscussionReply]):
         kind="discussion_cards",
         prompt="discussion_cards",
         packet=schemas.CardsPacket,
+        rules=schemas.RULES,
+    )
+    #: 综合用不同的 definition（prompt/slots 另一套）
+    synthesis_definition = DISCUSSER_SYNTHESIS
+    SYNTHESIS = StructuredCall(
+        purpose="discussion_synthesis",
+        kind="discussion_synthesis",
+        prompt="discussion_synthesis",
+        packet=schemas.DiscussionSynthesis,
         rules=schemas.RULES,
     )
 
@@ -161,6 +187,41 @@ class Discusser(Agent[SayOutcome, schemas.DiscussionReply]):
             purpose=self.cards_definition.purpose, lenient=lenient,
         )
         return CardsOutcome(cards=cards, envelope=outcome)
+
+    async def synthesize(
+        self,
+        *,
+        topic: str,
+        round_history: str,
+        prior_summaries: str = "",
+        discussion_id: str,
+        synthesis_slot: str,
+        validation_error: str = "",
+    ) -> SynthesisOutcome:
+        outcome = await call_structured(
+            self.SYNTHESIS,
+            gateway=self._model,
+            prompts=self._prompts,
+            slots={
+                "topic": topic,
+                "round_history": round_history,
+                "prior_summaries": prior_summaries,
+                "validation_error": validation_error,
+            },
+            metadata={"discussion_id": discussion_id},
+            packet_id=make_packet_id(
+                discussion_id, self.SYNTHESIS.kind, "discusser", slot=synthesis_slot
+            ),
+            run_id=discussion_id,
+            produced_by="discusser",
+        )
+        packet = outcome.packet
+        return SynthesisOutcome(
+            agreed=tuple(line.strip() for line in packet.agreed if line.strip()),
+            disagreed=tuple(line.strip() for line in packet.disagreed if line.strip()),
+            open=tuple(line.strip() for line in packet.open if line.strip()),
+            envelope=outcome,
+        )
 
 
 def say_from_packet(

@@ -59,7 +59,9 @@ def _bad_ref_reply() -> str:
 
 def _empty_reply() -> str:
     """结构错（空结果）：引用错已改成降级，逼 failed 要用结构性失败。"""
-    return json.dumps({"basis": "读了文档", "hypotheses": [], "blind_spots": []}, ensure_ascii=False)
+    return json.dumps(
+        {"basis": "读了文档", "hypotheses": [], "blind_spots": []}, ensure_ascii=False
+    )
 
 
 def _filled(harness: Harness) -> None:

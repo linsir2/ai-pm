@@ -614,6 +614,10 @@ export interface TurnView {
   role: "user" | "assistant" | string;
   text: string;
   based_on: string[];
+  /** 谁说的：用户 turn 写 "user"，席位 turn 写 role_id（M18；旧行缺省按 assistant 显示）。 */
+  author: string;
+  /** 第几轮 panel 轮次（M18；say_pair 记当前轮，旧行缺省 1）。 */
+  round: number;
 }
 
 /** 讨论总结出的一张灵感卡（M9）。过目状态在 `state`/`kept_as`（M12，与候选同构）。 */
@@ -627,6 +631,21 @@ export interface CardView {
   kept_ref: string | null;
   state: "new" | "kept" | "dismissed" | string;
   kept_as: "seed" | "material" | null;
+}
+
+/** panel 成员（M18）：哪个角色、从第几轮开始在场。单成员即旧 1:1 线程。 */
+export interface ParticipantView {
+  role_id: string;
+  role_title: string;
+  joined_round: number;
+}
+
+/** 一轮的综合（M18）：共识 / 分歧 / 未决三组清单，只归纳不新开观点。 */
+export interface RoundSummaryView {
+  index: number;
+  agreed: string[];
+  disagreed: string[];
+  open: string[];
 }
 
 /** 一条讨论线程（M9）：列表与展开共用它；真身在后端。 */
@@ -643,6 +662,10 @@ export interface ThreadView {
   /** 开题调研底稿条数（M13）：真身在探索表，这里只给数。 */
   findings_count: number;
   created_at: string;
+  /** panel 成员（M18；旧行读回即单成员）。 */
+  participants: ParticipantView[];
+  /** 每轮综合（M18；只增，给人看的副栏）。 */
+  summaries: RoundSummaryView[];
 }
 
 /** 一趟探索运行（M8）：过目台与历史都读它。 */

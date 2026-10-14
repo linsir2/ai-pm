@@ -90,11 +90,12 @@ def _seed_e1(harness: Harness) -> None:
 
 
 async def _start(
-    harness: Harness, *, topic: str = "导出优化", role_id: str = "dlg.challenger",
+    harness: Harness, *, topic: str = "导出优化", role_ids: list[str] | None = None,
     question: QuestionSnapshot | None = None,
 ):  # type: ignore[no-untyped-def]
     return await harness.start_discussion()(
-        project_id=PROJECT, topic=topic, role_id=role_id, question=question
+        project_id=PROJECT, topic=topic, role_ids=role_ids or ["dlg.challenger"],
+        question=question,
     )
 
 
@@ -103,7 +104,7 @@ async def test_start_resolves_explicit_role_and_snapshots_topic() -> None:
     harness.seed_project()
     question = QuestionSnapshot(title="题面", why="为啥问")
     view = await _start(
-        harness, topic="  导出   优化  ", role_id="dlg.challenger", question=question
+        harness, topic="  导出   优化  ", role_ids=["dlg.challenger"], question=question
     )
 
     assert view.topic == "导出 优化"
@@ -120,11 +121,11 @@ async def test_start_resolves_explicit_role_and_snapshots_topic() -> None:
 async def test_start_returns_existing_open_thread_for_same_topic_role() -> None:
     harness = Harness(replies={})
     harness.seed_project()
-    first = await _start(harness, topic="导出 优化", role_id="dlg.challenger")
-    second = await _start(harness, topic="  导出   优化 ", role_id="dlg.challenger")
+    first = await _start(harness, topic="导出 优化", role_ids=["dlg.challenger"])
+    second = await _start(harness, topic="  导出   优化 ", role_ids=["dlg.challenger"])
     assert second.thread_id == first.thread_id
 
-    third = await _start(harness, topic="导出 优化", role_id="dlg.user_voice")
+    third = await _start(harness, topic="导出 优化", role_ids=["dlg.user_voice"])
     assert third.thread_id != first.thread_id
 
 
@@ -132,7 +133,7 @@ async def test_start_rejects_unknown_role_with_404_code() -> None:
     harness = Harness(replies={})
     harness.seed_project()
     with pytest.raises(UnknownRole) as caught:
-        await _start(harness, topic="导出优化", role_id="dlg.nope")
+        await _start(harness, topic="导出优化", role_ids=["dlg.nope"])
     assert caught.value.code == "unknown_role"
 
 
@@ -140,7 +141,7 @@ async def test_start_rejects_empty_topic() -> None:
     harness = Harness(replies={})
     harness.seed_project()
     with pytest.raises(ShapeError):
-        await _start(harness, topic="   ", role_id="dlg.challenger")
+        await _start(harness, topic="   ", role_ids=["dlg.challenger"])
 
 
 async def test_say_appends_pair_and_counts_turn_slot() -> None:
@@ -267,18 +268,18 @@ async def test_say_on_closed_thread_is_409() -> None:
     assert str(getattr(caught.value, "code", "")).startswith("invariant:")
 
 
-async def test_say_refuses_13th_turn() -> None:
+async def test_say_refuses_31st_turn() -> None:
     harness = Harness(replies={"discussion": _say_reply()})
     harness.seed_project()
     started = await _start(harness)
     did = DiscussionId(started.thread_id)
-    for _ in range(6):
+    for _ in range(15):
         stored = harness.discussions.get(did)
         stored.say_pair(user_text="u", assistant_text="a", based_on=())
         harness.discussions.save(stored)
-    assert len(harness.discussions.get(did).turns) == 12
+    assert len(harness.discussions.get(did).turns) == 30
     with pytest.raises(Exception) as caught:
-        await harness.say_to_thread()(discussion_id=did, text="第 13 轮")
+        await harness.say_to_thread()(discussion_id=did, text="第 31 条")
     assert str(getattr(caught.value, "code", "")).startswith("invariant:")
 
 
@@ -489,7 +490,7 @@ async def test_start_with_finding_exploration_snapshots_candidates() -> None:
     view = await harness.start_discussion()(
         project_id=PROJECT,
         topic="带底稿聊导出",
-        role_id="dlg.challenger",
+        role_ids=["dlg.challenger"],
         question=None,
         finding_exploration_id=str(xid),
     )
@@ -513,7 +514,7 @@ async def test_start_rejects_bad_finding_exploration() -> None:
         await harness.start_discussion()(
             project_id=PROJECT,
             topic="x",
-            role_id="dlg.challenger",
+            role_ids=["dlg.challenger"],
             question=None,
             finding_exploration_id="x-nope",
         )
@@ -524,7 +525,7 @@ async def test_start_rejects_bad_finding_exploration() -> None:
         await harness.start_discussion()(
             project_id=PROJECT,
             topic="y",
-            role_id="dlg.challenger",
+            role_ids=["dlg.challenger"],
             question=None,
             finding_exploration_id=str(xid),
         )
@@ -542,7 +543,7 @@ async def test_say_renders_findings_into_the_prompt() -> None:
     started = await harness.start_discussion()(
         project_id=PROJECT,
         topic="带底稿聊导出",
-        role_id="dlg.challenger",
+        role_ids=["dlg.challenger"],
         question=None,
         finding_exploration_id=str(xid),
     )
@@ -606,3 +607,206 @@ async def test_assemble_salvages_a_hallucinated_card_ref_as_invented() -> None:
     card = view.cards[0]
     assert card.based_on == ()  # E99 摘掉
     assert card.grounding == "invented"  # 文档接地摘空 → 降级凭空推演
+
+
+def _panel_say_reply(text: str) -> str:
+    return json.dumps({"text": text, "based_on": []}, ensure_ascii=False)
+
+
+def _synthesis_reply(
+    agreed: list[str] | None = None, disagreed: list[str] | None = None,
+    open: list[str] | None = None,
+) -> str:
+    return json.dumps(
+        {"agreed": agreed or [], "disagreed": disagreed or [], "open": open or []},
+        ensure_ascii=False,
+    )
+
+
+def _empty_panel_reply() -> str:
+    return json.dumps({"text": "", "based_on": []}, ensure_ascii=False)
+
+
+async def _start_panel(harness, roles=("dlg.challenger", "dlg.user_voice")):  # type: ignore[no-untyped-def]
+    return await harness.start_discussion()(
+        project_id=PROJECT, topic="日报要不要日报", role_ids=list(roles), question=None
+    )
+
+
+async def test_start_panel_records_members_and_is_idempotent_on_the_same_set() -> None:
+    harness = Harness()
+    harness.seed_project()
+    first = await _start_panel(harness)
+    assert [m.role_id for m in first.participants] == ["dlg.challenger", "dlg.user_voice"]
+
+    second = await _start_panel(harness, roles=("dlg.user_voice", "dlg.challenger"))
+    assert second.thread_id == first.thread_id  # 同集合换序幂等返
+
+    third = await _start_panel(harness, roles=("dlg.challenger",))
+    assert third.thread_id != first.thread_id  # 集合不同是另一条
+
+
+async def test_start_panel_rejects_empty_duplicate_and_oversize() -> None:
+    from pmstudio.domain.shared.errors import ShapeError
+    from tests.support.builders import make_seat
+
+    harness = Harness()
+    harness.seed_project()
+    with pytest.raises(ShapeError):
+        await _start_panel(harness, roles=())
+    with pytest.raises(ShapeError):
+        await _start_panel(harness, roles=("dlg.challenger", "dlg.challenger"))
+
+    five = Harness(seats=(make_seat(), make_seat("seat.permissions", title="权限与角色")))
+    five.seed_project()
+    with pytest.raises(ShapeError):
+        await _start_panel(
+            five,
+            roles=(
+                "dlg.challenger", "dlg.user_voice", "dlg.analogist",
+                "seat.data_scale", "seat.permissions",
+            ),
+        )
+
+
+async def test_run_panel_runs_all_members_then_synthesizes() -> None:
+    harness = Harness(
+        replies={
+            "discussion": [_panel_say_reply("A 先说"), _panel_say_reply("B 再说")],
+            "discussion_synthesis": [_synthesis_reply(agreed=["都认要写"], open=["给谁看"])],
+        }
+    )
+    harness.seed_project()
+    started = await _start_panel(harness)
+
+    view = await harness.run_panel_round()(discussion_id=DiscussionId(started.thread_id))
+
+    assert sorted(t.author for t in view.turns) == ["dlg.challenger", "dlg.user_voice"]
+    assert sorted(t.text for t in view.turns) == ["A 先说", "B 再说"]
+    assert len(view.summaries) == 1
+    assert view.summaries[0].agreed == ("都认要写",)
+    assert view.summaries[0].open == ("给谁看",)
+    purposes = [request.purpose for request in harness.gateway.requests]
+    assert purposes.count("discussion") == 2
+    assert purposes.count("discussion_synthesis") == 1
+    # 综合看到的是本轮两人的发言（取证方式照 P0 那条：留样记槽位值）
+    synthesis_prompt = "\n".join(
+        message.content
+        for message in harness.gateway.requests[-1].messages
+    )
+    assert "A 先说" in synthesis_prompt
+    assert "B 再说" in synthesis_prompt
+
+
+async def test_run_panel_failure_keeps_landed_turns_and_resumes_remaining() -> None:
+    harness = Harness(
+        replies={
+            "discussion": [
+                _panel_say_reply("A 说了"),
+                _empty_panel_reply(),
+                _empty_panel_reply(),
+                _panel_say_reply("B 补上"),
+            ],
+            "discussion_synthesis": [_synthesis_reply(agreed=["齐了"])],
+        }
+    )
+    harness.seed_project()
+    started = await _start_panel(harness)
+    did = DiscussionId(started.thread_id)
+
+    with pytest.raises(PacketParseError):
+        await harness.run_panel_round()(discussion_id=did)
+    assert len(harness.discussions.get(did).turns) == 1  # A 的落库了，B 的没记
+
+    view = await harness.run_panel_round()(discussion_id=did)  # 重试补 B + 综合
+    assert len(view.turns) == 2
+    assert len(view.summaries) == 1
+    assert view.summaries[0].agreed == ("齐了",)
+
+
+async def test_join_panel_takes_effect_from_the_next_round() -> None:
+    harness = Harness(
+        replies={
+            "discussion": [
+                _panel_say_reply("A 第一轮"),
+                _panel_say_reply("A 第二轮"),
+                _panel_say_reply("B 第二轮"),
+            ],
+            "discussion_synthesis": [_synthesis_reply(), _synthesis_reply()],
+        }
+    )
+    harness.seed_project()
+    started = await _start_panel(harness, roles=("dlg.challenger",))
+    did = DiscussionId(started.thread_id)
+    await harness.run_panel_round()(discussion_id=did)
+
+    joined = await harness.join_panel()(discussion_id=did, role_id="dlg.user_voice")
+    assert [m.role_id for m in joined.participants] == ["dlg.challenger", "dlg.user_voice"]
+    assert [m.joined_round for m in joined.participants] == [1, 2]
+
+    view = await harness.run_panel_round()(discussion_id=did)
+    round2 = [t.author for t in view.turns if t.round == 2]
+    assert sorted(round2) == ["dlg.challenger", "dlg.user_voice"]
+    assert len(view.summaries) == 2
+
+
+class _HangingGateway:
+    """第一次 discussion 调用就卡住：把轮次钉在"正在跑"，好测串行与取消。"""
+
+    def __init__(self) -> None:
+        import asyncio as _asyncio
+
+        self.entered = _asyncio.Event()
+        self.release = _asyncio.Event()
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from pmstudio.harness.errors import ModelCallFailed
+
+        self.entered.set()
+        await self.release.wait()
+        raise ModelCallFailed("测试用：卡住之后不打算成功", purpose=str(request.purpose))
+
+
+async def test_run_panel_second_call_while_running_is_rejected() -> None:
+    import asyncio as _asyncio
+
+    gateway = _HangingGateway()
+    harness = Harness(gateway=gateway)
+    harness.seed_project()
+    started = await _start_panel(harness)
+    did = DiscussionId(started.thread_id)
+    runner = harness.discussion_runner()
+
+    first = _asyncio.create_task(runner.run_round(discussion_id=did))
+    await _asyncio.wait_for(gateway.entered.wait(), timeout=5)
+    from pmstudio.application.errors import DiscussionBusy
+
+    with pytest.raises(DiscussionBusy):
+        await runner.run_round(discussion_id=did)
+    gateway.release.set()
+    from pmstudio.harness.errors import ModelCallFailed
+
+    with pytest.raises(ModelCallFailed):  # 放行后网关失败，属预期（不是 busy 的问题）
+        await first
+
+
+async def test_abort_stops_the_inflight_round_without_writing_status() -> None:
+    import asyncio as _asyncio
+
+    gateway = _HangingGateway()
+    harness = Harness(gateway=gateway)
+    harness.seed_project()
+    started = await _start_panel(harness)
+    did = DiscussionId(started.thread_id)
+    runner = harness.discussion_runner()
+
+    task = _asyncio.create_task(runner.run_round(discussion_id=did))
+    await _asyncio.wait_for(gateway.entered.wait(), timeout=5)
+
+    assert await runner.abort(discussion_id=did) is True
+    assert task.done()
+    # 取消只让调用停下来，不写状态：线程还是 open，已落库的没有（这一轮一个都没交回）
+    assert harness.discussions.get(did).status.value == "open"
+    assert harness.discussions.get(did).turns == ()
+
+    assert await runner.abort(discussion_id=did) is False  # 没在跑幂等成功

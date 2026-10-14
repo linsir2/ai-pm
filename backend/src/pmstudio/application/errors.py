@@ -218,3 +218,18 @@ class RoundBusy(ApplicationError):
             code="round_busy",
             round_id=str(round_id),
         )
+
+
+class DiscussionBusy(ApplicationError):
+    """同一条讨论线程已经有一轮在跑。
+
+    与 `RoundBusy` 同一条口径：前端自动循环 + 双击"再跑一轮" + 两个标签页都会撞上。
+    已落库的 turn 不动——停下来等它跑完，或调 abort 停掉它再跑。
+    """
+
+    def __init__(self, discussion_id: object) -> None:
+        super().__init__(
+            "这条讨论正在跑一轮：等它跑完，或先停掉它",
+            code="discussion_busy",
+            discussion_id=str(discussion_id),
+        )

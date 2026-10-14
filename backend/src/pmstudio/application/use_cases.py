@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
-from pmstudio.application.agents.discusser import Discusser
+from pmstudio.application.agents.discusser import Discusser, SayOutcome
 from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import IntegrationOutcome, Integrator
 from pmstudio.application.agents.memory_curator import CuratorOutcome, MemoryCurator
@@ -209,9 +209,12 @@ from pmstudio.domain.authoring.views import DocumentView
 from pmstudio.domain.discussion.card import Card, CardState
 from pmstudio.domain.discussion.thread import (
     MAX_DISCUSSION_TURNS,
+    MAX_PANEL_ROUNDS,
     Discussion,
     FindingRef,
+    Participant,
     QuestionSnapshot,
+    RoundSummary,
     ThreadStatus,
     Turn,
 )
@@ -4344,8 +4347,37 @@ def _card_of(thread: Discussion, card_id: str) -> Card:
     raise ShapeError(f"这条讨论没有这张卡片：{card_id}", card_id=card_id)
 
 
+def _discussion_window(
+    documents: DocumentReader,
+    checker: ReadinessChecker,
+    evidence: EvidenceReader,
+    thread: Discussion,
+    *,
+    history: str,
+) -> tuple[str, frozenset[EvidenceId], EvidenceLedger]:
+    """讨论调用的公共上下文：文档窗口 + known_eids + ledger（三处共用，同源不漂移）。
+
+    SayToThread / AssembleCards / RunPanelRound 共用——窗口（topic 窄化）与 known
+    （窗口 ∩ 账本 ∪ 历史可见 ∩ 账本）必须同一套，否则同一线程两处校验口径漂移
+    （`02` §11.0.61：出卡与发言同一窄化）。`history` 由调用方给：say 传含本轮 pending
+    的那份，assemble/run 传渲染好的历史。
+    """
+
+    document = documents.get(thread.project_id)
+    view = document.view()
+    window = document_window(view, readiness=checker.check(view), topic=thread.topic)
+    ledger = evidence.get(thread.project_id)
+    known_eids = window.known_eids(ledger) | (
+        visible_eids(history) & window.ledger_ids(ledger)
+    )
+    return window.text, known_eids
+
+
 class StartDiscussion:
-    """开一条讨论线程：角色双查＋同（项目，归一化主题，角色）的 open 线程幂等返。
+    """开一条讨论线程：角色双查＋同（项目，归一化主题，角色集合）的 open 线程幂等返。
+
+    M18 起收 `role_ids[1..4]`（panel）：单元素即旧 1:1 线程。开聊时所有成员都从第 1 轮在场；
+    中途拉人走 `JoinPanel`（下一轮生效）。
 
     `finding_exploration_id`（M13「先跑一轮调研」）：把那一趟调研的**全部候选**快照成
     开题底稿（只存引用）；候选文本在说的时候读回来注入提示词。
@@ -4396,27 +4428,34 @@ class StartDiscussion:
         *,
         project_id: ProjectId,
         topic: str,
-        role_id: str,
+        role_ids: Sequence[str],
         question: QuestionSnapshot | None,
         finding_exploration_id: str | None = None,
     ) -> ThreadView:
         self._documents.get(project_id)  # 存在性；空文档不拒（与 M8 create 的接地判据差在这里）
-        if not role_id.strip():
+        ids = [role_id.strip() for role_id in role_ids]
+        if not ids or any(not role_id for role_id in ids):
             raise ShapeError("开聊必须指定角色")
+        if len(set(ids)) != len(ids):
+            raise ShapeError("同一个角色不能请两次")
         normalized = " ".join(topic.split())  # 与 _clip 同式，不新建函数
         if not normalized:
             raise ShapeError("开聊必须带主题")
-        role_title, _ = _discussion_role_of(
-            role_id, catalog=self._catalog, discussion_roles=self._discussion_roles
-        )
+        resolved = [
+            (role_id, _discussion_role_of(
+                role_id, catalog=self._catalog, discussion_roles=self._discussion_roles
+            )[0])
+            for role_id in ids
+        ]
         findings = self._finding_refs(project_id, finding_exploration_id)
+        wanted = frozenset(ids)
         for existing in self._discussions.list_for_project(
             project_id, limit=MAX_DISCUSSION_LIST
         ):
             if (
                 existing.status is ThreadStatus.OPEN
                 and " ".join(existing.topic.split()) == normalized
-                and existing.role_id == role_id
+                and frozenset(member.role_id for member in existing.participants) == wanted
             ):
                 # 幂等返已有线程：底稿不追挂（它属于"这次新开的线程"的起手式）
                 return thread_view(existing)
@@ -4426,8 +4465,10 @@ class StartDiscussion:
                 discussion_id=discussion_id,
                 project_id=project_id,
                 topic=normalized,
-                role_id=role_id,
-                role_title=role_title,
+                participants=tuple(
+                    Participant(role_id=role_id, role_title=title, joined_round=1)
+                    for role_id, title in resolved
+                ),
                 question=question,
                 now=self._clock.now(),
                 findings=findings,
@@ -4487,16 +4528,6 @@ class SayToThread:
         role_title, role_focus = _discussion_role_of(
             thread.role_id, catalog=self._catalog, discussion_roles=self._discussion_roles
         )
-        document = self._documents.get(thread.project_id)
-        view = document.view()
-        # 讨论是**有主题信号的**（`thread.topic` 就是发起时选中的那段原文），
-        # 所以按它收窄文档——选区与条目入口发起的必然命中，自由开聊回落全文
-        # （`02` §11.0.61：有信号才切，没信号不猜）。
-        window = document_window(
-            view, readiness=self._checker.check(view), topic=thread.topic
-        )
-        document_state = window.text
-        ledger = self._evidence.get(thread.project_id)
         base = len(thread.turns)
         # 本轮用户的话还没落库（模型先跑、跑通才原子记一对），但**它必须出现在这一趟的
         # 提示词里**——不然角色永远在答上一轮（2026-10-10 真跑抓到的 P0：第 2 次追问
@@ -4505,10 +4536,16 @@ class SayToThread:
         # 本轮占一格，"共 N 轮"也算它（跑完就真的有这一轮）。
         pending = Turn(index=base, role="user", text=text, based_on=())
         history = render_thread_history((*thread.turns, pending))
-        # **不变量**（`02` §11.0.61）：`known` = 看得见的编号。历史里上一轮引过的
-        # 编号也看得见，所以它进 `visible`——但文档里没渲染出来的那些进不来。
-        known_eids = window.known_eids(ledger) | (
-            visible_eids(history) & window.ledger_ids(ledger)
+        # 讨论是**有主题信号的**（`thread.topic` 就是发起时选中的那段原文），
+        # 所以按它收窄文档——选区与条目入口发起的必然命中，自由开聊回落全文
+        # （`02` §11.0.61：有信号才切，没信号不猜）。窗口与 known 走共用 helper，
+        # 与 AssembleCards/RunPanelRound 同源（历史里上一轮引过的编号也看得见）。
+        document_state, known_eids = _discussion_window(
+            self._documents,
+            self._checker,
+            self._evidence,
+            thread,
+            history=history,
         )
         question = _question_text(thread.question)
         findings = _render_thread_findings(
@@ -4564,6 +4601,247 @@ class SayToThread:
         return thread_view(stored)
 
 
+class RunPanelRound:
+    """跑一轮 panel 自主讨论（M18）：本轮在场者并行发言 → 综合 → 落库。
+
+    一次只跑**一轮**：N 轮由前端循环驱动（进度可见、可随时停）。
+    失败语义：已落库的 turn 保留（自包含合法），本轮停、无综合；重试补剩余发言者。
+    轮内发言并行（gather；各人恰好说一次，显示顺序 = 完成顺序）。
+    """
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentReader,
+        discussions: DiscussionReader,
+        discussion_writer: DiscussionWriter,
+        evidence: EvidenceReader,
+        explorations: ExplorationReader,
+        uow: UnitOfWork,
+        discusser: Discusser,
+        checker: ReadinessChecker,
+        clock: Clock,
+        events: EventPublisher,
+        catalog: SeatCatalog,
+        discussion_roles: tuple,
+    ) -> None:
+        self._documents = documents
+        self._discussions = discussions
+        self._discussion_writer = discussion_writer
+        self._evidence = evidence
+        self._explorations = explorations
+        self._uow = uow
+        self._discusser = discusser
+        self._checker = checker
+        self._clock = clock
+        self._events = events
+        self._catalog = catalog
+        self._discussion_roles = discussion_roles
+
+    async def __call__(
+        self, *, discussion_id: DiscussionId
+    ) -> ThreadView:
+        thread = self._discussions.get(discussion_id)
+        if thread.status is not ThreadStatus.OPEN:
+            raise ThreadClosed(discussion_id=discussion_id)
+        round_no = thread.current_round
+        if round_no > MAX_PANEL_ROUNDS:
+            raise ThreadFull(limit=MAX_PANEL_ROUNDS)
+        in_round = [
+            member for member in thread.participants if member.joined_round <= round_no
+        ]
+        spoken = {
+            turn.author
+            for turn in thread.turns
+            if turn.round == round_no and turn.author not in ("user", "assistant")
+        }
+        remaining = [member for member in in_round if member.role_id not in spoken]
+        history = render_thread_history(thread.turns)
+        document_state, known_eids = _discussion_window(
+            self._documents,
+            self._checker,
+            self._evidence,
+            thread,
+            history=history,
+        )
+        question = _question_text(thread.question)
+        findings = _render_thread_findings(
+            thread.findings, explorations=self._explorations
+        )
+        results = await asyncio.gather(
+            *(
+                self._speak(
+                    member,
+                    topic=thread.topic,
+                    question=question,
+                    history=history,
+                    document_state=document_state,
+                    findings=findings,
+                    discussion_id=discussion_id,
+                    round_no=round_no,
+                    known_eids=known_eids,
+                )
+                for member in remaining
+            ),
+            return_exceptions=True,
+        )
+        for member, result in zip(remaining, results, strict=True):
+            if isinstance(result, BaseException):
+                continue
+            with self._uow:
+                stored = self._discussions.get(discussion_id)
+                stored.append_agent_turn(
+                    role_id=member.role_id,
+                    text=result.text,
+                    based_on=result.refs,
+                    round=round_no,
+                )
+                self._discussion_writer.save(stored)
+            _publish_discussion(self._events, self._clock, stored)
+        failures = [
+            (member, result)
+            for member, result in zip(remaining, results, strict=True)
+            if isinstance(result, BaseException)
+        ]
+        if failures:
+            # 已落库的不动；调用方（前端）重试本轮会补剩余发言者。
+            raise failures[0][1]
+        await self._synthesize(
+            discussion_id=discussion_id,
+            topic=thread.topic,
+            round_no=round_no,
+        )
+        return thread_view(self._discussions.get(discussion_id))
+
+    async def _speak(
+        self,
+        member: Participant,
+        *,
+        topic: str,
+        question: str,
+        history: str,
+        document_state: str,
+        findings: str,
+        discussion_id: DiscussionId,
+        round_no: int,
+        known_eids: frozenset[EvidenceId],
+    ) -> SayOutcome:
+        role_title, role_focus = _discussion_role_of(
+            member.role_id, catalog=self._catalog, discussion_roles=self._discussion_roles
+        )
+        slot = f"r{round_no}-{member.role_id}"
+        try:
+            outcome = await self._discusser.say(
+                role_title=role_title,
+                role_focus=role_focus,
+                topic=topic,
+                question=question,
+                history=history,
+                document_state=document_state,
+                related_findings=findings,
+                discussion_id=str(discussion_id),
+                turn_slot=slot,
+                known_eids=known_eids,
+            )
+            validate_ledger_refs(outcome.refs, known_eids=known_eids)
+            return outcome
+        except ModelCallFailed:
+            raise
+        except (PacketParseError, ShapeError) as error:
+            repair = (
+                repair_note(error)
+                if isinstance(error, PacketParseError)
+                else f"上一次的产物没通过校验：{error.message}"
+            )
+            outcome = await self._discusser.say(
+                role_title=role_title,
+                role_focus=role_focus,
+                topic=topic,
+                question=question,
+                history=history,
+                document_state=document_state,
+                related_findings=findings,
+                discussion_id=str(discussion_id),
+                turn_slot=f"{slot}-2",
+                known_eids=known_eids,
+                validation_error=repair,
+                # 最后一次尝试：不存在的编号摘掉、正文照收（`02` §11.0.2）
+                lenient=True,
+            )
+            validate_ledger_refs(outcome.refs, known_eids=known_eids)
+            return outcome
+
+    async def _synthesize(
+        self, *, discussion_id: DiscussionId, topic: str, round_no: int
+    ) -> None:
+        stored = self._discussions.get(discussion_id)
+        titles = {member.role_id: member.role_title for member in stored.participants}
+        round_history = "\n".join(
+            f"{titles.get(turn.author, turn.author)}：{turn.text}"
+            for turn in stored.turns
+            if turn.round == round_no
+        )
+        prior_summaries = "\n".join(
+            f"第{summary.index}轮：共识{list(summary.agreed)}；分歧{list(summary.disagreed)}；"
+            f"未决{list(summary.open)}"
+            for summary in stored.summaries
+        )
+        outcome = await self._discusser.synthesize(
+            topic=topic,
+            round_history=round_history,
+            prior_summaries=prior_summaries,
+            discussion_id=str(discussion_id),
+            synthesis_slot=f"y{round_no}",
+        )
+        with self._uow:
+            current = self._discussions.get(discussion_id)
+            current.append_summary(
+                RoundSummary(
+                    index=round_no,
+                    agreed=outcome.agreed,
+                    disagreed=outcome.disagreed,
+                    open=outcome.open,
+                )
+            )
+            self._discussion_writer.save(current)
+        _publish_discussion(self._events, self._clock, current)
+
+
+class JoinPanel:
+    """中途拉人进 panel（M18）：下一轮生效，不追补、不重跑。"""
+
+    def __init__(
+        self,
+        *,
+        discussions: DiscussionReader,
+        discussion_writer: DiscussionWriter,
+        uow: UnitOfWork,
+        clock: Clock,
+        events: EventPublisher,
+        catalog: SeatCatalog,
+        discussion_roles: tuple,
+    ) -> None:
+        self._discussions = discussions
+        self._discussion_writer = discussion_writer
+        self._uow = uow
+        self._clock = clock
+        self._events = events
+        self._catalog = catalog
+        self._discussion_roles = discussion_roles
+
+    async def __call__(self, *, discussion_id: DiscussionId, role_id: str) -> ThreadView:
+        # 存在性由 join 报（UnknownDiscussion）；这里不先 get 一次——with 块里拿的是最新。
+        role_title, _ = _discussion_role_of(
+            role_id, catalog=self._catalog, discussion_roles=self._discussion_roles
+        )
+        with self._uow:
+            stored = self._discussions.get(discussion_id)
+            stored.join(role_id=role_id, role_title=role_title)
+            self._discussion_writer.save(stored)
+        _publish_discussion(self._events, self._clock, stored)
+        return thread_view(stored)
+
+
 class AssembleCards:
     """把讨论总结成 1-3 张卡：repair 1 次；再坏线程不动。"""
 
@@ -4603,19 +4881,16 @@ class AssembleCards:
         role_title, role_focus = _discussion_role_of(
             thread.role_id, catalog=self._catalog, discussion_roles=self._discussion_roles
         )
-        document = self._documents.get(thread.project_id)
-        view = document.view()
         # 出卡与发言同一个主题信号、同一条窄化（`02` §11.0.61）。**出卡的 grounding
         # 是硬二选一**（`grounding=document` → `based_on` 必须来自这里），所以
         # 窄化后 `known` 必须同源收缩——否则卡会引一个它没看见的编号。
-        window = document_window(
-            view, readiness=self._checker.check(view), topic=thread.topic
-        )
-        document_state = window.text
-        ledger = self._evidence.get(thread.project_id)
         thread_text = render_thread_history(thread.turns)
-        known_eids = window.known_eids(ledger) | (
-            visible_eids(thread_text) & window.ledger_ids(ledger)
+        document_state, known_eids = _discussion_window(
+            self._documents,
+            self._checker,
+            self._evidence,
+            thread,
+            history=thread_text,
         )
         # slot = 已有 cards 数＋1：cards 只增，单调，撞不了；不用另设计数器。
         base = len(thread.cards) + 1

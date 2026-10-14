@@ -128,7 +128,7 @@ async def test_start_round_carries_discussion_card_seed_ids() -> None:
     async with async_client(app) as client:
         started = await client.post(
             f"/api/projects/{PROJECT}/discussions",
-            json={"topic": "导出优化", "role_id": "dlg.challenger"},
+            json={"topic": "导出优化", "role_ids": ["dlg.challenger"]},
         )
         assert started.status_code == 200, started.text
         did = started.json()["thread_id"]

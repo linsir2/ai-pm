@@ -66,7 +66,7 @@ async def test_free_topic_thread_to_kept_card_flows_into_a_round_as_simulated() 
 
     harness = _harness()
     started = await harness.start_discussion()(
-        project_id=PROJECT, topic="导出找单太慢", role_id="dlg.challenger", question=None
+        project_id=PROJECT, topic="导出找单太慢", role_ids=["dlg.challenger"], question=None
     )
     did = started.thread_id
     assert started.status == "open"

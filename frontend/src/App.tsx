@@ -402,9 +402,10 @@ export default function App() {
             discussions={data.discussions}
             discussionsPending={data.discussionsPending}
             discussionAnchor={discussionAnchor}
-            onStartDiscussion={(anchor, runInquiry) =>
-              void data.startDiscussion(anchor, runInquiry)
-            }
+            onStartDiscussion={(start, runInquiry) => data.startPanel(start, runInquiry)}
+            onRunPanelRound={(threadId, signal) => data.runPanelRound(threadId, signal)}
+            onJoinPanel={(threadId, roleId) => data.joinPanel(threadId, roleId)}
+            onAbortPanelRun={(threadId) => data.abortPanelRun(threadId)}
             onSayToThread={(threadId, text) => void data.sayToThread(threadId, text)}
             onAssembleCards={(threadId) => void data.assembleCards(threadId)}
             onKeepDiscussionCard={(threadId, cardId, as) =>

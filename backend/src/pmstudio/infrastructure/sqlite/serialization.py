@@ -14,7 +14,9 @@ from pmstudio.domain.discussion.card import Grounding as DiscussionGrounding
 from pmstudio.domain.discussion.thread import (
     Discussion,
     FindingRef,
+    Participant,
     QuestionSnapshot,
+    RoundSummary,
     ThreadStatus,
     Turn,
 )
@@ -1065,13 +1067,23 @@ def exploration_from_payload(
 
 
 def discussion_to_payload(discussion: Discussion) -> dict:
-    """讨论的 payload。列字段（status / created_at）不放这里——读时从列传回来。"""
+    """讨论的 payload。列字段（status / created_at）不放这里——读时从列传回来。
+
+    M18 起 `role_id`/`role_title` 不再写（首位成员即旧值，读侧照旧能拿到）；
+    只写 `participants`。老行没有这把键 → 读侧回落单成员（M12 稀疏映射同纪律）。
+    """
 
     question = discussion.question
     return {
         "topic": discussion.topic,
-        "role_id": discussion.role_id,
-        "role_title": discussion.role_title,
+        "participants": [
+            {
+                "role_id": member.role_id,
+                "role_title": member.role_title,
+                "joined_round": member.joined_round,
+            }
+            for member in discussion.participants
+        ],
         "question": (
             None
             if question is None
@@ -1088,8 +1100,19 @@ def discussion_to_payload(discussion: Discussion) -> dict:
                 "role": turn.role,
                 "text": turn.text,
                 "based_on": [str(eid) for eid in turn.based_on],
+                "author": turn.author,
+                "round": turn.round,
             }
             for turn in discussion.turns
+        ],
+        "summaries": [
+            {
+                "index": summary.index,
+                "agreed": list(summary.agreed),
+                "disagreed": list(summary.disagreed),
+                "open": list(summary.open),
+            }
+            for summary in discussion.summaries
         ],
         "cards": [
             {
@@ -1164,8 +1187,7 @@ def discussion_from_payload(
         discussion_id=discussion_id,
         project_id=project_id,
         topic=str(payload.get("topic") or ""),
-        role_id=str(payload.get("role_id") or ""),
-        role_title=str(payload.get("role_title") or ""),
+        participants=_participants_of(payload),
         created_at=created_at,
         question=(
             None
@@ -1182,6 +1204,8 @@ def discussion_from_payload(
                 role=str(item["role"]),
                 text=str(item["text"]),
                 based_on=tuple(EvidenceId(str(eid)) for eid in item.get("based_on") or ()),
+                author=str(item.get("author") or "assistant"),
+                round=int(item.get("round") or 1),
             )
             for item in payload.get("turns") or ()
         ),
@@ -1193,5 +1217,41 @@ def discussion_from_payload(
                 local_id=str(item["local_id"]),
             )
             for item in payload.get("findings") or ()
+        ),
+        # 老行里没有这两把键（M18 panel）：综合缺省空
+        summaries=tuple(
+            RoundSummary(
+                index=int(item["index"]),
+                agreed=tuple(str(line) for line in item.get("agreed") or ()),
+                disagreed=tuple(str(line) for line in item.get("disagreed") or ()),
+                open=tuple(str(line) for line in item.get("open") or ()),
+            )
+            for item in payload.get("summaries") or ()
+        ),
+    )
+
+
+def _participants_of(payload: dict) -> tuple[Participant, ...]:
+    """读 panel 成员：新行读 `participants`；M9 老行只有 `role_id`/`role_title` → 单成员回落。
+
+    空 participants 在领域层是非法的（start 要求 1–4 个），所以回落分支兜住空串，
+    保证读回来的聚合永远合法——坏行不该在读侧炸（坏行跳过是仓储层的职责）。
+    """
+
+    stored = payload.get("participants")
+    if isinstance(stored, list) and stored:
+        return tuple(
+            Participant(
+                role_id=str(item["role_id"]),
+                role_title=str(item.get("role_title") or ""),
+                joined_round=int(item.get("joined_round") or 1),
+            )
+            for item in stored
+        )
+    return (
+        Participant(
+            role_id=str(payload.get("role_id") or ""),
+            role_title=str(payload.get("role_title") or ""),
+            joined_round=1,
         ),
     )

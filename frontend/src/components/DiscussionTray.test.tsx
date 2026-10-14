@@ -3,7 +3,7 @@
    （追问 / 总结成卡 / 收卡 / 关掉）。门控全在 `state/discussions.ts` 的纯函数里，
    这里只断言"门控之后界面上画了什么"。 */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CardView, ThreadView } from "../api/types";
@@ -25,8 +25,15 @@ function card(over: Partial<CardView> = {}): CardView {
   };
 }
 
-function turn(index: number, role: "user" | "assistant") {
-  return { index, role, text: `第${index}轮`, based_on: [] };
+function turn(index: number, role: "user" | "assistant", author?: string, round = 1) {
+  return {
+    index,
+    role,
+    text: `第${index}轮`,
+    based_on: [],
+    author: author ?? role,
+    round,
+  };
 }
 
 function thread(over: Partial<ThreadView> = {}): ThreadView {
@@ -42,6 +49,8 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
     cards: [],
     findings_count: 0,
     created_at: "2026-10-05T10:00:00+00:00",
+    participants: [],
+    summaries: [],
     ...over,
   };
 }
@@ -56,10 +65,13 @@ function draw(over: Partial<Parameters<typeof DiscussionTray>[0]> = {}) {
   const props = {
     threads: [] as ThreadView[],
     roles: ROLES,
-    turnLimit: 12,
+    turnLimit: 30,
     anchor: null,
     pending: false,
-    onStart: vi.fn(),
+    onStartPanel: vi.fn().mockResolvedValue(null),
+    onRunRound: vi.fn().mockResolvedValue(null),
+    onJoin: vi.fn(),
+    onAbortRun: vi.fn(),
     onSay: vi.fn(),
     onCards: vi.fn(),
     onKeep: vi.fn(),
@@ -73,38 +85,78 @@ function draw(over: Partial<Parameters<typeof DiscussionTray>[0]> = {}) {
 }
 
 describe("DiscussionTray", () => {
-  it("空态说人话，并且开聊卡上三个固定角色都在", () => {
+  it("空态说人话，并且开跑 panel 上三个固定角色都在（多选）", () => {
     draw();
 
     expect(screen.getByText(/还没开过讨论/)).toBeTruthy();
-    expect(screen.getByRole("radio", { name: /反方/ })).toBeTruthy();
-    expect(screen.getByRole("radio", { name: /用户之声/ })).toBeTruthy();
-    expect(screen.getByRole("radio", { name: /类比者/ })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: /反方/ })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: /用户之声/ })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: /类比者/ })).toBeTruthy();
   });
 
-  it("默认选反方；点开聊把主题与选中的角色交出去", () => {
+  it("默认勾选三个固定角色；点开跑把主题、名单、轮数交出去", async () => {
     const props = draw();
 
-    expect((screen.getByRole("radio", { name: /反方/ }) as HTMLInputElement).checked).toBe(true);
-    fireEvent.click(screen.getByRole("radio", { name: /类比者/ }));
+    expect(
+      (screen.getByRole("checkbox", { name: /反方/ }) as HTMLInputElement).checked,
+    ).toBe(true);
     fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "导出要不要做筛选" } });
-    fireEvent.click(screen.getByRole("button", { name: "开聊" }));
+    fireEvent.click(screen.getByRole("button", { name: "开跑" }));
 
-    expect(props.onStart).toHaveBeenCalledWith(
-      { topic: "导出要不要做筛选", role_id: "dlg.analogist" },
+    expect(props.onStartPanel).toHaveBeenCalledWith(
+      {
+        topic: "导出要不要做筛选",
+        role_ids: ["dlg.challenger", "dlg.user_voice", "dlg.analogist"],
+        question: null,
+      },
       false,
     );
   });
 
-  it("勾选「先跑一轮调研」：开聊时把 runInquiry=true 交出去（M13）", () => {
+  it("名单可加减：取消一个再开跑，名单里就没有它", async () => {
+    const props = draw();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /类比者/ }));
+    fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "导出要不要做筛选" } });
+    fireEvent.click(screen.getByRole("button", { name: "开跑" }));
+
+    expect(props.onStartPanel).toHaveBeenCalledWith(
+      {
+        topic: "导出要不要做筛选",
+        role_ids: ["dlg.challenger", "dlg.user_voice"],
+        question: null,
+      },
+      false,
+    );
+  });
+
+  it("全取消就开不了跑（后端口径 1–4，界面先拦）", () => {
+    const props = draw();
+
+    for (const name of [/反方/, /用户之声/, /类比者/]) {
+      fireEvent.click(screen.getByRole("checkbox", { name }));
+    }
+    fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "导出要不要做筛选" } });
+
+    expect(
+      (screen.getByRole("button", { name: "开跑" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(props.onStartPanel).not.toHaveBeenCalled();
+  });
+
+  it("勾选「先跑一轮调研」：开跑时把 runInquiry=true 交出去（M13）", () => {
     const props = draw();
 
     fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "导出要不要做筛选" } });
     fireEvent.click(screen.getByRole("checkbox", { name: /先跑一轮调研/ }));
-    fireEvent.click(screen.getByRole("button", { name: "开聊" }));
+    fireEvent.click(screen.getByRole("button", { name: "开跑" }));
 
-    expect(props.onStart).toHaveBeenCalledWith(
-      { topic: "导出要不要做筛选", role_id: "dlg.challenger" },
+    expect(props.onStartPanel).toHaveBeenCalledWith(
+      {
+        topic: "导出要不要做筛选",
+        role_ids: ["dlg.challenger", "dlg.user_voice", "dlg.analogist"],
+        question: null,
+      },
       true,
     );
   });
@@ -118,21 +170,25 @@ describe("DiscussionTray", () => {
   it("主题留空时不发请求（后端 topic 必填，界面不点亮一个必然 422 的按钮）", () => {
     const props = draw();
 
-    const start = screen.getByRole("button", { name: "开聊" }) as HTMLButtonElement;
+    const start = screen.getByRole("button", { name: "开跑" }) as HTMLButtonElement;
     expect(start.disabled).toBe(true);
-    expect(props.onStart).not.toHaveBeenCalled();
+    expect(props.onStartPanel).not.toHaveBeenCalled();
   });
 
-  it("问卷带进来的锚点：主题框有值、角色预选在问的那个人身上（席位 id 也照收）", () => {
+  it("问卷带进来的锚点：主题框有值、问的那个人默认勾上（席位 id 也照收）", () => {
     const props = draw({ anchor: { topic: "保存几年？", role_id: "seat.data_scale" } });
 
     expect((screen.getByLabelText("讨论主题") as HTMLTextAreaElement).value).toBe("保存几年？");
-    expect((screen.getByRole("radio", { name: /seat.data_scale/ }) as HTMLInputElement).checked).toBe(
-      true,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "开聊" }));
-    expect(props.onStart).toHaveBeenCalledWith(
-      { topic: "保存几年？", role_id: "seat.data_scale" },
+    expect(
+      (screen.getByRole("checkbox", { name: /seat.data_scale/ }) as HTMLInputElement).checked,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "开跑" }));
+    expect(props.onStartPanel).toHaveBeenCalledWith(
+      {
+        topic: "保存几年？",
+        role_ids: ["seat.data_scale", "dlg.challenger", "dlg.user_voice", "dlg.analogist"],
+        question: null,
+      },
       false,
     );
   });
@@ -142,8 +198,8 @@ describe("DiscussionTray", () => {
       threads: [
         thread({
           turns: [
-            { index: 0, role: "user", text: "先只做全量", based_on: [] },
-            { index: 1, role: "assistant", text: "那筛选留到有人骂再加", based_on: ["E1"] },
+            { index: 0, role: "user", text: "先只做全量", based_on: [], author: "user", round: 1 },
+            { index: 1, role: "assistant", text: "那筛选留到有人骂再加", based_on: ["E1"], author: "assistant", round: 1 },
           ],
         }),
       ],
@@ -233,15 +289,17 @@ describe("DiscussionTray", () => {
     expect(props.onClose).not.toHaveBeenCalled();
   });
 
-  it("聊满 12 条（后端上限，说一说一对）之后不再点亮「说这一轮」", () => {
+  it("聊满 30 条之后不再点亮「说这一轮」（T4' 上限，M18 从 12 放宽）", () => {
     draw({
       threads: [
         thread({
-          turns: Array.from({ length: 11 }, (_, i) => ({
+          turns: Array.from({ length: 29 }, (_, i) => ({
             index: i,
             role: i % 2 === 0 ? "user" : "assistant",
             text: `第${i}条`,
             based_on: [],
+            author: i % 2 === 0 ? "user" : "assistant",
+            round: 1,
           })),
         }),
       ],
@@ -258,7 +316,7 @@ describe("DiscussionTray", () => {
     });
 
     fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "先只做全量" } });
-    expect((screen.getByRole("button", { name: "开聊" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "开跑" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "总结成卡" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -317,5 +375,102 @@ describe("DiscussionTray · 顶部发起调研（M17：从灵感箱底部搬过�
     draw({});
 
     expect(screen.queryByRole("button", { name: "发起调研（整份文档）" })).toBeNull();
+  });
+});
+
+describe("DiscussionTray · panel 自主跑（M18）", () => {
+  function panelThread(over: Partial<ThreadView> = {}): ThreadView {
+    return thread({
+      participants: [
+        { role_id: "dlg.challenger", role_title: "反方", joined_round: 1 },
+        { role_id: "dlg.user_voice", role_title: "用户之声", joined_round: 1 },
+      ],
+      ...over,
+    });
+  }
+
+  function summary(index: number) {
+    return { index, agreed: [`共识${index}`], disagreed: [] as string[], open: [] as string[] };
+  }
+
+  it("开跑后自动跑到 N 轮就停（轮数选 1，跑一轮）", async () => {
+    const done = panelThread({ summaries: [summary(1)] });
+    const onRunRound = vi.fn().mockResolvedValue(done);
+    const onStartPanel = vi.fn().mockResolvedValue("d-1");
+    draw({ threads: [panelThread({})], onStartPanel, onRunRound });
+
+    fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "日报要不要日报" } });
+    fireEvent.change(screen.getByLabelText("跑几轮"), { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "开跑" }));
+
+    await waitFor(() => expect(onStartPanel).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onRunRound).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByText(/正在跑/)).toBeNull());
+  });
+
+  it("点停止：调 abort，不再调下一轮", async () => {
+    let resolveRun: (view: ThreadView) => void = () => undefined;
+    const onRunRound = vi
+      .fn()
+      .mockImplementation(
+        () => new Promise<ThreadView>((resolve) => { resolveRun = resolve; }),
+      );
+    const onAbortRun = vi.fn();
+    const onStartPanel = vi.fn().mockResolvedValue("d-1");
+    draw({ threads: [panelThread({})], onStartPanel, onRunRound, onAbortRun });
+
+    fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "日报要不要日报" } });
+    fireEvent.change(screen.getByLabelText("跑几轮"), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: "开跑" }));
+    await waitFor(() => expect(onRunRound).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+    expect(onAbortRun).toHaveBeenCalledWith("d-1");
+    resolveRun(panelThread({}));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(onRunRound).toHaveBeenCalledTimes(1);
+  });
+
+  it("再跑一轮：从当前综合数继续跑一轮", async () => {
+    const done = panelThread({ summaries: [summary(1), summary(2)] });
+    const onRunRound = vi.fn().mockResolvedValue(done);
+    draw({ threads: [panelThread({ summaries: [summary(1)] })], onRunRound });
+
+    fireEvent.click(screen.getByRole("button", { name: "再跑一轮" }));
+
+    await waitFor(() => expect(onRunRound).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByText(/正在跑/)).toBeNull());
+  });
+
+  it("综合按轮显示：共识/分歧/未决", () => {
+    draw({
+      threads: [
+        panelThread({
+          summaries: [{ index: 1, agreed: ["都认要写"], disagreed: ["怎么写"], open: ["给谁看"] }],
+        }),
+      ],
+    });
+
+    expect(screen.getByText(/第 1 轮/)).toBeTruthy();
+    expect(screen.getByText(/共识：都认要写/)).toBeTruthy();
+    expect(screen.getByText(/分歧：怎么写/)).toBeTruthy();
+    expect(screen.getByText(/未决：给谁看/)).toBeTruthy();
+  });
+
+  it("拉人进来：把线程 id 与选中的角色交出去", () => {
+    const props = draw({ threads: [panelThread({})] });
+
+    fireEvent.change(screen.getByLabelText(/拉人进来/), { target: { value: "dlg.analogist" } });
+    fireEvent.click(screen.getByRole("button", { name: "拉进来" }));
+
+    expect(props.onJoin).toHaveBeenCalledWith("d-1", "dlg.analogist");
+  });
+
+  it("在场的人不在拉人下拉框里", () => {
+    draw({ threads: [panelThread({})] });
+
+    const select = screen.getByLabelText(/拉人进来/) as HTMLSelectElement;
+    const values = [...select.options].map((option) => option.value);
+    expect(values).toEqual(["dlg.analogist"]);
   });
 });

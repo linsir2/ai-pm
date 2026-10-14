@@ -8,6 +8,7 @@ from pmstudio.application.agents.schemas import (
     CardsPacket,
     ClaimsPacket,
     DiscussionReply,
+    DiscussionSynthesis,
     InquiryPacket,
     IntegrationPacket,
     MemoryPacket,
@@ -145,6 +146,21 @@ DISCUSSER_CARDS = AgentDefinition(
     ),
 )
 
+DISCUSSER_SYNTHESIS = AgentDefinition(
+    agent_id="discusser_synthesis",
+    purpose="discussion_synthesis",
+    kind="discussion_synthesis",
+    prompt="discussion_synthesis",
+    packet=DiscussionSynthesis,
+    slots=(
+        "topic",
+        "round_history",
+        "prior_summaries",
+        "schema_json",
+        "validation_error",
+    ),
+)
+
 MEMORY_CURATOR = AgentDefinition(
     agent_id="memory_curator",
     purpose="memory_curation",
@@ -195,6 +211,7 @@ ALL_AGENTS = (
     INQUIRER,
     DISCUSSER_SAY,
     DISCUSSER_CARDS,
+    DISCUSSER_SYNTHESIS,
     MEMORY_CURATOR,
     SIM_INQUIRY,
     SIM_REVIEW,

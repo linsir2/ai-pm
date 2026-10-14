@@ -377,6 +377,15 @@ class CardsPacket(BaseModel):
     cards: list[DiscussionCardDraft] = Field(min_length=1, max_length=3)
 
 
+class DiscussionSynthesis(BaseModel):
+    #: 一轮的综合：共识 / 分歧 / 未决三组清单。只归纳发言里出现过的内容，
+    #: 不开新观点、不编 E 编号（引用归卡片管）。三组都可以空。
+
+    agreed: list[str] = Field(default_factory=list, description="大家都认的，每条一句话")
+    disagreed: list[str] = Field(default_factory=list, description="明确唱反调的，每条一句话")
+    open: list[str] = Field(default_factory=list, description="没说清、要追问的，每条一句话")
+
+
 class TargetDraft(BaseModel):
     zone: Zone = "body"
     section_id: str | None = Field(

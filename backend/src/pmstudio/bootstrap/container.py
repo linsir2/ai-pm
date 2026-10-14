@@ -38,6 +38,7 @@ from pmstudio.application.use_cases import (
     GetVersions,
     GetWorkspace,
     IntegrateRound,
+    JoinPanel,
     KeepCandidate,
     KeepDiscussionCard,
     KeepSimInquiry,
@@ -51,6 +52,7 @@ from pmstudio.application.use_cases import (
     RetryRound,
     RollbackVersion,
     RunInquiry,
+    RunPanelRound,
     RunSeatRound,
     RunSimInquiry,
     RunSimReview,
@@ -75,6 +77,7 @@ from pmstudio.harness.model.providers.litellm import LiteLLMGateway
 from pmstudio.harness.prompt import PROMPTS_DIR, FilePromptLibrary
 from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
 from pmstudio.infrastructure.discussion.roles import load_discussion_roles
+from pmstudio.infrastructure.discussion.runner import DiscussionRunner
 from pmstudio.infrastructure.graph.exploration_runner import ExplorationRunner
 from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.personas.catalog import load_personas
@@ -410,6 +413,30 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         catalog=catalog,
         discussion_roles=discussion_roles,
     )
+    run_panel_round = RunPanelRound(
+        documents=documents,
+        discussions=discussions,
+        discussion_writer=discussions,
+        evidence=evidences,
+        explorations=explorations,
+        uow=uow,
+        discusser=discusser,
+        checker=readiness,
+        clock=clock,
+        events=bus,
+        catalog=catalog,
+        discussion_roles=discussion_roles,
+    )
+    join_panel = JoinPanel(
+        discussions=discussions,
+        discussion_writer=discussions,
+        uow=uow,
+        clock=clock,
+        events=bus,
+        catalog=catalog,
+        discussion_roles=discussion_roles,
+    )
+    discussion_runner = DiscussionRunner(run_panel_round=run_panel_round)
     services = ApiServices(
         runner=runner,
         dig_round=dig_round,
@@ -447,6 +474,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         start_discussion=start_discussion,
         say_to_thread=say_to_thread,
         assemble_cards=assemble_cards,
+        join_panel=join_panel,
+        discussion_runner=discussion_runner,
         keep_card=KeepDiscussionCard(
             discussions=discussions,
             discussion_writer=discussions,

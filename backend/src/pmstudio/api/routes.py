@@ -12,6 +12,7 @@ from pmstudio.api.schemas import (
     CreateProjectRequest,
     EditEntryRequest,
     FetchRequest,
+    JoinPanelRequest,
     KeepRequest,
     KeepSimInquiryRequest,
     OpeningRequest,
@@ -495,13 +496,13 @@ async def dismiss_candidate(request: Request, exploration_id: str, candidate_id:
 async def start_discussion(  # type: ignore[no-untyped-def]
     request: Request, project_id: str, body: StartDiscussionRequest
 ):
-    """开一条讨论线程（M9）：同（项目，归一化主题，角色）的 open 线程幂等返。"""
+    """开一条讨论线程（M9/M18）：同（项目，归一化主题，角色集合）的 open 线程幂等返。"""
 
     return as_json(
         await services_of(request).start_discussion(
             project_id=ProjectId(project_id),
             topic=body.topic,
-            role_id=body.role_id,
+            role_ids=list(body.role_ids),
             question=(
                 None
                 if body.question is None
@@ -580,6 +581,47 @@ async def close_discussion(request: Request, discussion_id: str):  # type: ignor
             discussion_id=DiscussionId(discussion_id)
         )
     )
+
+
+@router.post("/discussions/{discussion_id}/run-round")
+async def run_panel_round(request: Request, discussion_id: str):  # type: ignore[no-untyped-def]
+    """跑一轮 panel 自主讨论（M18）：本轮在场者并行发言 → 综合 → 落库。
+
+    一次只跑一轮；N 轮由前端循环驱动。失败保留已落库的 turn、无综合，重试补剩余发言者。
+    同一线程同时只允许一轮在跑（`discussion_busy` 409）。
+    """
+
+    return as_json(
+        await services_of(request).discussion_runner.run_round(
+            discussion_id=DiscussionId(discussion_id)
+        )
+    )
+
+
+@router.post("/discussions/{discussion_id}/join")
+async def join_panel(  # type: ignore[no-untyped-def]
+    request: Request, discussion_id: str, body: JoinPanelRequest
+):
+    """中途拉人进 panel（M18）：下一轮生效，不追补、不重跑。"""
+
+    return as_json(
+        await services_of(request).join_panel(
+            discussion_id=DiscussionId(discussion_id), role_id=body.role_id
+        )
+    )
+
+
+@router.post("/discussions/{discussion_id}/abort-run")
+async def abort_panel_round(request: Request, discussion_id: str):  # type: ignore[no-untyped-def]
+    """停掉正在跑的那一轮（M18）：只让在途调用停下来，不写状态。
+
+    已落库的 turn 照留，线程还是 open；没在跑时幂等成功。
+    """
+
+    aborted = await services_of(request).discussion_runner.abort(
+        discussion_id=DiscussionId(discussion_id)
+    )
+    return as_json({"aborted": aborted})
 
 
 @router.get("/events")

@@ -69,6 +69,7 @@ def test_the_prompts_directory_is_not_empty():
         "analyzer.md",
         "discussion_cards.md",
         "discussion_say.md",
+        "discussion_synthesis.md",
         "inquiry.md",
         "integrator.md",
         "memory_curator.md",

@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from pmstudio.api import routes
 from pmstudio.api.errors import body_for, status_for
-from pmstudio.application.ports import ExplorationOrchestrator, RoundOrchestrator
+from pmstudio.application.ports import DiscussionRunner, ExplorationOrchestrator, RoundOrchestrator
 from pmstudio.application.use_cases import (
     AbandonExploration,
     AbandonRound,
@@ -29,6 +29,7 @@ from pmstudio.application.use_cases import (
     GetVersionDiff,
     GetVersions,
     GetWorkspace,
+    JoinPanel,
     KeepCandidate,
     KeepDiscussionCard,
     KeepSimInquiry,
@@ -62,6 +63,8 @@ class ApiServices:
     start_discussion: StartDiscussion
     say_to_thread: SayToThread
     assemble_cards: AssembleCards
+    join_panel: JoinPanel
+    discussion_runner: DiscussionRunner
     keep_card: KeepDiscussionCard
     dismiss_card: DismissDiscussionCard
     keep_sim_inquiry: KeepSimInquiry

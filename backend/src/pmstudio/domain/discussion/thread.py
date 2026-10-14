@@ -16,7 +16,11 @@ from pmstudio.domain.shared.errors import (
 )
 from pmstudio.domain.shared.ids import DiscussionId, EvidenceId, ProjectId
 
-MAX_DISCUSSION_TURNS = 12
+MAX_DISCUSSION_TURNS = 30
+#: 自主 panel 一次开跑最多几轮（M18）：机器可判的终止条件，不用"觉得够深了"。
+MAX_PANEL_ROUNDS = 5
+#: 一条线程最多几个角色同场（M18）：广播给所有席位只适合搜料，深想靠点名 panel。
+MAX_PANEL_SIZE = 4
 
 
 class ThreadStatus(StrEnum):
@@ -30,12 +34,47 @@ class Turn:
     role: str  # "user" | "assistant"
     text: str
     based_on: tuple[EvidenceId, ...] = ()
+    #: 谁说的：用户 turn 写 "user"，席位 turn 写 role_id（M18；旧行缺省 "assistant"）。
+    author: str = "assistant"
+    #: 第几轮 panel 轮次（M18；say_pair 记当前轮，旧行缺省 1）。
+    round: int = 1
 
     def __post_init__(self) -> None:
         if self.role not in ("user", "assistant"):
             raise ShapeError(f"turn 角色只能是 user 或 assistant：{self.role}")
         if not self.text.strip():
             raise ShapeError("turn 必须写清内容", index=self.index)
+
+
+@dataclass(frozen=True, slots=True)
+class Participant:
+    """panel 成员（M18）：哪个角色、从第几轮开始在场。
+
+    中途加入只对后续轮次生效（不追补、不重跑）；单成员 panel 就是今天的 1:1 线程。
+    """
+
+    role_id: str
+    role_title: str
+    joined_round: int
+
+    def __post_init__(self) -> None:
+        if not self.role_id.strip():
+            raise ShapeError("panel 成员必须带 role_id")
+        if self.joined_round < 1:
+            raise ShapeError("joined_round 从 1 起", role_id=self.role_id)
+
+
+@dataclass(frozen=True, slots=True)
+class RoundSummary:
+    """一轮的综合（M18）：共识 / 分歧 / 未决三组 bullets，只归纳不新开观点。
+
+    它是给人看的副栏，不是第二真相源：回流只走卡片。
+    """
+
+    index: int
+    agreed: tuple[str, ...] = ()
+    disagreed: tuple[str, ...] = ()
+    open: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,26 +112,26 @@ class Discussion:
         discussion_id: DiscussionId,
         project_id: ProjectId,
         topic: str,
-        role_id: str,
-        role_title: str,
+        participants: tuple[Participant, ...] | list[Participant],
         created_at: datetime,
         question: QuestionSnapshot | None = None,
         status: ThreadStatus = ThreadStatus.OPEN,
         turns: tuple[Turn, ...] = (),
         cards: tuple[Card, ...] = (),
         findings: tuple[FindingRef, ...] = (),
+        summaries: tuple[RoundSummary, ...] = (),
     ) -> None:
         self._discussion_id = discussion_id
         self._project_id = project_id
         self._topic = topic
-        self._role_id = role_id
-        self._role_title = role_title
+        self._participants = tuple(participants)
         self._created_at = created_at
         self._question = question
         self._status = status
         self._turns = tuple(turns)
         self._cards = tuple(cards)
         self._findings = tuple(findings)
+        self._summaries = tuple(summaries)
 
     @classmethod
     def start(
@@ -101,20 +140,27 @@ class Discussion:
         discussion_id: DiscussionId,
         project_id: ProjectId,
         topic: str,
-        role_id: str,
-        role_title: str,
+        participants: tuple[Participant, ...] | list[Participant],
         question: QuestionSnapshot | None,
         now: datetime,
         findings: tuple[FindingRef, ...] = (),
     ) -> "Discussion":
         if not topic.strip():
             raise ShapeError("开聊必须带主题")
+        members = tuple(participants)
+        if not 1 <= len(members) <= MAX_PANEL_SIZE:
+            raise ShapeError(
+                f"panel 一次 1–{MAX_PANEL_SIZE} 个角色", count=len(members)
+            )
+        if len({member.role_id for member in members}) != len(members):
+            raise ShapeError("同一个角色不能请两次")
+        if any(member.joined_round != 1 for member in members):
+            raise ShapeError("开聊时所有成员都从第 1 轮在场")
         return cls(
             discussion_id=discussion_id,
             project_id=project_id,
             topic=topic,
-            role_id=role_id,
-            role_title=role_title,
+            participants=members,
             created_at=now,
             question=question,
             findings=findings,
@@ -135,11 +181,21 @@ class Discussion:
 
     @property
     def role_id(self) -> str:
-        return self._role_id
+        """首位成员（旧单角色线程的 role_id；多成员 panel 取首位，仅作兼容）。"""
+        return self._participants[0].role_id
 
     @property
     def role_title(self) -> str:
-        return self._role_title
+        return self._participants[0].role_title
+
+    @property
+    def participants(self) -> tuple[Participant, ...]:
+        return self._participants
+
+    @property
+    def current_round(self) -> int:
+        """下一轮是第几轮（已出综合数 + 1；开跑/拉人都按它算）。"""
+        return len(self._summaries) + 1
 
     @property
     def created_at(self) -> datetime:
@@ -166,6 +222,11 @@ class Discussion:
         """开题调研底稿的引用（M13）：文本在探索表，这里只记回链。"""
         return self._findings
 
+    @property
+    def summaries(self) -> tuple[RoundSummary, ...]:
+        """每轮的综合（M18）：只增；综合是给人看的副栏，回流只走卡片。"""
+        return self._summaries
+
     # —— 推进 ——
     def say_pair(
         self,
@@ -181,9 +242,72 @@ class Discussion:
         if len(self._turns) + 2 > MAX_DISCUSSION_TURNS:
             raise ThreadFull(limit=MAX_DISCUSSION_TURNS)
         base = len(self._turns)
+        round_no = self.current_round
         self._turns = self._turns + (
-            Turn(index=base, role="user", text=user_text, based_on=()),
-            Turn(index=base + 1, role="assistant", text=assistant_text, based_on=tuple(based_on)),
+            Turn(
+                index=base, role="user", text=user_text, based_on=(),
+                author="user", round=round_no,
+            ),
+            Turn(
+                index=base + 1, role="assistant", text=assistant_text,
+                based_on=tuple(based_on), author="assistant", round=round_no,
+            ),
+        )
+
+    def append_agent_turn(
+        self,
+        *,
+        role_id: str,
+        text: str,
+        based_on: tuple[EvidenceId, ...],
+        round: int,
+    ) -> None:
+        """自主轮次里某成员的一条发言（M18）：单条可记，不要求成对。
+
+        与 `say_pair` 的分工：用户插话走成对（T2 的原子性不动），panel 内 agent 发言
+        自带 author，按（round, 到达序）追加。失败的 turn 不记——调用方保证只把
+        校验通过的交进来。
+        """
+        if self._status is not ThreadStatus.OPEN:
+            raise ThreadClosed(discussion_id=self._discussion_id)
+        if role_id not in {member.role_id for member in self._participants}:
+            raise ShapeError("不在场的角色不能发言", role_id=role_id)
+        if not text.strip():
+            raise ShapeError("发言必须写清内容", role_id=role_id)
+        if round != self.current_round:
+            raise ShapeError("只能往当前轮追加发言", round=round, current=self.current_round)
+        if len(self._turns) + 1 > MAX_DISCUSSION_TURNS:
+            raise ThreadFull(limit=MAX_DISCUSSION_TURNS)
+        base = len(self._turns)
+        self._turns = self._turns + (
+            Turn(
+                index=base, role="assistant", text=text,
+                based_on=tuple(based_on), author=role_id, round=round,
+            ),
+        )
+
+    def append_summary(self, summary: RoundSummary) -> None:
+        """记一轮的综合（M18）：必须按轮次顺序， rounds 上限一到就停。"""
+        if self._status is not ThreadStatus.OPEN:
+            raise ThreadClosed(discussion_id=self._discussion_id)
+        if summary.index != self.current_round:
+            raise ShapeError(
+                "综合必须按轮次顺序记", index=summary.index, current=self.current_round
+            )
+        if len(self._summaries) + 1 > MAX_PANEL_ROUNDS:
+            raise ThreadFull(limit=MAX_PANEL_ROUNDS)
+        self._summaries = self._summaries + (summary,)
+
+    def join(self, *, role_id: str, role_title: str) -> None:
+        """中途拉人进 panel（M18）：下一轮生效，不追补、不重跑。"""
+        if self._status is not ThreadStatus.OPEN:
+            raise ThreadClosed(discussion_id=self._discussion_id)
+        if role_id in {member.role_id for member in self._participants}:
+            raise ShapeError("这个角色已经在场了", role_id=role_id)
+        if len(self._participants) + 1 > MAX_PANEL_SIZE:
+            raise ShapeError(f"panel 一次最多 {MAX_PANEL_SIZE} 个角色")
+        self._participants = self._participants + (
+            Participant(role_id=role_id, role_title=role_title, joined_round=self.current_round),
         )
 
     def append_cards(self, cards: tuple[Card, ...]) -> None:

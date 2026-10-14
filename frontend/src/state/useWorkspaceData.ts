@@ -15,8 +15,8 @@ import {
   explorationSeedId,
 } from "../api/payload";
 import type { ExplorationAnchor } from "../api/payload";
-import { cardSeedText, resolveRoleId } from "./discussions";
-import type { DiscussionAnchor } from "./discussions";
+import { cardSeedText } from "./discussions";
+import type { PanelStart } from "./discussions";
 import { seedText } from "./explorations";
 import type {
   EditResult,
@@ -439,22 +439,24 @@ export function useWorkspaceData() {
   }, []);
 
   /**
-   * 开一条讨论（M9）：主题与角色都已由界面算好（`resolveRoleId` 兜过底）。
+   * 开一个讨论 panel（M9/M18）：主题与名单都已由界面算好（`validatePanel` 兜过底）。
+   * 返回新线程 id（失败 null）——界面拿到后自己循环跑 N 轮。
    *
    * `runInquiry`（M13「先跑一轮调研」）：先同步跑一趟聚焦调研（焦点 = 主题）→
    * 候选进灵感箱照常过目；跑成了才开线程，并把趟次 id 当开题底稿带上。
    * 失败不开线程（banner 说原因）——不假装带上了底稿。
    */
-  const startDiscussion = useCallback(
-    (anchor: DiscussionAnchor, runInquiry = false) =>
-      run("discussion", async () => {
-        const projectId = selected.current;
-        if (projectId === null) return;
-        let findingExplorationId: string | null = null;
+  const startPanel = useCallback(
+    async (start: PanelStart, runInquiry = false): Promise<string | null> => {
+      const projectId = selected.current;
+      if (projectId === null) return null;
+      let findingExplorationId: string | null = null;
+      let thread: ThreadView | null = null;
+      await run("discussion", async () => {
         if (runInquiry) {
           const view = await api.startExploration(
             projectId,
-            buildExplorationBody({ kind: "document", focus: anchor.topic }),
+            buildExplorationBody({ kind: "document", focus: start.topic }),
           );
           replaceExploration(view);
           if (view.status !== "done") {
@@ -465,17 +467,52 @@ export function useWorkspaceData() {
           }
           findingExplorationId = view.exploration_id;
         }
-        replaceThread(
-          await api.startDiscussion(projectId, {
-            topic: anchor.topic,
-            role_id: resolveRoleId(anchor.role_id),
-            question: anchor.question ?? null,
-            finding_exploration_id: findingExplorationId,
-          }),
-        );
-      }),
+        thread = await api.startDiscussion(projectId, {
+          topic: start.topic,
+          role_ids: start.role_ids,
+          question: start.question ?? null,
+          finding_exploration_id: findingExplorationId,
+        });
+        replaceThread(thread);
+      });
+      return thread === null ? null : (thread as ThreadView).thread_id;
+    },
     [replaceExploration, replaceThread, run],
   );
+
+  /**
+   * 跑一轮 panel（M18）：**旁路全局 pending**——N 轮循环由组件驱动，
+   * 不能借 `run()` 的串行闸（那会挡住「停止」这类动作）。
+   * 失败/被停都返回 null（失败已弹 banner；被停静默）——组件据此收循环。
+   */
+  const runPanelRound = useCallback(
+    async (threadId: string, signal?: AbortSignal): Promise<ThreadView | null> => {
+      try {
+        const view = await api.runPanelRound(threadId, signal);
+        replaceThread(view);
+        return view;
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "aborted") return null;
+        dispatch({ type: "error", message: describe(error) });
+        return null;
+      }
+    },
+    [replaceThread],
+  );
+
+  /** 中途拉人（M18）：下一轮生效；失败弹 banner。 */
+  const joinPanel = useCallback(
+    (threadId: string, roleId: string) =>
+      run("discussion", async () => {
+        replaceThread(await api.joinPanel(threadId, roleId));
+      }),
+    [replaceThread, run],
+  );
+
+  /** 停掉在跑的一轮（M18）：服务端也停，不写状态。失败静默（停止不该再报错）。 */
+  const abortPanelRun = useCallback((threadId: string) => {
+    void api.abortPanelRun(threadId).catch(() => undefined);
+  }, []);
 
   /** 追问一轮：后端成对写入，返回的就是最新的那条线程。 */
   const sayToThread = useCallback(
@@ -785,7 +822,10 @@ export function useWorkspaceData() {
     dismissCandidate,
     discussions,
     discussionsPending: pending === "discussion",
-    startDiscussion,
+    startPanel,
+    runPanelRound,
+    joinPanel,
+    abortPanelRun,
     sayToThread,
     assembleCards,
     keepDiscussionCard,

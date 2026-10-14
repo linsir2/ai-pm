@@ -478,6 +478,48 @@ class Harness:
             discussion_roles=self.discussion_roles,
         )
 
+    def run_panel_round(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import RunPanelRound
+
+        return RunPanelRound(
+            documents=self.documents,
+            discussions=self.discussions,
+            discussion_writer=self.discussions,
+            evidence=self.evidences,
+            explorations=self.explorations,
+            uow=self.uow,
+            discusser=self.discusser,
+            checker=self.readiness,
+            clock=self.clock,
+            events=self.events,
+            catalog=self.seats,
+            discussion_roles=self.discussion_roles,
+        )
+
+    def join_panel(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import JoinPanel
+
+        return JoinPanel(
+            discussions=self.discussions,
+            discussion_writer=self.discussions,
+            uow=self.uow,
+            clock=self.clock,
+            events=self.events,
+            catalog=self.seats,
+            discussion_roles=self.discussion_roles,
+        )
+
+    def discussion_runner(self):  # type: ignore[no-untyped-def]
+        """**缓存同一个实例**（取消要能找到那个任务，照 exploration_runner）。"""
+
+        from pmstudio.infrastructure.discussion.runner import DiscussionRunner
+
+        if not hasattr(self, "_discussion_runner"):
+            self._discussion_runner = DiscussionRunner(
+                run_panel_round=self.run_panel_round(),
+            )
+        return self._discussion_runner
+
     def keep_discussion_card(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import KeepDiscussionCard
 
@@ -908,6 +950,8 @@ class Harness:
             start_discussion=self.start_discussion(),
             say_to_thread=self.say_to_thread(),
             assemble_cards=self.assemble_cards(),
+            join_panel=self.join_panel(),
+            discussion_runner=self.discussion_runner(),
             keep_card=self.keep_discussion_card(),
             dismiss_card=self.dismiss_discussion_card(),
             keep_sim_inquiry=self.keep_sim_inquiry(),

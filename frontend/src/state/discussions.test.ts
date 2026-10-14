@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { CardView, QuestionView, SchemaView, ThreadView } from "../api/types";
+import type { CardView, SchemaView, ThreadView } from "../api/types";
 import { FALLBACK_LIMITS } from "./schema";
 import {
   canDiscuss,
@@ -13,7 +13,6 @@ import {
   discussionTopic,
   discussionTurnLimit,
   FALLBACK_DISCUSSION_TURNS,
-  resolveRoleId,
   roleChoices,
   roleOptionOf,
   roleOptions,
@@ -41,7 +40,7 @@ const FROM_SCHEMA = {
 } as SchemaView;
 
 function turn(index: number, role: string) {
-  return { index, role, text: `第${index}轮${role}`, based_on: [] };
+  return { index, role, text: `第${index}轮${role}`, based_on: [], author: role, round: 1 };
 }
 
 function thread(over: Partial<ThreadView> = {}): ThreadView {
@@ -57,6 +56,8 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
     cards: [],
     findings_count: 0,
     created_at: "2026-10-05T10:00:00+00:00",
+    participants: [],
+    summaries: [],
     ...over,
   };
 }
@@ -74,41 +75,6 @@ function card(over: Partial<CardView> = {}): CardView {
   };
 }
 
-function question(over: Partial<QuestionView> = {}): QuestionView {
-  return {
-    question_id: "q1",
-    kind: "gap",
-    type: "single",
-    title: "保存几年？",
-    why: "合规要求",
-    target_label: "s8",
-    options: [],
-    consequence_if_skipped: "按三年实现",
-    eids: [],
-    asked_by: [],
-    blocking: false,
-    ...over,
-  };
-}
-
-describe("resolveRoleId", () => {
-  it("显式给的赢（问卷是谁问的不抢）", () => {
-    expect(
-      resolveRoleId("dlg.analogist", question({ asked_by: ["dlg.challenger"] })),
-    ).toBe("dlg.analogist");
-  });
-
-  it("没显式给就用问卷题的 asked_by[0]（席位 id 照收，后端认 seat.*）", () => {
-    expect(resolveRoleId(undefined, question({ asked_by: ["seat.data_scale"] }))).toBe(
-      "seat.data_scale",
-    );
-  });
-
-  it("两边都没有就默认反方", () => {
-    expect(resolveRoleId()).toBe("dlg.challenger");
-    expect(resolveRoleId(null, null)).toBe("dlg.challenger");
-  });
-});
 
 describe("roleOptions", () => {
   it("/schema 给的三行就是全部（照抄，不排序不补）", () => {
@@ -259,5 +225,142 @@ describe("discussionTopic", () => {
   it("恰好 200 不动刀", () => {
     const exact = "啊".repeat(200);
     expect(discussionTopic(exact)).toBe(exact);
+  });
+});
+
+describe("validatePanel（M18 开跑校验：组件只显示，不定规则）", () => {
+  it("空名单、重复请人、超 4 人都给人话", async () => {
+    const { validatePanel } = await import("./discussions");
+
+    expect(validatePanel([], 3)).toBe("至少请一个人");
+    expect(validatePanel(["dlg.challenger", "dlg.challenger"], 3)).toBe(
+      "同一个角色不能请两次",
+    );
+    expect(
+      validatePanel(["a", "b", "c", "d", "e"], 3),
+    ).toBe("一次最多请 4 个人");
+  });
+
+  it("轮数只能 1–5 的整数", async () => {
+    const { validatePanel } = await import("./discussions");
+
+    expect(validatePanel(["dlg.challenger"], 0)).toBe("轮数只能是 1–5");
+    expect(validatePanel(["dlg.challenger"], 6)).toBe("轮数只能是 1–5");
+    expect(validatePanel(["dlg.challenger"], 1.5)).toBe("轮数只能是 1–5");
+  });
+
+  it("合法返回 null", async () => {
+    const { validatePanel } = await import("./discussions");
+
+    expect(validatePanel(["dlg.challenger"], 1)).toBeNull();
+    expect(validatePanel(["a", "b", "c", "d"], 5)).toBeNull();
+  });
+});
+
+describe("joinableRoles（M18：已在场的排除）", () => {
+  it("在场的不再给", async () => {
+    const { joinableRoles } = await import("./discussions");
+    const options = [
+      { role_id: "dlg.challenger", title: "反方", focus: "" },
+      { role_id: "dlg.user_voice", title: "用户之声", focus: "" },
+    ];
+
+    expect(joinableRoles(options, thread())).toEqual(options);
+    expect(
+      joinableRoles(
+        options,
+        thread({
+          participants: [
+            { role_id: "dlg.challenger", role_title: "反方", joined_round: 1 },
+          ],
+        }),
+      ),
+    ).toEqual([{ role_id: "dlg.user_voice", title: "用户之声", focus: "" }]);
+  });
+});
+
+describe("authorTitle（M18：发言人显示名）", () => {
+  it("你 / 在场成员标题 / 陌生 id 照实显示", async () => {
+    const { authorTitle } = await import("./discussions");
+    const paneled = thread({
+      participants: [{ role_id: "dlg.challenger", role_title: "反方", joined_round: 1 }],
+    });
+
+    expect(authorTitle(paneled, "user")).toBe("你");
+    expect(authorTitle(paneled, "dlg.challenger")).toBe("反方");
+    expect(authorTitle(paneled, "dlg.nobody")).toBe("dlg.nobody");
+  });
+});
+
+describe("roundsOf（M18：副栏按轮分组）", () => {
+  it("按 round 分组排序", async () => {
+    const { roundsOf } = await import("./discussions");
+
+    expect(roundsOf(thread())).toEqual([]);
+    expect(
+      roundsOf(
+        thread({
+          turns: [
+            { index: 0, role: "assistant", text: "a", based_on: [], author: "x", round: 2 },
+            { index: 1, role: "assistant", text: "b", based_on: [], author: "y", round: 1 },
+          ],
+        }),
+      ),
+    ).toEqual([
+      {
+        round: 1,
+        turns: [{ index: 1, role: "assistant", text: "b", based_on: [], author: "y", round: 1 }],
+      },
+      {
+        round: 2,
+        turns: [{ index: 0, role: "assistant", text: "a", based_on: [], author: "x", round: 2 }],
+      },
+    ]);
+  });
+
+  it("有综合但没 turns 的轮次也要画出来（不许静默漏一组）", async () => {
+    const { roundsOf } = await import("./discussions");
+
+    expect(
+      roundsOf(
+        thread({
+          summaries: [{ index: 1, agreed: ["共识"], disagreed: [], open: [] }],
+        }),
+      ),
+    ).toEqual([{ round: 1, turns: [] }]);
+  });
+});
+
+describe("defaultPanelRoles（M18：开跑默认勾选）", () => {
+  it("默认勾上全部固定角色（开箱即灵感 panel）", async () => {
+    const { defaultPanelRoles } = await import("./discussions");
+    const options = [
+      { role_id: "dlg.challenger", title: "反方", focus: "" },
+      { role_id: "dlg.user_voice", title: "用户之声", focus: "" },
+      { role_id: "dlg.analogist", title: "类比者", focus: "" },
+    ];
+
+    expect(defaultPanelRoles(null, options)).toEqual([
+      "dlg.challenger",
+      "dlg.user_voice",
+      "dlg.analogist",
+    ]);
+  });
+
+  it("问卷带来的表外席位也默认勾上（M13 预选不断），且不超 4 个", async () => {
+    const { defaultPanelRoles } = await import("./discussions");
+    const options = [
+      { role_id: "seat.data_scale", title: "席位", focus: "" },
+      { role_id: "dlg.challenger", title: "反方", focus: "" },
+      { role_id: "dlg.user_voice", title: "用户之声", focus: "" },
+      { role_id: "dlg.analogist", title: "类比者", focus: "" },
+    ];
+
+    expect(defaultPanelRoles("seat.data_scale", options)).toEqual([
+      "seat.data_scale",
+      "dlg.challenger",
+      "dlg.user_voice",
+      "dlg.analogist",
+    ]);
   });
 });

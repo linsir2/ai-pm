@@ -1893,11 +1893,28 @@ class DiscussionQuestionView:
 
 
 @dataclass(frozen=True, slots=True)
+class ParticipantView:
+    role_id: str
+    role_title: str
+    joined_round: int
+
+
+@dataclass(frozen=True, slots=True)
+class RoundSummaryView:
+    index: int
+    agreed: tuple[str, ...] = ()
+    disagreed: tuple[str, ...] = ()
+    open: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class TurnView:
     index: int
     role: str
     text: str
     based_on: tuple[str, ...] = ()
+    author: str = "assistant"
+    round: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -1925,6 +1942,10 @@ class ThreadView:
     #: 开题调研底稿条数（M13）：真身在探索表，界面只要数（"开题调研底稿 N 条"）
     findings_count: int
     created_at: datetime
+    #: panel 成员（M18）：单成员即旧 1:1 线程
+    participants: tuple[ParticipantView, ...] = ()
+    #: 每轮综合（M18）：只增，给人看的副栏
+    summaries: tuple[RoundSummaryView, ...] = ()
 
 
 def thread_view(thread: Discussion) -> ThreadView:
@@ -1949,6 +1970,8 @@ def thread_view(thread: Discussion) -> ThreadView:
                 role=turn.role,
                 text=turn.text,
                 based_on=tuple(str(eid) for eid in turn.based_on),
+                author=turn.author,
+                round=turn.round,
             )
             for turn in thread.turns
         ),
@@ -1966,6 +1989,23 @@ def thread_view(thread: Discussion) -> ThreadView:
         ),
         findings_count=len(thread.findings),
         created_at=thread.created_at,
+        participants=tuple(
+            ParticipantView(
+                role_id=member.role_id,
+                role_title=member.role_title,
+                joined_round=member.joined_round,
+            )
+            for member in thread.participants
+        ),
+        summaries=tuple(
+            RoundSummaryView(
+                index=summary.index,
+                agreed=tuple(summary.agreed),
+                disagreed=tuple(summary.disagreed),
+                open=tuple(summary.open),
+            )
+            for summary in thread.summaries
+        ),
     )
 
 

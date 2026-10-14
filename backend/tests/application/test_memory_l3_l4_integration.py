@@ -158,7 +158,7 @@ async def test_l3_stored_after_keep_card(harness):
     # 先创建讨论
     from pmstudio.domain.discussion.thread import QuestionSnapshot
     await harness.start_discussion()(
-        project_id=pid, topic="用户增长策略", role_id="dlg.challenger",
+        project_id=pid, topic="用户增长策略", role_ids=["dlg.challenger"],
         question=QuestionSnapshot(title="如何不依赖团长实现增长？")
     )
     did = (await harness.list_discussions()(project_id=pid))[-1].thread_id

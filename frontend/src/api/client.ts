@@ -36,10 +36,11 @@ export interface ExplorationBody {
   scope: { kind: "entry" | "document"; ref: string | null; text: string | null };
 }
 
-/** 开一条讨论线程的请求体（M9，与后端 `StartDiscussionRequest` 一一对应）。 */
+/** 开一条讨论线程的请求体（M9/M18，与后端 `StartDiscussionRequest` 一一对应）。 */
 export interface DiscussionBody {
   topic: string;
-  role_id: string;
+  /** 1–4 个角色（M18 panel；单元素即旧 1:1 开聊）。 */
+  role_ids: string[];
   /** 问卷题快照：只当开场白，**可空**（讨论 tab 自由开聊时不带）。 */
   question: { title: string; why: string | null } | null;
   /** 「先跑一轮调研」的底稿趟次（M13）：不传 = 无底稿。 */
@@ -94,6 +95,18 @@ export function apiErrorFrom(status: number, body: unknown, fallback: string): A
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
+  // 外部 signal（M18「停止这一轮」用）：调用方 abort 时把内部 controller 一起掐掉，
+  // 并记下"是调用方停的"——好把它的报错译成"已停止"而不是"超时"。
+  const external = init?.signal ?? null;
+  let stoppedByCaller = false;
+  const onExternalAbort = () => {
+    stoppedByCaller = true;
+    controller.abort();
+  };
+  if (external !== null) {
+    if (external.aborted) onExternalAbort();
+    else external.addEventListener("abort", onExternalAbort);
+  }
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let response: Response;
   try {
@@ -105,9 +118,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch (error) {
     clearTimeout(timer);
     if (error instanceof DOMException && error.name === "AbortError") {
+      if (stoppedByCaller) throw new ApiError("aborted", "已停止这一轮。");
       throw new ApiError("timeout", "请求超时了，后端可能还在跑；刷新页面看看这一轮的进度。");
     }
     throw new ApiError("network_error", "连不上后端（先确认它起在 8000 端口）。");
+  } finally {
+    external?.removeEventListener("abort", onExternalAbort);
   }
   clearTimeout(timer);
 
@@ -311,7 +327,7 @@ export const api = {
     request<ThreadView[]>(`/projects/${projectId}/discussions`),
 
   /**
-   * 开一条讨论线程：同（项目，归一化主题，角色）已有 open 线程时**幂等返那一条**
+   * 开一条讨论线程：同（项目，归一化主题，角色集合）已有 open 线程时**幂等返那一条**
    * （后端 D4 形态）——所以连点两次不会开出两条。
    */
   startDiscussion: (projectId: string, body: DiscussionBody) =>
@@ -357,6 +373,35 @@ export const api = {
       method: "POST",
       body: "{}",
     }),
+
+  /**
+   * 跑一轮 panel 自主讨论（M18）：本轮在场者并行发言 → 综合 → 落库。
+   * 一次只跑一轮；N 轮由前端循环驱动。失败保留已落库的 turn、无综合，重试补剩余。
+   * `signal`（可选）：「停止这一轮」用它即时掐掉客户端等待（服务端也会 abort）。
+   */
+  runPanelRound: (discussionId: string, signal?: AbortSignal) =>
+    request<ThreadView>(`/discussions/${encodeURIComponent(discussionId)}/run-round`, {
+      method: "POST",
+      body: "{}",
+      signal,
+    }),
+
+  /** 中途拉人进 panel（M18）：下一轮生效，不追补、不重跑。 */
+  joinPanel: (discussionId: string, roleId: string) =>
+    request<ThreadView>(`/discussions/${encodeURIComponent(discussionId)}/join`, {
+      method: "POST",
+      body: JSON.stringify({ role_id: roleId }),
+    }),
+
+  /**
+   * 停掉正在跑的那一轮（M18）：只让在途调用停下来，不写状态。
+   * 已落库的 turn 照留，线程还是 open；没在跑幂等成功。返回是否真停掉了一轮。
+   */
+  abortPanelRun: (discussionId: string) =>
+    request<{ aborted: boolean }>(
+      `/discussions/${encodeURIComponent(discussionId)}/abort-run`,
+      { method: "POST", body: "{}" },
+    ),
 
   submitOpening: (roundId: string, body: OpeningBody) =>
     request<RoundView>(`/rounds/${roundId}/opening`, {

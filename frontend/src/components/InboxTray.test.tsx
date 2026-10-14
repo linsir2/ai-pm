@@ -37,6 +37,8 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
     cards: [],
     findings_count: 0,
     created_at: "2026-10-05T10:00:00+00:00",
+    participants: [],
+    summaries: [],
     ...over,
   };
 }

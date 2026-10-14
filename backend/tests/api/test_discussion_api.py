@@ -43,7 +43,7 @@ async def test_start_say_cards_keep_flow_over_http() -> None:
     async with async_client(app) as client:
         started = await client.post(
             f"/api/projects/{PROJECT}/discussions",
-            json={"topic": "导出优化", "role_id": "dlg.challenger"},
+            json={"topic": "导出优化", "role_ids": ["dlg.challenger"]},
         )
         assert started.status_code == 200, started.text
         body = started.json()
@@ -83,7 +83,7 @@ async def test_card_keep_seed_and_dismiss_over_http() -> None:
     async with async_client(app) as client:
         started = await client.post(
             f"/api/projects/{PROJECT}/discussions",
-            json={"topic": "导出优化", "role_id": "dlg.challenger"},
+            json={"topic": "导出优化", "role_ids": ["dlg.challenger"]},
         )
         did = started.json()["thread_id"]
         await client.post(f"/api/discussions/{did}/say", json={"text": "我想做导出"})
@@ -118,7 +118,7 @@ async def test_dismiss_card_over_http_is_idempotent_and_unknown_cards_are_422() 
     async with async_client(app) as client:
         started = await client.post(
             f"/api/projects/{PROJECT}/discussions",
-            json={"topic": "导出优化", "role_id": "dlg.challenger"},
+            json={"topic": "导出优化", "role_ids": ["dlg.challenger"]},
         )
         did = started.json()["thread_id"]
         await client.post(f"/api/discussions/{did}/say", json={"text": "我想做导出"})
@@ -188,7 +188,7 @@ async def test_start_discussion_with_finding_exploration_over_http() -> None:
             f"/api/projects/{PROJECT}/discussions",
             json={
                 "topic": "带底稿聊导出",
-                "role_id": "dlg.challenger",
+                "role_ids": ["dlg.challenger"],
                 "finding_exploration_id": xid,
             },
         )
@@ -199,7 +199,7 @@ async def test_start_discussion_with_finding_exploration_over_http() -> None:
             f"/api/projects/{PROJECT}/discussions",
             json={
                 "topic": "坏底稿",
-                "role_id": "dlg.challenger",
+                "role_ids": ["dlg.challenger"],
                 "finding_exploration_id": "x-nope",
             },
         )
@@ -212,7 +212,7 @@ async def test_say_to_closed_thread_is_409() -> None:
     async with async_client(app) as client:
         started = await client.post(
             f"/api/projects/{PROJECT}/discussions",
-            json={"topic": "导出优化", "role_id": "dlg.challenger"},
+            json={"topic": "导出优化", "role_ids": ["dlg.challenger"]},
         )
         did = started.json()["thread_id"]
         closed = await client.post(f"/api/discussions/{did}/close")
@@ -233,7 +233,7 @@ async def test_unknown_thread_and_role_are_404() -> None:
 
         started = await client.post(
             f"/api/projects/{PROJECT}/discussions",
-            json={"topic": "导出优化", "role_id": "dlg.nope"},
+            json={"topic": "导出优化", "role_ids": ["dlg.nope"]},
         )
         assert started.status_code == 404
         assert started.json()["code"] == "unknown_role"
@@ -244,8 +244,60 @@ async def test_empty_say_text_is_422() -> None:
     async with async_client(app) as client:
         started = await client.post(
             f"/api/projects/{PROJECT}/discussions",
-            json={"topic": "导出优化", "role_id": "dlg.challenger"},
+            json={"topic": "导出优化", "role_ids": ["dlg.challenger"]},
         )
         did = started.json()["thread_id"]
         response = await client.post(f"/api/discussions/{did}/say", json={"text": ""})
     assert response.status_code == 422
+
+
+def _panel_say_reply(text: str) -> str:
+    return json.dumps({"text": text, "based_on": []}, ensure_ascii=False)
+
+
+def _synthesis_reply() -> str:
+    return json.dumps(
+        {"agreed": ["都认要写"], "disagreed": [], "open": ["给谁看"]},
+        ensure_ascii=False,
+    )
+
+
+async def test_run_panel_round_join_and_abort_over_http() -> None:
+    app, _ = _app(
+        replies={
+            "discussion": [_panel_say_reply("A 先说"), _panel_say_reply("B 再说")],
+            "discussion_synthesis": [_synthesis_reply()],
+        }
+    )
+    async with async_client(app) as client:
+        started = await client.post(
+            f"/api/projects/{PROJECT}/discussions",
+            json={"topic": "日报要不要日报", "role_ids": ["dlg.challenger", "dlg.user_voice"]},
+        )
+        assert started.status_code == 200, started.text
+        did = started.json()["thread_id"]
+        assert [m["role_id"] for m in started.json()["participants"]] == [
+            "dlg.challenger",
+            "dlg.user_voice",
+        ]
+
+        ran = await client.post(f"/api/discussions/{did}/run-round")
+        assert ran.status_code == 200, ran.text
+        body = ran.json()
+        assert sorted(t["author"] for t in body["turns"]) == [
+            "dlg.challenger",
+            "dlg.user_voice",
+        ]
+        assert len(body["summaries"]) == 1
+        assert body["summaries"][0]["agreed"] == ["都认要写"]
+
+        joined = await client.post(
+            f"/api/discussions/{did}/join", json={"role_id": "dlg.analogist"}
+        )
+        assert joined.status_code == 200, joined.text
+        members = {m["role_id"]: m["joined_round"] for m in joined.json()["participants"]}
+        assert members == {"dlg.challenger": 1, "dlg.user_voice": 1, "dlg.analogist": 2}
+
+        aborted = await client.post(f"/api/discussions/{did}/abort-run")
+        assert aborted.status_code == 200, aborted.text
+        assert aborted.json() == {"aborted": False}  # 没在跑幂等成功

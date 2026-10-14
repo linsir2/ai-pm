@@ -50,6 +50,8 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
     cards: [],
     findings_count: 0,
     created_at: "2026-10-05T10:00:00+00:00",
+    participants: [],
+    summaries: [],
     ...over,
   };
 }
@@ -71,8 +73,15 @@ function card(over: Partial<CardView> = {}): CardView {
 function afterOneSay(over: Partial<ThreadView> = {}): ThreadView {
   return thread({
     turns: [
-      { index: 0, role: "user", text: "先只做全量", based_on: [] },
-      { index: 1, role: "assistant", text: "那筛选留到有人骂再加", based_on: ["E1"] },
+      { index: 0, role: "user", text: "先只做全量", based_on: [], author: "user", round: 1 },
+      {
+        index: 1,
+        role: "assistant",
+        text: "那筛选留到有人骂再加",
+        based_on: ["E1"],
+        author: "assistant",
+        round: 1,
+      },
     ],
     ...over,
   });
@@ -182,7 +191,7 @@ it("忽略成功：卡片 state=dismissed 替换进线程", async () => {
   expect(result.current.state.error).toBeNull();
 });
 
-it("开聊：body 带 question 快照与 finding_exploration_id=null（M13 起字段显式）", async () => {
+it("开 panel：body 带 role_ids 名单、question 快照与 finding_exploration_id=null；返回线程 id", async () => {
   startDiscussion.mockResolvedValue(thread());
   const { result } = renderHook(() => useWorkspaceData());
   await act(async () => {});
@@ -190,23 +199,29 @@ it("开聊：body 带 question 快照与 finding_exploration_id=null（M13 起�
     result.current.selectProject("p1");
   });
 
+  let threadId: string | null = null;
   await act(async () => {
-    await result.current.startDiscussion(
-      { topic: "导出优化", role_id: "dlg.challenger", question: { title: "导出优化", why: "合规" } },
+    threadId = await result.current.startPanel(
+      {
+        topic: "导出优化",
+        role_ids: ["dlg.challenger", "dlg.user_voice"],
+        question: { title: "导出优化", why: "合规" },
+      },
       false,
     );
   });
 
   expect(startDiscussion).toHaveBeenCalledWith("p1", {
     topic: "导出优化",
-    role_id: "dlg.challenger",
+    role_ids: ["dlg.challenger", "dlg.user_voice"],
     question: { title: "导出优化", why: "合规" },
     finding_exploration_id: null,
   });
+  expect(threadId).toBe("d-1");
   expect(startExploration).not.toHaveBeenCalled();
 });
 
-it("先跑一轮调研（M13）：先起探索（焦点=主题），成功后再开聊并带趟次 id", async () => {
+it("先跑一轮调研（M13）：先起探索（焦点=主题），成功后再开 panel 并带趟次 id", async () => {
   const done = {
     exploration_id: "x-9",
     project_id: "p1",
@@ -230,8 +245,8 @@ it("先跑一轮调研（M13）：先起探索（焦点=主题），成功后再
   });
 
   await act(async () => {
-    await result.current.startDiscussion(
-      { topic: "导出优化", role_id: "dlg.challenger" },
+    await result.current.startPanel(
+      { topic: "导出优化", role_ids: ["dlg.challenger"] },
       true,
     );
   });
@@ -242,7 +257,7 @@ it("先跑一轮调研（M13）：先起探索（焦点=主题），成功后再
   });
   expect(startDiscussion).toHaveBeenCalledWith("p1", {
     topic: "导出优化",
-    role_id: "dlg.challenger",
+    role_ids: ["dlg.challenger"],
     question: null,
     finding_exploration_id: "x-9",
   });
@@ -271,8 +286,8 @@ it("先跑调研失败：不开线程，错误可见（不假装带上了底稿�
   });
 
   await act(async () => {
-    await result.current.startDiscussion(
-      { topic: "导出优化", role_id: "dlg.challenger" },
+    await result.current.startPanel(
+      { topic: "导出优化", role_ids: ["dlg.challenger"] },
       true,
     );
   });

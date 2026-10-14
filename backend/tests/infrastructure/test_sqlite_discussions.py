@@ -11,7 +11,14 @@ import pytest
 
 from pmstudio.application.errors import UnknownDiscussion
 from pmstudio.domain.discussion.card import Card, CardState, Grounding
-from pmstudio.domain.discussion.thread import Discussion, FindingRef, QuestionSnapshot
+from pmstudio.domain.discussion.thread import (
+    Discussion,
+    FindingRef,
+    Participant,
+    QuestionSnapshot,
+    RoundSummary,
+    ThreadStatus,
+)
 from pmstudio.domain.shared.ids import DiscussionId, EvidenceId, ProjectId
 from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.repositories import SqliteDiscussionRepository
@@ -34,8 +41,9 @@ def _thread() -> Discussion:
         discussion_id=DiscussionId("d-1"),
         project_id=ProjectId("p1"),
         topic="怎么让灵感不丢",
-        role_id="dlg.challenger",
-        role_title="反方",
+        participants=(
+            Participant(role_id="dlg.challenger", role_title="反方", joined_round=1),
+        ),
         question=QuestionSnapshot(title="题面", why="为啥问"),
         now=NOW,
     )
@@ -130,8 +138,9 @@ def test_legacy_kept_map_reads_back_as_material(store) -> None:  # type: ignore[
         discussion_id=DiscussionId("d-1"),
         project_id=ProjectId("p1"),
         topic="旧行",
-        role_id="dlg.challenger",
-        role_title="反方",
+        participants=(
+            Participant(role_id="dlg.challenger", role_title="反方", joined_round=1),
+        ),
         question=None,
         now=NOW,
     )
@@ -181,8 +190,9 @@ def test_findings_round_trip_and_old_rows_fall_back(store) -> None:  # type: ign
         discussion_id=DiscussionId("d-f"),
         project_id=ProjectId("p1"),
         topic="带底稿的线程",
-        role_id="dlg.challenger",
-        role_title="反方",
+        participants=(
+            Participant(role_id="dlg.challenger", role_title="反方", joined_round=1),
+        ),
         question=None,
         now=NOW,
         findings=(
@@ -213,8 +223,9 @@ def test_list_returns_newest_first_and_skips_bad_rows(store) -> None:  # type: i
         discussion_id=DiscussionId("d-1"),
         project_id=ProjectId("p1"),
         topic="旧主题",
-        role_id="dlg.challenger",
-        role_title="反方",
+        participants=(
+            Participant(role_id="dlg.challenger", role_title="反方", joined_round=1),
+        ),
         question=None,
         now=NOW,
     )
@@ -222,8 +233,9 @@ def test_list_returns_newest_first_and_skips_bad_rows(store) -> None:  # type: i
         discussion_id=DiscussionId("d-2"),
         project_id=ProjectId("p1"),
         topic="新主题",
-        role_id="dlg.challenger",
-        role_title="反方",
+        participants=(
+            Participant(role_id="dlg.challenger", role_title="反方", joined_round=1),
+        ),
         question=None,
         now=NOW.replace(minute=30),
     )
@@ -275,3 +287,58 @@ def test_user_version_is_11_and_discussions_table_exists(store) -> None:  # type
     }
     assert "grounding" not in insp_cols
     assert "context" not in insp_cols
+
+
+def test_panel_thread_round_trips_with_participants_authors_and_summaries(store) -> None:  # type: ignore[no-untyped-def]
+    """M18：panel 成员/author/综合落库再读回来，一个不少（TDD 先红）。"""
+    repo, _ = store
+    thread = Discussion.start(
+        discussion_id=DiscussionId("d-9"),
+        project_id=ProjectId("p1"),
+        topic="日报要不要日报",
+        participants=(
+            Participant(role_id="dlg.challenger", role_title="反方", joined_round=1),
+            Participant(role_id="dlg.user_voice", role_title="用户之声", joined_round=1),
+        ),
+        question=None,
+        now=NOW,
+    )
+    thread.append_agent_turn(role_id="dlg.challenger", text="先泼冷水", based_on=(), round=1)
+    thread.append_summary(
+        RoundSummary(index=1, agreed=("都认要写",), disagreed=("怎么写",), open=("给谁看",))
+    )
+    repo.save(thread)
+
+    restored = repo.get(DiscussionId("d-9"))
+    assert [(p.role_id, p.joined_round) for p in restored.participants] == [
+        ("dlg.challenger", 1),
+        ("dlg.user_voice", 1),
+    ]
+    assert [(t.author, t.round) for t in restored.turns] == [("dlg.challenger", 1)]
+    assert [(s.index, s.agreed, s.disagreed, s.open) for s in restored.summaries] == [
+        (1, ("都认要写",), ("怎么写",), ("给谁看",))
+    ]
+
+
+def test_old_rows_without_panel_keys_read_back_as_single_member(store) -> None:  # type: ignore[no-untyped-def]
+    """M18 兼容：M9 老行没有 participants/summaries/author/round 键，读回即单成员 panel。"""
+    from pmstudio.infrastructure.sqlite.serialization import discussion_from_payload
+
+    restored = discussion_from_payload(
+        {
+            "topic": "老话题",
+            "role_id": "dlg.challenger",
+            "role_title": "反方",
+            "turns": [{"index": 0, "role": "user", "text": "老话", "based_on": []}],
+            "cards": [],
+        },
+        discussion_id=DiscussionId("d-old"),
+        project_id=ProjectId("p1"),
+        status=ThreadStatus.OPEN,
+        created_at=NOW,
+    )
+    assert [(p.role_id, p.joined_round) for p in restored.participants] == [
+        ("dlg.challenger", 1)
+    ]
+    assert restored.turns[0].author == "assistant"
+    assert restored.summaries == ()

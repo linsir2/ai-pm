@@ -48,6 +48,10 @@ EXPECTED_PATHS = {
     "/api/discussions/{discussion_id}/cards/{card_id}/keep",
     "/api/discussions/{discussion_id}/cards/{card_id}/dismiss",
     "/api/discussions/{discussion_id}/close",
+    # M18 自主 panel：跑一轮 / 中途拉人 / 停掉在跑的一轮
+    "/api/discussions/{discussion_id}/run-round",
+    "/api/discussions/{discussion_id}/join",
+    "/api/discussions/{discussion_id}/abort-run",
 }
 
 

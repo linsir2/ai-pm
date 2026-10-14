@@ -18,7 +18,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from pmstudio.domain.shared.ids import DocumentId, ExplorationId, ProjectId, RoundId
+from pmstudio.domain.shared.ids import (
+    DiscussionId,
+    DocumentId,
+    ExplorationId,
+    ProjectId,
+    RoundId,
+)
 
 if TYPE_CHECKING:
     from pmstudio.application.commands import RoundCommand
@@ -33,6 +39,7 @@ if TYPE_CHECKING:
         RoundHeadView,
         RoundOutcomeView,
         RoundView,
+        ThreadView,
     )
     from pmstudio.domain.exploration.exploration import ExplorationScope
 
@@ -277,3 +284,17 @@ class ExplorationCanceller(Protocol):
     """
 
     async def cancel(self, exploration_id: ExplorationId) -> None: ...
+
+
+@runtime_checkable
+class DiscussionRunner(Protocol):
+    """panel 轮次的执行器（实现是 infrastructure 里的 `DiscussionRunner`，M18）。
+
+    `api` 只认这个协议。与探索/轮次 runner 同形：串行 + 任务注册 + 取消。
+    取消只让在途调用停下来，**不写状态**（线程还是 open，已落库的 turn 照留）——
+    讨论 abort 没有"先写状态"的那一半（与 AbandonRound/AbandonExploration 不同）。
+    """
+
+    async def run_round(self, *, discussion_id: DiscussionId) -> "ThreadView": ...
+
+    async def abort(self, *, discussion_id: DiscussionId) -> None: ...
