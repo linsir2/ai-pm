@@ -1001,6 +1001,7 @@ class TemplateSectionSchemaView:
     title: str
     purpose: str
     role: str
+    slots: tuple[SlotSchemaView, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1135,6 +1136,12 @@ def schema_view(
                         title=section.title,
                         purpose=section.purpose,
                         role=section.role.value,
+                        slots=tuple(
+                            SlotSchemaView(
+                                name=slot.name, title=slot.title, kind=slot.kind.value
+                            )
+                            for slot in section.slots
+                        ),
                     )
                     for section in template.sections
                 ),

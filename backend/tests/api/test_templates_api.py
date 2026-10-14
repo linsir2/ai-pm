@@ -103,3 +103,26 @@ async def test_get_unknown_template_is_404():
         response = await client.get("/api/templates/nope")
 
     assert response.status_code == 404
+
+
+async def test_schema_templates_carry_slots():
+    """`/schema` 的模板投影带槽：前端类型声明了 slots，后端就得真给（契约对拍）。"""
+
+    app, _ = make_client()
+    async with async_client(app) as client:
+        response = await client.get("/api/schema")
+
+    assert response.status_code == 200
+    templates = {item["template_id"]: item for item in response.json()["templates"]}
+    assert set(templates) >= {"standard", "light"}
+    s8 = next(
+        item for item in templates["standard"]["sections"] if item["section_id"] == "s8"
+    )
+    assert [slot["name"] for slot in s8["slots"]] == [
+        "performance",
+        "availability",
+        "security",
+        "compatibility",
+        "observability",
+        "cost",
+    ]

@@ -13,6 +13,21 @@ from pmstudio.domain.shared.template import DocumentTemplate, template_from_dict
 TEMPLATES_DIR = Path(__file__).parent
 
 
+def seed_builtin_templates(repository, *, directory: Path = TEMPLATES_DIR) -> tuple[str, ...]:
+    """内置模板 seed（幂等 upsert）：TOML 是定义源，表是运行时源。
+
+    改 TOML 发版即改内置（upsert 覆盖）；自定义模板 id 不同，碰不到。
+    `repository` 按鸭子类型调 `.save(template, builtin=True)`——真库与替身通用。
+    返回种下的 id（启动日志/测试断言用）。
+    """
+
+    seeded: list[str] = []
+    for template in load_template_dir(directory).values():
+        repository.save(template, builtin=True)
+        seeded.append(template.template_id)
+    return tuple(seeded)
+
+
 def load_template_file(path: Path) -> DocumentTemplate:
     """读一份 TOML → `DocumentTemplate`（含 `validate`，坏的进不来）。"""
 

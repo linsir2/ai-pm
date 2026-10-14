@@ -103,7 +103,7 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
-from pmstudio.infrastructure.templates.loader import TEMPLATES_DIR, load_template_dir
+from pmstudio.infrastructure.templates.loader import seed_builtin_templates
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
 from pmstudio.infrastructure.tools.tavily import TavilySearchGateway
@@ -166,8 +166,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     # 内置模板 seed（幂等 upsert）：TOML 是定义源，表是运行时源。
     # 改 TOML 发版即改内置；自定义模板（builtin=0）id 不同，seed 碰不到。
     # 老项目行内存的是全文快照，库里怎么变都不影响它们。
-    for builtin_template in load_template_dir(TEMPLATES_DIR).values():
-        template_repo.save(builtin_template, builtin=True)
+    seed_builtin_templates(template_repo)
     uow = SqliteUnitOfWork(connection)
     prompts = FilePromptLibrary(PROMPTS_DIR)
     if gateway is None:

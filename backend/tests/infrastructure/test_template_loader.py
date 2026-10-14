@@ -93,3 +93,46 @@ def test_loading_a_directory_rejects_duplicate_template_ids(tmp_path):
 
     with pytest.raises(BadTemplateDefinition):
         loader.load_template_dir(tmp_path)
+
+
+def test_seed_builtin_templates_is_idempotent_and_keeps_customs(tmp_path):
+    """启动 seed：内置 upsert 反复种不炸，自定义模板碰不到。"""
+
+    from pmstudio.domain.shared.ids import SectionId
+    from pmstudio.domain.shared.template import DocumentTemplate, TemplatedSection, TemplateRole
+    from pmstudio.infrastructure.sqlite import database
+    from pmstudio.infrastructure.sqlite.repositories import SqliteTemplateRepository
+    from pmstudio.infrastructure.templates import loader
+
+    connection = database.connect(tmp_path / "pm.db")
+    repo = SqliteTemplateRepository(connection)
+    custom = DocumentTemplate(
+        template_id="tpl-x",
+        title="自建",
+        sections=(
+            TemplatedSection(
+                section_id=SectionId("s5"), title="t", purpose="p", role=TemplateRole.FEATURE
+            ),
+            TemplatedSection(
+                section_id=SectionId("s11"),
+                title="t",
+                purpose="p",
+                role=TemplateRole.OPEN_QUESTIONS,
+            ),
+            TemplatedSection(
+                section_id=SectionId("s13"),
+                title="t",
+                purpose="p",
+                role=TemplateRole.VERSION_HISTORY,
+            ),
+        ),
+    )
+    repo.save(custom, builtin=False)
+
+    first = loader.seed_builtin_templates(repo)
+    second = loader.seed_builtin_templates(repo)
+
+    assert first == second
+    assert "standard" in first and "light" in first
+    assert repo.get("tpl-x") == custom  # 自定义的没被 seed 碰
+    connection.close()
