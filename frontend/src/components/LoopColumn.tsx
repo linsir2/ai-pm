@@ -49,6 +49,10 @@ export function LoopColumn({
   discussions = [],
   discussionsPending = false,
   discussionAnchor = null,
+  collapsed = false,
+  badgeCount = 0,
+  onExpand,
+  onCollapse,
   onSubmitOpening,
   onSubmitAnswers,
   onSkipAll,
@@ -118,6 +122,12 @@ export function LoopColumn({
   /** 过目台的数据源（M8）：这个项目走过的探索。 */
   explorations?: ExplorationView[];
   explorationsPending?: boolean;
+  /** 右栏折叠态（06 §2.4 §3）：rail 只是它的折叠态，不另起文件。 */
+  collapsed?: boolean;
+  /** rail 徽标数：纯函数 `loopBadgeCount` 在调用方算好（组件不做业务判断）。 */
+  badgeCount?: number;
+  onExpand?: () => void;
+  onCollapse?: () => void;
   onSubmitOpening: () => void;
   onSubmitAnswers: () => void;
   onSkipAll: () => void;
@@ -204,6 +214,22 @@ export function LoopColumn({
     />
   );
 
+  // 折叠态：只剩 56px rail 里的一个竖按钮（图标 + 徽标数），其余原样不渲染。
+  if (collapsed) {
+    return (
+      <div className="loop">
+        <button
+          type="button"
+          className="topbar__action"
+          onClick={onExpand}
+          aria-label="展开闭环区"
+        >
+          闭环{badgeCount > 0 ? ` · ${badgeCount}` : ""}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="loop">
       {showTabs && (
@@ -241,6 +267,16 @@ export function LoopColumn({
           >
             讨论
           </button>
+          {onCollapse !== undefined && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={onCollapse}
+              aria-label="收起闭环区"
+            >
+              收起
+            </button>
+          )}
         </div>
       )}
 

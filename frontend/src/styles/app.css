@@ -82,6 +82,7 @@ a {
     "top top top"
     "nav doc loop";
   height: 100vh;
+  transition: grid-template-columns var(--dur-short) var(--ease-out);
 }
 
 /* 文档列收起（想看才打开）：左栏 + 右列，文档不占位 */
@@ -103,6 +104,25 @@ a {
 
 .shell--nodoc .loop__composer {
   padding-inline: var(--space-4);
+}
+
+/* 右栏折叠（06 §2.4 §3）：中栏独占，右列只剩 56px rail（DESIGN.md 顶栏同宽）。
+   rail 里只有一个竖按钮（图标 + 徽标数），`topbar__action` 样式复用，不新开类。 */
+.shell--noloop {
+  grid-template-columns: 208px minmax(0, 1fr) 56px;
+  grid-template-areas:
+    "top top top"
+    "nav doc loop";
+}
+
+.shell--noloop .loop {
+  align-items: center;
+  padding-top: var(--space-3);
+}
+
+.shell--noloop .loop > .topbar__action {
+  writing-mode: vertical-rl;
+  padding: var(--space-2) 4px;
 }
 
 .shell--plain {

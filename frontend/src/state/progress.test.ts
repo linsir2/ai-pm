@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { RoundView } from "../api/types";
-import { labelCounts, rewritesOf, roundElapsed, roundOrdinal, statusText } from "./progress";
+import {
+  labelCounts,
+  loopBadgeCount,
+  needsLoopAttention,
+  rewritesOf,
+  roundElapsed,
+  roundOrdinal,
+  statusText,
+} from "./progress";
 
 describe("statusText（状态行那一句：waiting 优先于 step）", () => {
   function at(over: Partial<RoundView>) {
@@ -82,6 +90,61 @@ describe("rewritesOf", () => {
   });
 });
 
+describe("needsLoopAttention（右栏任务驱动显隐，06 §2.4 §3）", () => {
+  function round(over: Partial<RoundView>) {
+    return { step: "started", waiting_on: "none", ...over } as unknown as RoundView;
+  }
+
+  it("有问卷待答就展开", () => {
+    expect(needsLoopAttention(round({ waiting_on: "questionnaire" }))).toBe(true);
+  });
+
+  it("开场卡与草案待确认也展开", () => {
+    expect(needsLoopAttention(round({ waiting_on: "opening_card" }))).toBe(true);
+    expect(needsLoopAttention(round({ waiting_on: "draft_card" }))).toBe(true);
+  });
+
+  it("无 round 就折叠", () => {
+    expect(needsLoopAttention(null)).toBe(false);
+  });
+
+  it("waiting_on=none 就折叠", () => {
+    expect(needsLoopAttention(round({ waiting_on: "none" }))).toBe(false);
+  });
+});
+
+describe("loopBadgeCount（rail 徽标：未答题数 + 草案组 0/1）", () => {
+  function round(over: Partial<RoundView>) {
+    return {
+      step: "awaiting_answers",
+      waiting_on: "questionnaire",
+      questions: [],
+      answer_sets: [],
+      draft: null,
+      ...over,
+    } as unknown as RoundView;
+  }
+
+  it("徽标数=未答题数+草案组", () => {
+    const questions = [{ question_id: "q1" }, { question_id: "q2" }, { question_id: "q3" }];
+    const r = round({
+      questions: questions as unknown as RoundView["questions"],
+      answer_sets: [{ form_id: "f1", answered: 1, skipped: 0, answers: [] }],
+      draft: { draft_id: "d1", groups: [], proposals: [], gaps: [] },
+    });
+    expect(loopBadgeCount(r)).toBe(3); // 2 未答 + 1 草案组
+  });
+
+  it("无 round 就是 0", () => {
+    expect(loopBadgeCount(null)).toBe(0);
+  });
+
+  it("没草案时只有未答题数；题全答完徽标归零", () => {
+    const one = [{ question_id: "q1" }] as unknown as RoundView["questions"];
+    expect(loopBadgeCount(round({ questions: one }))).toBe(1);
+    expect(loopBadgeCount(round({ questions: [] }))).toBe(0);
+  });
+});
 describe("roundElapsed（开局时长，rounds 列表拼）", () => {
   const rounds = [{ round_id: "r1", created_at: "2026-10-13T10:00:00.000Z" }];
   const now = Date.parse("2026-10-13T10:03:20.000Z");

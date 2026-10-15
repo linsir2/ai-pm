@@ -16,6 +16,7 @@ import {
 import type { ExplorationAnchor } from "./api/payload";
 import { discussionTopic } from "./state/discussions";
 import type { DiscussionAnchor } from "./state/discussions";
+import { loopBadgeCount, needsLoopAttention } from "./state/progress";
 import { limitsOf } from "./state/schema";
 import { DocumentPane } from "./components/DocumentPane";
 import { TemplateLibraryScreen } from "./templates/TemplateLibraryScreen";
@@ -72,6 +73,9 @@ export default function App() {
       "刷新时有 view=projects 没 project 该去哪"）。 */
   /** 文档列开着没（想看才打开；默认开，顶栏可收）。纯 UI 态。 */
   const [docOpen, setDocOpen] = useState(true);
+  /** 右栏开着没（06 §2.4 §3）：null = 按判据初判，点 rail/收起后记 true/false 手动覆盖。
+      纯 UI 态，不持久化、不进 URL/后端。 */
+  const [loopOpen, setLoopOpen] = useState<boolean | null>(null);
   /** 顶层视图：工作区 ⇄ 项目列表 ⇄ 模板库（`06` §2.3）。**纯 UI 态，不进 URL、不进后端**——
       `?project=` 才是要留着刷新恢复的那一个（两者性质不同，混在一起就要回答
       "刷新时有 view=projects 没 project 该去哪"）。
@@ -82,6 +86,8 @@ export default function App() {
   const listing = view === "projects";
 
   const mode = awaitingMode(round);
+  /** 右栏展开条件（06 §2.4 §3）：nodoc 优先（文档都没开还谈什么右栏），否则按它选 shell / shell--noloop。 */
+  const loopExpanded = loopOpen ?? needsLoopAttention(round);
   const project = state.project;
   const drafts = useRoundDrafts(round, mode);
   // 点跨轮编号时会切到那一轮（只读）；其余时候看的都是当前这一轮
@@ -109,6 +115,7 @@ export default function App() {
     setReviewOpen(false);
     setActiveSection("s1");
     setPendingScroll(null);
+    setLoopOpen(null);
   }, [state.projectId]);
 
   // 从功能子树点进来：先切到 s5，等它渲染出来再滚过去。
@@ -401,7 +408,7 @@ export default function App() {
       <EditScope value={editApi}>
         <ExplorationScope value={researchApi}>
         <DiscussionScope value={discussionApi}>
-        <div className={docOpen ? "shell" : "shell shell--nodoc"}>
+        <div className={docOpen ? (loopExpanded ? "shell" : "shell shell--noloop") : "shell shell--nodoc"}>
           <TopBar
             projects={projects}
             project={project}
@@ -458,6 +465,10 @@ export default function App() {
             doc={doc}
             schema={data.schema}
             rounds={data.rounds}
+            collapsed={!loopExpanded}
+            badgeCount={loopBadgeCount(round)}
+            onExpand={() => setLoopOpen(true)}
+            onCollapse={() => setLoopOpen(false)}
             onViewRound={(roundId) => void data.viewRound(roundId)}
             mode={readingHistory ? null : mode}
             pending={data.pending}

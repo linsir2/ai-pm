@@ -27,6 +27,26 @@ export function statusText(round: RoundView): string {
   return stepText(round.step);
 }
 
+const LOOP_TASKS: readonly string[] = ["opening_card", "questionnaire", "draft_card"];
+
+/** 右栏要不要展开：有待办的轮次才占 500px（06 §2.4 §3）。 */
+export function needsLoopAttention(round: RoundView | null): boolean {
+  return round !== null && LOOP_TASKS.includes(round.waiting_on);
+}
+
+/** rail 徽标数：未答题数 + 草案待确认组数（0/1）。
+    `answer_sets` 的 answered/skipped 是**计数**（`api/types.ts:336`），不是题 id——
+    未答 = 当前批题数 − 历批已处理计数（下限 0，不碰 drafts 本地态）。 */
+export function loopBadgeCount(round: RoundView | null): number {
+  if (round === null) return 0;
+  let done = 0;
+  for (const batch of round.answer_sets ?? []) {
+    done += batch.answered + batch.skipped;
+  }
+  const open = Math.max(0, (round.questions ?? []).length - done);
+  return open + (round.draft === null || round.draft === undefined ? 0 : 1);
+}
+
 /**
  * 第几轮（展示序号）：`rounds` 最新在前，序号 = 总数 − 位置。
  * 查不到（列表还没到 / 不在列表里）就是 null——界面回落成"本轮"，不编一个数。
