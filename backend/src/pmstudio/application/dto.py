@@ -42,7 +42,7 @@ from pmstudio.domain.services.scope_guard import ScopeGuard
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS
-from pmstudio.domain.shared.template import DocumentTemplate
+from pmstudio.domain.shared.template import DocumentTemplate, MinEntries
 
 SEAT_COMPLETED = "completed"
 SEAT_PENDING = "pending"
@@ -1018,6 +1018,10 @@ class TemplateSectionView:
     purpose: str
     role: str
     slots: tuple[SlotSchemaView, ...]
+    #: 判据声明（`02` §11.0.69）：没声明就是 null，引擎按 role 走缺省值。
+    #: 直接投影领域对象——`as_json` 会把它摊成 `{count, kind}`，不多写一遍形状。
+    min_entries: MinEntries | None = None
+    coverage: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1045,6 +1049,8 @@ def template_view(template: DocumentTemplate) -> TemplateView:
                     SlotSchemaView(name=slot.name, title=slot.title, kind=slot.kind.value)
                     for slot in section.slots
                 ),
+                min_entries=section.min_entries,
+                coverage=section.coverage,
             )
             for section in template.sections
         ),

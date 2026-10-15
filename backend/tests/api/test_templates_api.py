@@ -126,3 +126,57 @@ async def test_schema_templates_carry_slots():
         "observability",
         "cost",
     ]
+
+
+async def test_create_template_carries_criteria_declarations():
+    """API 建的模板带判据声明，读回来一字不差（声明漏传 = 静默没判据）。"""
+
+    app, _ = make_client()
+    async with async_client(app) as client:
+        created = await client.post(
+            "/api/templates",
+            json={
+                "title": "带判据",
+                "sections": [
+                    {
+                        "id": "bg",
+                        "title": "背景",
+                        "purpose": "摆设",
+                        "min_entries": 2,
+                        "coverage": 3,
+                    },
+                    {"id": "s5", "title": "功能", "purpose": "摆设", "role": "feature"},
+                    {"id": "s11", "title": "未决", "purpose": "摆设", "role": "open_questions"},
+                    {"id": "s13", "title": "版本", "purpose": "摆设", "role": "version_history"},
+                ],
+            },
+        )
+
+    assert created.status_code == 201
+    section = created.json()["sections"][0]
+    assert section["min_entries"] == {"count": 2, "kind": None}
+    assert section["coverage"] == 3
+
+
+async def test_create_template_rejects_criteria_on_anchor_section():
+    app, _ = make_client()
+    async with async_client(app) as client:
+        response = await client.post(
+            "/api/templates",
+            json={
+                "title": "越界",
+                "sections": [
+                    {
+                        "id": "s5",
+                        "title": "功能",
+                        "purpose": "摆设",
+                        "role": "feature",
+                        "min_entries": 2,
+                    },
+                    {"id": "s11", "title": "未决", "purpose": "摆设", "role": "open_questions"},
+                    {"id": "s13", "title": "版本", "purpose": "摆设", "role": "version_history"},
+                ],
+            },
+        )
+
+    assert response.status_code == 409

@@ -8,18 +8,21 @@ id = "s1"
 title = "背景与问题"
 purpose = "为什么现在要做：现状有什么问题、不做会付出什么代价。"
 role = "backbone"
+min_entries = 1
 
 [[sections]]
 id = "s2"
 title = "目标与非目标"
 purpose = "要达成什么、明确不做什么；目标要能被验收。"
 role = "backbone"
+min_entries = 2
 
 [[sections]]
 id = "s4"
 title = "范围与边界"
 purpose = "本期做到哪、本期不做哪、边界情况谁来处理。"
 role = "backbone"
+min_entries = 2
 
 [[sections]]
 id = "s5"

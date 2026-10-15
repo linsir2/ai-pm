@@ -8,10 +8,13 @@ from pmstudio.domain.shared.template import (
     ANCHOR_ROLES,
     STANDARD_TEMPLATE_ID,
     DocumentTemplate,
+    MinEntries,
     TemplatedSection,
     TemplateRole,
     standard_template,
+    template_from_dict,
 )
+from pmstudio.domain.shared.writing import BlockKind
 
 
 def section(
@@ -93,3 +96,153 @@ def test_standard_template_matches_current_constants():
         "observability",
         "cost",
     ]
+
+
+# —— 判据声明（`02` §11.0.69：min_entries / coverage 是模板自己的声明）——
+
+
+def test_min_entries_accepts_bare_count_and_count_with_kind():
+    bare = template_from_dict(
+        {
+            "template_id": "t",
+            "title": "x",
+            "sections": [
+                {"id": "s1", "title": "a", "purpose": "p", "min_entries": 2},
+                {"id": "s5", "title": "f", "purpose": "p", "role": "feature"},
+                {"id": "s11", "title": "q", "purpose": "p", "role": "open_questions"},
+                {"id": "s13", "title": "v", "purpose": "p", "role": "version_history"},
+            ],
+        }
+    )
+    assert bare.sections[0].min_entries == MinEntries(count=2, kind=None)
+
+    with_kind = template_from_dict(
+        {
+            "template_id": "t",
+            "title": "x",
+            "sections": [
+                {
+                    "id": "s1",
+                    "title": "a",
+                    "purpose": "p",
+                    "min_entries": {"count": 1, "kind": "acceptance"},
+                },
+                {"id": "s5", "title": "f", "purpose": "p", "role": "feature"},
+                {"id": "s11", "title": "q", "purpose": "p", "role": "open_questions"},
+                {"id": "s13", "title": "v", "purpose": "p", "role": "version_history"},
+            ],
+        }
+    )
+    assert with_kind.sections[0].min_entries == MinEntries(count=1, kind=BlockKind.ACCEPTANCE)
+
+
+def test_min_entries_with_unknown_kind_is_rejected():
+    with pytest.raises(BadTemplateDefinition):
+        template_from_dict(
+            {
+                "template_id": "t",
+                "title": "x",
+                "sections": [
+                    {
+                        "id": "s1",
+                        "title": "a",
+                        "purpose": "p",
+                        "min_entries": {"count": 1, "kind": "nope"},
+                    },
+                    {"id": "s5", "title": "f", "purpose": "p", "role": "feature"},
+                    {"id": "s11", "title": "q", "purpose": "p", "role": "open_questions"},
+                    {"id": "s13", "title": "v", "purpose": "p", "role": "version_history"},
+                ],
+            }
+        )
+
+
+def test_zero_min_entries_is_rejected():
+    """`min_entries = 0` 等于没写——写不出效果的声明不许留在定义里。"""
+
+    with pytest.raises(BadTemplateDefinition):
+        template_from_dict(
+            {
+                "template_id": "t",
+                "title": "x",
+                "sections": [
+                    {"id": "s1", "title": "a", "purpose": "p", "min_entries": 0},
+                    {"id": "s5", "title": "f", "purpose": "p", "role": "feature"},
+                    {"id": "s11", "title": "q", "purpose": "p", "role": "open_questions"},
+                    {"id": "s13", "title": "v", "purpose": "p", "role": "version_history"},
+                ],
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("role", "field"),
+    [
+        ("feature", {"min_entries": 2}),
+        ("open_questions", {"min_entries": 2}),
+        ("version_history", {"min_entries": 2}),
+        ("version_history", {"coverage": 3}),
+    ],
+)
+def test_criteria_on_anchor_sections_are_rejected(role: str, field: dict):
+    """三锚点的判据是引擎算的（功能必填字段 / 未决阻塞 / 版本历史不判），
+    在模板里再声明一份就是两个真相源——定义时炸。"""
+
+    with pytest.raises(BadTemplateDefinition):
+        template_from_dict(
+            {
+                "template_id": "t",
+                "title": "x",
+                "sections": [
+                    {"id": "s1", "title": "a", "purpose": "p"},
+                    {"id": "s5", "title": "f", "purpose": "p", "role": "feature", **field},
+                    {"id": "s11", "title": "q", "purpose": "p", "role": "open_questions"},
+                    {
+                        "id": "s13",
+                        "title": "v",
+                        "purpose": "p",
+                        "role": "version_history" if role != "version_history" else "plain",
+                        **({} if role != "version_history" else field),
+                    },
+                ],
+            }
+        )
+
+
+def test_standard_template_declares_the_six_backbone_minimums():
+    """standard 的判据声明住代码（与 TOML 双源钉死）：s12 只数验收标准。"""
+
+    standard = standard_template()
+    declared = {
+        str(item.section_id): item.min_entries
+        for item in standard.sections
+        if item.min_entries is not None
+    }
+    assert declared == {
+        "s1": MinEntries(count=1, kind=None),
+        "s2": MinEntries(count=2, kind=None),
+        "s3": MinEntries(count=1, kind=None),
+        "s4": MinEntries(count=2, kind=None),
+        "s10": MinEntries(count=1, kind=None),
+        "s12": MinEntries(count=1, kind=BlockKind.ACCEPTANCE),
+    }
+    assert all(item.coverage is None for item in standard.sections)
+
+
+def test_custom_chapter_id_is_free_form():
+    """章节 id 不限 sN：适配器的序号与文案都从模板派生（`lstrip("s")` 一刀切会错）。"""
+
+    custom = template_from_dict(
+        {
+            "template_id": "t",
+            "title": "x",
+            "sections": [
+                {"id": "overview", "title": "概览", "purpose": "p", "min_entries": 1},
+                {"id": "feat", "title": "功能", "purpose": "p", "role": "feature"},
+                {"id": "open", "title": "未决", "purpose": "p", "role": "open_questions"},
+                {"id": "history", "title": "版本", "purpose": "p", "role": "version_history"},
+            ],
+        }
+    )
+
+    assert [str(item) for item in custom.section_ids] == ["overview", "feat", "open", "history"]

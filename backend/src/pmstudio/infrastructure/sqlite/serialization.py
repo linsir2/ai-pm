@@ -86,6 +86,7 @@ from pmstudio.domain.shared.sections import SlotSpec
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template import (
     DocumentTemplate,
+    MinEntries,
     TemplatedSection,
     TemplateRole,
     standard_template,
@@ -223,10 +224,39 @@ def template_to_json(template: DocumentTemplate) -> dict:
                     {"name": slot.name, "title": slot.title, "kind": slot.kind.value}
                     for slot in section.slots
                 ],
+                # 判据声明：没声明就不写键（老行同形，见 template_from_json 的回落）
+                **(
+                    {}
+                    if section.min_entries is None
+                    else {
+                        "min_entries": {
+                            "count": section.min_entries.count,
+                            **(
+                                {}
+                                if section.min_entries.kind is None
+                                else {"kind": section.min_entries.kind.value}
+                            ),
+                        }
+                    }
+                ),
+                **({} if section.coverage is None else {"coverage": section.coverage}),
             }
             for section in template.sections
         ],
     }
+
+
+def _min_entries_of_row(item: dict) -> MinEntries | None:
+    """老行（切片 1 写的）没有 `min_entries` 键 = 没声明，不是坏数据。"""
+
+    raw = item.get("min_entries")
+    if raw is None:
+        return None
+    kind_raw = raw.get("kind")
+    return MinEntries(
+        count=int(raw["count"]),
+        kind=None if kind_raw is None else BlockKind(str(kind_raw)),
+    )
 
 
 def template_from_json(data: dict) -> DocumentTemplate:
@@ -249,6 +279,8 @@ def template_from_json(data: dict) -> DocumentTemplate:
                     )
                     for slot in item.get("slots", ())
                 ),
+                min_entries=_min_entries_of_row(item),
+                coverage=item.get("coverage"),
             )
             for item in data["sections"]
         ),

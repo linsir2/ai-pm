@@ -144,3 +144,51 @@ def test_project_summary_carries_template_ref(tmp_path):
     by_id = {item.project_id: item for item in index.list_summaries()}
     assert by_id["p-light"].template_title == "轻量版"
     connection.close()
+
+
+def test_template_json_roundtrip_keeps_criteria_declarations():
+    """判据声明要跟着文档行走：快照丢字段 = 老项目换模板后判据静默变空。"""
+
+    from pmstudio.infrastructure.sqlite import serialization
+    from pmstudio.infrastructure.templates import loader
+
+    template = loader.load_template_file(loader.TEMPLATES_DIR / "light.toml")
+
+    assert serialization.template_from_json(serialization.template_to_json(template)) == template
+
+
+def test_template_json_from_legacy_snapshot_falls_back_to_no_declaration():
+    """切片 1 存的老行没有这两个键：读回来是"没声明"，不是炸（老项目照样打开）。"""
+
+    from pmstudio.infrastructure.sqlite import serialization
+
+    legacy = serialization.template_to_json(
+        serialization.template_from_json(
+            {
+                "template_id": "t",
+                "title": "老行",
+                "sections": [
+                    {
+                        "section_id": "s5",
+                        "title": "功能",
+                        "purpose": "p",
+                        "role": "feature",
+                    },
+                    {
+                        "section_id": "s11",
+                        "title": "未决",
+                        "purpose": "p",
+                        "role": "open_questions",
+                    },
+                    {
+                        "section_id": "s13",
+                        "title": "版本",
+                        "purpose": "p",
+                        "role": "version_history",
+                    },
+                ],
+            }
+        )
+    )
+    assert "min_entries" not in legacy["sections"][0]
+    assert "coverage" not in legacy["sections"][0]

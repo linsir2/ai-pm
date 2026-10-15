@@ -23,6 +23,10 @@ class TemplateSectionRequest(BaseModel):
     purpose: str
     role: str = "plain"
     slots: list[TemplateSlotRequest] = Field(default_factory=list)
+    #: 判据声明：整数（"至少 N 条"）或 `{count, kind}`（只数某种块，如验收标准）
+    min_entries: int | dict[str, object] | None = None
+    #: 上下文覆盖度下限（提示词用"这章写满没有"）；缺省按 role 推导
+    coverage: int | None = None
 
 
 class TemplateCreateRequest(BaseModel):

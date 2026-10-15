@@ -11,24 +11,28 @@ id = "s1"
 title = "背景与问题"
 purpose = "为什么现在要做：现状有什么问题、不做会付出什么代价。"
 role = "backbone"
+min_entries = 1
 
 [[sections]]
 id = "s2"
 title = "目标与非目标"
 purpose = "要达成什么、明确不做什么；目标要能被验收。"
 role = "backbone"
+min_entries = 2
 
 [[sections]]
 id = "s3"
 title = "用户与受众"
 purpose = "给谁用：有哪些角色、各自在什么场景、痛点是什么。"
 role = "backbone"
+min_entries = 1
 
 [[sections]]
 id = "s4"
 title = "范围与边界"
 purpose = "本期做到哪、本期不做哪、边界情况谁来处理。"
 role = "backbone"
+min_entries = 2
 
 [[sections]]
 id = "s5"
@@ -95,6 +99,7 @@ id = "s10"
 title = "假设、约束与依赖"
 purpose = "假设要写「错了会怎样」；依赖要写「失联怎么办」。"
 role = "backbone"
+min_entries = 1
 
 [[sections]]
 id = "s11"
@@ -107,6 +112,7 @@ id = "s12"
 title = "上线、验收与迭代"
 purpose = "怎么上线、怎么算验收通过、后续怎么迭代。"
 role = "backbone"
+min_entries = { count = 1, kind = "acceptance" }
 
 [[sections]]
 id = "s13"

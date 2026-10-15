@@ -45,12 +45,28 @@ ANCHOR_ROLES = (
 
 
 @dataclass(frozen=True, slots=True)
+class MinEntries:
+    """这一章"至少几条非空条目"的声明（`02` §11.0.69）。
+
+    `kind` 不为 None 时只数那种块（如 s12 只数验收标准）——"写了一条普通正文"不算达标。
+    声明是**模板自己的事实**：standard 在代码里声明（与 TOML 双源钉死），custom 在 TOML 里声明。
+    """
+
+    count: int
+    kind: BlockKind | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TemplatedSection:
     section_id: SectionId
     title: str
     purpose: str
     role: TemplateRole = TemplateRole.PLAIN
     slots: tuple[SlotSpec, ...] = ()
+    #: 判据声明：缺省 = 不按条数判（引擎按 role 走缺省值，见 `template_adapter.py`）
+    min_entries: MinEntries | None = None
+    #: 上下文覆盖度的下限（提示词用"这章写满没有"）：缺省按 role 推导
+    coverage: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +96,44 @@ class DocumentTemplate:
                     f"模板必须恰有一个 {role.value} 锚点，实际 {len(holders)} 个",
                     template_id=self.template_id,
                     role=role.value,
+                )
+        self._validate_criteria()
+
+    def _validate_criteria(self) -> None:
+        """判据声明的合法性（`02` §11.0.69）。
+
+        三条断，理由都是"两个真相源"：
+        1. 三锚点的判据由引擎算（功能必填字段 / 未决阻塞 / 版本历史不判），模板里再声明
+           一份就是两份真相——功能章声明"至少 1 条"会和"至少一棵功能子树"打架；
+        2. `count = 0` 等于没声明，写不出效果的声明留在定义里只会骗人；
+        3. `coverage` 落在版本历史上同理：它永不参与判定。
+        """
+
+        for section in self.sections:
+            sid, role = str(section.section_id), section.role
+            if section.min_entries is not None and role in ANCHOR_ROLES:
+                raise BadTemplateDefinition(
+                    f"{role.value} 锚点章不能声明 min_entries（它的判据由引擎算）",
+                    template_id=self.template_id,
+                    section_id=sid,
+                )
+            if section.coverage is not None and role is TemplateRole.VERSION_HISTORY:
+                raise BadTemplateDefinition(
+                    "版本历史章永不参与判定，不能声明 coverage",
+                    template_id=self.template_id,
+                    section_id=sid,
+                )
+            if section.min_entries is not None and section.min_entries.count < 1:
+                raise BadTemplateDefinition(
+                    f"{sid} 的 min_entries 必须 ≥ 1",
+                    template_id=self.template_id,
+                    section_id=sid,
+                )
+            if section.coverage is not None and section.coverage < 1:
+                raise BadTemplateDefinition(
+                    f"{sid} 的 coverage 必须 ≥ 1",
+                    template_id=self.template_id,
+                    section_id=sid,
                 )
 
     @property
@@ -130,17 +184,61 @@ def _slot(item: dict, *, template_id: str, section_id: str) -> SlotSpec:
     return SlotSpec(name=str(item.get("name")), title=str(item.get("title")), kind=kind)
 
 
+def _min_entries(item: dict, *, template_id: str, section_id: str) -> MinEntries | None:
+    raw = item.get("min_entries")
+    if raw is None:
+        return None
+    if isinstance(raw, bool):  # bool 是 int 的子类，别让 True 变成"至少 1 条"
+        raise BadTemplateDefinition(
+            f"{section_id} 的 min_entries 不是一个条数", template_id=template_id
+        )
+    if isinstance(raw, int):
+        return MinEntries(count=raw)
+    if not isinstance(raw, dict) or "count" not in raw:
+        raise BadTemplateDefinition(
+            f"{section_id} 的 min_entries 形状不认识（要整数或 {{count, kind}}）",
+            template_id=template_id,
+            section_id=section_id,
+        )
+    kind_raw = raw.get("kind")
+    kind = None
+    if kind_raw is not None:
+        try:
+            kind = BlockKind(str(kind_raw))
+        except ValueError:
+            raise BadTemplateDefinition(
+                f"{section_id} 的 min_entries.kind 不认识：{kind_raw}",
+                template_id=template_id,
+                section_id=section_id,
+            ) from None
+    return MinEntries(count=int(raw["count"]), kind=kind)
+
+
+def _coverage(item: dict, *, template_id: str, section_id: str) -> int | None:
+    raw = item.get("coverage")
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise BadTemplateDefinition(
+            f"{section_id} 的 coverage 不是一个整数", template_id=template_id, section_id=section_id
+        )
+    return raw
+
+
 def _section(item: dict, *, template_id: str) -> TemplatedSection:
+    section_id = str(item.get("id"))
     slots = tuple(
-        _slot(raw, template_id=template_id, section_id=str(item.get("id")))
+        _slot(raw, template_id=template_id, section_id=section_id)
         for raw in item.get("slots", ())
     )
     return TemplatedSection(
-        section_id=SectionId(str(item.get("id"))),
+        section_id=SectionId(section_id),
         title=str(item.get("title")),
         purpose=str(item.get("purpose")),
         role=_role(item.get("role", "plain"), template_id=template_id),
         slots=slots,
+        min_entries=_min_entries(item, template_id=template_id, section_id=section_id),
+        coverage=_coverage(item, template_id=template_id, section_id=section_id),
     )
 
 
@@ -184,6 +282,19 @@ _ROLE_BY_SECTION_ID = {
 }
 
 
+#: standard 六章的"至少 N 条"声明（`01-规格.md` §4 的判据表；住这里而不是就绪度里，
+#: 因为它是**模板的事实**——适配器读它，缺了它就绪度就没有判据来源）。
+#: s12 只数验收标准（写一条普通正文不算达标）。
+_STANDARD_MIN_ENTRIES: dict[str, MinEntries] = {
+    "s1": MinEntries(1),
+    "s2": MinEntries(2),
+    "s3": MinEntries(1),
+    "s4": MinEntries(2),
+    "s10": MinEntries(1),
+    "s12": MinEntries(1, BlockKind.ACCEPTANCE),
+}
+
+
 def standard_template() -> DocumentTemplate:
     """现行 13 章的标准模板：与 `SECTIONS`/`SECTION_SLOTS` 同源算出，不复写第二份。
 
@@ -201,6 +312,7 @@ def standard_template() -> DocumentTemplate:
                 purpose=spec.purpose,
                 role=_ROLE_BY_SECTION_ID[str(spec.section_id)],
                 slots=SECTION_SLOTS.get(spec.section_id, ()),
+                min_entries=_STANDARD_MIN_ENTRIES.get(str(spec.section_id)),
             )
             for spec in SECTIONS
         ),
