@@ -29,9 +29,13 @@ export function statusText(round: RoundView): string {
 
 const LOOP_TASKS: readonly string[] = ["opening_card", "questionnaire", "draft_card"];
 
-/** 右栏要不要展开：有待办的轮次才占 500px（06 §2.4 §3）。 */
+/** 右栏要不要展开：有待办的轮次才占 500px（06 §2.4 §3）。
+    席位在跑也算有待办：那三条进 `seats_running` 的路（开场确认 / 交卷 / 深挖）
+    全是 `waiting_on=none`（`round.py` 的 `_advance_to` 默认值），waiting 判不动，只能看 step。 */
 export function needsLoopAttention(round: RoundView | null): boolean {
-  return round !== null && LOOP_TASKS.includes(round.waiting_on);
+  if (round === null) return false;
+  if (round.step === "seats_running") return true;
+  return LOOP_TASKS.includes(round.waiting_on);
 }
 
 /** rail 徽标数：未答题数 + 草案待确认组数（0/1）。

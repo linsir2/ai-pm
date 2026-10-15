@@ -111,6 +111,15 @@ describe("needsLoopAttention（右栏任务驱动显隐，06 §2.4 §3）", () =
   it("waiting_on=none 就折叠", () => {
     expect(needsLoopAttention(round({ waiting_on: "none" }))).toBe(false);
   });
+
+  it("席位在跑也展开（waiting_on 是 none，但 step 可判）", () => {
+    expect(needsLoopAttention(round({ step: "seats_running", waiting_on: "none" }))).toBe(true);
+  });
+
+  it("终态不展开（failed/abandoned 配 none 仍折叠）", () => {
+    expect(needsLoopAttention(round({ step: "failed", waiting_on: "none" }))).toBe(false);
+    expect(needsLoopAttention(round({ step: "abandoned", waiting_on: "none" }))).toBe(false);
+  });
 });
 
 describe("loopBadgeCount（rail 徽标：未答题数 + 草案组 0/1）", () => {
