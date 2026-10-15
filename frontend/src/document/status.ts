@@ -5,6 +5,7 @@
    然后才算已经有内容。 */
 
 import { sectionIdOf } from "../labels";
+import type { ReadinessItemView } from "../api/types";
 
 export type SectionStatus = "empty" | "filled" | "gap" | "open" | "conflict";
 
@@ -52,6 +53,26 @@ export function sectionStatus(
 
 export function statusClass(status: SectionStatus): string {
   return `dot dot--${status}`;
+}
+
+export interface SectionBadge {
+  block: number;
+  warn: number;
+}
+
+/** 缺口戳计数：severity 原样分桶（DESIGN.md 状态色一套，计数不动语义）。 */
+export function sectionBadge(
+  sectionId: string,
+  readiness: readonly ReadinessItemView[],
+): SectionBadge | null {
+  let block = 0;
+  let warn = 0;
+  for (const item of readiness) {
+    if (item.section_id !== sectionId) continue;
+    if (item.severity === "blocker") block += 1;
+    else warn += 1;
+  }
+  return block === 0 && warn === 0 ? null : { block, warn };
 }
 
 /** 状态在界面上的人话。颜色与词都在这一处对齐 DESIGN.md 的四个语义色。 */

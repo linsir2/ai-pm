@@ -9,7 +9,7 @@
 import { useEffect, useState } from "react";
 
 import type { BlockView, DocumentView, ReadinessItemView, RoundView } from "../api/types";
-import { STATUS_TEXT, sectionStatus, statusClass } from "../document/status";
+import { STATUS_TEXT, sectionBadge, sectionStatus, statusClass } from "../document/status";
 import { readinessPercent, readinessSummary } from "../document/readiness";
 import { featureHome, listFeatures } from "../document/structure";
 import { fieldTitle } from "../state/schema";
@@ -94,6 +94,7 @@ export function SideRail({
       <ul className="rail__list rail__tree" role="tree">
         {doc?.sections.map((section) => {
           const status = sectionStatus(section, round);
+          const badge = sectionBadge(section.section_id, readiness);
           const on = activeSection === section.section_id;
           const children =
             home !== null && section.section_id === home
@@ -134,6 +135,14 @@ export function SideRail({
                   <span className="rail__num mono">{section.section_id}</span>
                   <span className="rail__label">{section.title}</span>
                   <span className={statusClass(status)} role="img" aria-label={STATUS_TEXT[status]} />
+                  {badge !== null && (
+                    <span
+                      className="rail__badge mono"
+                      style={badge.block > 0 ? { color: "var(--conflict)" } : { color: "var(--gap)" }}
+                    >
+                      {badge.block > 0 ? `!${badge.block}` : `${badge.warn}`}
+                    </span>
+                  )}
                 </button>
               </div>
 
@@ -195,6 +204,7 @@ export function SideRail({
           </li>
         )}
       </ul>
+      <p className="rail__legend">矛盾 &gt; 开放问题 &gt; 缺口 &gt; 有内容 &gt; 空</p>
     </nav>
   );
 }

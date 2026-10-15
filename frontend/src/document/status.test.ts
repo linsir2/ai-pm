@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { sectionIdOf } from "../labels";
-import { filledSectionCount, sectionStatus } from "./status";
+import { filledSectionCount, sectionBadge, sectionStatus } from "./status";
+import type { ReadinessItemView } from "../api/types";
 
 const filled = {
   section_id: "s1",
@@ -84,6 +85,26 @@ describe("sectionIdOf", () => {
     ["preference", "preference"],
   ])("%s → %s", (target, expected) => {
     expect(sectionIdOf(target)).toBe(expected);
+  });
+});
+
+describe("sectionBadge", () => {
+  const item = (section_id: string, severity: "blocker" | "warn"): ReadinessItemView => ({
+    section_id,
+    code: "section_min_entries",
+    title: "背景与问题还缺 1 条内容",
+    detail: "至少 1 条",
+    severity,
+  });
+
+  it("该章 2 阻塞 1 提示时戳分开计数", () => {
+    expect(
+      sectionBadge("s5", [item("s5", "blocker"), item("s5", "blocker"), item("s5", "warn"), item("s9", "blocker")]),
+    ).toEqual({ block: 2, warn: 1 });
+  });
+
+  it("无缺口返回 null（不渲染戳）", () => {
+    expect(sectionBadge("s1", [])).toBeNull();
   });
 });
 
