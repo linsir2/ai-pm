@@ -13,6 +13,8 @@
 不为每一行调一次 `/workspace`（N+1）；模板名来自摘要里的 `template_title`
 （后端行快照里带出来，不编）。 */
 
+import { useEffect, useState } from "react";
+
 import type { LimitsView, ProjectSummaryView, TemplateView } from "../api/types";
 import { Logo } from "./Logo";
 import { NewProjectForm } from "./NewProjectForm";
@@ -30,6 +32,7 @@ export function ProjectList({
   model = null,
   templates,
   initialTemplateId = null,
+  onManageTemplates,
 }: {
   projects: ProjectSummaryView[];
   onOpen: (projectId: string) => void;
@@ -46,7 +49,29 @@ export function ProjectList({
   templates: TemplateView[];
   /** 从模板库「用这个建项目」带回来的预选项（`06` §2.3）；null = 用既有默认。 */
   initialTemplateId?: string | null;
+  /** 模板库入口（`06` §2.4 §1）：与 TopBar 模板按钮同一动作（`setView("templates")`）。 */
+  onManageTemplates?: () => void;
 }) {
+  const [active, setActive] = useState("home-new");
+  useEffect(() => {
+    // jsdom / 非浏览器环境没有 IntersectionObserver：没有就不高亮，不炸。
+    if (typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) setActive(entry.target.id);
+        }
+      },
+      { rootMargin: "-40% 0px -55% 0px" },
+    );
+    for (const id of ["home-new", "home-recent"]) {
+      const el = document.getElementById(id);
+      if (el !== null) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, []);
+  const navCls = (id: string) =>
+    id === active ? "home__navlink home__navlink--active" : "home__navlink";
   if (booting) {
     return (
       <div className="doc__inner home">
@@ -73,15 +98,15 @@ export function ProjectList({
   return (
     <div className="doc__inner home home--split">
       <nav className="home__nav" aria-label="项目页导航">
-        <a className="home__navlink" href="#home-new">
+        <a className={navCls("home-new")} href="#home-new">
           新建项目
         </a>
-        <a className="home__navlink" href="#home-recent">
+        <a className={navCls("home-recent")} href="#home-recent">
           最近项目
         </a>
-        <a className="home__navlink" href="#home-templates">
+        <button type="button" className="home__navlink" onClick={onManageTemplates}>
           模板库
-        </a>
+        </button>
       </nav>
       <div className="home__main">
         <header className="home__head">

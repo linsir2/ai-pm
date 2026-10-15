@@ -387,6 +387,19 @@ a {
   color: var(--ink);
 }
 
+button.home__navlink {
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.home__navlink--active {
+  color: var(--primary);
+  background: var(--tint-primary);
+}
+
 .home__main {
   min-width: 0;
   display: flex;
@@ -509,6 +522,11 @@ a {
 .topbar__action:hover {
   background: color-mix(in srgb, var(--ink) 5%, transparent);
   color: var(--ink);
+}
+
+.topbar__action--active {
+  color: var(--primary);
+  box-shadow: inset 0 -2px 0 var(--primary);
 }
 
 .topbar__action-count {

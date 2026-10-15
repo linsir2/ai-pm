@@ -28,6 +28,7 @@ export function TopBar({
       地方——那一屏本来就在 `Onboarding`）。 */
   onHome,
   onTemplates,
+  templatesActive = false,
   libraryCount = 0,
   onOpenLibrary,
   theme,
@@ -43,6 +44,9 @@ export function TopBar({
   onHome?: () => void;
   /** 模板库入口（`06` §2.3）：不传就不画（工作区里没有它，模板管理是列表页的事）。 */
   onTemplates?: () => void;
+  /** 模板库视图里标出当前位置（`06` §2.4 §1）：用法照抄 `SideRail.tsx:132,187`
+      的 `aria-current`，不发明新模式。 */
+  templatesActive?: boolean;
   onExport: () => void;
   /** 材料库入口（顶栏）：显示库里有几份，点开抽屉。 */
   libraryCount?: number;
@@ -110,7 +114,12 @@ export function TopBar({
       )}
 
       {onTemplates !== undefined && (
-        <button type="button" className="topbar__action" onClick={onTemplates}>
+        <button
+          type="button"
+          className={templatesActive ? "topbar__action topbar__action--active" : "topbar__action"}
+          aria-current={templatesActive ? "page" : undefined}
+          onClick={onTemplates}
+        >
           模板
         </button>
       )}

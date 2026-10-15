@@ -119,4 +119,24 @@ describe("TopBar", () => {
     expect(screen.queryByText("灵感箱")).toBeNull();
     expect(screen.getByText("材料库")).toBeTruthy();
   });
+
+  it("在模板库视图里模板按钮标出当前位置", () => {
+    render(
+      <TopBar
+        projects={[project]}
+        project={project}
+        connection="open"
+        theme="light"
+        onSelectProject={vi.fn()}
+        onExport={vi.fn()}
+        onToggleTheme={vi.fn()}
+        onTemplates={() => {}}
+        templatesActive
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "模板" }).getAttribute("aria-current")).toBe(
+      "page",
+    );
+  });
 });

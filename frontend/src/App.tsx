@@ -308,6 +308,7 @@ export default function App() {
           onExport={() => void data.exportMarkdown()}
           onHome={() => setView("workspace")}
           onTemplates={() => setView("templates")}
+          templatesActive={false}
           theme={theme}
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
         />
@@ -327,6 +328,7 @@ export default function App() {
             model={data.model}
             templates={templates}
             initialTemplateId={pickedTemplateId}
+            onManageTemplates={() => setView("templates")}
           />
         </main>
       </div>
@@ -344,6 +346,8 @@ export default function App() {
           onSelectProject={data.selectProject}
           onExport={() => void data.exportMarkdown()}
           onHome={() => setView("projects")}
+          onTemplates={() => setView("templates")}
+          templatesActive
           theme={theme}
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
         />
