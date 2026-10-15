@@ -263,7 +263,11 @@ infrastructure/discussion/ roles.py
 1. 领域上下文（authoring / provenance / round / exploration）**互不 import**，只能通过 `shared/` 与 `services/` 协作；
 2. domain 内一律**绝对导入**（相对导入会让上下文守卫失效）；
 3. **写能力单独拆成 `DocumentWriter`**，全项目只有 `domain/services/committer.py` 能持有它——
-   `DocumentReader` 谁都能拿，`DocumentWriter` 不行。
+   `DocumentReader` 谁都能拿，`DocumentWriter` 不行；
+4. **模板只经 `TemplateAdapter` 进引擎**（2026-10-15，`02` §11.0.69）：解读章节集、槽表、判据、
+   `Target` 合法性一律 `adapt(document.template)`。直查标准章表（`sections.py` 的两张表）
+   只允许出现在 `sections.py` 自身与 `template_adapter.py`——**由 `tests/architecture/
+   test_section_tables.py` 扫 import 守**，不许靠自觉。
 
 ## 9. 事务与一致性
 
