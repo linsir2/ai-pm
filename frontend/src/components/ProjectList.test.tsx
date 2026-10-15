@@ -190,11 +190,13 @@ describe("ProjectList", () => {
   });
 
   it("left_nav_has_the_three_anchors", () => {
-    renderList();
+    const props = renderList({ onManageTemplates: vi.fn() });
 
     expect(screen.getByRole("link", { name: "新建项目" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "最近项目" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "模板库" })).toBeTruthy();
+    const templatesButton = screen.getByRole("button", { name: "模板库" });
+    fireEvent.click(templatesButton);
+    expect(props.onManageTemplates).toHaveBeenCalledTimes(1);
   });
 
   it("slim_meta_line_shows_count_model_and_limits_without_claiming_13_chapters", () => {
