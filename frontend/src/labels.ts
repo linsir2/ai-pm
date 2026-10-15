@@ -4,6 +4,19 @@
 import type { SectionView } from "./api/types";
 import { fieldTitle, slotTitle } from "./state/schema";
 
+/** 模板章节角色（`02` §11.0.70）。真相源是后端 `TemplateRole`——这里只映中文词，
+ *  可选值本身问 `state/schema.ts` 的 `templateRoles()`（前端不抄一份枚举）。 */
+export const ROLE_TEXT: Record<string, string> = {
+  feature: "功能需求",
+  open_questions: "风险与开放问题",
+  version_history: "版本历史",
+  steps: "流程步骤",
+  decision: "关键决策",
+  data: "数据与接口",
+  backbone: "骨架章",
+  plain: "普通内容章",
+};
+
 export const CLAIM_LABEL_TEXT: Record<string, string> = {
   fact: "事实",
   need: "需求",

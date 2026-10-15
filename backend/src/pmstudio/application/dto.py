@@ -42,8 +42,9 @@ from pmstudio.domain.services.scope_guard import ScopeGuard
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS
-from pmstudio.domain.shared.template import DocumentTemplate, MinEntries
+from pmstudio.domain.shared.template import DocumentTemplate, MinEntries, TemplateRole
 from pmstudio.domain.shared.template_adapter import TemplateAdapter
+from pmstudio.domain.shared.writing import BlockKind
 
 SEAT_COMPLETED = "completed"
 SEAT_PENDING = "pending"
@@ -1027,19 +1028,23 @@ class TemplateSectionView:
 
 @dataclass(frozen=True, slots=True)
 class TemplateView:
-    """模板全文（库表行 + 创建回显）。槽要全——创建页预览读它。"""
+    """模板全文（库表行 + 创建/修改回显）。槽要全——创建页预览读它。"""
 
     template_id: str
     title: str
     sections: tuple[TemplateSectionView, ...]
+    #: 这份是不是出厂自带的（`02` §11.0.70）。界面靠它决定给不给编辑/删除按钮——
+    #: 内置两份锁死，改了就回不到出厂状态。
+    builtin: bool = False
 
 
-def template_view(template: DocumentTemplate) -> TemplateView:
-    """领域模板 → 视图。"""
+def template_view(template: DocumentTemplate, *, builtin: bool = False) -> TemplateView:
+    """领域模板 → 视图。`builtin` 是库内元数据，从仓储的 `TemplateEntry` 一起上来。"""
 
     return TemplateView(
         template_id=template.template_id,
         title=template.title,
+        builtin=builtin,
         sections=tuple(
             TemplateSectionView(
                 section_id=str(section.section_id),
@@ -1077,6 +1082,12 @@ class SchemaView:
     #: 模板库全文（`02` §11.0.68）：创建页的选择器读它。**只读投影**，不是真相源——
     #: 真相源是各文档行内的快照（`Document.template`）。
     templates: tuple[TemplateSchemaView, ...] = ()
+    #: 模板章节的引擎角色取值（`02` §11.0.70）。**必填**：模板编辑器的角色下拉读它，
+    #: 且不能只靠现有模板反推——`steps`/`decision`/`backbone`/`data` 四个角色没有任何
+    #: 内置模板在用，不给就建不出这几章。
+    template_roles: tuple[str, ...] = ()
+    #: 槽位与条数判据可指定的块种类。**必填**，理由同上（`kind` 是 API 层的必填项）。
+    block_kinds: tuple[str, ...] = ()
 
 
 def schema_view(
@@ -1155,6 +1166,11 @@ def schema_view(
             )
             for template in templates
         ),
+        # 枚举表直接取自 domain 的真身（不构造注入）：`discussion_roles`/`personas`
+        # 注入是因为它们的真相源在 infrastructure 的 TOML，而这两个枚举在 domain，
+        # application 本来就能 import（`02` §11.0.70）。
+        template_roles=tuple(role.value for role in TemplateRole),
+        block_kinds=tuple(kind.value for kind in BlockKind),
     )
 
 

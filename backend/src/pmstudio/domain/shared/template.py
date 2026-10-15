@@ -102,7 +102,25 @@ class DocumentTemplate:
                     template_id=self.template_id,
                     role=role.value,
                 )
+        self._validate_slots()
         self._validate_criteria()
+
+    def _validate_slots(self) -> None:
+        """一章之内槽位名不许重复（`02` §11.0.70）。
+
+        重名会让 `slot(section_id, name)` 静默返回第一个——写到"乙"槽的内容会落进
+        "甲"槽，寻址静默错乱，且没有任何报错。界面保证唯一只是体验，定义层得兜住。
+        """
+
+        for section in self.sections:
+            names = [slot.name for slot in section.slots]
+            if len(set(names)) != len(names):
+                raise BadTemplateDefinition(
+                    f"{section.section_id} 里槽位名重复",
+                    template_id=self.template_id,
+                    section_id=str(section.section_id),
+                    slots=sorted({name for name in names if names.count(name) > 1}),
+                )
 
     def _validate_criteria(self) -> None:
         """判据声明的合法性（`02` §11.0.69）。

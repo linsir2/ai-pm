@@ -350,19 +350,32 @@ export interface ProjectSummaryView {
   template_title: string;
 }
 
-/** 模板（一套章节集 + 三锚点；`02` §11.0.68）。创建页选择器（切片 2）读它。 */
+/** 模板（一套章节集 + 三锚点；`02` §11.0.68）。模板编辑器读它。 */
 export interface TemplateSectionView {
   section_id: string;
   title: string;
   purpose: string;
   role: string;
   slots: { name: string; title: string; kind: string }[];
+  /** 条数判据声明（`02` §11.0.69）。缺省 = 不按条数判。
+   *  注意 `coverage` **不在这条线上**：它不进就绪度、两个内置模板也都没声明它，
+   *  所以界面上不给它入口（`06` §2.3）。 */
+  min_entries?: { count: number; kind?: string } | number | null;
 }
+
+/** 发给后端的章节形状：`section_id` → `id`。
+ *  GET 与 POST/PUT 的字段名不一致（后端 `_section()` 读的是 `id`），
+ *  转换只发生在 `templates/draft.ts` 的 `toPayload` 一处。 */
+export type TemplateSectionPayload = Omit<TemplateSectionView, "section_id"> & {
+  id: string;
+};
 
 export interface TemplateView {
   template_id: string;
   title: string;
   sections: TemplateSectionView[];
+  /** 这份是不是出厂自带的（`02` §11.0.70）。内置的既不能改也不能删。 */
+  builtin?: boolean;
 }
 
 export interface ReadinessItemView {
@@ -521,8 +534,13 @@ export interface SchemaView {
   discussion_roles: DiscussionRoleSchema[];
   /** 五个固定模拟使用者（M11）：评测选择器读它；老后端为 undefined（回落空表）。 */
   personas?: PersonaSchemaView[];
-  /** 模板库（`02` §11.0.68）：创建页选择器（切片 2）读它；老后端为 undefined。 */
+  /** 模板库（`02` §11.0.68）：创建页选择器读它；老后端为 undefined。 */
   templates?: TemplateView[];
+  /** 模板章节的引擎角色取值（`02` §11.0.70）。**必填**：角色下拉读它，且不能靠现有
+   *  模板反推——`steps`/`decision`/`backbone`/`data` 四个角色没有任何内置模板在用。 */
+  template_roles?: string[];
+  /** 槽位与条数判据可指定的块种类（`02` §11.0.70）；老后端为 undefined。 */
+  block_kinds?: string[];
 }
 
 /** `GET /schema` 里的一个模拟使用者（M11）。 */

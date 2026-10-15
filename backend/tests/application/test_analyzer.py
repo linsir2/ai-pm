@@ -961,24 +961,10 @@ def _reply_with(*targets: dict) -> str:
                     "zone": "body",
                     **target,
                 }
-                for text, target in (
-                    ("运营每天手工对表", {"section_id": "s1"}),
-                    ("数据量大概几万", {"section_id": "s10"}),
-                    ("登录页太丑了", {"section_id": "s3"}),
-                )
-                if target is not None
-            ]
-            if False
-            else [
-                {
-                    "text": text,
-                    "raw_span": text,
-                    "label": "fact",
-                    "zone": "body",
-                    **target,
-                }
                 for text, target in zip(
-                    ("运营每天手工对表", "数据量大概几万", "登录页太丑了"), targets
+                    ("运营每天手工对表", "数据量大概几万", "登录页太丑了"),
+                    targets,
+                    strict=True,
                 )
             ],
             "seats": [{"seat_id": SEAT, "why": "说到运营"}],
@@ -1004,11 +990,12 @@ async def test_a_claim_pointing_outside_the_template_is_dropped_not_fatal():
     analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": reply}), prompts)
 
     analysis = await analyzer.analyze(
-        adapter=LIGHT, user_input="运营每天手工对表，数据量大概几万，登录页太丑了", document_state=""
+        adapter=LIGHT,
+        user_input="运营每天手工对表，数据量大概几万，登录页太丑了",
+        document_state="",
     )
 
     assert [claim.text for claim in analysis.claims] == ["运营每天手工对表", "登录页太丑了"]
-    dropped = [item.handle for item in analysis.dropped]
     assert any("s10" in item.reason for item in analysis.dropped), analysis.dropped
 
 
@@ -1018,7 +1005,9 @@ async def test_the_drop_trace_names_the_template_and_where_it_can_go():
     analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": reply}), prompts)
 
     analysis = await analyzer.analyze(
-        adapter=LIGHT, user_input="运营每天手工对表，数据量大概几万，登录页太丑了", document_state=""
+        adapter=LIGHT,
+        user_input="运营每天手工对表，数据量大概几万，登录页太丑了",
+        document_state="",
     )
 
     reason = next(item.reason for item in analysis.dropped if "s99" in item.reason)

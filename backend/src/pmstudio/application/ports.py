@@ -243,13 +243,31 @@ class ProjectFactory(Protocol):
     ) -> DocumentId: ...
 
 
+@dataclass(frozen=True, slots=True)
+class TemplateEntry:
+    """模板 + 库内元数据（`02` §11.0.70）。
+
+    `builtin` 是**仓储的账**（哪些是出厂的），所以不进 `DocumentTemplate`——那份定义
+    一旦被拷进项目的行内快照，就带着一个毫无意义的 `builtin=False`。读库的两条路都
+    返回它：界面靠这个标记决定给不给编辑/删除按钮（`06` §2.3）。
+    """
+
+    template: DocumentTemplate
+    builtin: bool
+
+
 @runtime_checkable
 class TemplateRepository(Protocol):
-    """模板库表：定义时来源。只存取，不校验（入库前调用方已 `validate` 过）。"""
+    """模板库表：定义时来源。只存取，不校验（入库前调用方已 `validate` 过）。
+
+    `delete` 对不存在的 id 抛 `UnknownTemplate`——"删一个不在库里的东西"和"读一个不在
+    库里的东西"是同一件事（404），不是静默成功。
+    """
 
     def save(self, template: DocumentTemplate, *, builtin: bool) -> None: ...
-    def list(self) -> tuple[DocumentTemplate, ...]: ...
-    def get(self, template_id: str) -> DocumentTemplate: ...
+    def list(self) -> tuple[TemplateEntry, ...]: ...
+    def get(self, template_id: str) -> TemplateEntry: ...
+    def delete(self, template_id: str) -> None: ...
 
 
 @runtime_checkable

@@ -164,3 +164,80 @@ async def test_light_project_runs_a_full_loop_over_http(make_app):
         ]
         # 就绪度按 light 的章节算：模板外的章一条都不报
         assert {item["section_id"] for item in workspace["readiness"]} <= light_ids
+
+
+async def test_updating_a_template_leaves_every_existing_project_alone(make_app):
+    """快照不变式（`02` §11.0.70）：项目行里存的是模板**全文 JSON 快照**，不是 id 引用。
+
+    所以改模板对已建项目零影响——这是"改模板不危险"的根据，不是运气。
+    """
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        project = (
+            await client.post(
+                "/api/projects", json={"title": "老项目", "template_id": "light"}
+            )
+        ).json()
+        before = (await client.get(f"/api/projects/{project['project_id']}/workspace")).json()
+
+        template_id = (
+            await client.post(
+                "/api/templates",
+                json={"title": "改我", "sections": [
+                    {"id": "s1", "title": "改名后的背景", "purpose": "摆设", "role": "plain"},
+                    {"id": "s5", "title": "功能", "purpose": "摆设", "role": "feature"},
+                    {"id": "s11", "title": "未决", "purpose": "摆设", "role": "open_questions"},
+                    {"id": "s13", "title": "版本", "purpose": "摆设", "role": "version_history"},
+                ]},
+            )
+        ).json()["template_id"]
+        renamed = await client.put(
+            f"/api/templates/{template_id}",
+            json={"title": "改完了", "sections": [
+                {"id": "s2", "title": "全新的章", "purpose": "摆设", "role": "plain"},
+                {"id": "s5", "title": "功能", "purpose": "摆设", "role": "feature"},
+                {"id": "s11", "title": "未决", "purpose": "摆设", "role": "open_questions"},
+                {"id": "s13", "title": "版本", "purpose": "摆设", "role": "version_history"},
+            ]},
+        )
+
+        after = (await client.get(f"/api/projects/{project['project_id']}/workspace")).json()
+
+    assert renamed.status_code == 200
+    assert before["document"]["sections"] == after["document"]["sections"]
+    assert [item["section_id"] for item in after["document"]["sections"]] == [
+        "s1", "s2", "s4", "s5", "s11", "s13",
+    ]
+
+
+async def test_deleting_a_template_leaves_every_existing_project_openable(make_app):
+    """删模板不删项目（快照模型）：项目照常打开，只是那个 id 不能再建新项目。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        template_id = (
+            await client.post(
+                "/api/templates", json={"title": "用一下", "sections": TRIPLE}
+            )
+        ).json()["template_id"]
+        project = (
+            await client.post(
+                "/api/projects", json={"title": "用它建的", "template_id": template_id}
+            )
+        ).json()
+
+        assert (await client.delete(f"/api/templates/{template_id}")).status_code == 204
+
+        workspace = await client.get(f"/api/projects/{project['project_id']}/workspace")
+        listed = await client.get("/api/projects")
+        rebuild = await client.post(
+            "/api/projects", json={"title": "再建一个", "template_id": template_id}
+        )
+
+    assert workspace.status_code == 200
+    assert [item["section_id"] for item in workspace.json()["document"]["sections"]] == [
+        "s5", "s11", "s13",
+    ]
+    assert [item["project_id"] for item in listed.json()] == [project["project_id"]]
+    assert rebuild.status_code == 404

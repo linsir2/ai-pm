@@ -16,6 +16,7 @@ from pmstudio.application.use_cases import (
     CreateProject,
     CreateTemplate,
     DeleteMaterial,
+    DeleteTemplate,
     DigRound,
     DismissCandidate,
     DismissDiscussionCard,
@@ -46,6 +47,7 @@ from pmstudio.application.use_cases import (
     SayToThread,
     SearchProject,
     StartDiscussion,
+    UpdateTemplate,
     UploadMaterial,
 )
 from pmstudio.domain.shared.errors import DomainError
@@ -77,6 +79,8 @@ class ApiServices:
     create_template: CreateTemplate
     get_template: GetTemplate
     list_templates: ListTemplates
+    update_template: UpdateTemplate
+    delete_template: DeleteTemplate
     workspace: GetWorkspace
     list_projects: ListProjects
     get_round: GetRound

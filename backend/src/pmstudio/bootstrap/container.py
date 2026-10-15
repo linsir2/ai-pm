@@ -24,6 +24,7 @@ from pmstudio.application.use_cases import (
     CreateProject,
     CreateTemplate,
     DeleteMaterial,
+    DeleteTemplate,
     DigRound,
     DismissCandidate,
     DismissDiscussionCard,
@@ -65,6 +66,7 @@ from pmstudio.application.use_cases import (
     StartRound,
     SubmitAnswers,
     SubmitOpening,
+    UpdateTemplate,
     UploadMaterial,
     web_search_tool,
 )
@@ -514,6 +516,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         create_template=CreateTemplate(templates=template_repo, ids=ids),
         list_templates=ListTemplates(templates=template_repo),
         get_template=GetTemplate(templates=template_repo),
+        update_template=UpdateTemplate(templates=template_repo),
+        delete_template=DeleteTemplate(templates=template_repo),
         workspace=GetWorkspace(
             documents=documents,
             rounds=rounds,
@@ -532,7 +536,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         get_schema=GetSchema(
             discussion_roles=discussion_roles,
             personas=personas,
-            templates=template_repo.list(),
+            # 取 `.template`：`schema_view` 按鸭子类型读 DocumentTemplate（.template_id/
+            # .title/.sections[]），/schema 只投影结构、不需要 builtin 标记。
+            templates=tuple(entry.template for entry in template_repo.list()),
         ),
         list_rounds=ListRounds(index=index),
         search=SearchProject(

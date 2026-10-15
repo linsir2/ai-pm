@@ -23,6 +23,7 @@ from pmstudio.application.errors import (
     UnknownRound,
     UnknownTemplate,
 )
+from pmstudio.application.ports import TemplateEntry
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.discussion.thread import Discussion, ThreadStatus
 from pmstudio.domain.exploration.exploration import (
@@ -652,20 +653,41 @@ class SqliteTemplateRepository:
             ),
         )
 
-    def list(self) -> tuple[DocumentTemplate, ...]:
+    def list(self) -> tuple[TemplateEntry, ...]:
         rows = self._connection.execute(
             # 内置在前（画廊默认选 standard，它得排第一）；同组按标题排，不按 id
             # （按 id 的话 light 永在 standard 前面，默认高亮落在第二张卡上）。
-            "SELECT spec FROM templates ORDER BY builtin DESC, title"
+            "SELECT spec, builtin FROM templates ORDER BY builtin DESC, title"
         ).fetchall()
         return tuple(
-            ser.template_from_json(json.loads(row["spec"])) for row in rows
+            TemplateEntry(
+                template=ser.template_from_json(json.loads(row["spec"])),
+                builtin=bool(row["builtin"]),
+            )
+            for row in rows
         )
 
-    def get(self, template_id: str) -> DocumentTemplate:
+    def get(self, template_id: str) -> TemplateEntry:
         row = self._connection.execute(
-            "SELECT spec FROM templates WHERE template_id = ?", (template_id,)
+            "SELECT spec, builtin FROM templates WHERE template_id = ?", (template_id,)
         ).fetchone()
         if row is None:
             raise UnknownTemplate(template_id)
-        return ser.template_from_json(json.loads(row["spec"]))
+        return TemplateEntry(
+            template=ser.template_from_json(json.loads(row["spec"])),
+            builtin=bool(row["builtin"]),
+        )
+
+    def delete(self, template_id: str) -> None:
+        """删一行。删不掉就是"这个 id 不在库里"——抛出去，不静默成功。
+
+        不碰 `documents`：项目行里存的是模板的**全文 JSON 快照**（`template_to_json`），
+        不是 id 引用，两张表没有外键，所以这里不需要级联、也不需要引用检查
+        （`02` §11.0.70）。
+        """
+
+        cursor = self._connection.execute(
+            "DELETE FROM templates WHERE template_id = ?", (template_id,)
+        )
+        if cursor.rowcount == 0:
+            raise UnknownTemplate(template_id)

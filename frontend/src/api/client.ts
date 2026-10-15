@@ -15,7 +15,7 @@ import type {
   RoundHeadView,
   SchemaView,
   SearchResultsView,
-  TemplateSectionView,
+  TemplateSectionPayload,
   TemplateView,
   ThreadView,
   VersionListView,
@@ -214,11 +214,22 @@ export const api = {
   getTemplate: (templateId: string) =>
     request<TemplateView>(`/templates/${encodeURIComponent(templateId)}`),
 
-  createTemplate: (title: string, sections: TemplateSectionView[]) =>
+  createTemplate: (title: string, sections: TemplateSectionPayload[]) =>
     request<TemplateView>("/templates", {
       method: "POST",
       body: JSON.stringify({ title, sections }),
     }),
+
+  /** 整份替换一套模板（`02` §11.0.70）。内置那份锁死，后端回 409。 */
+  updateTemplate: (templateId: string, title: string, sections: TemplateSectionPayload[]) =>
+    request<TemplateView>(`/templates/${encodeURIComponent(templateId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ title, sections }),
+    }),
+
+  /** 删一套自建模板。已经用它建好的项目照常打开（项目存的是模板快照）。 */
+  deleteTemplate: (templateId: string) =>
+    request<void>(`/templates/${encodeURIComponent(templateId)}`, { method: "DELETE" }),
 
   workspace: (projectId: string) =>
     request<WorkspaceView>(`/projects/${projectId}/workspace`),

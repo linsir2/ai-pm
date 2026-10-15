@@ -1,7 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { SchemaView } from "../api/types";
-import { FALLBACK_LIMITS, fieldTitle, limitsOf, sectionPurpose, setSchema } from "./schema";
+import {
+  FALLBACK_BLOCK_KINDS,
+  FALLBACK_LIMITS,
+  FALLBACK_TEMPLATE_ROLES,
+  blockKinds,
+  fieldTitle,
+  limitsOf,
+  sectionPurpose,
+  setSchema,
+  templateRoles,
+} from "./schema";
 
 const FROM_BACKEND: SchemaView = {
   sections: [
@@ -51,5 +61,25 @@ describe("schema", () => {
 
   it("空字段就是空，不编", () => {
     expect(fieldTitle(null)).toBeNull();
+  });
+});
+
+describe("模板枚举（`02` §11.0.70）", () => {
+  afterEach(() => setSchema(null));
+
+  it("角色下拉拿后端那份，回落到离线那一份", () => {
+    expect(templateRoles()).toEqual(FALLBACK_TEMPLATE_ROLES);
+    // 后端没给时也拿得到（老后端 / schema 还没到）
+    expect(FALLBACK_TEMPLATE_ROLES).toContain("steps");
+    expect(FALLBACK_TEMPLATE_ROLES).toContain("backbone");
+    setSchema({ ...FROM_BACKEND, template_roles: ["feature", "plain"] });
+    expect(templateRoles()).toEqual(["feature", "plain"]);
+  });
+
+  it("kind 下拉同理", () => {
+    expect(blockKinds()).toEqual(FALLBACK_BLOCK_KINDS);
+    expect(FALLBACK_BLOCK_KINDS).toContain("acceptance");
+    setSchema({ ...FROM_BACKEND, block_kinds: ["text"] });
+    expect(blockKinds()).toEqual(["text"]);
   });
 });

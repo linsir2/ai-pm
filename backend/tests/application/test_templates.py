@@ -2,7 +2,10 @@
 
 import pytest
 
-from pmstudio.application.errors import UnknownTemplate
+from pmstudio.application.errors import (
+    BuiltinTemplateProtected,
+    UnknownTemplate,
+)
 from pmstudio.domain.shared.errors import BadTemplateDefinition
 from pmstudio.infrastructure.templates.loader import TEMPLATES_DIR, load_template_file
 from tests.support.harness import Harness
@@ -130,3 +133,95 @@ async def test_starting_a_round_on_a_custom_template_is_allowed_now():
     assert len(harness.rounds.all_rounds()) == 1
     assert round_id
 
+
+
+# —— 改与删（`02` §11.0.70）——
+
+
+async def test_updating_a_custom_template_replaces_its_definition():
+    harness = Harness(replies={})
+    template_id = await harness.create_template()(
+        title="自建", sections=triple_sections()
+    )
+
+    await harness.update_template()(
+        template_id=template_id,
+        title="改名了",
+        sections=triple_sections() + [section("s1", "背景", "plain")],
+    )
+
+    got = await harness.get_template()(template_id=template_id)
+    assert got.title == "改名了"
+    assert [item.section_id for item in got.sections] == ["s5", "s11", "s13", "s1"]
+
+
+async def test_builtin_templates_can_neither_be_updated_nor_deleted():
+    """内置两份锁死：改了/删了就回不到出厂状态（界面也不给那两个按钮）。"""
+
+    harness = Harness(replies={})
+
+    with pytest.raises(BuiltinTemplateProtected) as update_error:
+        await harness.update_template()(
+            template_id="standard", title="偷改", sections=triple_sections()
+        )
+    with pytest.raises(BuiltinTemplateProtected) as delete_error:
+        await harness.delete_template()(template_id="standard")
+
+    assert update_error.value.code == "template_builtin_protected"
+    assert delete_error.value.code == "template_builtin_protected"
+    # 内置那份原样还在库里
+    assert (await harness.get_template()(template_id="standard")).title == "标准版"
+
+
+async def test_deleting_a_custom_template_takes_it_out_of_the_library():
+    harness = Harness(replies={})
+    template_id = await harness.create_template()(
+        title="自建", sections=triple_sections()
+    )
+
+    await harness.delete_template()(template_id=template_id)
+
+    listed = await harness.list_templates()()
+    assert template_id not in [item.template_id for item in listed]
+
+
+async def test_updating_with_a_broken_definition_leaves_the_old_one_intact():
+    """非法定义（缺两个锚点）要拒绝，而且**库里那份不能被写坏**。"""
+
+    harness = Harness(replies={})
+    template_id = await harness.create_template()(
+        title="自建", sections=triple_sections()
+    )
+
+    with pytest.raises(BadTemplateDefinition):
+        await harness.update_template()(
+            template_id=template_id,
+            title="坏",
+            sections=[section("s5", "功能", "feature")],
+        )
+
+    got = await harness.get_template()(template_id=template_id)
+    assert got.title == "自建"
+    assert len(got.sections) == 3
+
+
+async def test_touching_a_template_that_is_not_there_is_a_404():
+    harness = Harness(replies={})
+
+    with pytest.raises(UnknownTemplate):
+        await harness.update_template()(
+            template_id="tpl-nope", title="x", sections=triple_sections()
+        )
+    with pytest.raises(UnknownTemplate):
+        await harness.delete_template()(template_id="tpl-nope")
+
+
+async def test_listing_marks_which_templates_are_builtin():
+    harness = Harness(replies={})
+    custom = await harness.create_template()(
+        title="自建", sections=triple_sections()
+    )
+
+    listed = {item.template_id: item.builtin for item in await harness.list_templates()()}
+
+    assert listed == {"standard": True, "light": True, custom: False}

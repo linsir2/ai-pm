@@ -46,6 +46,38 @@ export const FALLBACK_LIMITS: LimitsView = {
   max_discussion_turns: 12,
 };
 
+/** 模板章节角色的离线回落（`02` §11.0.70）。真相源是后端 `domain/shared/template.py`
+ *  的 `TemplateRole`——`/schema.template_roles` 才是那一份，这里只是同一份值的离线副本。 */
+export const FALLBACK_TEMPLATE_ROLES: readonly string[] = [
+  "feature",
+  "open_questions",
+  "version_history",
+  "steps",
+  "decision",
+  "data",
+  "backbone",
+  "plain",
+];
+
+/** 槽位与条数判据可指定的块种类（离线回落；真相源是后端 `BlockKind`）。 */
+export const FALLBACK_BLOCK_KINDS: readonly string[] = [
+  "text",
+  "bullet_list",
+  "table",
+  "steps",
+  "acceptance",
+  "entity",
+  "interface",
+  "nfr",
+  "decision",
+  "assumption",
+  "constraint",
+  "dependency",
+  "risk",
+  "question",
+  "metric",
+];
+
 let current: SchemaView | null = null;
 
 export function setSchema(view: SchemaView | null): void {
@@ -58,6 +90,16 @@ export function currentSchema(): SchemaView | null {
 
 export function limitsOf(schema: SchemaView | null = current): LimitsView {
   return schema?.limits ?? FALLBACK_LIMITS;
+}
+
+/** 模板编辑器的角色下拉（`templates/draft.ts` 与组件都问它，别各自抄一份）。 */
+export function templateRoles(schema: SchemaView | null = current): readonly string[] {
+  return schema?.template_roles ?? FALLBACK_TEMPLATE_ROLES;
+}
+
+/** 槽位 / 条数判据的 kind 下拉。 */
+export function blockKinds(schema: SchemaView | null = current): readonly string[] {
+  return schema?.block_kinds ?? FALLBACK_BLOCK_KINDS;
 }
 
 export function fieldTitle(

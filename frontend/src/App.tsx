@@ -18,6 +18,7 @@ import { discussionTopic } from "./state/discussions";
 import type { DiscussionAnchor } from "./state/discussions";
 import { limitsOf } from "./state/schema";
 import { DocumentPane } from "./components/DocumentPane";
+import { TemplateLibraryScreen } from "./templates/TemplateLibraryScreen";
 import { EditScope } from "./components/EditContext";
 import { EvidenceScope } from "./components/EvidenceContext";
 import { DiscussionScope } from "./components/DiscussionContext";
@@ -71,10 +72,14 @@ export default function App() {
       "刷新时有 view=projects 没 project 该去哪"）。 */
   /** 文档列开着没（想看才打开；默认开，顶栏可收）。纯 UI 态。 */
   const [docOpen, setDocOpen] = useState(true);
-  /** 顶层视图：项目列表 ⇄ 工作区。**纯 UI 态，不进 URL、不进后端**——
+  /** 顶层视图：工作区 ⇄ 项目列表 ⇄ 模板库（`06` §2.3）。**纯 UI 态，不进 URL、不进后端**——
       `?project=` 才是要留着刷新恢复的那一个（两者性质不同，混在一起就要回答
-      "刷新时有 view=projects 没 project 该去哪"）。 */
-  const [listing, setListing] = useState(false);
+      "刷新时有 view=projects 没 project 该去哪"）。
+      用枚举而不是两个 boolean：两个 boolean 表达互斥视图迟早会出第四种组合。 */
+  const [view, setView] = useState<"workspace" | "projects" | "templates">("workspace");
+  /** 从模板库点「用这个建项目」带回来的模板（null = 不预选，回到既有默认）。 */
+  const [pickedTemplateId, setPickedTemplateId] = useState<string | null>(null);
+  const listing = view === "projects";
 
   const mode = awaitingMode(round);
   const project = state.project;
@@ -91,7 +96,7 @@ export default function App() {
   // 切项目：把**属于某个项目**的 UI 态清干净。数据侧由 `useWorkspaceData.selectProject`
   // 负责（它清自己那份 useState）；这里的开关与锚点活在 App，得自己清——
   // 尤其是 `researchAnchor` / `discussionAnchor`：它们带着上一个项目的原文，
-  // 不清就会拿旧文字在新项目里发起动作。`theme` / `listing` / `docOpen` 是全局或布局偏好，不动。
+  // 不清就会拿旧文字在新项目里发起动作。`theme` / `view` / `docOpen` 是全局或布局偏好，不动。
   useEffect(() => {
     setVersionsOpen(false);
     setLibraryOpen(false);
@@ -153,7 +158,10 @@ export default function App() {
       void data
         .createProject(title, templateId)
         .then((summary) => {
-          if (summary !== null) setListing(false);
+          if (summary !== null) {
+            setView("workspace");
+            setPickedTemplateId(null);
+          }
         }),
     [data],
   );
@@ -298,7 +306,8 @@ export default function App() {
           connection={state.connection}
           onSelectProject={data.selectProject}
           onExport={() => void data.exportMarkdown()}
-          onHome={() => setListing(false)}
+          onHome={() => setView("workspace")}
+          onTemplates={() => setView("templates")}
           theme={theme}
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
         />
@@ -306,7 +315,8 @@ export default function App() {
           <ProjectList
             projects={projects}
             onOpen={(projectId) => {
-              setListing(false);
+              setView("workspace");
+              setPickedTemplateId(null);
               data.selectProject(projectId);
             }}
             onCreate={enterCreated}
@@ -316,6 +326,35 @@ export default function App() {
             limits={limitsOf(data.schema)}
             model={data.model}
             templates={templates}
+            initialTemplateId={pickedTemplateId}
+          />
+        </main>
+      </div>
+    );
+  }
+
+  // 模板库（`06` §2.3）：编辑态与列表态在同一个视图里切，不另开一层。
+  if (view === "templates") {
+    return (
+      <div className="shell shell--plain">
+        <TopBar
+          projects={projects}
+          project={null}
+          connection={state.connection}
+          onSelectProject={data.selectProject}
+          onExport={() => void data.exportMarkdown()}
+          onHome={() => setView("projects")}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+        />
+        <main className="doc" aria-label="模板库">
+          <TemplateLibraryScreen
+            active
+            onUse={(templateId) => {
+              // 回项目列表，并把这份模板预选上（"用这个建项目"不许让用户再选一遍）
+              setPickedTemplateId(templateId);
+              setView("projects");
+            }}
           />
         </main>
       </div>
@@ -364,7 +403,7 @@ export default function App() {
             connection={state.connection}
             onSelectProject={data.selectProject}
             onExport={() => void data.exportMarkdown()}
-            onHome={() => setListing(true)}
+            onHome={() => setView("projects")}
             docOpen={docOpen}
             onToggleDoc={() => setDocOpen((open) => !open)}
             libraryCount={data.materials.length}

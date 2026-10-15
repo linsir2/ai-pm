@@ -12,16 +12,22 @@ export function NewProjectForm({
   pending,
   error,
   autoFocus = false,
+  initialTemplateId = null,
 }: {
   templates: TemplateView[];
   onCreate: (title: string, templateId: string) => void;
   pending: boolean;
   error: string | null;
   autoFocus?: boolean;
+  /** 从模板库「用这个建项目」带回来的预选项（`06` §2.3）。null = 既有默认（standard）。
+   *  它只是初值：用户在这一屏换了选择不写回父级——这一屏的活状态不外泄。 */
+  initialTemplateId?: string | null;
 }) {
   const standard =
     templates.find((item) => item.template_id === "standard") ?? templates[0];
-  const [picked, setPicked] = useState(standard?.template_id ?? "standard");
+  const [picked, setPicked] = useState(
+    initialTemplateId ?? standard?.template_id ?? "standard",
+  );
   const [title, setTitle] = useState("");
   const clean = title.trim();
 

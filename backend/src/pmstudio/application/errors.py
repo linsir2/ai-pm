@@ -121,6 +121,22 @@ class UnknownTemplate(ApplicationError):
         )
 
 
+class BuiltinTemplateProtected(ApplicationError):
+    """内置模板（standard / light）不能改也不能删——状态不允许，409（`02` §11.0.70）。
+
+    **为什么锁**：内置那份是"回到出厂状态"的唯一路径。改了或删了，模板出问题时就没有
+    基准可比了。界面上的做法是不给编辑/删除按钮（不是点了报错），这个类是给直接调接口
+    的那条路兜底的。
+    """
+
+    def __init__(self, template_id: object) -> None:
+        super().__init__(
+            f"内置模板不能修改或删除：{template_id}",
+            code="template_builtin_protected",
+            template_id=str(template_id),
+        )
+
+
 class DigestAlreadyWritten(ApplicationError):
     """同一个轮次的摘要已经写过了（`07 §7.14`：摘要只追加，不改写）。
 

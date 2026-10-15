@@ -29,6 +29,7 @@ export function ProjectList({
   limits,
   model = null,
   templates,
+  initialTemplateId = null,
 }: {
   projects: ProjectSummaryView[];
   onOpen: (projectId: string) => void;
@@ -43,6 +44,8 @@ export function ProjectList({
   model?: string | null;
   /** 模板库（`/schema.templates`）：画廊的数据源；空表退化成纯表单。 */
   templates: TemplateView[];
+  /** 从模板库「用这个建项目」带回来的预选项（`06` §2.3）；null = 用既有默认。 */
+  initialTemplateId?: string | null;
 }) {
   if (booting) {
     return (
@@ -61,6 +64,7 @@ export function ProjectList({
           error={error}
           pending={pending}
           templates={templates}
+          initialTemplateId={initialTemplateId}
         />
       </div>
     );
@@ -103,6 +107,7 @@ export function ProjectList({
             onCreate={onCreate}
             pending={pending}
             error={error}
+            initialTemplateId={initialTemplateId}
           />
         </section>
 

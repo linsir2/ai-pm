@@ -140,6 +140,7 @@ from pmstudio.application.dto import (
     workspace_view,
 )
 from pmstudio.application.errors import (
+    BuiltinTemplateProtected,
     MaterialFrozen,
     MaterialTooLarge,
     UnknownEntryId,
@@ -3083,7 +3084,7 @@ class CreateProject:
     async def __call__(
         self, *, title: str, template_id: str = STANDARD_TEMPLATE_ID
     ) -> ProjectSummaryView:
-        template = self._templates.get(template_id)
+        template = self._templates.get(template_id).template
         project_id = ProjectId(self._ids.new("p"))
         self._factory.create(
             project_id=project_id, title=title, now=self._clock.now(), template=template
@@ -3120,7 +3121,10 @@ class ListTemplates:
         self._templates = templates
 
     async def __call__(self) -> tuple[TemplateView, ...]:
-        return tuple(template_view(item) for item in self._templates.list())
+        return tuple(
+            template_view(entry.template, builtin=entry.builtin)
+            for entry in self._templates.list()
+        )
 
 
 class GetTemplate:
@@ -3130,7 +3134,54 @@ class GetTemplate:
         self._templates = templates
 
     async def __call__(self, *, template_id: str) -> TemplateView:
-        return template_view(self._templates.get(template_id))
+        entry = self._templates.get(template_id)
+        return template_view(entry.template, builtin=entry.builtin)
+
+
+class UpdateTemplate:
+    """把一套模板的整份定义换掉（`02` §11.0.70）。
+
+    **改就是全量替换，不做增量**：模板定义是一份声明，增量改要么留一堆 diff 状态，
+    要么就得有一个"局部合并"的语义——那是一套新的数据契约，而界面上改的就是一份
+    草稿的全量提交（`06` §2.3）。没有增量需求就不造这个轮子。
+
+    安全性有两条：内置锁死（409，`BuiltinTemplateProtected`）；`template_from_dict`
+    自己会 `validate`，非法定义抛 `BadTemplateDefinition` **而且不落库**（先算再写，
+    不用先写再回滚）。
+    """
+
+    def __init__(self, *, templates: TemplateRepository) -> None:
+        self._templates = templates
+
+    async def __call__(
+        self, *, template_id: str, title: str, sections: Sequence[Mapping[str, object]]
+    ) -> TemplateView:
+        if self._templates.get(template_id).builtin:
+            raise BuiltinTemplateProtected(template_id)
+        template = template_from_dict(
+            {"template_id": template_id, "title": title, "sections": list(sections)}
+        )
+        self._templates.save(template, builtin=False)
+        # 存进去的就是刚算出来那份，直接投影回去（照 `CreateTemplate` 之后回读同一份的
+        # 做法，但这里不必再读一次库）
+        return template_view(template, builtin=False)
+
+
+class DeleteTemplate:
+    """删掉一套自建模板（`02` §11.0.70）。
+
+    **不影响任何已建项目**：项目行里存的是模板的全文 JSON 快照，不是 id 引用，两张表
+    没有外键。真实后果只有一个——以后不能用这个 id 建新项目。
+    **刻意不做**引用计数与"有项目在用就拒绝"：那是在快照模型上凭空加锁。
+    """
+
+    def __init__(self, *, templates: TemplateRepository) -> None:
+        self._templates = templates
+
+    async def __call__(self, *, template_id: str) -> None:
+        if self._templates.get(template_id).builtin:
+            raise BuiltinTemplateProtected(template_id)
+        self._templates.delete(template_id)
 
 
 class GetWorkspace:

@@ -134,5 +134,6 @@ def test_seed_builtin_templates_is_idempotent_and_keeps_customs(tmp_path):
 
     assert first == second
     assert "standard" in first and "light" in first
-    assert repo.get("tpl-x") == custom  # 自定义的没被 seed 碰
+    # `get()` 改报 `TemplateEntry`（带 builtin 标记，`02` §11.0.70）：需求变更
+    assert repo.get("tpl-x").template == custom  # 自定义的没被 seed 碰
     connection.close()

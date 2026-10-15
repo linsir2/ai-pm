@@ -15,6 +15,7 @@ from pmstudio.application.errors import (
     UnknownRound,
     UnknownTemplate,
 )
+from pmstudio.application.ports import TemplateEntry
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.exploration.exploration import Exploration
 from pmstudio.domain.memory.digest import RoundDigest
@@ -411,19 +412,33 @@ class InMemoryInspirationRepository:
 
 
 class InMemoryTemplateRepository:
-    """模板库替身：内存字典。`get`  miss 抛 `UnknownTemplate`（与真实现同语义）。"""
+    """模板库替身：内存字典。miss 抛 `UnknownTemplate`（与真实现同语义）。
+
+    `builtin` 标记照真实现**存下来**（此前这个参数被丢弃，于是"内置不能改不能删"
+    在替身上根本测不出来——这是假实现漏掉的真实语义，不是多余的细节）。
+    """
 
     def __init__(self) -> None:
-        self._items: dict[str, DocumentTemplate] = {}
+        self._items: dict[str, tuple[DocumentTemplate, bool]] = {}
 
     def save(self, template: DocumentTemplate, *, builtin: bool) -> None:
-        self._items[template.template_id] = template
+        self._items[template.template_id] = (template, builtin)
 
-    def list(self) -> tuple[DocumentTemplate, ...]:
-        return tuple(self._items.values())
+    def list(self) -> tuple[TemplateEntry, ...]:
+        return tuple(
+            TemplateEntry(template=item, builtin=flag)
+            for item, flag in self._items.values()
+        )
 
-    def get(self, template_id: str) -> DocumentTemplate:
+    def get(self, template_id: str) -> TemplateEntry:
         try:
-            return self._items[template_id]
+            item, flag = self._items[template_id]
+        except KeyError:
+            raise UnknownTemplate(template_id) from None
+        return TemplateEntry(template=item, builtin=flag)
+
+    def delete(self, template_id: str) -> None:
+        try:
+            del self._items[template_id]
         except KeyError:
             raise UnknownTemplate(template_id) from None

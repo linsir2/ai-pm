@@ -27,6 +27,7 @@ export function TopBar({
   /** 左上角标识：点了回项目列表。没有项目时不传（顶栏就没有可回的
       地方——那一屏本来就在 `Onboarding`）。 */
   onHome,
+  onTemplates,
   libraryCount = 0,
   onOpenLibrary,
   theme,
@@ -40,6 +41,8 @@ export function TopBar({
   connection: "idle" | "open" | "lost";
   onSelectProject: (projectId: string) => void;
   onHome?: () => void;
+  /** 模板库入口（`06` §2.3）：不传就不画（工作区里没有它，模板管理是列表页的事）。 */
+  onTemplates?: () => void;
   onExport: () => void;
   /** 材料库入口（顶栏）：显示库里有几份，点开抽屉。 */
   libraryCount?: number;
@@ -104,6 +107,12 @@ export function TopBar({
             </span>
           </span>
         </>
+      )}
+
+      {onTemplates !== undefined && (
+        <button type="button" className="topbar__action" onClick={onTemplates}>
+          模板
+        </button>
       )}
 
       <span className="topbar__spacer" />

@@ -94,6 +94,33 @@ async def get_template(request: Request, template_id: str):  # type: ignore[no-u
     return as_json(await services_of(request).get_template(template_id=template_id))
 
 
+@router.put("/templates/{template_id}")
+async def update_template(  # type: ignore[no-untyped-def]
+    request: Request, template_id: str, body: TemplateCreateRequest
+):
+    """整份替换一套模板（`02` §11.0.70）。body 复用创建那份：形状一样，不另立契约。
+
+    内置两份锁死（409）；改了/删了回不到出厂状态。已经建好的项目**不受影响**——
+    文档行里存的是模板的全文快照，不是 id 引用。
+    """
+
+    return as_json(
+        await services_of(request).update_template(
+            template_id=template_id,
+            title=body.title,
+            sections=[item.model_dump() for item in body.sections],
+        )
+    )
+
+
+@router.delete("/templates/{template_id}", status_code=204)
+async def delete_template(request: Request, template_id: str):  # type: ignore[no-untyped-def]
+    """删一套自建模板。已经用它的项目照常打开（快照模型，见 `02` §11.0.70）。"""
+
+    await services_of(request).delete_template(template_id=template_id)
+    return Response(status_code=204)
+
+
 @router.get("/projects")
 async def list_projects(request: Request):  # type: ignore[no-untyped-def]
     return as_json(await services_of(request).list_projects())

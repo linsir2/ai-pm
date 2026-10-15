@@ -7,11 +7,13 @@ export function Onboarding({
   error,
   pending,
   templates,
+  initialTemplateId = null,
 }: {
   onCreate: (title: string, templateId: string) => void;
   error: string | null;
   pending: boolean;
   templates: TemplateView[];
+  initialTemplateId?: string | null;
 }) {
   return (
     <div className="empty">
@@ -28,6 +30,7 @@ export function Onboarding({
         pending={pending}
         error={error}
         autoFocus
+        initialTemplateId={initialTemplateId}
       />
     </div>
   );

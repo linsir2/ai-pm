@@ -1,12 +1,36 @@
-"""模板库表：builtin seed + 自定义存取 + 老库迁移。"""
+"""模板库表：builtin seed + 自定义存取 + 老库迁移 + 删（`02` §11.0.70）。"""
 
 import json
 import sqlite3
 
+import pytest
+
 from pmstudio.application.errors import UnknownTemplate
-from pmstudio.domain.shared.template import standard_template
+from pmstudio.domain.shared.template import standard_template, template_from_dict
 from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.repositories import SqliteTemplateRepository
+
+
+def _custom_template() -> object:
+    """一份最小的自建模板（三锚点齐全，`validate` 才放行）。"""
+
+    return template_from_dict(
+        {
+            "template_id": "tpl-custom",
+            "title": "自建",
+            "sections": [
+                {"id": "s1", "title": "背景", "purpose": "摆设", "role": "plain"},
+                {"id": "s5", "title": "功能", "purpose": "摆设", "role": "feature"},
+                {"id": "s11", "title": "未决", "purpose": "摆设", "role": "open_questions"},
+                {
+                    "id": "s13",
+                    "title": "版本",
+                    "purpose": "摆设",
+                    "role": "version_history",
+                },
+            ],
+        }
+    )
 
 
 def test_templates_table_created_and_round_trips(tmp_path):
@@ -19,10 +43,12 @@ def test_templates_table_created_and_round_trips(tmp_path):
     repo.save(standard_template(), builtin=True)  # seed 幂等：重复种不炸
     repo.save(load_template_file(TEMPLATES_DIR / "light.toml"), builtin=True)
     # 内置按标题排（标准版在前）：画廊默认选 standard，它得是第一张卡
-    assert [template.template_id for template in repo.list()] == ["standard", "light"]
+    # `list()` 改报 `TemplateEntry`（带 builtin 标记，`02` §11.0.70）：需求变更
+    assert [item.template.template_id for item in repo.list()] == ["standard", "light"]
 
     got = repo.get("standard")
-    assert got == standard_template()
+    assert got.template == standard_template()
+    assert got.builtin is True
     connection.close()
 
 
@@ -37,6 +63,47 @@ def test_unknown_template_id_is_a_404(tmp_path):
         assert error.code == "unknown_template"
     finally:
         connection.close()
+
+
+def test_list_and_get_report_which_templates_are_builtin(tmp_path):
+    """库里要能分辨出厂的和自建的（`06` §2.3：内置那份不���编辑/删除按钮）。"""
+
+    connection = database.connect(tmp_path / "pm.db")
+    repo = SqliteTemplateRepository(connection)
+    repo.save(standard_template(), builtin=True)
+    repo.save(_custom_template(), builtin=False)
+
+    assert {item.template.template_id: item.builtin for item in repo.list()} == {
+        "standard": True,
+        "tpl-custom": False,
+    }
+    assert repo.get("standard").builtin is True
+    assert repo.get("tpl-custom").builtin is False
+    connection.close()
+
+
+def test_delete_removes_that_template_and_leaves_the_others(tmp_path):
+    connection = database.connect(tmp_path / "pm.db")
+    repo = SqliteTemplateRepository(connection)
+    repo.save(standard_template(), builtin=True)
+    repo.save(_custom_template(), builtin=False)
+
+    repo.delete("tpl-custom")
+
+    assert [item.template.template_id for item in repo.list()] == ["standard"]
+    connection.close()
+
+
+def test_deleting_a_template_that_is_not_there_is_an_error(tmp_path):
+    connection = database.connect(tmp_path / "pm.db")
+    repo = SqliteTemplateRepository(connection)
+    repo.save(standard_template(), builtin=True)
+
+    with pytest.raises(UnknownTemplate):
+        repo.delete("tpl-nope")
+
+    assert len(repo.list()) == 1
+    connection.close()
 
 
 OLD_DOCUMENTS_DDL = """

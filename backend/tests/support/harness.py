@@ -789,6 +789,16 @@ class Harness:
 
         return GetTemplate(templates=self.templates)
 
+    def update_template(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import UpdateTemplate
+
+        return UpdateTemplate(templates=self.templates)
+
+    def delete_template(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import DeleteTemplate
+
+        return DeleteTemplate(templates=self.templates)
+
     def get_round(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetRound
 
@@ -842,7 +852,7 @@ class Harness:
         return GetSchema(
             discussion_roles=self.discussion_roles,
             personas=self.personas,
-            templates=tuple(self.templates.list()),
+            templates=tuple(entry.template for entry in self.templates.list()),
         )
 
     def list_rounds(self):  # type: ignore[no-untyped-def]
@@ -1010,6 +1020,8 @@ class Harness:
             create_template=self.create_template(),
             list_templates=self.list_templates(),
             get_template=self.get_template(),
+            update_template=self.update_template(),
+            delete_template=self.delete_template(),
             workspace=self.get_workspace(),
             list_projects=self.list_projects(),
             get_round=self.get_round(),
