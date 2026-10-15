@@ -139,4 +139,30 @@ describe("TopBar", () => {
       "page",
     );
   });
+
+  it("非模板库视图里模板按钮不标当前位置（缺省/false 都无 aria-current 与 active 类）", () => {
+    const base = {
+      projects: [project],
+      project,
+      connection: "open" as const,
+      theme: "light" as const,
+      onSelectProject: vi.fn(),
+      onExport: vi.fn(),
+      onToggleTheme: vi.fn(),
+      onTemplates: () => {},
+    };
+    const { rerender } = render(<TopBar {...base} />);
+
+    expect(screen.getByRole("button", { name: "模板" }).getAttribute("aria-current")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "模板" }).getAttribute("class"),
+    ).not.toContain("topbar__action--active");
+
+    rerender(<TopBar {...base} templatesActive={false} />);
+
+    expect(screen.getByRole("button", { name: "模板" }).getAttribute("aria-current")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "模板" }).getAttribute("class"),
+    ).not.toContain("topbar__action--active");
+  });
 });
