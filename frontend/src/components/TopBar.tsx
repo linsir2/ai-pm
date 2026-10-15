@@ -44,8 +44,9 @@ export function TopBar({
   onHome?: () => void;
   /** 模板库入口（`06` §2.3）：不传就不画（工作区里没有它，模板管理是列表页的事）。 */
   onTemplates?: () => void;
-  /** 模板库视图里标出当前位置（`06` §2.4 §1）：用法照抄 `SideRail.tsx:132,187`
-      的 `aria-current`，不发明新模式。 */
+  /** 模板库视图里标出当前位置（`06` §2.4 §1）：跨视图按钮按 ARIA 取 `"page"`。
+      与 `SideRail` 章节按钮的布尔值、`ProjectList` 页内锚点的 `"location"` 各表各的语义，
+      不互相照抄（旧注"照抄 SideRail"与实情不符，改成如实描述）。 */
   templatesActive?: boolean;
   onExport: () => void;
   /** 材料库入口（顶栏）：显示库里有几份，点开抽屉。 */

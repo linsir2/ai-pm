@@ -98,10 +98,18 @@ export function ProjectList({
   return (
     <div className="doc__inner home home--split">
       <nav className="home__nav" aria-label="项目页导航">
-        <a className={navCls("home-new")} href="#home-new">
+        <a
+          className={navCls("home-new")}
+          href="#home-new"
+          aria-current={active === "home-new" ? "location" : undefined}
+        >
           新建项目
         </a>
-        <a className={navCls("home-recent")} href="#home-recent">
+        <a
+          className={navCls("home-recent")}
+          href="#home-recent"
+          aria-current={active === "home-recent" ? "location" : undefined}
+        >
           最近项目
         </a>
         <button type="button" className="home__navlink" onClick={onManageTemplates}>

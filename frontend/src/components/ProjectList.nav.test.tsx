@@ -93,6 +93,52 @@ it("左导航只有两个真锚点，模板库是按钮", () => {
   expect(fn).toHaveBeenCalledTimes(1);
 });
 
+it("左导航当前段标 aria-current=location（页内锚点不用 TopBar 的 page）", () => {
+  render(
+    <ProjectList
+      projects={[proj]}
+      onOpen={vi.fn()}
+      onCreate={vi.fn()}
+      pending={false}
+      error={null}
+      booting={false}
+      limits={LIMITS}
+      templates={TEMPLATES}
+      onManageTemplates={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByRole("link", { name: "新建项目" }).getAttribute("aria-current")).toBe(
+    "location",
+  );
+  expect(screen.getByRole("link", { name: "最近项目" }).getAttribute("aria-current")).toBeNull();
+
+  intersect("home-recent");
+
+  expect(screen.getByRole("link", { name: "最近项目" }).getAttribute("aria-current")).toBe(
+    "location",
+  );
+  expect(screen.getByRole("link", { name: "新建项目" }).getAttribute("aria-current")).toBeNull();
+});
+
+it("模板库是跨视图按钮：从不标 aria-current（page 是 TopBar 那边的语义）", () => {
+  render(
+    <ProjectList
+      projects={[proj]}
+      onOpen={vi.fn()}
+      onCreate={vi.fn()}
+      pending={false}
+      error={null}
+      booting={false}
+      limits={LIMITS}
+      templates={TEMPLATES}
+      onManageTemplates={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByRole("button", { name: "模板库" }).getAttribute("aria-current")).toBeNull();
+});
+
 it("scrollspy：home-recent 相交后对应导航项带 active 类、另一项不带", () => {
   render(
     <ProjectList
