@@ -42,6 +42,10 @@ class SectionView:
     section_id: SectionId
     title: str
     blocks: tuple[BlockView, ...]
+    #: 这一章在模板里的角色（`TemplateRole` 的值字符串）。就绪度按它找步骤章/决策章，
+    #: 前端环形图按它排除版本章——**投影出来是为了让消费者不必再回头问模板**
+    #: （`02` §11.0.69）。
+    role: str = "plain"
 
 
 @dataclass(frozen=True, slots=True)

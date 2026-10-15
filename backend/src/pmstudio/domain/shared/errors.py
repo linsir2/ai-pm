@@ -45,9 +45,12 @@ class BadTemplateDefinition(InvariantViolation):
 
 
 class UnknownSection(InvariantViolation):
-    def __init__(self, section_id: object) -> None:
+    def __init__(self, section_id: object, *, template_title: str = "") -> None:
+        suffix = f"（模板「{template_title}」里没有这一章）" if template_title else ""
         super().__init__(
-            f"未知章节：{section_id}", invariant=DInvariant.D1, section_id=str(section_id)
+            f"未知章节：{section_id}{suffix}",
+            invariant=DInvariant.D1,
+            section_id=str(section_id),
         )
 
 
@@ -67,10 +70,16 @@ class SectionOrderViolation(InvariantViolation):
 
 class FeatureNotAllowedHere(InvariantViolation):
     def __init__(
-        self, *, section_id: object, feature_slug: object, feature_home: object = "s5"
+        self,
+        *,
+        section_id: object,
+        feature_slug: object,
+        feature_home: object = "s5",
+        template_title: str = "",
     ) -> None:
+        suffix = f"（模板「{template_title}」）" if template_title else ""
         super().__init__(
-            f"功能子树只能长在 {feature_home}，{section_id} 不行",
+            f"功能子树只能长在 {feature_home}，{section_id} 不行{suffix}",
             invariant=DInvariant.D3,
             section_id=str(section_id),
             feature_slug=str(feature_slug),

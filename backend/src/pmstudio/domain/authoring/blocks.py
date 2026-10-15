@@ -41,10 +41,17 @@ class Block:
         return cls(block_id=BlockId(str(section_id)), parent_id=None, kind=BlockKind.SECTION)
 
     @classmethod
-    def feature_root(cls, *, block_id: BlockId, slug: FeatureSlug) -> "Block":
+    def feature_root(
+        cls, *, block_id: BlockId, slug: FeatureSlug, parent: BlockId | str
+    ) -> "Block":
+        """功能子树根。挂哪一章由调用方给（模板的功能锚点，`02` §11.0.69）。
+
+        这里不认 s5——s5 只是 `standard` 那套模板的锚点 id，别的模板可以是别的章。
+        """
+
         return cls(
             block_id=block_id,
-            parent_id=BlockId("s5"),
+            parent_id=BlockId(parent),
             kind=BlockKind.FEATURE,
             feature_slug=slug,
         )

@@ -35,11 +35,7 @@ from pmstudio.domain.shared.ids import (
     SectionId,
 )
 from pmstudio.domain.shared.label import Zone
-from pmstudio.domain.shared.sections import (
-    FEATURE_HOME,
-    section_slot,
-    slot_block_id,
-)
+from pmstudio.domain.shared.sections import slot_block_id
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template import (
     DocumentTemplate,
@@ -233,6 +229,7 @@ class Document:
                 blocks=tuple(
                     build(block) for block in children.get(BlockId(spec.section_id), ())
                 ),
+                role=str(spec.role.value),
             )
             # 读自家模板的章节（不是全局 SECTIONS）：画廊承诺几章，这里就是几章
             for spec in self._template.sections
@@ -264,6 +261,7 @@ class Document:
             self._blocks,
             self._preference_entries,
             tombstone_ids=frozenset(block.block_id for block in self._tombstones),
+            template=self._template,
         )
         for instruction in instructions:
             working.apply(instruction, authorized_new_features=authorized_new_features)
@@ -278,6 +276,7 @@ class Document:
             preference_entries=working.preference_entries,
             tombstones=self._tombstones + working.tombstones,
             created_at=self._created_at,
+            template=self._template,
         )
         version = Version(
             version_no=self.current_version.version_no + 1,
@@ -321,6 +320,7 @@ class Document:
             preference_entries=preference_entries,
             tombstones=tombstones,
             created_at=self._created_at,
+            template=self._template,
         )
         before = _signature(self._blocks, self._preference_entries)
         self._blocks = restored
@@ -442,11 +442,15 @@ class _WorkingTree:
         preference_entries: tuple[Entry, ...],
         *,
         tombstone_ids: frozenset[BlockId],
+        template: DocumentTemplate,
     ) -> None:
         self._blocks: dict[BlockId, Block] = {block.block_id: block for block in blocks}
         self._order: list[BlockId] = [block.block_id for block in blocks]
         self._preferences: list[Entry] = list(preference_entries)
         self._tombstone_ids: set[BlockId] = set(tombstone_ids)
+        # 槽表与功能家读**这一份文档的模板**（不是全局 13 章表）：块树变更器要按
+        # 目标章的槽建块、要按锚点挂功能根，两者都是模板事实（`02` §11.0.69）。
+        self._template = template
         self._new_tombstones: list[Block] = []
         self._changed: set[BlockId] = set()
 
@@ -628,11 +632,11 @@ class _WorkingTree:
         return block_id
 
     def _section_slot_parent(self, target: Target) -> BlockId:
-        """章节槽（s8 的六块）：有就复用，没有就按槽表建一个。"""
+        """章节槽（s8 的六块）：有就复用，没有就按**自家模板的槽表**建一个。"""
 
         section_id = str(target.section_id)
-        slot = section_slot(section_id, target.field or "")
-        assert slot is not None  # Target 已经校验过
+        slot = self._template.slot(section_id, target.field or "")
+        assert slot is not None  # 适配器已经校验过（`02` §11.0.69）
         existing = self._field_block(BlockId(section_id), slot.name)
         if existing is not None:
             return existing.block_id
@@ -657,10 +661,18 @@ class _WorkingTree:
                 return block.block_id
         if slug not in authorized_new_features:
             raise FeatureRequiresUserNaming(feature_slug=slug)
-        if target.section_id != FEATURE_HOME:
-            raise FeatureNotAllowedHere(section_id=target.section_id, feature_slug=slug)
+        feature_home = self._template.anchor(TemplateRole.FEATURE)
+        if target.section_id != feature_home:
+            raise FeatureNotAllowedHere(
+                section_id=target.section_id,
+                feature_slug=slug,
+                feature_home=feature_home,
+                template_title=self._template.title,
+            )
         block_id = self._free_id(BlockId(f"feat-{slug}"))
-        self._add(Block.feature_root(block_id=block_id, slug=slug))
+        self._add(
+            Block.feature_root(block_id=block_id, slug=slug, parent=feature_home)
+        )
         return block_id
 
     def _field_block(self, parent_id: BlockId, field: str) -> Block | None:

@@ -31,7 +31,9 @@ def test_GB1_bad_entry_without_refs():
 
 def test_D4_ok_two_fields_under_one_feature():
     root = Block.feature_root(
-        block_id=BlockId("feat-order-export"), slug=FeatureSlug("order-export")
+        block_id=BlockId("feat-order-export"),
+        slug=FeatureSlug("order-export"),
+        parent=BlockId("s5"),
     )
     blocks = (
         root,
@@ -53,7 +55,9 @@ def test_D4_ok_two_fields_under_one_feature():
 
 def test_D4_bad_duplicate_field_under_same_parent():
     root = Block.feature_root(
-        block_id=BlockId("feat-order-export"), slug=FeatureSlug("order-export")
+        block_id=BlockId("feat-order-export"),
+        slug=FeatureSlug("order-export"),
+        parent=BlockId("s5"),
     )
     field = {
         "parent_id": root.block_id,

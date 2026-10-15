@@ -3,6 +3,7 @@ from datetime import datetime
 
 import pytest
 
+from pmstudio.domain.authoring.blocks import Block
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.version import VersionTrigger
@@ -671,3 +672,72 @@ def test_light_document_view_shows_its_own_six_sections():
         "s11",
         "s13",
     ]
+
+
+def _new_light_document() -> Document:
+    return Document.new(
+        document_id=DocumentId("doc1"),
+        project_id=ProjectId("p1"),
+        title="t",
+        now=NOW,
+        template=_light_template(),
+    )
+
+
+def test_apply_on_light_document_validates_against_light_template():
+    """apply 的候选校验必须读自家模板：不传 template 会回落 STANDARD，
+    6 章骨架会被判成"缺 7 章"（SectionSetViolation）。"""
+
+    document = _new_light_document()
+    version = apply(document, instruction(target=Target.body("s4"), text="本期只做导出"))
+
+    block_id = version.changed_block_ids[0]
+    assert [entry.text for entry in document.block(block_id).entries] == ["本期只做导出"]
+    assert document.current_version.version_no == 2
+
+
+def test_rollback_on_light_document_keeps_light_template():
+    """rollback 的候选校验同样不能回落 STANDARD，否则 light 项目一次都退不回去。"""
+
+    document = _new_light_document()
+    apply(document, instruction(target=Target.body("s4"), text="本期只做导出"))
+    document.rollback_to(1, now=NOW, summary="退回")
+
+    assert [str(block.block_id) for block in document.blocks] == [
+        "s1",
+        "s2",
+        "s4",
+        "s5",
+        "s11",
+        "s13",
+    ]
+    assert document.template.template_id == "light"
+
+
+def test_feature_root_takes_explicit_parent():
+    """功能根挂哪一章由调用方给（模板的功能锚点），不许在 blocks 里写死 s5。"""
+
+    root = Block.feature_root(
+        block_id=BlockId("feat-x"), slug=FeatureSlug("x"), parent=BlockId("fx")
+    )
+
+    assert root.parent_id == BlockId("fx")
+    assert root.kind is BlockKind.FEATURE
+
+
+def test_view_sections_carry_template_role():
+    """视图章节带 role：前端环形图靠它排除版本章，就绪度靠它找 STEPS/DECISION。"""
+
+    light_roles = [section.role for section in _new_light_document().view().sections]
+    assert light_roles == [
+        "backbone",
+        "backbone",
+        "backbone",
+        "feature",
+        "open_questions",
+        "version_history",
+    ]
+    standard_sections = new_document().view().sections
+    standard_roles = {str(section.section_id): section.role for section in standard_sections}
+    assert standard_roles["s8"] == "plain"
+    assert standard_roles["s5"] == "feature"
