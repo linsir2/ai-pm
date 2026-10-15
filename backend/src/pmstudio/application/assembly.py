@@ -63,6 +63,7 @@ from pmstudio.domain.shared.sections import (
     section_slot,
 )
 from pmstudio.domain.shared.target import Target, target_from_label
+from pmstudio.domain.shared.template_adapter import TemplateAdapter, adapt
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.harness.errors import PacketParseError
 
@@ -376,8 +377,9 @@ def deferred_from_open_items(
     """
 
     view = document.view()
+    adapter = adapt(document.template)
     section = next(
-        (item for item in view.sections if str(item.section_id) == OPEN_QUESTION_HOME), None
+        (item for item in view.sections if str(item.section_id) == adapter.open_home), None
     )
     if section is None:
         return ()
@@ -391,10 +393,11 @@ def deferred_from_open_items(
             if parsed is None:
                 continue
             title, consequence, blocking = parsed.title, parsed.consequence, parsed.blocking
-            # 去处回到**出题那一批**该落的地方（P11 C1）；认不出来才回落 s11，绝不猜
-            target = target_from_label(parsed.target_label or "") or Target.body(
-                OPEN_QUESTION_HOME
-            )
+            # 去处回到**出题那一批**该落的地方（P11 C1）；认不出来（形状残缺或这一套
+            # 模板里没有这一章）才回落未决章，绝不猜
+            target = target_from_label(
+                parsed.target_label or "", adapter
+            ) or Target.body(adapter.open_home)
             collected.append(
                 Question(
                     question_id=QuestionId("q0"),  # 占位：assemble 统一重编号
@@ -544,6 +547,8 @@ def assemble(
     )
     authorized = round_.authorized_new_features
     existing = _existing_content(document)
+    # 这一份文档的模板视角（`02` §11.0.69）：去处校验、阻塞判据、去重键全走它。
+    adapter = adapt(document.template)
 
     proposals: list[Proposal] = []
     feature_questions: list[Question] = []
@@ -554,7 +559,12 @@ def assemble(
 
     for index, draft in enumerate(packet.proposals, start=1):
         target = _target_or_drop(
-            draft.target, dropped=dropped, pass_index=pass_index, what="提案", index=index
+            draft.target,
+            dropped=dropped,
+            pass_index=pass_index,
+            what="提案",
+            index=index,
+            adapter=adapter,
         )
         if target is None:
             continue
@@ -655,7 +665,12 @@ def assemble(
     current_batch_keys: set[tuple[str, str]] = set()
     for index, item in enumerate(packet.questions, start=1):
         target = _target_or_drop(
-            item.target, dropped=dropped, pass_index=pass_index, what="题目", index=index
+            item.target,
+            dropped=dropped,
+            pass_index=pass_index,
+            what="题目",
+            index=index,
+            adapter=adapter,
         )
         if target is None:
             continue
@@ -755,7 +770,12 @@ def assemble(
     list_items: list[ListItem] = []
     for index, item in enumerate(packet.list_items, start=1):
         target = _target_or_drop(
-            item.target, dropped=dropped, pass_index=pass_index, what="清单项", index=index
+            item.target,
+            dropped=dropped,
+            pass_index=pass_index,
+            what="清单项",
+            index=index,
+            adapter=adapter,
         )
         if target is None:
             continue
@@ -1173,9 +1193,9 @@ def is_blocking(target: Target) -> bool:
 # —— 内部 ——
 
 
-def _target(draft: schemas.TargetDraft) -> Target:
+def _target(draft: schemas.TargetDraft, *, adapter: TemplateAdapter) -> Target:
     try:
-        return schemas.target_of(draft)
+        return schemas.target_of(draft, adapter=adapter)
     except DomainError as error:
         # 把模型给的原样 target 带回给它：重装一次时它得看得见自己错在哪，
         # 否则只会重犯同一处（真模型冒烟实测过这一条）。
@@ -1193,6 +1213,7 @@ def _target_or_drop(
     pass_index: int,
     what: str,
     index: int,
+    adapter: TemplateAdapter,
 ) -> Target | None:
     """去处写错：丢**这一条**并留痕，不放整轮失败（2026-09-28 作者拍板）。
 
@@ -1202,7 +1223,7 @@ def _target_or_drop(
     """
 
     try:
-        return _target(draft)
+        return _target(draft, adapter=adapter)
     except PacketParseError as error:
         dropped.append(
             DroppedItem(

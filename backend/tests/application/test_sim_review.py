@@ -17,7 +17,7 @@ from pmstudio.domain.authoring.document import WriteInstruction
 from pmstudio.domain.shared.ids import EntryId, EvidenceId, FeatureSlug
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from tests.support.builders import NOW, document_with_feature
+from tests.support.builders import NOW, STD, document_with_feature
 
 
 def _document():  # type: ignore[no-untyped-def]
@@ -28,7 +28,7 @@ def _document():  # type: ignore[no-untyped-def]
                 instruction_id="i-flow",
                 entry_id=EntryId("en-flow"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "main_flow"),
+                target=Target.feature_field("order-export", "main_flow", home=STD.feature_home),
                 text="1. 进入订单列表\n2. 点导出\n3. 选时间范围",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.STEPS,
@@ -37,7 +37,7 @@ def _document():  # type: ignore[no-untyped-def]
                 instruction_id="i-prio",
                 entry_id=EntryId("en-prio"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "priority"),
+                target=Target.feature_field("order-export", "priority", home=STD.feature_home),
                 text="P0",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.TEXT,
@@ -46,7 +46,7 @@ def _document():  # type: ignore[no-untyped-def]
                 instruction_id="i-acc1",
                 entry_id=EntryId("en-acc1"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "acceptance"),
+                target=Target.feature_field("order-export", "acceptance", home=STD.feature_home),
                 text="5 万条内 60 秒可下载",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.ACCEPTANCE,
@@ -55,7 +55,7 @@ def _document():  # type: ignore[no-untyped-def]
                 instruction_id="i-acc2",
                 entry_id=EntryId("en-acc2"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "acceptance"),
+                target=Target.feature_field("order-export", "acceptance", home=STD.feature_home),
                 text="无权限不出现导出按钮",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.ACCEPTANCE,
@@ -157,7 +157,10 @@ def test_document_anchors_indexes_entries_features_and_acceptance() -> None:
     assert anchors.priority_entry["order-export"] == "en-prio"
     assert "main_flow" in anchors.feature_fields["order-export"]
     assert anchors.entry_feature["en-flow"] == "order-export"
-    assert anchors.entry_target["en-flow"] == Target.feature_field("order-export", "main_flow")
+    assert anchors.entry_target["en-flow"] == Target.feature_field(
+                                                  "order-export", "main_flow",
+                                                  home=STD.feature_home
+                                              )
     assert anchors.entry_order["en-flow"] < anchors.entry_order["en-prio"]
 
 
@@ -445,7 +448,7 @@ def test_r2_without_priority_entry_only_advises() -> None:
                 instruction_id="i-checkout",
                 entry_id=EntryId("en-co-name"),
                 op=WriteOp.ADD,
-                target=Target.feature_field(FeatureSlug("checkout"), "name"),
+                target=Target.feature_field(FeatureSlug("checkout"), "name", home=STD.feature_home),
                 text="结账",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.TEXT,

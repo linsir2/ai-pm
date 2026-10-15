@@ -6,7 +6,7 @@ from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.shared.ids import EntryId, EvidenceId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
-from tests.support.builders import NOW, document_with_feature
+from tests.support.builders import NOW, STD, document_with_feature
 
 
 def instruction(
@@ -44,7 +44,7 @@ def test_changed_entry_is_reported_with_before_and_after():
     document.apply(
         [
             instruction(
-                target=Target.feature_field("order-export", "one_liner"),
+                target=Target.feature_field("order-export", "one_liner", home=STD.feature_home),
                 entry_id=entry_id_of(document, "one_liner"),
                 text="按筛选条件把订单导成表格",
                 op=WriteOp.REPLACE,
@@ -71,7 +71,7 @@ def test_added_entry_is_grouped_under_its_field():
     document.apply(
         [
             instruction(
-                target=Target.feature_field("order-export", "acceptance"),
+                target=Target.feature_field("order-export", "acceptance", home=STD.feature_home),
                 entry_id="en-ac1",
                 text="5 万条以内 60 秒可下载",
             )
@@ -95,7 +95,7 @@ def test_removed_entry_shows_up_in_the_reverse_direction():
     document.apply(
         [
             instruction(
-                target=Target.feature_field("order-export", "one_liner"),
+                target=Target.feature_field("order-export", "one_liner", home=STD.feature_home),
                 entry_id=entry_id,
                 text="删掉一句话描述",
                 op=WriteOp.REMOVE,
@@ -135,7 +135,7 @@ def test_labels_cover_sections_slots_features_and_preference():
             ),
             instruction(target=Target.preference(), entry_id="en-pref", text="登录页太丑"),
             instruction(
-                target=Target.feature_field("order-export", "name"),
+                target=Target.feature_field("order-export", "name", home=STD.feature_home),
                 entry_id="en-name",
                 text="订单导出",
             ),

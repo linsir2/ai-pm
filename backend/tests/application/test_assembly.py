@@ -37,6 +37,7 @@ from tests.support.builders import (
     NOW,
     ROUND_ID,
     SEAT,
+    STD,
     document_with_feature,
     make_document,
     make_round,
@@ -611,7 +612,7 @@ def test_question_is_not_blocking_for_a_non_blocking_section_or_preference():
 def test_skipped_blocking_question_lands_in_s11_with_the_marker():
     blocking = Question(
         question_id=QuestionId("q1"),
-        target=Target.feature_field("order-export", "acceptance"),
+        target=Target.feature_field("order-export", "acceptance", home=STD.feature_home),
         type=QuestionType.TEXT,
         title="单次导出的最大行数是多少？",
         why="量级决定同步还是异步",

@@ -1,11 +1,16 @@
 import pytest
 
-from pmstudio.domain.shared.errors import FeatureNotAllowedHere, ShapeError, UnknownSection
+from pmstudio.domain.shared.errors import (
+    FeatureNotAllowedHere,
+    TargetShapeError,
+    UnknownSection,
+)
 from pmstudio.domain.shared.ids import evidence_id, evidence_seq
 from pmstudio.domain.shared.invariants import DInvariant
 from pmstudio.domain.shared.label import ClaimLabel, Zone, zone_for
 from pmstudio.domain.shared.sections import SECTION_IDS, section_spec
 from pmstudio.domain.shared.target import Target
+from tests.support.builders import STD
 
 
 def test_evidence_id_roundtrip():
@@ -45,7 +50,7 @@ def test_D1_ok_target_accepts_every_section(section_id):
 
 def test_D1_bad_unknown_section_in_target():
     with pytest.raises(UnknownSection) as exc:
-        Target(section_id="s14")
+        STD.check_target("s14", None, None)
     assert exc.value.invariant == DInvariant.D1
 
 
@@ -60,13 +65,16 @@ def test_sections_have_titles_and_only_s5_grows_features():
 
 def test_D3_bad_feature_outside_s5():
     with pytest.raises(FeatureNotAllowedHere) as exc:
-        Target(section_id="s3", feature_slug="order-export")
+        STD.check_target("s3", "order-export", None)
     assert exc.value.invariant == DInvariant.D3
 
 
 def test_shape_bad_field_without_feature():
-    with pytest.raises(ShapeError):
-        Target(section_id="s5", field="one_liner")
+    """功能字段名必须配 feature_slug——那是**内容层**（功能字段表）的事；
+    成员校验（这一章有没有这个槽）由适配器判。两件事都还在。"""
+
+    with pytest.raises(TargetShapeError):
+        STD.check_target("s5", None, "one_liner")
 
 
 def test_target_is_within_supports_subtree_and_preference_zone():

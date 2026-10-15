@@ -26,8 +26,8 @@ from pmstudio.domain.exploration.item import (
 )
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import FeatureSlug, SectionId
-from pmstudio.domain.shared.sections import FEATURE_HOME, section_slot
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.harness.model.normalize import (
     Discarded,
     NormalizeRules,
@@ -560,30 +560,42 @@ def parse_packet_lenient[T: BaseModel](
     return parse_lenient(text, model, purpose=purpose, rules=RULES)
 
 
-def target_of(draft: TargetDraft) -> Target:
-    """线形状 → Target。形状不对时抛领域错误；调用方负责转成 PacketParseError。"""
+def target_of(draft: TargetDraft, *, adapter: TemplateAdapter) -> Target:
+    """线形状 → Target。形状或成员不对时抛领域错误；调用方负责转成 PacketParseError。
+
+    `adapter` 是这一份文档的模板视角（`02` §11.0.69）：功能挂哪一章、有哪些章节槽，
+    都由它说了算——同一套代码在 13 章与 6 章模板上都能把去处翻译对。
+    """
 
     if draft.zone == "preference":
         if any((draft.section_id, draft.feature_slug, draft.field)):
             raise ShapeError("偏好区的 target 不带章节、功能与字段")
         return Target.preference()
-    section = SectionId(draft.section_id) if draft.section_id else FEATURE_HOME
+    section = SectionId(draft.section_id) if draft.section_id else adapter.feature_home
     if draft.field is not None:
         if draft.feature_slug is not None:
-            return Target.feature_field(FeatureSlug(draft.feature_slug), draft.field)
-        # 没有 feature_slug 时，field 只能是**章节槽**（s8 的六块，P5a）。
-        # 真模型实测：这里以前一律要求 feature_slug，于是六个槽对 AI 路径根本不可达。
-        if section_slot(section, draft.field) is None:
-            raise ShapeError(
-                f"{section} 没有名为 {draft.field} 的章节槽；功能字段必须和 feature_slug 一起给"
+            target = Target.feature_field(
+                FeatureSlug(draft.feature_slug), draft.field, home=adapter.feature_home
             )
-        return Target.body(section, field=draft.field)
-    if draft.feature_slug is not None:
-        return Target.body(section, feature_slug=FeatureSlug(draft.feature_slug))
-    return Target.body(section)
+        else:
+            # 没有 feature_slug 时，field 只能是**章节槽**（standard 里是 s8 的六块，P5a）。
+            # 真模型实测：这里以前一律要求 feature_slug，于是六个槽对 AI 路径根本不可达。
+            if adapter.slot(section, draft.field) is None:
+                raise ShapeError(
+                    f"{section} 没有名为 {draft.field} 的章节槽；功能字段必须和 feature_slug 一起给"
+                )
+            target = Target.body(section, field=draft.field)
+    elif draft.feature_slug is not None:
+        target = Target.body(section, feature_slug=FeatureSlug(draft.feature_slug))
+    else:
+        target = Target.body(section)
+    adapter.check_target(target.section_id, target.feature_slug, target.field)
+    return target
 
 
-def normalize_claim_target(draft: TargetDraft, *, label: str) -> Target:
+def normalize_claim_target(
+    draft: TargetDraft, *, label: str, adapter: TemplateAdapter
+) -> Target:
     """主张的"归位建议"规范化：套用领域规则，而不是把模型的笔误变成整轮失败。
 
     规则（真模型冒烟实测出来的，见汇报）：
@@ -599,6 +611,16 @@ def normalize_claim_target(draft: TargetDraft, *, label: str) -> Target:
     if label == "preference" or draft.zone == "preference":
         return Target.preference()
     if draft.feature_slug:
-        return Target.feature_field(FeatureSlug(draft.feature_slug), draft.field) if draft.field \
-            else Target.body(FEATURE_HOME, feature_slug=FeatureSlug(draft.feature_slug))
-    return Target.body(SectionId(draft.section_id) if draft.section_id else FEATURE_HOME)
+        target = (
+            Target.feature_field(
+                FeatureSlug(draft.feature_slug), draft.field, home=adapter.feature_home
+            )
+            if draft.field
+            else Target.body(adapter.feature_home, feature_slug=FeatureSlug(draft.feature_slug))
+        )
+    else:
+        target = Target.body(
+            SectionId(draft.section_id) if draft.section_id else adapter.feature_home
+        )
+    adapter.check_target(target.section_id, target.feature_slug, target.field)
+    return target

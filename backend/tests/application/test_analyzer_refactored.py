@@ -10,7 +10,7 @@ import pytest
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.definitions import ALL_AGENTS
 from pmstudio.harness.agents.agent import Agent, AgentRegistry
-from tests.support.builders import SEAT, make_seat
+from tests.support.builders import SEAT, STD, make_seat
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway, StaticSeatCatalog
 
 
@@ -64,6 +64,7 @@ class TestAnalyzerCallUsesBaseClass:
         """端到端验证：analyze() 返回正确的 Analysis 对象。"""
         analyzer = make_analyzer()
         result = await analyzer.analyze(
+            adapter=STD,
             user_input="测试输入",
             document_state="",
             round_id="r-test",

@@ -24,7 +24,7 @@ from pmstudio.domain.services.scope_guard import OUTSIDE_ROUND_SCOPE, ScopeGuard
 from pmstudio.domain.shared.ids import EntryId, EvidenceId, FormId, ProposalId, QuestionId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_claim
+from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, STD, make_claim
 
 
 def round_with_claim(target: Target) -> Round:
@@ -58,17 +58,29 @@ def violations(round_: Round, *targets: Target):  # type: ignore[no-untyped-def]
 def test_a_feature_field_claim_covers_the_whole_feature():
     """主张点了功能的一个字段 ⇒ 这个功能的其它字段也算在范围内（D1 的核心）。"""
 
-    round_ = round_with_claim(Target.feature_field("order-export", "one_liner"))
+    round_ = round_with_claim(Target.feature_field(
+                                  "order-export", "one_liner",
+                                  home=STD.feature_home
+                              ))
 
-    assert violations(round_, Target.feature_field("order-export", "goal")) == ()
+    assert violations(round_, Target.feature_field(
+                                  "order-export", "goal",
+                                  home=STD.feature_home
+                              )) == ()
 
 
 def test_another_feature_is_still_outside_the_round():
     """放宽只对**同一个功能**生效：别的功能没被点名，照样报。"""
 
-    round_ = round_with_claim(Target.feature_field("order-export", "one_liner"))
+    round_ = round_with_claim(Target.feature_field(
+                                  "order-export", "one_liner",
+                                  home=STD.feature_home
+                              ))
 
-    result = violations(round_, Target.feature_field("other-feature", "name"))
+    result = violations(round_, Target.feature_field(
+                                    "other-feature", "name",
+                                    home=STD.feature_home
+                                ))
 
     assert [item.code for item in result] == [OUTSIDE_ROUND_SCOPE]
 

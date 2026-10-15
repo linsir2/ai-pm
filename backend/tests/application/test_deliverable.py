@@ -21,7 +21,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from tests.support.builders import NOW, PROJECT, document_with_feature, make_document
+from tests.support.builders import NOW, PROJECT, STD, document_with_feature, make_document
 
 EXPORTED_AT = datetime(2026, 9, 24, 12, 40)
 RAW_SPAN = "想做个订单导出的功能"
@@ -266,7 +266,10 @@ def test_feature_name_carries_its_evidence_into_the_heading():
                 instruction_id="i-name",
                 entry_id=EntryId("en-name"),
                 op=WriteOp.ADD,
-                target=Target.feature_field(FeatureSlug("order-export"), "name"),
+                target=Target.feature_field(
+                           FeatureSlug("order-export"), "name",
+                           home=STD.feature_home
+                       ),
                 text="订单导出",
                 refs=(EvidenceId("E1"),),
             )
@@ -317,7 +320,10 @@ def test_appendix_keeps_evidence_that_real_content_also_cites():
                 instruction_id="i-rules",
                 entry_id=EntryId("en-rules"),
                 op=WriteOp.ADD,
-                target=Target.feature_field(FeatureSlug("order-export"), "rules"),
+                target=Target.feature_field(
+                           FeatureSlug("order-export"), "rules",
+                           home=STD.feature_home
+                       ),
                 text="导出记录保留 30 天",
                 refs=(EvidenceId("E2"),),
                 kind=BlockKind.BULLET_LIST,
@@ -385,7 +391,7 @@ def test_acceptance_entries_are_rendered_as_list_items():
                 instruction_id="i1",
                 entry_id=EntryId("en1"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "acceptance"),
+                target=Target.feature_field("order-export", "acceptance", home=STD.feature_home),
                 text="5 万条内 60 秒可下载",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.ACCEPTANCE,

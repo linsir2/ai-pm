@@ -40,6 +40,7 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from tests.support.builders import STD
 from tests.support.fakes import (
     FakeTransaction,
     InMemoryDocumentRepository,
@@ -360,7 +361,7 @@ def test_case_a_from_input_to_version_two():
                 "p1",
                 "en1",
                 WriteOp.ADD,
-                Target.feature_field("order-export", "one_liner"),
+                Target.feature_field("order-export", "one_liner", home=STD.feature_home),
                 "运营按时间筛选并导出订单",
                 OriginType.USER,
                 (by_claim["c1"], by_claim["c3"]),
@@ -370,7 +371,7 @@ def test_case_a_from_input_to_version_two():
                 "p2",
                 "en2",
                 WriteOp.ADD,
-                Target.feature_field("order-export", "acceptance"),
+                Target.feature_field("order-export", "acceptance", home=STD.feature_home),
                 "5 万条以内 60 秒可下载",
                 OriginType.DERIVED,
                 (perf_eid, answer_refs["q1"]),
@@ -380,7 +381,7 @@ def test_case_a_from_input_to_version_two():
                 "p3",
                 "en3",
                 WriteOp.ADD,
-                Target.feature_field("order-export", "exceptions"),
+                Target.feature_field("order-export", "exceptions", home=STD.feature_home),
                 "无导出权限的账号不显示导出入口",
                 OriginType.DERIVED,
                 (by_claim["c1"], answer_refs["q3"]),
@@ -420,7 +421,7 @@ def test_case_a_from_input_to_version_two():
                 "p7",
                 "en7",
                 WriteOp.ADD,
-                Target.feature_field("order-export", "rules"),
+                Target.feature_field("order-export", "rules", home=STD.feature_home),
                 "导出记录保留 30 天",
                 OriginType.PROPOSED,
                 (proposed_eid,),

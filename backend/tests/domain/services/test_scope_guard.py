@@ -3,6 +3,7 @@ from pmstudio.domain.services.scope_guard import OUTSIDE_ROUND_SCOPE, ScopeGuard
 from pmstudio.domain.shared.ids import EntryId, EvidenceId, ProposalId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
+from tests.support.builders import STD
 
 REF = EvidenceId("E1")
 
@@ -27,7 +28,10 @@ def test_no_violation_when_inside_scope():
 def test_feature_field_inside_section_scope_is_ok():
     scope = frozenset({Target.body("s5")})
     report = ScopeGuard().check(
-        (proposal(Target.feature_field("order-export", "acceptance")),), write_scope=scope
+        (proposal(Target.feature_field(
+                      "order-export", "acceptance",
+                      home=STD.feature_home
+                  )),), write_scope=scope
     )
     assert report == ()
 

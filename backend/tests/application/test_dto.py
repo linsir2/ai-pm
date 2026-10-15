@@ -41,6 +41,7 @@ from tests.support.builders import (
     PROJECT,
     ROUND_ID,
     SEAT,
+    STD,
     document_with_feature,
     make_claim,
     make_document,
@@ -656,7 +657,10 @@ def test_advisory_when_claims_name_features_but_the_draft_has_none():
     """真跑实测（报告 F1）：主张点了 5 个功能，草案 s5 一条没有，卡片上什么都不说。"""
 
     round_ = round_for_coverage(
-        claim_target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+        claim_target=Target.feature_field(
+                         FeatureSlug("order-export"), "one_liner",
+                         home=STD.feature_home
+                     ),
         proposal_target=Target.body("s1"),
     )
 
@@ -669,8 +673,14 @@ def test_advisory_when_claims_name_features_but_the_draft_has_none():
 
 def test_no_advisory_when_the_draft_has_feature_content():
     round_ = round_for_coverage(
-        claim_target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
-        proposal_target=Target.feature_field(FeatureSlug("order-export"), "goal"),
+        claim_target=Target.feature_field(
+                         FeatureSlug("order-export"), "one_liner",
+                         home=STD.feature_home
+                     ),
+        proposal_target=Target.feature_field(
+                            FeatureSlug("order-export"), "goal",
+                            home=STD.feature_home
+                        ),
     )
 
     assert dto.feature_coverage_advisory(round_) is None
@@ -692,7 +702,10 @@ def test_no_advisory_before_there_is_a_draft():
 
 def test_round_view_puts_the_coverage_advisory_first():
     round_ = round_for_coverage(
-        claim_target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+        claim_target=Target.feature_field(
+                         FeatureSlug("order-export"), "one_liner",
+                         home=STD.feature_home
+                     ),
         proposal_target=Target.body("s1"),
     )
 

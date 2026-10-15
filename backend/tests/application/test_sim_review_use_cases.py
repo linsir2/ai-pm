@@ -21,7 +21,7 @@ from tests.application.test_sim_use_cases import (  # noqa: F401
     DRAFT_REPLY,
     SEAT_REPLY,
 )
-from tests.support.builders import NOW, PROJECT, SEAT, document_with_feature
+from tests.support.builders import NOW, PROJECT, SEAT, STD, document_with_feature
 from tests.support.harness import Harness
 
 PERSONAS = (
@@ -39,7 +39,7 @@ def _document():  # type: ignore[no-untyped-def]
                 instruction_id="i-flow",
                 entry_id=EntryId("en-flow"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "main_flow"),
+                target=Target.feature_field("order-export", "main_flow", home=STD.feature_home),
                 text="1. 进入订单列表\n2. 点导出\n3. 选时间范围",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.STEPS,
@@ -48,7 +48,7 @@ def _document():  # type: ignore[no-untyped-def]
                 instruction_id="i-prio",
                 entry_id=EntryId("en-prio"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "priority"),
+                target=Target.feature_field("order-export", "priority", home=STD.feature_home),
                 text="P0",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.TEXT,
@@ -57,7 +57,7 @@ def _document():  # type: ignore[no-untyped-def]
                 instruction_id="i-acc1",
                 entry_id=EntryId("en-acc1"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "acceptance"),
+                target=Target.feature_field("order-export", "acceptance", home=STD.feature_home),
                 text="5 万条内 60 秒可下载",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.ACCEPTANCE,
@@ -66,7 +66,7 @@ def _document():  # type: ignore[no-untyped-def]
                 instruction_id="i-acc2",
                 entry_id=EntryId("en-acc2"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "acceptance"),
+                target=Target.feature_field("order-export", "acceptance", home=STD.feature_home),
                 text="无权限不出现导出按钮",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.ACCEPTANCE,

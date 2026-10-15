@@ -20,6 +20,8 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template import standard_template
+from pmstudio.domain.shared.template_adapter import TemplateAdapter, adapt
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 
 NOW = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
@@ -184,6 +186,12 @@ def make_seat(
     )
 
 
+#: 测试里绝大多数 target 都按 standard 说（这些用例测的是既有行为，不是模板变体）。
+#: 短名是刻意的：`Target.feature_field(a, b, home=STD.feature_home)` 要塞进 100 列。
+#: 需要别的模板的用例自己 `adapt(...)`。
+STD: TemplateAdapter = adapt(standard_template())
+
+
 def document_with_feature(*, one_liner: str = "把订单导出成表格") -> Document:
     document = make_document()
     document.apply(
@@ -192,7 +200,9 @@ def document_with_feature(*, one_liner: str = "把订单导出成表格") -> Doc
                 instruction_id="i1",
                 entry_id=EntryId("en-bootstrap"),
                 op=WriteOp.ADD,
-                target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+                target=Target.feature_field(
+                    FeatureSlug("order-export"), "one_liner", home=STD.feature_home
+                ),
                 text=one_liner,
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.TEXT,

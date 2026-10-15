@@ -4,6 +4,7 @@ import pytest
 
 from pmstudio.domain.shared.errors import TargetShapeError
 from pmstudio.domain.shared.target import Target
+from tests.support.builders import STD
 
 
 def test_section_slot_target_is_legal():
@@ -15,13 +16,15 @@ def test_section_slot_target_is_legal():
 
 
 def test_field_without_feature_must_be_a_slot_of_that_section():
+    """成员校验的执行者从 Target 换成了适配器（`02` §11.0.69），判据没放宽。"""
+
     with pytest.raises(TargetShapeError):
-        Target.body("s1", field="performance")  # s1 没有槽
+        STD.check_target("s1", None, "performance")  # s1 没有槽
     with pytest.raises(TargetShapeError):
-        Target.body("s8", field="acceptance")  # 功能字段名不是章节槽
+        STD.check_target("s8", None, "acceptance")  # 功能字段名不是章节槽
 
 
 def test_feature_field_still_works():
-    target = Target.feature_field("order-export", "acceptance")
+    target = Target.feature_field("order-export", "acceptance", home=STD.feature_home)
     assert target.feature_slug == "order-export"
     assert target.label() == "s5/order-export.acceptance"

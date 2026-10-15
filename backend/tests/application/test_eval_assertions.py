@@ -30,7 +30,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_claim, make_round
+from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, STD, make_claim, make_round
 
 
 def question(question_id: str, *, target: Target, eids: tuple[str, ...] = ("E1",)) -> Question:
@@ -302,7 +302,10 @@ def round_whose_claims_name_a_feature(*, proposal_target: Target) -> Round:
         (
             make_claim(
                 eid=EvidenceId("E1"),
-                target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+                target=Target.feature_field(
+                           FeatureSlug("order-export"), "one_liner",
+                           home=STD.feature_home
+                       ),
             ),
         )
     )
@@ -479,7 +482,10 @@ def test_draft_section_kind_reads_the_draft_card():
     # 落在别处（功能字段的主流程）不算数：那一章还是空的
     wrong_place = view_of(
         round_with_one_proposal(
-            target=Target.feature_field(FeatureSlug("order-export"), "main_flow"),
+            target=Target.feature_field(
+                       FeatureSlug("order-export"), "main_flow",
+                       home=STD.feature_home
+                   ),
             kind=BlockKind.STEPS,
         )
     )

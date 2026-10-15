@@ -17,7 +17,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from tests.support.builders import NOW, make_document
+from tests.support.builders import NOW, STD, make_document
 
 REF = EvidenceId("E1")
 ALL_SECTIONS = ("s1", "s2", "s3", "s4", "s8", "s10", "s12")
@@ -61,7 +61,10 @@ def two_thin_features() -> Document:
 
     document = empty_doc()
     for slug in ("order-export", "login-wechat"):
-        write(document, target=Target.feature_field(slug, "one_liner"), text=f"{slug} 的一句话")
+        write(document, target=Target.feature_field(
+                                   slug, "one_liner",
+                                   home=STD.feature_home
+                               ), text=f"{slug} 的一句话")
     return document
 
 

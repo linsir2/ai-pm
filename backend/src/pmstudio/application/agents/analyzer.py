@@ -27,6 +27,7 @@ from pmstudio.domain.round.web_query import MAX_WEB_QUERIES, WebQuery
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.label import ClaimLabel
+from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.harness.agents.agent import Agent
 from pmstudio.harness.errors import PacketParseError
 from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
@@ -161,6 +162,7 @@ class ClaimAnalyzer(Agent[Analysis, schemas.ClaimsPacket]):
     async def analyze(
         self,
         *,
+        adapter: TemplateAdapter,
         user_input: str,
         document_state: str,
         external_material: str = NO_MATERIAL_TEXT,
@@ -196,7 +198,7 @@ class ClaimAnalyzer(Agent[Analysis, schemas.ClaimsPacket]):
         packet, overflow, discarded = outcome.packet, outcome.overflow, outcome.discarded
         seats, dropped = nominations_from_packet(packet, catalog=self._catalog)
         claims, claim_drops = claims_from_packet(
-            packet, user_input=user_input, material_eids=material_eids
+            packet, adapter=adapter, user_input=user_input, material_eids=material_eids
         )
         # 被摘掉的那些条（根本不是对象）会让后面主张的序号整体前移，而互斥对子是按
         # **模型自己写的序号**指认的——所以要用"原始序号 → 落下来的第几条"换算，
@@ -371,6 +373,7 @@ def nominations_from_packet(
 def claims_from_packet(
     packet: schemas.ClaimsPacket,
     *,
+    adapter: TemplateAdapter,
     user_input: str,
     material_eids: frozenset[EvidenceId] = frozenset(),
 ) -> tuple[tuple[Claim, ...], tuple[DroppedItem, ...]]:
@@ -429,7 +432,9 @@ def claims_from_packet(
                     claim_id=claim_id,
                     text=draft.text.strip(),
                     label=ClaimLabel(draft.label),
-                    target=schemas.normalize_claim_target(draft, label=draft.label),
+                    target=schemas.normalize_claim_target(
+                        draft, label=draft.label, adapter=adapter
+                    ),
                     raw_span=span,
                     assumption=(
                         Assumption(

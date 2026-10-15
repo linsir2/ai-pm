@@ -42,6 +42,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from tests.support.builders import STD
 
 NOW = datetime(2026, 9, 22, 10, 0)
 PROJECT = ProjectId("p1")
@@ -245,7 +246,10 @@ def test_kept_entries_keep_their_field_header() -> None:
                 instruction_id="i-f",
                 entry_id=EntryId("en-f1"),
                 op=WriteOp.ADD,
-                target=Target.feature_field(FeatureSlug("order-export"), "name"),
+                target=Target.feature_field(
+                           FeatureSlug("order-export"), "name",
+                           home=STD.feature_home
+                       ),
                 text="把订单导出成表格",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.TEXT,
@@ -254,7 +258,10 @@ def test_kept_entries_keep_their_field_header() -> None:
                 instruction_id="i-f2",
                 entry_id=EntryId("en-f2"),
                 op=WriteOp.ADD,
-                target=Target.feature_field(FeatureSlug("order-export"), "acceptance"),
+                target=Target.feature_field(
+                           FeatureSlug("order-export"), "acceptance",
+                           home=STD.feature_home
+                       ),
                 text="60 秒内完成",
                 refs=(EvidenceId("E2"),),
                 kind=BlockKind.TEXT,

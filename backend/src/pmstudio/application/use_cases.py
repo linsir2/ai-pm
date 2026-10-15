@@ -308,9 +308,9 @@ from pmstudio.domain.shared.ids import (
     RoundId,
 )
 from pmstudio.domain.shared.label import ClaimLabel, Zone
-from pmstudio.domain.shared.sections import FEATURE_HOME, SECTION_IDS
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template import STANDARD_TEMPLATE_ID, template_from_dict
+from pmstudio.domain.shared.template_adapter import TemplateAdapter, adapt
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.harness.errors import (
     ApplicationError,
@@ -591,6 +591,7 @@ class StartRound:
         for attempt in range(1, MAX_CLAIMS_ATTEMPTS + 1):
             try:
                 analysis = await self._analyzer.analyze(
+                    adapter=adapt(document.template),
                     user_input=user_input,
                     document_state=document_state,
                     external_material=external_material_text(round_, store=self._materials),
@@ -2956,19 +2957,21 @@ def _resolve_manual_target(
        某个章节 id（`s1`…`s13`：这一章还没有块，那就新开一段）。
     """
 
+    # 章节 id 按**这一份文档的模板**认（不是全局 13 章表）：手改的章节列表与工作区一致。
+    adapter = adapt(document.template)
     if op is WriteOp.ADD:
         if requested is not None:
-            return _target_of_request(requested), None
+            return _target_of_request(requested, adapter), None
         if block_id is None:
             raise ShapeError("加一条要先说加到哪一块")
         if block_id == MANUAL_PREFERENCE_BLOCK:
             return Target.preference(), None
-        if block_id in SECTION_IDS:
+        if adapter.has(block_id):
             return Target.body(block_id), None
         block = next((item for item in document.blocks if str(item.block_id) == block_id), None)
         if block is None:
             raise ShapeError(f"找不到块 {block_id}", block_id=block_id)
-        return _target_of_block(block), None
+        return _target_of_block(block, adapter), None
 
     if entry_id is None:
         raise ShapeError("改或删要先说改哪一条")
@@ -2978,32 +2981,45 @@ def _resolve_manual_target(
     for block in document.blocks:
         entry = block.entry(EntryId(entry_id))
         if entry is not None:
-            return _target_of_block(block), entry
+            return _target_of_block(block, adapter), entry
     raise ShapeError(f"找不到条目 {entry_id}", entry_id=entry_id)
 
 
-def _target_of_request(requested: Target) -> Target:
-    """把接口层给的 target 归一成"写哪"。功能字段这一支由 domain 建块（F8-①）。"""
+def _target_of_request(requested: Target, adapter: TemplateAdapter) -> Target:
+    """把接口层给的 target 归一成"写哪"。功能字段这一支由 domain 建块（F8-①）。
+
+    成员校验（这一章在不在模板里、功能挂不挂得住）在下一行统一做——
+    归一（分派到哪个构造器）与校验（这套模板认不认）是两件事。
+    """
 
     if requested.zone is Zone.PREFERENCE:
         return Target.preference()
     if requested.feature_slug is not None and requested.field is not None:
-        return Target.feature_field(requested.feature_slug, requested.field)
-    if requested.section_id is None:
+        target = Target.feature_field(
+            requested.feature_slug, requested.field, home=adapter.feature_home
+        )
+    elif requested.section_id is None:
         raise ShapeError("target 说不清要落到哪")
-    if requested.field is not None:
-        return Target.body(requested.section_id, field=requested.field)
-    return Target.body(requested.section_id)
+    elif requested.field is not None:
+        target = Target.body(requested.section_id, field=requested.field)
+    else:
+        target = Target.body(requested.section_id)
+    adapter.check_target(target.section_id, target.feature_slug, target.field)
+    return target
 
 
-def _target_of_block(block) -> Target:  # type: ignore[no-untyped-def]
+def _target_of_block(block, adapter: TemplateAdapter) -> Target:  # type: ignore[no-untyped-def]
+    """把一个既有块还原成"改它等于写到哪"（手改 / 回退都要）。"""
+
     if block.field is not None and block.feature_slug is not None:
-        return Target.feature_field(block.feature_slug, block.field)
+        return Target.feature_field(
+            block.feature_slug, block.field, home=adapter.feature_home
+        )
     if block.field is not None and block.parent_id is not None:
         # 章节槽（s8 的六块）：手改要落回那个槽，别退化成"整章"
         return Target.body(str(block.parent_id), field=block.field)
     if block.kind is BlockKind.FEATURE and block.feature_slug is not None:
-        return Target.body(FEATURE_HOME, feature_slug=block.feature_slug)
+        return Target.body(adapter.feature_home, feature_slug=block.feature_slug)
     section_id = str(block.parent_id or block.block_id)
     return Target.body(section_id)
 
@@ -3012,8 +3028,10 @@ def _manual_kind(document: Document, *, block_id: str | None) -> BlockKind | Non
     """往章节级块里加内容时，跟着被点的块保持同一种 kind（清单还是清单）。"""
 
     # 偏好区不是块；章节 id 也不能照抄——章节根块的 kind 是 section，
-    # 抄下来会造出第二个章节根（D1：13 章必须不多不少，这条真踩过）。
-    if block_id is None or block_id == MANUAL_PREFERENCE_BLOCK or block_id in SECTION_IDS:
+    # 抄下来会造出第二个章节根（D1：章节集必须不多不少，这条真踩过）。
+    if block_id is None or block_id == MANUAL_PREFERENCE_BLOCK:
+        return None
+    if adapt(document.template).has(block_id):
         return None
     block = next((item for item in document.blocks if str(item.block_id) == block_id), None)
     return None if block is None else block.kind

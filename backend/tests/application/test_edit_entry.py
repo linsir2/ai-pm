@@ -17,7 +17,7 @@ from pmstudio.domain.shared.errors import (
 from pmstudio.domain.shared.ids import BlockId, EntryId, EvidenceId, ProjectId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
-from tests.support.builders import NOW, PROJECT, document_with_feature
+from tests.support.builders import NOW, PROJECT, STD, document_with_feature
 from tests.support.harness import Harness
 
 
@@ -102,7 +102,7 @@ async def test_add_appends_to_a_multi_value_field_and_to_the_preference_area(wor
                 instruction_id="seed-exceptions",
                 entry_id=EntryId("en-exc-1"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "exceptions"),
+                target=Target.feature_field("order-export", "exceptions", home=STD.feature_home),
                 text="无权限的用户看不到导出入口",
                 refs=(EvidenceId("E1"),),
             )
@@ -203,7 +203,7 @@ async def test_add_creates_a_field_block_that_does_not_exist_yet(world):
         project_id=ProjectId(PROJECT),
         op=WriteOp.ADD,
         text="导出 5 万条 60 秒内完成",
-        target=Target.feature_field("order-export", "acceptance"),
+        target=Target.feature_field("order-export", "acceptance", home=STD.feature_home),
     )
 
     after = world.documents.get(PROJECT)
@@ -225,7 +225,7 @@ async def test_add_to_an_unknown_feature_is_still_refused(world):
             project_id=ProjectId(PROJECT),
             op=WriteOp.ADD,
             text="凭空写一句",
-            target=Target.feature_field("never-named", "name"),
+            target=Target.feature_field("never-named", "name", home=STD.feature_home),
         )
 
     # 失败的那次没有留下版本
@@ -295,7 +295,7 @@ async def test_ai_cannot_overwrite_a_hand_edited_block(world):
                     instruction_id="ai-tries",
                     entry_id=entry.entry_id,
                     op=WriteOp.REPLACE,
-                    target=Target.feature_field("order-export", "one_liner"),
+                    target=Target.feature_field("order-export", "one_liner", home=STD.feature_home),
                     text="AI 想覆盖你写的那句",
                     refs=(EvidenceId("E1"),),
                 )

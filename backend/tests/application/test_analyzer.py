@@ -13,7 +13,7 @@ from pmstudio.harness.errors import PacketParseError
 
 #: 提示词本体：归位规则这类"模型每轮都看得见"的东西，钉在文件上比钉在槽里准
 from pmstudio.harness.prompt import PROMPTS_DIR  # 路径跟随资源，别在这里重算
-from tests.support.builders import SEAT, make_seat
+from tests.support.builders import SEAT, STD, make_seat
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway, StaticSeatCatalog
 
 INPUT = "想做个订单导出的功能，运营每天都要用，数据量大概几万。登录页太丑了。下个月必须上线。"
@@ -73,7 +73,9 @@ async def test_analyzer_returns_claims_with_labels_targets_and_no_eids():
     prompts = RecordingPrompts()
     analyzer = make_analyzer(gateway, prompts)
 
-    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 订单中台（v1）")
+    analysis = await analyzer.analyze(
+        adapter=STD, user_input=INPUT, document_state="# 订单中台（v1）"
+    )
     claims = analysis.claims
 
     assert [claim.label for claim in claims] == [
@@ -94,7 +96,7 @@ async def test_analyzer_sends_purpose_schema_and_all_prompt_slots():
     prompts = RecordingPrompts()
     analyzer = make_analyzer(gateway, prompts)
 
-    await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert gateway.requests[0].purpose == "claims"
     assert gateway.requests[0].schema_name == "ClaimsPacket"
@@ -121,6 +123,7 @@ async def test_analyzer_passes_validation_error_on_repair():
     analyzer = make_analyzer(gateway, prompts)
 
     await analyzer.analyze(
+            adapter=STD,
         user_input=INPUT,
         document_state="# 文档",
         validation_error="第 4 条主张（c4）的 raw_span 在用户输入里找不到对应的连续原话。",
@@ -150,7 +153,7 @@ async def test_analyzer_bad_raw_span_must_appear_in_input():
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
     with pytest.raises(PacketParseError) as exc:
-        await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+        await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
     assert "原话片段" in exc.value.message
     assert exc.value.details["purpose"] == "claims"
 
@@ -181,7 +184,7 @@ async def test_analyzer_realigns_recombined_raw_span_to_a_real_fragment():
     gateway = ScriptedModelGateway(replies={"claims": reply})
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    claims = (await analyzer.analyze(user_input=INPUT, document_state="# 文档")).claims
+    claims = (await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")).claims
 
     span = claims[0].raw_span
     assert span in INPUT  # 一定是原文里真实存在的一段
@@ -210,7 +213,10 @@ async def test_analyzer_survives_an_ellipsis_joined_raw_span():
     gateway = ScriptedModelGateway(replies={"claims": reply})
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    claims = (await analyzer.analyze(user_input=CASE_A_INPUT, document_state="# 文档")).claims
+    analysis = await analyzer.analyze(
+        adapter=STD, user_input=CASE_A_INPUT, document_state="# 文档"
+    )
+    claims = analysis.claims
 
     assert claims[0].raw_span == "想做个订单导出的功能"
     assert claims[0].raw_span in CASE_A_INPUT
@@ -237,7 +243,7 @@ async def test_analyzer_still_rejects_invented_spans():
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
     with pytest.raises(PacketParseError):
-        await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+        await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
 
 def test_grounded_span_realigns_an_ellipsis_joined_span_when_both_parts_are_real():
@@ -314,7 +320,7 @@ async def test_analyzer_normalizes_preference_target_that_also_carries_a_section
     gateway = ScriptedModelGateway(replies={"claims": reply})
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    claims = (await analyzer.analyze(user_input=INPUT, document_state="# 文档")).claims
+    claims = (await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")).claims
 
     assert claims[0].target == Target.preference()  # 偏好区胜出，内容照旧
     assert claims[0].text == "登录页太丑"
@@ -355,7 +361,7 @@ async def test_analyzer_reports_the_position_of_the_bad_span():
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
     with pytest.raises(PacketParseError) as exc:
-        await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+        await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert exc.value.details["claim_id"] == "c2"
     assert exc.value.details["position"] == 2
@@ -388,7 +394,7 @@ async def test_analyzer_refuses_a_seat_that_is_not_in_the_catalog():
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
     with pytest.raises(PacketParseError) as exc:
-        await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+        await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert "目录里没有" in exc.value.message
     assert exc.value.details["seat_id"] == "seat.invented"
@@ -417,7 +423,7 @@ async def test_analyzer_dedups_repeated_seat_picks():
     gateway = ScriptedModelGateway(replies={"claims": reply})
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert analysis.seats == (SeatNomination(seat_id=SEAT, why="第一次说的理由"),)
 
@@ -455,7 +461,7 @@ async def test_analyzer_keeps_known_seats_and_reports_unknown_ones():
     gateway = ScriptedModelGateway(replies={"claims": reply})
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert analysis.seats == (SeatNomination(seat_id=SEAT, why="你说到了数据量"),)
     assert [item.handle for item in analysis.dropped] == ["席位提名 seat.observability"]
@@ -492,7 +498,7 @@ async def test_the_analyzer_turns_claim_numbers_into_claim_ids():
     gateway = ScriptedModelGateway(replies={"claims": contradictions_reply(claim_a=1, claim_b=3)})
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert [item.claim_id for item in analysis.claims] == ["c1", "c2", "c3"]
     assert [(item.claim_id_a, item.claim_id_b) for item in analysis.contradictions] == [
@@ -507,7 +513,7 @@ async def test_a_contradiction_pointing_at_an_unknown_claim_is_dropped_with_a_tr
     gateway = ScriptedModelGateway(replies={"claims": contradictions_reply(claim_a=1, claim_b=9)})
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert analysis.contradictions == ()
     assert [item.handle for item in analysis.dropped] == ["互斥对子 1↔9"]
@@ -520,7 +526,7 @@ async def test_a_contradiction_of_a_claim_with_itself_is_dropped_too():
     gateway = ScriptedModelGateway(replies={"claims": contradictions_reply(claim_a=2, claim_b=2)})
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert analysis.contradictions == ()
     assert [item.handle for item in analysis.dropped] == ["互斥对子 2↔2"]
@@ -546,7 +552,7 @@ async def test_analyzer_parses_the_queries_the_model_nominated():
     )
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert analysis.web_queries == (
         WebQuery(query="RBAC 权限模型的主流做法", why="要查行业通行的权限模型"),
@@ -560,7 +566,7 @@ async def test_no_web_queries_in_the_packet_is_an_empty_tuple():
     gateway = ScriptedModelGateway(replies={"claims": CLAIMS_REPLY})
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert analysis.web_queries == ()
 
@@ -580,7 +586,7 @@ async def test_a_fourth_query_is_dropped_with_a_trace_not_a_restart():
     )
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert [item.query for item in analysis.web_queries] == [
         "第1条检索词",
@@ -604,7 +610,7 @@ async def test_a_query_without_a_reason_is_dropped_with_a_trace():
     )
     analyzer = make_analyzer(gateway, RecordingPrompts())
 
-    analysis = await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert [item.query for item in analysis.web_queries] == ["订单导出的行业规范"]
     assert [item.handle for item in analysis.dropped] == ["检索词 RBAC"]
@@ -645,6 +651,7 @@ async def test_assumption_on_a_non_guess_claim_is_stripped_not_fatal():
     analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": reply}), RecordingPrompts())
 
     analysis = await analyzer.analyze(
+            adapter=STD,
         user_input=ASSUMPTION_ON_CONSTRAINT_INPUT, document_state="# 文档"
     )
 
@@ -680,7 +687,7 @@ async def test_guess_without_assumption_is_still_fatal():
     analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": reply}), RecordingPrompts())
 
     with pytest.raises(PacketParseError):
-        await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+        await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
 
 def test_analyzer_prompt_routes_backbone_sentences_to_their_chapters():
@@ -715,7 +722,7 @@ async def test_analyzer_still_sends_the_section_table_to_the_model():
     prompts = RecordingPrompts()
     analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": CLAIMS_REPLY}), prompts)
 
-    await analyzer.analyze(user_input=INPUT, document_state="# 文档")
+    await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
     assert "s5 功能需求" in prompts.calls[0][1]["sections"]
 
@@ -764,7 +771,7 @@ async def test_a_non_object_claim_is_dropped_with_a_trace():
         ScriptedModelGateway(replies={"claims": claims_with_a_placeholder()}), RecordingPrompts()
     )
 
-    analysis = await analyzer.analyze(user_input=CASE_A_INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=CASE_A_INPUT, document_state="# 文档")
 
     assert [item.text for item in analysis.claims] == ["要做一个订单导出功能", "登录页太丑"]
     assert [item.claim_id for item in analysis.claims] == ["c1", "c2"]
@@ -785,7 +792,7 @@ async def test_a_contradiction_ordinal_is_remapped_after_a_dropped_claim():
         RecordingPrompts(),
     )
 
-    analysis = await analyzer.analyze(user_input=CASE_A_INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=CASE_A_INPUT, document_state="# 文档")
 
     assert [(item.claim_id_a, item.claim_id_b) for item in analysis.contradictions] == [
         ("c1", "c2")
@@ -801,7 +808,7 @@ async def test_a_contradiction_pointing_at_a_dropped_claim_is_dropped_too():
         RecordingPrompts(),
     )
 
-    analysis = await analyzer.analyze(user_input=CASE_A_INPUT, document_state="# 文档")
+    analysis = await analyzer.analyze(adapter=STD, user_input=CASE_A_INPUT, document_state="# 文档")
 
     assert analysis.contradictions == ()
     assert [item.handle for item in analysis.dropped] == [
@@ -838,6 +845,7 @@ async def test_claim_with_material_eids_passes_when_chunk_was_picked():
     gateway = ScriptedModelGateway(replies={"claims": MATERIAL_CLAIM_REPLY})
     analyzer = make_analyzer(gateway, RecordingPrompts())
     analysis = await analyzer.analyze(
+            adapter=STD,
         user_input="按这份材料写",
         document_state="# 文档",
         material_eids=frozenset({EvidenceId("E1")}),
@@ -854,6 +862,7 @@ async def test_claim_citing_unpicked_material_fails_packet():
     analyzer = make_analyzer(gateway, RecordingPrompts())
     with pytest.raises(PacketParseError, match="材料块"):
         await analyzer.analyze(
+            adapter=STD,
             user_input="按这份材料写",
             document_state="# 文档",
             material_eids=frozenset({EvidenceId("E2")}),
@@ -865,5 +874,6 @@ async def test_claim_citing_unknown_eid_fails_packet():
     analyzer = make_analyzer(gateway, RecordingPrompts())
     with pytest.raises(PacketParseError, match="材料块"):
         await analyzer.analyze(
+            adapter=STD,
             user_input="按这份材料写", document_state="# 文档", material_eids=frozenset()
         )

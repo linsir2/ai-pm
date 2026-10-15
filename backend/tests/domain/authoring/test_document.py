@@ -32,6 +32,7 @@ from pmstudio.domain.shared.template import (
     TemplateRole,
 )
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from tests.support.builders import STD
 
 NOW = datetime(2026, 9, 22, 10, 0, 0)
 REF = EvidenceId("E1")
@@ -242,7 +243,7 @@ def test_D2_bad_removed_block_id_is_not_reused():
 
 def test_D3_ok_feature_with_authorization():
     document = new_document()
-    target = Target.feature_field("order-export", "one_liner")
+    target = Target.feature_field("order-export", "one_liner", home=STD.feature_home)
     version = apply(
         document,
         instruction(target=target, text="运营按时间导出订单"),
@@ -260,14 +261,17 @@ def test_D3_ok_feature_with_authorization():
 def test_D3_bad_feature_without_authorization():
     document = new_document()
     with pytest.raises(FeatureRequiresUserNaming) as exc:
-        apply(document, instruction(target=Target.feature_field("order-export", "one_liner")))
+        apply(document, instruction(target=Target.feature_field(
+                                               "order-export", "one_liner",
+                                               home=STD.feature_home
+                                           )))
     assert exc.value.invariant == DInvariant.D3
     assert document.features() == ()
 
 
 def test_D5_ok_add_to_untouched_single_value_field():
     document = new_document()
-    target = Target.feature_field("order-export", "one_liner")
+    target = Target.feature_field("order-export", "one_liner", home=STD.feature_home)
     apply(
         document,
         instruction(target=target, entry_id="en1", text="第一版"),
@@ -361,7 +365,7 @@ def test_allow_manual_override_removes_from_manually_edited_block():
 
 def test_allow_manual_override_adds_to_manually_edited_single_value_field():
     document = new_document()
-    target = Target.feature_field("order-export", "one_liner")
+    target = Target.feature_field("order-export", "one_liner", home=STD.feature_home)
     apply(
         document,
         instruction(target=target, entry_id="en1", text="用户写的简介"),
@@ -450,7 +454,7 @@ def test_view_builds_tree_and_preference_area():
         instruction(target=Target.body("s5"), entry_id="en1", text="本期不做定时导出"),
         instruction(target=Target.preference(), entry_id="en2", text="登录页太丑"),
         instruction(
-            target=Target.feature_field("order-export", "acceptance"),
+            target=Target.feature_field("order-export", "acceptance", home=STD.feature_home),
             entry_id="en3",
             text="5 万条内 60 秒",
         ),
@@ -469,7 +473,7 @@ def test_gaps_lists_missing_required_fields():
     apply(
         document,
         instruction(
-            target=Target.feature_field("order-export", "name"),
+            target=Target.feature_field("order-export", "name", home=STD.feature_home),
             entry_id="en1",
             text="订单导出",
         ),
@@ -518,7 +522,7 @@ def _document_with_a_deleted_feature() -> Document:
     apply(
         document,
         instruction(
-            target=Target.feature_field("order-export", "name"),
+            target=Target.feature_field("order-export", "name", home=STD.feature_home),
             entry_id="en-name",
             text="订单导出",
         ),

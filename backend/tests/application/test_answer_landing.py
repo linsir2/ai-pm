@@ -30,7 +30,7 @@ from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, FormId, QuestionId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
-from tests.support.builders import NOW, PROJECT, ROUND_ID, document_with_feature
+from tests.support.builders import NOW, PROJECT, ROUND_ID, STD, document_with_feature
 
 
 def question(question_id: str, *, target: Target) -> Question:
@@ -129,7 +129,10 @@ def test_a_cited_answer_is_not_landed_twice():
 def test_an_answer_about_an_unauthorized_new_feature_is_not_landed():
     """落下去等于凭空建功能子树（硬约束）——不落，但要说清为什么。"""
 
-    target = Target.feature_field(FeatureSlug("brand-new-thing"), "acceptance")
+    target = Target.feature_field(
+                 FeatureSlug("brand-new-thing"), "acceptance",
+                 home=STD.feature_home
+             )
 
     landed = assembly.landed_answer_proposals(
         round_with_one_answer(target=target),
@@ -145,7 +148,10 @@ def test_an_answer_about_an_unauthorized_new_feature_is_not_landed():
 def test_an_authorized_new_feature_still_lands():
     """用户答了"是独立功能"（于是被授权）⇒ 照落，别把这条路堵死。"""
 
-    target = Target.feature_field(FeatureSlug("brand-new-thing"), "acceptance")
+    target = Target.feature_field(
+                 FeatureSlug("brand-new-thing"), "acceptance",
+                 home=STD.feature_home
+             )
 
     landed = assembly.landed_answer_proposals(
         round_with_one_answer(target=target, authorized=("brand-new-thing",)),
@@ -241,7 +247,7 @@ def test_an_answer_about_an_unknown_feature_field_is_skipped_with_a_note():
     而这段落地代码跑在事务里，抛出去就是 500——用户刚答完题，不能因为一个字打错就全丢。
     """
 
-    target = Target.feature_field(FeatureSlug("order-export"), "bogus-field")
+    target = Target.feature_field(FeatureSlug("order-export"), "bogus-field", home=STD.feature_home)
 
     landed = assembly.landed_answer_proposals(
         round_with_one_answer(target=target),

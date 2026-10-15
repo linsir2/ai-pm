@@ -8,6 +8,7 @@ import pytest
 
 from pmstudio.domain.shared.ids import FeatureSlug
 from pmstudio.domain.shared.target import Target, target_from_label
+from tests.support.builders import STD
 
 
 @pytest.mark.parametrize(
@@ -28,10 +29,23 @@ def test_label_roundtrips(target: Target):
 
 @pytest.mark.parametrize(
     "label",
-    ["", "   ", "s99", "s99/x.y", "s5/", "s5/order-export.", "preference.x", "随便一句话"],
+    ["", "   ", "s5/", "s5/order-export."],
 )
 def test_an_unparsable_label_returns_none(label: str):
+    """形状残缺：从来就没有猜测的余地（P11 C1）。"""
+
     assert target_from_label(label) is None
+
+
+@pytest.mark.parametrize("label", ["s99", "s99/x.y", "随便一句话", "preference.x"])
+def test_a_label_whose_chapter_the_template_lacks_returns_none(label: str):
+    """成员不认识（`02` §11.0.69）：给了适配器就由它判——回落未决章，绝不猜。
+
+    不给适配器时形状完整就照构造（Target 不再知道有哪些章）。`preference.x` 也在
+    这一组：偏好区不配字段是**成员**问题（`preference` 不是一章），不是形状残缺。
+    """
+
+    assert target_from_label(label, STD) is None
 
 
 def test_an_unknown_feature_field_is_still_a_target():

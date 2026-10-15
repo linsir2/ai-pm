@@ -8,7 +8,7 @@ from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.shared.ids import EntryId, RoundId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from tests.support.builders import NOW, PROJECT, make_document
+from tests.support.builders import NOW, PROJECT, STD, make_document
 from tests.support.harness import Harness
 
 
@@ -34,7 +34,7 @@ def world():
                 instruction_id="i1",
                 entry_id=EntryId("en-one-liner"),
                 op=WriteOp.ADD,
-                target=Target.feature_field("order-export", "one_liner"),
+                target=Target.feature_field("order-export", "one_liner", home=STD.feature_home),
                 text="把订单导出成表格",
                 refs=(eid,),
                 kind=BlockKind.TEXT,

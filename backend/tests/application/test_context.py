@@ -36,11 +36,12 @@ from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.infrastructure.tools.limits import CHUNK_CHARS
 from tests.support.builders import (
-    make_material_packet as make_packet,
-)
-from tests.support.builders import (
+    STD,
     make_round,
     make_round_with_contradictions,
+)
+from tests.support.builders import (
+    make_material_packet as make_packet,
 )
 from tests.support.builders import (
     make_web_packet as make_web,
@@ -61,7 +62,10 @@ def document_with_one_feature() -> Document:
                 instruction_id="i1",
                 entry_id="en1",  # type: ignore[arg-type]
                 op=WriteOp.ADD,
-                target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+                target=Target.feature_field(
+                           FeatureSlug("order-export"), "one_liner",
+                           home=STD.feature_home
+                       ),
                 text="把订单导出成表格",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.TEXT,
@@ -984,7 +988,10 @@ def _two_feature_document() -> Document:
                 instruction_id="i2",
                 entry_id="en2",
                 op=WriteOp.ADD,
-                target=Target.feature_field(FeatureSlug("order-export"), "one_liner"),
+                target=Target.feature_field(
+                           FeatureSlug("order-export"), "one_liner",
+                           home=STD.feature_home
+                       ),
                 text="把订单导出成表格",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.TEXT,
@@ -993,7 +1000,10 @@ def _two_feature_document() -> Document:
                 instruction_id="i3",
                 entry_id="en3",
                 op=WriteOp.ADD,
-                target=Target.feature_field(FeatureSlug("wechat-login"), "one_liner"),
+                target=Target.feature_field(
+                           FeatureSlug("wechat-login"), "one_liner",
+                           home=STD.feature_home
+                       ),
                 text="用微信扫码登录",
                 refs=(EvidenceId("E1"),),
                 kind=BlockKind.TEXT,

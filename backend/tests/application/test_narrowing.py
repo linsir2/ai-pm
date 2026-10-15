@@ -11,7 +11,7 @@ from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.round.questionnaire import Question, Questionnaire, QuestionType
 from pmstudio.domain.shared.ids import FormId, QuestionId
 from pmstudio.domain.shared.target import Target
-from tests.support.builders import ROUND_ID
+from tests.support.builders import ROUND_ID, STD
 from tests.support.doubles import StaticSeatCatalog
 
 
@@ -77,7 +77,10 @@ def test_field_mapping_hits_too():
         seats=("seat.a", "seat.c"),
         catalog=catalog_of(a=("s1",), c={"sections": ("s5",), "fields": ("acceptance",)}),
         questionnaire=questionnaire_with(
-            asked_by=(), target=Target.feature_field("order-export", "acceptance")
+            asked_by=(), target=Target.feature_field(
+                                    "order-export", "acceptance",
+                                    home=STD.feature_home
+                                )
         ),
         touched=(QuestionId("q1"),),
     )
