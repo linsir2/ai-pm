@@ -14,12 +14,16 @@ from pmstudio.domain.authoring.readiness import ReadinessChecker, Severity
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.ids import (
+    DocumentId,
     EntryId,
     EvidenceId,
     FeatureSlug,
+    ProjectId,
     RoundId,
+    SectionId,
 )
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template_adapter import adapt
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import NOW, PROJECT, STD, document_with_feature, make_document
 
@@ -92,6 +96,7 @@ def export(document: Document, ledger: EvidenceLedger, readiness=()) -> str:  # 
         versions=document.versions,
         ledger=ledger,
         exported_at=EXPORTED_AT,
+        adapter=adapt(document.template),
     ).markdown
 
 
@@ -442,6 +447,7 @@ def test_filename_carries_title_and_version():
         versions=make_document().versions,
         ledger=ledger_with_two_entries(),
         exported_at=EXPORTED_AT,
+        adapter=STD,
     )
     assert result.filename == "订单中台-v1.md"
     assert result.version_no == 1
@@ -511,3 +517,184 @@ def test_clean_export_has_no_simulation_disclaimer() -> None:
 
     assert SIMULATION_DISCLAIMER not in text, "没引用模拟内容就不许吓人"
     assert "模拟推演" not in text
+
+
+# —— 章号/功能号走模板顺序（`02` §11.0.69）：不再从 `sN` 剥前缀 ——
+
+
+def _light_template():
+    from pmstudio.domain.shared.template import (
+        DocumentTemplate,
+        TemplatedSection,
+        TemplateRole,
+    )
+
+    def section(sid: str, title: str, role=TemplateRole.PLAIN) -> TemplatedSection:
+        return TemplatedSection(
+            section_id=SectionId(sid), title=title, purpose="摆设", role=role
+        )
+
+    return DocumentTemplate(
+        template_id="light",
+        title="轻量版",
+        sections=(
+            section("s1", "背景与问题", TemplateRole.BACKBONE),
+            section("s2", "目标与非目标", TemplateRole.BACKBONE),
+            section("s4", "范围与边界", TemplateRole.BACKBONE),
+            section("s5", "功能需求", TemplateRole.FEATURE),
+            section("s11", "风险与开放问题", TemplateRole.OPEN_QUESTIONS),
+            section("s13", "版本历史", TemplateRole.VERSION_HISTORY),
+        ),
+    )
+
+
+def _render(document, *, adapter, ledger=None):
+    return render_markdown(
+        view=document.view(),
+        readiness=(),
+        versions=document.versions,
+        ledger=ledger if ledger is not None else EvidenceLedger(project_id=PROJECT),
+        exported_at=NOW,
+        adapter=adapter,
+    ).markdown
+
+
+def _ledger_with(text: str) -> tuple[EvidenceLedger, EvidenceId]:
+    """账本 + 它分到的编号（条目要引真编号，编号是账本给的）。"""
+
+    ledger = EvidenceLedger(project_id=PROJECT)
+    eid = ledger.record(
+        kind=EvidenceKind.USER_INPUT,
+        text=text,
+        source=EvidenceSource(round_id=RoundId("r1"), raw_span=RAW_SPAN),
+        now=NOW,
+    )
+    return ledger, eid
+
+
+def test_light_export_numbers_chapters_by_its_own_six():
+    """light 的章号是 1..6（s4→3、s5→4、s11→5、s13→6），不是从 id 剥 `s`。"""
+
+    from pmstudio.domain.authoring.document import Document
+    from pmstudio.domain.shared.template_adapter import adapt
+
+    template = _light_template()
+    document = Document.new(
+        document_id=DocumentId("d1"), project_id=ProjectId("p1"), title="轻量", now=NOW,
+        template=template,
+    )
+
+    text = _render(document, adapter=adapt(template))
+
+    assert "## 1 背景与问题" in text
+    assert "## 3 范围与边界" in text
+    assert "## 4 功能需求" in text
+    assert "## 5 风险与开放问题" in text
+    assert "## 6 版本历史" in text
+    assert "## 2 目标与非目标" in text
+
+
+def test_light_export_numbers_features_under_their_own_chapter():
+    """功能号用功能锚点章的序号：light 里功能章排第 4 → `### 4.1`（不是 `### 5.1`）。"""
+
+    from pmstudio.domain.authoring.document import Document
+    from pmstudio.domain.authoring.instruction import WriteInstruction
+    from pmstudio.domain.shared.template_adapter import adapt
+
+    template = _light_template()
+    document = Document.new(
+        document_id=DocumentId("d1"), project_id=ProjectId("p1"), title="轻量", now=NOW,
+        template=template,
+    )
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i1",
+                entry_id=EntryId("en1"),
+                op=WriteOp.ADD,
+                target=Target.feature_field(
+                    "order-export", "name", home=adapt(template).feature_home
+                ),
+                text="订单导出",
+                refs=(EvidenceId("E1"),),
+            )
+        ],
+        now=NOW,
+        summary="写一个功能",
+        authorized_new_features=frozenset({FeatureSlug("order-export")}),
+    )
+
+    text = _render(document, adapter=adapt(template))
+
+    assert "### 4.1 订单导出（order-export）〔E1〕" in text
+
+
+def test_version_chapter_renders_versions_by_role_not_by_id():
+    """版本历史章由 role 指认（standard 的 s13 之外，自定义模板里可能是别的 id）。"""
+
+    from pmstudio.domain.authoring.document import Document
+    from pmstudio.domain.shared.template import template_from_dict
+    from pmstudio.domain.shared.template_adapter import adapt
+
+    template = template_from_dict(
+        {
+            "template_id": "t",
+            "title": "x",
+            "sections": [
+                {"id": "overview", "title": "概览", "purpose": "p"},
+                {"id": "feat", "title": "功能", "purpose": "p", "role": "feature"},
+                {"id": "open", "title": "未决", "purpose": "p", "role": "open_questions"},
+                {
+                    "id": "history",
+                    "title": "版本",
+                    "purpose": "p",
+                    "role": "version_history",
+                },
+            ],
+        }
+    )
+    document = Document.new(
+        document_id=DocumentId("d1"), project_id=ProjectId("p1"), title="自建", now=NOW,
+        template=template,
+    )
+
+    text = _render(document, adapter=adapt(template))
+
+    assert "## 4 版本" in text
+    assert "| 版本 | 时间 | 触发 | 摘要 |" in text
+
+
+def test_open_questions_chapter_is_skipped_in_the_citation_appendix():
+    """附录 A 跳过的"未决章"取模板锚点；那句"第 N 章"也用它自己的序号（light 的 s11 是第 5 章）。"""
+
+    from pmstudio.domain.authoring.document import Document
+    from pmstudio.domain.authoring.instruction import WriteInstruction
+    from pmstudio.domain.shared.template_adapter import adapt
+
+    template = _light_template()
+    ledger, eid = _ledger_with("量级在 1 万级")
+    document = Document.new(
+        document_id=DocumentId("d1"), project_id=ProjectId("p1"), title="轻量", now=NOW,
+        template=template,
+    )
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i1",
+                entry_id=EntryId("en1"),
+                op=WriteOp.ADD,
+                target=Target.body(adapt(template).open_home),
+                text="〔未决·阻塞〕量级是多少（未决定，待决人：PM；跳过后果：按同步做）〔去处：s2〕",
+                refs=(eid,),
+                kind=BlockKind.QUESTION,
+            )
+        ],
+        now=NOW,
+        summary="留一条未决",
+    )
+
+    text = _render(document, adapter=adapt(template), ledger=ledger)
+
+    # 它的口径是"不列入清单、但仍可按编号查"：编号不进正文，也不出现在附录清单里
+    assert "只被第 5 章未决清单引用" in text
+    assert f"- {eid} ·" not in text

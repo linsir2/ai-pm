@@ -10,14 +10,11 @@ from dataclasses import dataclass
 from pmstudio.domain.authoring.blocks import Block, Entry
 from pmstudio.domain.authoring.schema import field_spec
 from pmstudio.domain.authoring.version import Snapshot
-from pmstudio.domain.shared.ids import BlockId, EntryId, EvidenceId, FeatureSlug, SectionId
-from pmstudio.domain.shared.sections import SECTION_BY_ID, SECTIONS, section_slot
+from pmstudio.domain.shared.ids import BlockId, EntryId, EvidenceId, FeatureSlug
+from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.domain.shared.writing import BlockKind
 
 PREFERENCE_LABEL = "偏好区（不进交付物）"
-_SECTION_INDEX: dict[SectionId, int] = {
-    spec.section_id: index for index, spec in enumerate(SECTIONS, start=1)
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,17 +38,24 @@ class DiffGroup:
     changed: tuple[ChangedEntry, ...] = ()
 
 
-def diff_snapshots(before: Snapshot, after: Snapshot) -> tuple[DiffGroup, ...]:
-    """两个快照之间：新增 / 删除 / 改写，按去处分组。"""
+def diff_snapshots(
+    before: Snapshot, after: Snapshot, *, adapter: TemplateAdapter
+) -> tuple[DiffGroup, ...]:
+    """两个快照之间：新增 / 删除 / 改写，按去处分组。
+
+    `adapter` 是这一份文档的模板视角（`02` §11.0.69）：分组标签里的**章号与标题**
+    来自模板顺序与标题（不是从 `sN` 剥前缀），排序也按模板顺序；模板里没有的章
+    原样显示 id——说不知道，不编标题。
+    """
 
     # 功能名（「名称」字段）两版之间可能变，而它是分组标签的一部分。
     # 两边共用一张表（after 优先、before 兜底），否则改个名字会让同一批条目
     # 在两侧落到不同组里、看着像"全删了又全加了"。
     names = _feature_names(before, after)
-    left = _marks(before, names=names)
-    right = _marks(after, names=names)
+    left = _marks(before, names=names, adapter=adapter)
+    right = _marks(after, names=names, adapter=adapter)
     groups: list[DiffGroup] = []
-    for label in sorted({*left, *right}, key=_order_key):
+    for label in sorted({*left, *right}, key=lambda item: _order_key(item, adapter=adapter)):
         old = left.get(label, {})
         new = right.get(label, {})
         added = tuple(_view(new[key]) for key in sorted(new, key=str) if key not in old)
@@ -79,7 +83,7 @@ def _differs(before: Entry, after: Entry) -> bool:
 
 
 def _marks(
-    snapshot: Snapshot, *, names: Mapping[FeatureSlug, str]
+    snapshot: Snapshot, *, names: Mapping[FeatureSlug, str], adapter: TemplateAdapter
 ) -> dict[str, dict[EntryId, Entry]]:
     """快照 → {去处标签: {entry_id: 条目}}。"""
 
@@ -88,7 +92,7 @@ def _marks(
     for block in snapshot.blocks:
         if not block.entries:
             continue
-        marks.setdefault(_label(block, by_id=by_id, names=names), {}).update(
+        marks.setdefault(_label(block, by_id=by_id, names=names, adapter=adapter), {}).update(
             {entry.entry_id: entry for entry in block.entries}
         )
     if snapshot.preference_entries:
@@ -122,28 +126,36 @@ def _feature_names(*snapshots: Snapshot) -> dict[FeatureSlug, str]:
 
 
 def _label(
-    block: Block, *, by_id: Mapping[BlockId, Block], names: Mapping[FeatureSlug, str]
+    block: Block,
+    *,
+    by_id: Mapping[BlockId, Block],
+    names: Mapping[FeatureSlug, str],
+    adapter: TemplateAdapter,
 ) -> str:
     if block.parent_id is None:
         # 章节根自己就挂内容（章节级内容落在 `sN.bK` 上，根上一般没有；有也要能标出来）
-        return _section_label(str(block.block_id))
+        return _section_label(str(block.block_id), adapter)
     parent = by_id.get(block.parent_id)
     if block.kind is BlockKind.FEATURE and block.feature_slug is not None:
-        return f"{_section_label(str(block.parent_id))} · {_feature_name(block, names)}"
+        return (
+            f"{_section_label(str(block.parent_id), adapter)} · {_feature_name(block, names)}"
+        )
     if block.feature_slug is not None:
         # 功能字段：章节要从**功能根**往上找（字段块的 parent 是功能根，不是 s5）
         root = _feature_root(block, by_id=by_id)
         section_id = str(root.parent_id) if root.parent_id is not None else str(root.block_id)
         title = field_spec(block.field).title if block.field is not None else ""
-        return f"{_section_label(section_id)} · {_feature_name(root, names)} · {title}"
+        return (
+            f"{_section_label(section_id, adapter)} · {_feature_name(root, names)} · {title}"
+        )
     section_id = str(block.parent_id)
     if block.field is not None:
-        slot = section_slot(section_id, block.field)
+        slot = adapter.slot(section_id, block.field)
         if slot is not None:
-            return f"{_section_label(section_id)} · {slot.title}"
+            return f"{_section_label(section_id, adapter)} · {slot.title}"
     if parent is not None and parent.kind is BlockKind.SECTION:
-        return _section_label(section_id)
-    return f"{_section_label(section_id)} · {block.block_id}"
+        return _section_label(section_id, adapter)
+    return f"{_section_label(section_id, adapter)} · {block.block_id}"
 
 
 def _feature_root(block: Block, *, by_id: Mapping[BlockId, Block]) -> Block:
@@ -164,17 +176,22 @@ def _feature_name(block: Block, names: Mapping[FeatureSlug, str]) -> str:
     return names.get(block.feature_slug, str(block.feature_slug))
 
 
-def _section_label(section_id: str) -> str:
-    spec = SECTION_BY_ID.get(SectionId(section_id))
-    if spec is None:
+def _section_label(section_id: str, adapter: TemplateAdapter) -> str:
+    """`3. 范围与边界` 这样的标签：序号与标题都取自模板；模板没有这一章就原样返回 id。"""
+
+    if not adapter.has(section_id):
         return section_id
-    return f"{_SECTION_INDEX[spec.section_id]}. {spec.title}"
+    return f"{adapter.number_of(section_id)}. {adapter.title_of(section_id)}"
 
 
-def _order_key(label: str) -> tuple[int, str]:
-    """章节顺序在前，偏好区永远排最后。"""
+def _order_key(label: str, *, adapter: TemplateAdapter) -> tuple[int, str]:
+    """章节顺序在前，偏好区永远排最后。
+
+    排序用的序号从标签头部取（标签是上面拼的），模板里没有的章排在所有章之后——
+    说不出位置的，就别冒充某一章。
+    """
 
     if label == PREFERENCE_LABEL:
-        return (len(SECTIONS) + 1, label)
+        return (len(adapter.section_ids) + 1, label)
     head = label.split(".", 1)[0]
-    return (int(head) if head.isdigit() else len(SECTIONS), label)
+    return (int(head) if head.isdigit() else len(adapter.section_ids), label)

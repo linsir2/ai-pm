@@ -43,6 +43,7 @@ from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS
 from pmstudio.domain.shared.template import DocumentTemplate, MinEntries
+from pmstudio.domain.shared.template_adapter import TemplateAdapter
 
 SEAT_COMPLETED = "completed"
 SEAT_PENDING = "pending"
@@ -1601,8 +1602,11 @@ def _entry_snapshot_view(item) -> EntrySnapshotView:  # type: ignore[no-untyped-
     )
 
 
-def diff_view(before: Version, after: Version) -> DiffView:
-    """两个版本 → 界面要的形状（分组、前后对照、编号照抄）。"""
+def diff_view(before: Version, after: Version, *, adapter: TemplateAdapter) -> DiffView:
+    """两个版本 → 界面要的形状（分组、前后对照、编号照抄）。
+
+    `adapter` 是这份文档的模板视角：分组标签的章号与标题由它给（`02` §11.0.69）。
+    """
 
     return DiffView(
         from_version_no=before.version_no,
@@ -1620,7 +1624,9 @@ def diff_view(before: Version, after: Version) -> DiffView:
                     for item in group.changed
                 ),
             )
-            for group in diff_snapshots(before.snapshot, after.snapshot)
+            for group in diff_snapshots(
+                before.snapshot, after.snapshot, adapter=adapter
+            )
         ),
     )
 

@@ -26,7 +26,8 @@ from pmstudio.domain.authoring.views import BlockView, DocumentView, SectionView
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId
-from pmstudio.domain.shared.sections import OPEN_QUESTION_SECTION
+from pmstudio.domain.shared.template import TemplateRole
+from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.domain.shared.writing import BlockKind
 
 #: 偏好区不在 13 章里，给它一个自己的名字，好让"按章节跳过"这套口径也能覆盖它
@@ -74,11 +75,21 @@ def render_markdown(
     versions: Sequence[Version],
     ledger: EvidenceLedger,
     exported_at: datetime,
+    adapter: TemplateAdapter,
 ) -> Deliverable:
+    """渲染交付物。
+
+    `adapter` 是这一份文档的模板视角（`02` §11.0.69）：**章号来自模板顺序**（不是从
+    `sN` 剥前缀——自定义模板的 id 是自由文本），版本历史章由 role 指认，功能号挂在
+    功能锚点章的序号下，附录跳过的未决章取开放问题锚点。
+    """
+
     parts: list[str] = [_header(view, readiness, exported_at)]
-    for section in view.sections:
-        parts.append(_section(section, readiness=readiness, versions=versions))
-    parts.append(_appendix_a(view, ledger))
+    for index, section in enumerate(view.sections, start=1):
+        parts.append(
+            _section(section, number=index, readiness=readiness, versions=versions, adapter=adapter)
+        )
+    parts.append(_appendix_a(view, ledger, adapter))
     if view.preference_entries:
         parts.append(_appendix_b(view))
     unfinished = _unfinished(readiness)
@@ -114,18 +125,21 @@ def _header(
 def _section(
     section: SectionView,
     *,
+    number: int,
     readiness: Sequence[ReadinessItem],
     versions: Sequence[Version],
+    adapter: TemplateAdapter,
 ) -> str:
-    number = str(section.section_id).lstrip("s")
     lines = [f"## {number} {section.title}"]
-    if str(section.section_id) == "s13":
+    # 版本历史章由**角色**指认：模板里这一章可能叫 s13，也可能叫 history。
+    if adapter.role_of(section.section_id) is TemplateRole.VERSION_HISTORY:
         lines += _versions_table(versions)
         return "\n".join(lines)
     features = [block for block in section.blocks if block.kind is BlockKind.FEATURE]
     if features:
+        feature_number = adapter.number_of(adapter.feature_home)
         for index, feature in enumerate(features, start=1):
-            lines += _feature(feature, index=index)
+            lines += _feature(feature, index=index, chapter=feature_number)
     plain = [block for block in section.blocks if block.kind is not BlockKind.FEATURE]
     for block in plain:
         lines += _block_lines(block)
@@ -134,7 +148,7 @@ def _section(
     return "\n".join(lines)
 
 
-def _feature(feature: BlockView, *, index: int) -> list[str]:
+def _feature(feature: BlockView, *, index: int, chapter: int) -> list[str]:
     slug = str(feature.feature_slug)
     name_block = _child(feature, "name")
     if name_block and name_block.entries:
@@ -143,9 +157,9 @@ def _feature(feature: BlockView, *, index: int) -> list[str]:
         # 名称也是正文内容，界面在功能名旁边挂了出处胶囊（`FeatureBlock.tsx`）；
         # 导出以前把它的编号吞了，于是附录里会出现一个正文根本看不见的编号
         # （P31 真跑对账抓到：L2 的 E170、L3 的 E28 都是 `s5/…name` 那条）
-        title = f"### 5.{index} {name}（{slug}）" + (f"〔{refs}〕" if refs else "")
+        title = f"### {chapter}.{index} {name}（{slug}）" + (f"〔{refs}〕" if refs else "")
     else:
-        title = f"### 5.{index} {slug}（{slug}）"
+        title = f"### {chapter}.{index} {slug}（{slug}）"
     lines = [title]
     missing: list[str] = []
     for spec in FEATURE_FIELDS:
@@ -212,7 +226,7 @@ def _versions_table(versions: Sequence[Version]) -> list[str]:
     return lines
 
 
-def _appendix_a(view: DocumentView, ledger: EvidenceLedger) -> str:
+def _appendix_a(view: DocumentView, ledger: EvidenceLedger, adapter: TemplateAdapter) -> str:
     """附录 A 是**交付物里看得见的编号**的清单（P31 收窄 + M7 B 再收一刀）。
 
     两类不收：
@@ -225,9 +239,7 @@ def _appendix_a(view: DocumentView, ledger: EvidenceLedger) -> str:
     未决清单里的引用，交付物只收正文真用得上的（各有各的消费者）。
     """
 
-    listed_ids = cited_evidence_ids(
-        view, skip_sections=frozenset({OPEN_QUESTION_SECTION})
-    )
+    listed_ids = cited_evidence_ids(view, skip_sections=frozenset({str(adapter.open_home)}))
     open_only_ids = cited_evidence_ids(view) - listed_ids
     lines = ["## 附录 A · 出处（只给编号与一句话摘要）"]
     total = listed = open_only = 0
@@ -248,7 +260,7 @@ def _appendix_a(view: DocumentView, ledger: EvidenceLedger) -> str:
     if not listed:
         lines.append("（还没有任何出处）" if not total else "（本文没有引用任何出处）")
     if open_only:
-        chapter = OPEN_QUESTION_SECTION.lstrip("s")
+        chapter = adapter.number_of(adapter.open_home)
         lines.append(
             f"（另有 {open_only} 条出处只被第 {chapter} 章未决清单引用，未列入本附录——"
             "它们是系统对「还没定的事」的记账，按编号仍可在系统里查）"

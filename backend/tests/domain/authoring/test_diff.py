@@ -3,7 +3,7 @@
 
 from pmstudio.domain.authoring.diff import diff_snapshots
 from pmstudio.domain.authoring.instruction import WriteInstruction
-from pmstudio.domain.shared.ids import EntryId, EvidenceId
+from pmstudio.domain.shared.ids import EntryId, EvidenceId, SectionId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
 from tests.support.builders import NOW, STD, document_with_feature
@@ -55,7 +55,7 @@ def test_changed_entry_is_reported_with_before_and_after():
         summary="改一句话描述",
     )
 
-    groups = diff_snapshots(before, document.current_version.snapshot)
+    groups = diff_snapshots(before, document.current_version.snapshot, adapter=STD)
 
     assert [group.target_label for group in groups] == ["5. 功能需求 · order-export · 一句话描述"]
     assert groups[0].added == ()
@@ -80,7 +80,7 @@ def test_added_entry_is_grouped_under_its_field():
         summary="加验收标准",
     )
 
-    groups = diff_snapshots(before, document.current_version.snapshot)
+    groups = diff_snapshots(before, document.current_version.snapshot, adapter=STD)
 
     assert [(group.target_label, [item.text for item in group.added]) for group in groups] == [
         ("5. 功能需求 · order-export · 验收标准", ["5 万条以内 60 秒可下载"])
@@ -105,8 +105,12 @@ def test_removed_entry_shows_up_in_the_reverse_direction():
         summary="删一条",
     )
 
-    groups = diff_snapshots(document.version(2).snapshot, document.current_version.snapshot)
-    backward = diff_snapshots(document.current_version.snapshot, document.version(2).snapshot)
+    groups = diff_snapshots(
+        document.version(2).snapshot, document.current_version.snapshot, adapter=STD
+    )
+    backward = diff_snapshots(
+        document.current_version.snapshot, document.version(2).snapshot, adapter=STD
+    )
 
     assert [group.target_label for group in groups] == [
         "5. 功能需求 · order-export · 一句话描述"
@@ -118,7 +122,7 @@ def test_removed_entry_shows_up_in_the_reverse_direction():
 def test_unchanged_snapshots_produce_no_groups():
     document = document_with_feature()
     same = document.current_version.snapshot
-    assert diff_snapshots(same, same) == ()
+    assert diff_snapshots(same, same, adapter=STD) == ()
 
 
 def test_labels_cover_sections_slots_features_and_preference():
@@ -144,7 +148,9 @@ def test_labels_cover_sections_slots_features_and_preference():
         summary="铺四个去处",
     )
 
-    groups = diff_snapshots(document.version(2).snapshot, document.current_version.snapshot)
+    groups = diff_snapshots(
+        document.version(2).snapshot, document.current_version.snapshot, adapter=STD
+    )
 
     assert [group.target_label for group in groups] == [
         "1. 背景与问题",
@@ -161,10 +167,161 @@ def test_diff_is_deterministic():
     before = document.version(1).snapshot
     after = document.current_version.snapshot
 
-    forward = diff_snapshots(before, after)
-    backward = diff_snapshots(after, before)
+    forward = diff_snapshots(before, after, adapter=STD)
+    backward = diff_snapshots(after, before, adapter=STD)
 
     assert [item.text for group in forward for item in group.added] == [
         item.text for group in backward for item in group.removed
     ]
-    assert diff_snapshots(before, after) == forward
+    assert diff_snapshots(before, after, adapter=STD) == forward
+
+
+# —— 分组标签走模板（`02` §11.0.69）：序号与标题都从模板来，不剥 `sN` ——
+
+
+def _light_template():
+    from pmstudio.domain.shared.template import (
+        DocumentTemplate,
+        TemplatedSection,
+        TemplateRole,
+    )
+
+    def section(sid: str, title: str, role=TemplateRole.PLAIN) -> TemplatedSection:
+        return TemplatedSection(
+            section_id=SectionId(sid), title=title, purpose="摆设", role=role
+        )
+
+    return DocumentTemplate(
+        template_id="light",
+        title="轻量版",
+        sections=(
+            section("s1", "背景与问题", TemplateRole.BACKBONE),
+            section("s2", "目标与非目标", TemplateRole.BACKBONE),
+            section("s4", "范围与边界", TemplateRole.BACKBONE),
+            section("s5", "功能需求", TemplateRole.FEATURE),
+            section("s11", "风险与开放问题", TemplateRole.OPEN_QUESTIONS),
+            section("s13", "版本历史", TemplateRole.VERSION_HISTORY),
+        ),
+    )
+
+
+def _light_document():
+    from pmstudio.domain.authoring.document import Document
+    from pmstudio.domain.shared.ids import DocumentId, ProjectId
+
+    return Document.new(
+        document_id=DocumentId("d1"),
+        project_id=ProjectId("p1"),
+        title="轻量",
+        now=NOW,
+        template=_light_template(),
+    )
+
+
+def test_diff_labels_use_the_templates_chapter_numbers_and_titles():
+    """light 的 `s4` 是第 3 章（不是 `4.`）：标签里的序号来自模板顺序。"""
+
+    from pmstudio.domain.shared.template_adapter import adapt
+
+    before = _light_document()
+    after = _light_document()
+    after.apply(
+        [
+            WriteInstruction(
+                instruction_id="i1",
+                entry_id=EntryId("en1"),
+                op=WriteOp.ADD,
+                target=Target.body("s4"),
+                text="本期只做导出",
+                refs=(EvidenceId("E1"),),
+            )
+        ],
+        now=NOW,
+        summary="补一条",
+    )
+
+    groups = diff_snapshots(
+        before.versions[0].snapshot, after.versions[1].snapshot, adapter=adapt(_light_template())
+    )
+
+    assert [group.target_label for group in groups] == ["3. 范围与边界"]
+
+
+def test_diff_orders_groups_by_the_templates_own_chapter_order():
+    """两章同时改：按模板顺序排（light 里 s2 在 s4 前，序号 2 < 3）。"""
+
+    from pmstudio.domain.shared.template_adapter import adapt
+
+    before = _light_document()
+    after = _light_document()
+    after.apply(
+        [
+            WriteInstruction(
+                instruction_id="i1",
+                entry_id=EntryId("en1"),
+                op=WriteOp.ADD,
+                target=Target.body("s4"),
+                text="范围",
+                refs=(EvidenceId("E1"),),
+            ),
+            WriteInstruction(
+                instruction_id="i2",
+                entry_id=EntryId("en2"),
+                op=WriteOp.ADD,
+                target=Target.body("s2"),
+                text="目标",
+                refs=(EvidenceId("E1"),),
+            ),
+        ],
+        now=NOW,
+        summary="补两条",
+    )
+
+    groups = diff_snapshots(
+        before.versions[0].snapshot, after.versions[1].snapshot, adapter=adapt(_light_template())
+    )
+
+    assert [group.target_label for group in groups] == ["2. 目标与非目标", "3. 范围与边界"]
+
+
+def test_diff_of_a_chapter_the_template_lacks_keeps_the_raw_id():
+    """模板里没有的章不编造标题：原样显示 id（说不知道，不猜）。"""
+
+    from pmstudio.domain.shared.template_adapter import adapt
+
+    before = _light_document()
+    after = _light_document()
+    after.apply(
+        [
+            WriteInstruction(
+                instruction_id="i1",
+                entry_id=EntryId("en1"),
+                op=WriteOp.ADD,
+                target=Target.body("s4"),
+                text="范围",
+                refs=(EvidenceId("E1"),),
+            )
+        ],
+        now=NOW,
+        summary="补一条",
+    )
+    # 用**只有三章**的模板去看 light 的差异：s4 不在里面
+    from pmstudio.domain.shared.template import template_from_dict
+
+    other = template_from_dict(
+        {
+            "template_id": "t",
+            "title": "x",
+            "sections": [
+                {"id": "s5", "title": "功能", "purpose": "p", "role": "feature"},
+                {"id": "s11", "title": "未决", "purpose": "p", "role": "open_questions"},
+                {"id": "s13", "title": "版本", "purpose": "p", "role": "version_history"},
+            ],
+        }
+    )
+
+    groups = diff_snapshots(
+        before.versions[0].snapshot, after.versions[1].snapshot, adapter=adapt(other)
+    )
+
+    assert [group.target_label for group in groups] == ["s4"]

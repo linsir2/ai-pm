@@ -3645,6 +3645,7 @@ class ExportMarkdown:
             versions=document.versions,
             ledger=self._evidence.get(project_id),
             exported_at=self._clock.now(),
+            adapter=adapt(document.template),
         )
 
 
@@ -3683,7 +3684,7 @@ class GetVersionDiff:
         # 版本号不存在 → UnknownVersion → 404（api/errors.py 的映射）
         before = document.version(from_version_no)
         after = document.version(to_version_no)
-        return diff_view(before, after)
+        return diff_view(before, after, adapter=adapt(document.template))
 
 
 class RollbackVersion:
