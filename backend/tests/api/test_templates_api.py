@@ -154,7 +154,9 @@ async def test_create_template_carries_criteria_declarations():
 
     assert created.status_code == 201
     section = created.json()["sections"][0]
-    assert section["min_entries"] == {"count": 2, "kind": None}
+    # 需求变更（`02` §11.0.70 的验收补记）：判据回显与 `template_to_json` 逐字同形，
+    # 没声明的 `kind` **不写出来**（此前这里给 null，于是同一份判据有两种 JSON 形状）
+    assert section["min_entries"] == {"count": 2}
     assert section["coverage"] == 3
 
 
@@ -283,3 +285,37 @@ async def test_a_template_with_duplicate_slot_names_is_rejected():
 
     # 坏定义是 `BadTemplateDefinition`（InvariantViolation）→ 409，与既有锚点校验同一个出口
     assert response.status_code == 409
+
+
+async def test_criteria_declarations_omit_an_unset_kind():
+    """判据回显的形状要和写进去的形状一致（`02` §11.0.69）。
+
+    写进去时没有 `kind`（`min_entries = 1`），读回来却给出 `"kind": null`——于是同一份
+    判据有**两种 JSON 形状**：文档行内快照走 `template_to_json`（省略），视图走
+    `template_view`（写 null）。界面的类型声明按前者写的，照后者读就名不副实。
+    """
+
+    async with async_client(make_client()[0]) as client:
+        listed = (await client.get("/api/templates")).json()
+
+    plain = next(
+        section
+        for item in listed
+        for section in item["sections"]
+        if section.get("min_entries") is not None
+        and section["min_entries"]["count"] > 0
+    )
+    assert "kind" not in plain["min_entries"], plain["min_entries"]
+
+
+async def test_schema_exposes_which_roles_are_anchors():
+    """三锚点是界面置灰的依据（`06` §2.3）。前端不能自己抄一份——抄了就是漂移的种子。"""
+
+    async with async_client(make_client()[0]) as client:
+        schema = (await client.get("/api/schema")).json()
+
+    assert set(schema["template_anchor_roles"]) == {
+        "feature",
+        "open_questions",
+        "version_history",
+    }

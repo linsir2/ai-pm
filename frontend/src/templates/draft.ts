@@ -13,20 +13,19 @@
  *     删除按钮——而不是等提交了再报错（红字在整个编辑过程里会一直亮着）。 */
 
 import type { TemplateSectionPayload, TemplateSectionView } from "../api/types";
+import { anchorRoles } from "../state/schema";
 
-/** 三个锚点：与后端 `ANCHOR_ROLES` 同一份口径（`02` §11.0.68）。
- *  这里只用于**算界面状态**——真正把关的是后端 `DocumentTemplate.validate`。 */
-export const ANCHOR_ROLES = ["feature", "open_questions", "version_history"] as const;
-
+/** 三个锚点：真相源在后端 `/schema.template_anchor_roles`（`02` §11.0.70），
+ *  这里**只用于算界面状态**——真正把关的是 `DocumentTemplate.validate`。
+ *  前端曾经自抄一份 `["feature","open_questions","version_history"]`：后端加第四个锚点时
+ *  置灰会静默失效（用户能删掉锚点章，保存才报 409）。副本删掉了。 */
 export function isAnchor(section: { role: string }): boolean {
-  return (ANCHOR_ROLES as readonly string[]).includes(section.role);
+  return anchorRoles().includes(section.role);
 }
 
 /** 已经占掉的锚点 role：下拉里这几项要置灰。 */
 export function pickedRoles(sections: readonly TemplateSectionView[]): string[] {
-  return ANCHOR_ROLES.filter((role) =>
-    sections.some((section) => section.role === role),
-  );
+  return anchorRoles().filter((role) => sections.some((section) => section.role === role));
 }
 
 /** 这个 role 现在还能不能选：非锚点永远能，锚点没被占时能。 */
@@ -34,7 +33,7 @@ export function canPickRole(
   sections: readonly TemplateSectionView[],
   role: string,
 ): boolean {
-  if (!(ANCHOR_ROLES as readonly string[]).includes(role)) return true;
+  if (!anchorRoles().includes(role)) return true;
   return !pickedRoles(sections).includes(role);
 }
 

@@ -35,6 +35,7 @@ export function TemplateListView({
 
   return (
     <div className="stack" style={{ gap: "var(--space-3)" }}>
+      <h2 className="home__title">模板库</h2>
       {error !== null && <Banner>{error}</Banner>}
       <ul className="stack" style={{ gap: "var(--space-1)", listStyle: "none", margin: 0, padding: 0 }}>
         {templates.map((item) => {

@@ -541,6 +541,9 @@ export interface SchemaView {
   template_roles?: string[];
   /** 槽位与条数判据可指定的块种类（`02` §11.0.70）；老后端为 undefined。 */
   block_kinds?: string[];
+  /** 三个锚点角色（`02` §11.0.70）。**必填**：模板编辑器靠它决定"这一章不能删"与
+   *  "这个 role 已被占用"——前端自己抄一份，后端加第四个锚点时置灰就会静默失效。 */
+  template_anchor_roles?: string[];
 }
 
 /** `GET /schema` 里的一个模拟使用者（M11）。 */

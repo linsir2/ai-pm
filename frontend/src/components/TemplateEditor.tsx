@@ -105,7 +105,15 @@ export function TemplateEditor({
               ? section.min_entries
               : null;
         return (
-          <section key={section.section_id} className="stack" style={{ gap: "var(--space-1)" }}>
+          <section
+            key={section.section_id}
+            className="stack"
+            style={{
+              gap: "var(--space-1)",
+              borderTop: "var(--hairline)",
+              paddingTop: "var(--space-2)",
+            }}
+          >
             <div className="row">
               <code className="mono muted small">{section.section_id}</code>
               <input
@@ -114,22 +122,26 @@ export function TemplateEditor({
                 value={section.title}
                 onChange={(event) => patch(index, { title: event.target.value })}
               />
+              {/* 锚点章的角色整个锁住：锚点是产品硬规则，不能被用户随手取消
+                 ——否则保存时后端必然 409（`02` §11.0.70）。想改这一章的叫法就改标题。 */}
               <select
                 className="text-input"
                 aria-label={`${section.section_id} 角色`}
                 value={section.role}
+                disabled={anchor}
+                title={anchor ? "锚点章的角色不能改（模板必须恰有三个锚点）" : undefined}
                 onChange={(event) => patch(index, { role: event.target.value })}
               >
-                {roles.map((role) => (
-                  <option
-                    key={role}
-                    value={role}
-                    disabled={!canPickRole(sections, role) && role !== section.role}
-                  >
-                    {ROLE_TEXT[role] ?? role}
-                    {canPickRole(sections, role) ? "" : "（已占用）"}
-                  </option>
-                ))}
+                {roles.map((role) => {
+                  const occupiedByOthers =
+                    role !== section.role && !canPickRole(sections, role);
+                  return (
+                    <option key={role} value={role} disabled={occupiedByOthers}>
+                      {ROLE_TEXT[role] ?? role}
+                      {occupiedByOthers ? "（已占用）" : ""}
+                    </option>
+                  );
+                })}
               </select>
               {anchor ? (
                 <span className="muted small">锚点 · 判据由引擎算</span>

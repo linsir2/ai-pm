@@ -78,6 +78,13 @@ export const FALLBACK_BLOCK_KINDS: readonly string[] = [
   "metric",
 ];
 
+/** 三个锚点角色的离线回落（真相源是后端 `ANCHOR_ROLES`）。 */
+export const FALLBACK_TEMPLATE_ANCHOR_ROLES: readonly string[] = [
+  "feature",
+  "open_questions",
+  "version_history",
+];
+
 let current: SchemaView | null = null;
 
 export function setSchema(view: SchemaView | null): void {
@@ -95,6 +102,11 @@ export function limitsOf(schema: SchemaView | null = current): LimitsView {
 /** 模板编辑器的角色下拉（`templates/draft.ts` 与组件都问它，别各自抄一份）。 */
 export function templateRoles(schema: SchemaView | null = current): readonly string[] {
   return schema?.template_roles ?? FALLBACK_TEMPLATE_ROLES;
+}
+
+/** 三个锚点角色（`templates/draft.ts` 的 `isAnchor` / `pickedRoles` 问它，别各自抄一份）。 */
+export function anchorRoles(schema: SchemaView | null = current): readonly string[] {
+  return schema?.template_anchor_roles ?? FALLBACK_TEMPLATE_ANCHOR_ROLES;
 }
 
 /** 槽位 / 条数判据的 kind 下拉。 */

@@ -193,3 +193,77 @@ describe("编辑器：锚点章的删除按钮不可点", () => {
     expect(input.getAttribute("min")).toBe("1");
   });
 });
+describe("锚点不可取消：UI 不许制造后端必然拒绝的状态", () => {
+  it("锚点章的角色下拉整个锁住（不能把唯一的 feature 改成别的）", () => {
+    render(
+      <TemplateEditor
+        title="x"
+        baseOptions={[CUSTOM]}
+        sections={BUILTIN.sections}
+        onChange={vi.fn()}
+        onBack={vi.fn()}
+        onSave={vi.fn()}
+        error={null}
+        pending={false}
+      />,
+    );
+
+    // 每章一个角色下拉：三个全是锚点，所以三个都该锁
+    const selects = screen.getAllByRole("combobox").filter((el) =>
+      (el as HTMLSelectElement).getAttribute("aria-label")?.includes("角色"),
+    );
+    expect(selects).toHaveLength(3);
+    for (const select of selects) {
+      expect(select.hasAttribute("disabled")).toBe(true);
+    }
+  });
+
+  it("普通章的角色下拉不锁", () => {
+    render(
+      <TemplateEditor
+        title="x"
+        baseOptions={[CUSTOM]}
+        sections={[
+          ...BUILTIN.sections,
+          { section_id: "s1", title: "背景", purpose: "p", role: "plain", slots: [] },
+        ]}
+        onChange={vi.fn()}
+        onBack={vi.fn()}
+        onSave={vi.fn()}
+        error={null}
+        pending={false}
+      />,
+    );
+
+    const plain = screen
+      .getAllByRole("combobox")
+      .filter((el) => el.getAttribute("aria-label") === "s1 角色")[0]!;
+    expect(plain.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("当前角色自己不标「（已占用）」（它就是占着它的那一条）", () => {
+    render(
+      <TemplateEditor
+        title="x"
+        baseOptions={[CUSTOM]}
+        sections={[
+          ...BUILTIN.sections,
+          { section_id: "s1", title: "背景", purpose: "p", role: "plain", slots: [] },
+        ]}
+        onChange={vi.fn()}
+        onBack={vi.fn()}
+        onSave={vi.fn()}
+        error={null}
+        pending={false}
+      />,
+    );
+
+    // s1 是 plain：plain 不标已占用；feature 已被 s5 占着 → 标
+    const select = screen
+      .getAllByRole("combobox")
+      .filter((el) => el.getAttribute("aria-label") === "s1 角色")[0]!;
+    const texts = [...select.querySelectorAll("option")].map((o) => o.textContent ?? "");
+    expect(texts.find((t) => t.startsWith("普通内容章"))).toBe("普通内容章");
+    expect(texts.find((t) => t.startsWith("功能需求"))).toBe("功能需求（已占用）");
+  });
+});

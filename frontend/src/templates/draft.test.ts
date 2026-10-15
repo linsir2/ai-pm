@@ -198,3 +198,22 @@ describe("编辑形状与 GET 返回的是同一份结构", () => {
     expect(toPayload(view.sections)[0]!.id).toBe("s5");
   });
 });
+describe("锚点角色问后端，不在前端抄一份（`02` §11.0.70）", () => {
+  it("装了 schema 就按 schema 的那份来算锚点", async () => {
+    const { setSchema } = await import("../state/schema");
+    setSchema({
+      sections: [],
+      feature_fields: [],
+      limits: { max_seat_rounds: 3, max_questionnaires: 2, max_open_items_per_batch: 3 },
+      discussion_roles: [],
+      template_anchor_roles: ["feature", "decision"],   // 后端将来加了第四个锚点
+    });
+    try {
+      // 前端自己那份没有 decision，所以这里能变——这就是"真相源在后端"的意思
+      expect(isAnchor({ ...section(), role: "decision" })).toBe(true);
+      expect(isAnchor({ ...section(), role: "open_questions" })).toBe(false);
+    } finally {
+      setSchema(null);
+    }
+  });
+});

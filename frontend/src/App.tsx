@@ -370,6 +370,7 @@ export default function App() {
           connection={state.connection}
           onSelectProject={data.selectProject}
           onExport={() => void data.exportMarkdown()}
+          onTemplates={() => setView("templates")}
           theme={theme}
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
         />

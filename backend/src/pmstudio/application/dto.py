@@ -42,7 +42,12 @@ from pmstudio.domain.services.scope_guard import ScopeGuard
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS
-from pmstudio.domain.shared.template import DocumentTemplate, MinEntries, TemplateRole
+from pmstudio.domain.shared.template import (
+    ANCHOR_ROLES,
+    DocumentTemplate,
+    MinEntries,
+    TemplateRole,
+)
 from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.domain.shared.writing import BlockKind
 
@@ -1038,6 +1043,22 @@ class TemplateView:
     builtin: bool = False
 
 
+def _criteria_view(criteria: MinEntries | None) -> dict[str, object] | None:
+    """判据声明 → 视图形状。**和 `template_to_json` 逐字同形**（没声明的键不写出来）。
+
+    为什么值得多这一处：文档行内快照走序列化函数、界面走这个投影，两条路径曾给出同一份
+    判据的**两种 JSON**（一处省略 `kind`、一处给 `null`）。同一概念两种形状，界面那份
+    类型声明就必然有一处是假的（`06` §4 的类型要按真的那份写）。
+    """
+
+    if criteria is None:
+        return None
+    return {
+        "count": criteria.count,
+        **({} if criteria.kind is None else {"kind": criteria.kind.value}),
+    }
+
+
 def template_view(template: DocumentTemplate, *, builtin: bool = False) -> TemplateView:
     """领域模板 → 视图。`builtin` 是库内元数据，从仓储的 `TemplateEntry` 一起上来。"""
 
@@ -1055,7 +1076,7 @@ def template_view(template: DocumentTemplate, *, builtin: bool = False) -> Templ
                     SlotSchemaView(name=slot.name, title=slot.title, kind=slot.kind.value)
                     for slot in section.slots
                 ),
-                min_entries=section.min_entries,
+                min_entries=_criteria_view(section.min_entries),
                 coverage=section.coverage,
             )
             for section in template.sections
@@ -1088,6 +1109,10 @@ class SchemaView:
     template_roles: tuple[str, ...] = ()
     #: 槽位与条数判据可指定的块种类。**必填**，理由同上（`kind` 是 API 层的必填项）。
     block_kinds: tuple[str, ...] = ()
+    #: 三个锚点角色（`feature` / `open_questions` / `version_history`）。**必填**：
+    #: 模板编辑器靠它决定"这一章不能删"与"这个 role 已被占用"（`06` §2.3）——
+    #: 前端自己抄一份就是漂移的种子，后端加第四个锚点时前端的置灰会静默失效。
+    template_anchor_roles: tuple[str, ...] = ()
 
 
 def schema_view(
@@ -1171,6 +1196,7 @@ def schema_view(
         # application 本来就能 import（`02` §11.0.70）。
         template_roles=tuple(role.value for role in TemplateRole),
         block_kinds=tuple(kind.value for kind in BlockKind),
+        template_anchor_roles=tuple(role.value for role in ANCHOR_ROLES),
     )
 
 

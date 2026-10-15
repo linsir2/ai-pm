@@ -75,8 +75,11 @@ export function TemplateLibraryScreen({
     if (saved !== null) setDraft(null);
   }, [draft, library]);
 
+  // 坐在同一张纸上：别的屏（文档区 / 项目列表）都是 `.doc__inner` 的纸，
+  // 模板屏不另起一套容器。
   if (draft === null) {
     return (
+      <div className="doc__inner">
       <TemplateListView
         templates={library.items}
         onUse={onUse}
@@ -86,10 +89,12 @@ export function TemplateLibraryScreen({
         error={library.error}
         pending={library.pending || library.loading}
       />
+      </div>
     );
   }
 
   return (
+    <div className="doc__inner">
     <TemplateEditor
       title={draft.title}
       sections={draft.sections}
@@ -106,5 +111,6 @@ export function TemplateLibraryScreen({
       }
       pending={library.pending}
     />
+    </div>
   );
 }
