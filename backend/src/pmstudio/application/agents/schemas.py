@@ -389,7 +389,10 @@ class DiscussionSynthesis(BaseModel):
 class TargetDraft(BaseModel):
     zone: Zone = "body"
     section_id: str | None = Field(
-        default=None, description="章节 id，如 s5；写功能字段时必须是 s5"
+        default=None,
+        description=(
+            "章节 id（如 s5；写功能字段时必须是功能锚点章——章节表里标了 feature 的那章）"
+        ),
     )
     feature_slug: str | None = Field(
         default=None,
@@ -578,7 +581,7 @@ def target_of(draft: TargetDraft, *, adapter: TemplateAdapter) -> Target:
                 FeatureSlug(draft.feature_slug), draft.field, home=adapter.feature_home
             )
         else:
-            # 没有 feature_slug 时，field 只能是**章节槽**（standard 里是 s8 的六块，P5a）。
+            # 没有 feature_slug 时，field 只能是**章节槽**（standard 里是那六块，P5a）。
             # 真模型实测：这里以前一律要求 feature_slug，于是六个槽对 AI 路径根本不可达。
             if adapter.slot(section, draft.field) is None:
                 raise ShapeError(
@@ -601,7 +604,8 @@ def normalize_claim_target(
     规则（真模型冒烟实测出来的，见汇报）：
     - **标签优先**：`label=preference` ⇒ 偏好区（LB1 说"偏好不进正文"，标签才是权威分类，
       `zone` 只是它的复述——模型两处写不一致时以标签为准）；
-    - 有 `feature_slug` ⇒ 章节必然是 s5（功能子树只长在 s5，D3）；模型写成 s12 也纠正过来；
+    - 有 `feature_slug` ⇒ 章节必然是**功能锚点章**（功能子树只长在那儿，D3）；
+      模型写成别的章也纠正过来；
     - 有 `field` 但没 `feature_slug` ⇒ 丢掉 field（字段必须挂在功能下，留着没意义）；
 
     注意这里**不丢内容**：主张文本、原话、标签都照旧，用户在开场卡上还能改去处。

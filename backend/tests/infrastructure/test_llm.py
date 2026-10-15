@@ -67,6 +67,25 @@ def _response_formats(seen: list[dict]) -> list[str]:
 PROMPTS = PROMPTS_DIR
 
 
+def _analyzer_prompt_text() -> str:
+    """**渲染后**的分析者提示词（.md 骨架 + 各槽内容）。
+
+    2026-10-15（`02` §11.0.69）：逐章归位表从 `.md` 静态文件搬进了 `$placement` 槽
+    （由文档模板渲染）。守"提示词里必须有这条信号"的用例要看**渲染结果**——
+    模型收到的是拼好的那段字，不是模板文件。
+    """
+
+    from pmstudio.application.context import placement_text, section_slots_text, sections_text
+    from tests.support.builders import STD
+
+    body = (PROMPTS / "analyzer.md").read_text(encoding="utf-8")
+    return (
+        body.replace("$placement", placement_text(STD))
+        .replace("$sections", sections_text(STD))
+        .replace("$section_slots", section_slots_text(STD))
+    )
+
+
 def test_prompt_library_renders_slots_and_reports_missing():
     library = FilePromptLibrary(PROMPTS)
     text = library.render(
@@ -75,6 +94,7 @@ def test_prompt_library_renders_slots_and_reports_missing():
         user_input="想做个导出",
         labels="- need（需求）：要做出来的能力",
         sections="- s5 功能需求",
+        placement="- s5 功能需求：每个功能一棵子树",
         feature_fields="- acceptance（验收标准，acceptance，可多条，必填）",
         section_slots="- s8.performance（性能，章节槽）",
         seat_catalog="- seat.data_scale · 数据规模与性能 · 管：量级与耗时 · 常驻",
@@ -201,7 +221,10 @@ def test_the_conflict_rule_covers_contradictions_inside_the_round():
     另一半同样重要：**只是"还没定"不算矛盾**，别把 gap 全标成 conflict（前端把它们分开显示）。
     """
 
-    from pmstudio.application.agents.integrator import LIMITS_TEXT
+    from pmstudio.application.agents.integrator import limits_text
+    from tests.support.builders import STD
+
+    LIMITS_TEXT = limits_text(STD)
 
     assert "本轮输入" in LIMITS_TEXT
     assert "互斥" in LIMITS_TEXT
@@ -218,7 +241,7 @@ def test_analyzer_prompt_gives_the_end_to_end_flow_a_home():
     于是第 6 章在五条车道上永远是空的（`readiness` 挂着 warn、导出写"（本章为空）"）。
     """
 
-    text = (PROMPTS / "analyzer.md").read_text(encoding="utf-8")
+    text = _analyzer_prompt_text()
 
     assert "s6" in text
     assert "端到端" in text
@@ -235,7 +258,7 @@ def test_analyzer_prompt_marks_the_walkthrough_as_main_flow():
     P38 就是把这条信号补上（只加提示词，不动 `readiness`）。
     """
 
-    text = (PROMPTS / "analyzer.md").read_text(encoding="utf-8")
+    text = _analyzer_prompt_text()
 
     assert "field: main_flow" in text
     assert "怎么走一遍" in text
@@ -244,7 +267,10 @@ def test_analyzer_prompt_marks_the_walkthrough_as_main_flow():
 def test_integrator_limits_tell_how_to_write_the_end_to_end_flow():
     """整合者要知道 s6 怎么写：章节级 + `kind=steps` + 一条提案写完整条流程。"""
 
-    from pmstudio.application.agents.integrator import LIMITS_TEXT
+    from pmstudio.application.agents.integrator import limits_text
+    from tests.support.builders import STD
+
+    LIMITS_TEXT = limits_text(STD)
 
     assert "s6" in LIMITS_TEXT
     assert "steps" in LIMITS_TEXT
@@ -273,7 +299,10 @@ def test_integrator_limits_bound_the_output_per_call_and_keep_the_reasoning_out_
        而每条提案的解释在草案卡上本来就有落点（`rationale` → "它为什么这么判断：…"）。
     """
 
-    from pmstudio.application.agents.integrator import LIMITS_TEXT
+    from pmstudio.application.agents.integrator import limits_text
+    from tests.support.builders import STD
+
+    LIMITS_TEXT = limits_text(STD)
 
     assert "一次整合最多 60 条" in LIMITS_TEXT
     assert "一轮最多 60 条" not in LIMITS_TEXT
@@ -292,7 +321,10 @@ def test_integrator_limits_ask_for_a_main_flow_per_feature():
     而正确的杠杆是**派活**（与 s6 同一个套路）。
     """
 
-    from pmstudio.application.agents.integrator import LIMITS_TEXT
+    from pmstudio.application.agents.integrator import limits_text
+    from tests.support.builders import STD
+
+    LIMITS_TEXT = limits_text(STD)
 
     assert "每个功能的正常路径要有一条" in LIMITS_TEXT
     assert "main_flow" in LIMITS_TEXT
@@ -1207,7 +1239,10 @@ def test_integrator_prompt_forbids_ledger_talk_in_open_item_titles():
 def test_integrator_limits_forbid_ledger_talk_in_open_item_titles():
     """s11 标题只写"问题本身"：不许交代"这件事这一轮怎么处置的"（M7 A′）。"""
 
-    from pmstudio.application.agents.integrator import LIMITS_TEXT
+    from pmstudio.application.agents.integrator import limits_text
+    from tests.support.builders import STD
+
+    LIMITS_TEXT = limits_text(STD)
 
     assert "只写问题本身" in LIMITS_TEXT
     assert "本轮已出题" in LIMITS_TEXT
@@ -1277,7 +1312,10 @@ def test_no_prompt_tells_the_model_to_copy_a_bracketed_token():
 
 
 def test_the_integrator_rules_say_what_to_do_not_what_to_avoid():
-    from pmstudio.application.agents.integrator import LIMITS_TEXT
+    from pmstudio.application.agents.integrator import limits_text
+    from tests.support.builders import STD
+
+    LIMITS_TEXT = limits_text(STD)
 
     # 「拿不准」是"不确定"，不是禁令——先剔掉再数
     scannable = LIMITS_TEXT.replace("拿不准", "")
@@ -1290,7 +1328,10 @@ def test_the_integrator_rules_say_what_to_do_not_what_to_avoid():
 def test_the_rewrite_keeps_every_hard_number_and_consequence():
     """改写只为更可能被遵守，**不许顺丢信息**：硬数字与"不守会怎样"都要在原地。"""
 
-    from pmstudio.application.agents.integrator import LIMITS_TEXT
+    from pmstudio.application.agents.integrator import limits_text
+    from tests.support.builders import STD
+
+    LIMITS_TEXT = limits_text(STD)
 
     assert "5 道题" in LIMITS_TEXT        # 每批题数上限
     assert "60 条" in LIMITS_TEXT         # 提案上限
@@ -1303,7 +1344,10 @@ def test_the_rewrite_keeps_every_hard_number_and_consequence():
 def test_the_dropped_opinion_rule_is_stated_once():
     """同一条规矩说两遍就是给自己减分（指令条数本身就是成本，N=80 时全线归零）。"""
 
-    from pmstudio.application.agents.integrator import LIMITS_TEXT
+    from pmstudio.application.agents.integrator import limits_text
+    from tests.support.builders import STD
+
+    LIMITS_TEXT = limits_text(STD)
 
     hits = LIMITS_TEXT.count("dropped_opinions")
     assert hits == 1, f"dropped_opinions 出现了 {hits} 次——同一件事只讲一遍"

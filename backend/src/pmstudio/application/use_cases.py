@@ -2150,6 +2150,7 @@ class IntegrateRound:
         while True:
             round_ = self._rounds.get(round_id)
             document = self._documents.get(round_.project_id)
+            adapter = adapt(document.template)
             ledger = self._evidence.get(round_.project_id)
             # carried 只算一次：重装时模型看到的是同一份"要优先问的题"（队列在事务里才消费）
             if first_pass:
@@ -2186,6 +2187,7 @@ class IntegrateRound:
                     round_id=round_id,
                 )
                 outcome = await self._integrator.integrate(
+                    adapter=adapter,
                     document_state=render_document_state(
                         view, readiness=self._checker.check(view, adapter=adapt(document.template))
                     ),

@@ -3,9 +3,16 @@ import json
 import pytest
 
 from pmstudio.application.agents import schemas
-from pmstudio.application.agents.integrator import LIMITS_TEXT, Integrator
+from pmstudio.application.agents.integrator import Integrator, limits_text
+from pmstudio.domain.shared.template import template_from_dict
+from pmstudio.domain.shared.template_adapter import adapt
 from pmstudio.harness.errors import PacketParseError
+from tests.support.builders import STD
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway
+
+#: 断言对象从"模块常量"换成"按 standard 渲染的结果"（`02` §11.0.69）：
+#: 同样的断言，现在钉的是**实际发给模型的那段字**。
+LIMITS_TEXT = limits_text(STD)
 
 
 def test_integrator_limits_forbid_the_same_question_twice():
@@ -74,6 +81,7 @@ async def test_integrator_passes_the_open_item_list():
     integrator = Integrator(model=gateway, prompts=prompts)
 
     await integrator.integrate(
+        adapter=STD,
         document_state="# 文档",
         claims="…",
         opinions="…",
@@ -92,6 +100,7 @@ async def test_integrator_passes_the_authorized_feature_list():
     integrator = Integrator(model=gateway, prompts=prompts)
 
     await integrator.integrate(
+        adapter=STD,
         document_state="# 文档",
         claims="…",
         opinions="…",
@@ -149,6 +158,7 @@ async def test_integrator_returns_parsed_packet_and_all_slots():
     integrator = Integrator(model=gateway, prompts=prompts)
 
     outcome = await integrator.integrate(
+        adapter=STD,
         document_state="# 文档",
         claims="- [E1] 需求 · s5 · 要做一个订单导出功能",
         opinions="### seat.data_scale（数据规模与性能）…",
@@ -178,6 +188,7 @@ async def test_integrator_passes_validation_error_on_repair():
     integrator = Integrator(model=gateway, prompts=prompts)
 
     await integrator.integrate(
+        adapter=STD,
         document_state="# 文档",
         claims="…",
         opinions="…",
@@ -212,6 +223,7 @@ async def test_integrator_bad_missing_proposal_refs_is_a_packet_error():
 
     with pytest.raises(PacketParseError):
         await integrator.integrate(
+            adapter=STD,
             document_state="# 文档",
             claims="…",
             opinions="…",
@@ -249,6 +261,7 @@ async def test_integrator_reports_overflow_instead_of_raising():
     integrator = Integrator(model=gateway, prompts=RecordingPrompts())
 
     outcome = await integrator.integrate(
+        adapter=STD,
         document_state="# 文档",
         claims="…",
         opinions="…",
@@ -286,6 +299,7 @@ async def test_integrator_reports_a_non_object_item_instead_of_raising():
     integrator = Integrator(model=gateway, prompts=RecordingPrompts())
 
     outcome = await integrator.integrate(
+        adapter=STD,
         document_state="# 文档",
         claims="…",
         opinions="…",
@@ -319,6 +333,7 @@ async def test_a_packet_that_is_all_placeholders_is_an_error_not_an_empty_draft(
 
     with pytest.raises(PacketParseError) as error:
         await integrator.integrate(
+            adapter=STD,
             document_state="# 文档",
             claims="…",
             opinions="…",
@@ -371,3 +386,86 @@ async def test_dispositions_drops_a_non_object_entry_without_raising():
     assert [(item.container, item.index) for item in outcome.discarded] == [
         ("dropped_opinions", 2)
     ]
+
+
+# —— 硬规矩按模板渲染（`02` §11.0.69）：standard 逐字不变，其余模板不说别的话 ——
+
+STANDARD_LIMITS_MARKERS = (
+    "落成 s11 未决条目",
+    "优先保留 s5 功能字段与验收标准",
+    "section_id: s5, feature_slug: <那个功能>",
+    "让 s5 有东西",
+    'section_id: "s5", feature_slug: <功能>, field: "main_flow"',
+    "**s6 业务流程与交互**写的是**跨功能/端到端**的流程与异常路径",
+    "**主张落在 s6 的，这一轮必须出一条 s6 的 steps 提案**",
+    "target 必须落在 13 章内",
+    "① 章节级 {zone: body, section_id: s2}",
+    "② 章节槽 {zone: body, section_id: s8, field: compatibility}",
+    "③ 功能字段级 {zone: body, section_id: s5, feature_slug: order-export, field: acceptance}",
+)
+
+
+def test_limits_text_keeps_every_standard_rule_verbatim():
+    text = limits_text(STD)
+
+    for marker in STANDARD_LIMITS_MARKERS:
+        assert marker in text, marker
+
+
+def test_limits_text_drops_the_steps_chapter_rules_when_the_template_has_none():
+    """light 没有步骤章：两整段 s6 规矩必须消失（说了就是教模型往不存在的章写）。"""
+
+    from pmstudio.infrastructure.templates import loader
+
+    light = adapt(loader.load_template_file(loader.TEMPLATES_DIR / "light.toml"))
+    text = limits_text(light)
+
+    assert "s6" not in text
+    assert "跨功能/端到端" not in text
+    # 功能与未决那几条还在（锚点都在 light 里）
+    assert "section_id: s5, feature_slug: <那个功能>" in text
+    assert "落成 s11 未决条目" in text
+
+
+def test_limits_text_drops_the_slot_rule_when_the_template_has_no_slots():
+    """没有章节槽的模板就不给槽表那条（②）——给了模型也写不进去。"""
+
+    adapter = adapt(
+        template_from_dict(
+            {
+                "template_id": "t",
+                "title": "x",
+                "sections": [
+                    {"id": "feat", "title": "功能", "purpose": "p", "role": "feature"},
+                    {"id": "open", "title": "未决", "purpose": "p", "role": "open_questions"},
+                    {"id": "history", "title": "版本", "purpose": "p", "role": "version_history"},
+                ],
+            }
+        )
+    )
+
+    text = limits_text(adapter)
+
+    assert "章节槽" not in text
+    assert "① 章节级" in text
+    assert "③ 功能字段级" in text
+
+
+def test_limits_text_uses_the_templates_own_chapter_count():
+    """「落在 N 章内」按模板章数说，不写死 13。"""
+
+    adapter = adapt(
+        template_from_dict(
+            {
+                "template_id": "t",
+                "title": "x",
+                "sections": [
+                    {"id": "feat", "title": "功能", "purpose": "p", "role": "feature"},
+                    {"id": "open", "title": "未决", "purpose": "p", "role": "open_questions"},
+                    {"id": "history", "title": "版本", "purpose": "p", "role": "version_history"},
+                ],
+            }
+        )
+    )
+
+    assert "target 必须落在 3 章内" in limits_text(adapter)

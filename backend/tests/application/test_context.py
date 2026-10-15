@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from pmstudio.application import context
+from pmstudio.application.context import placement_text, section_slots_text, sections_text
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
@@ -33,6 +34,8 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.memory import MemoryKind
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template import template_from_dict
+from pmstudio.domain.shared.template_adapter import adapt
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.infrastructure.tools.limits import CHUNK_CHARS
 from tests.support.builders import (
@@ -378,7 +381,7 @@ def test_the_decision_label_says_how_to_spot_one():
 
     assert "定了" in hint                      # 识别线索
     assert "偏好" in hint                      # 边界要说清
-    assert "s5 功能需求" in context.SECTIONS_TEXT
+    assert "s5 功能需求" in sections_text(STD)
 
 
 def test_render_contradictions_uses_the_claim_texts():
@@ -1113,3 +1116,106 @@ def test_the_narrowed_state_still_carries_the_gap_list():
     text = context.render_document_state(document.view(), feature_slugs=frozenset({"order-export"}))
 
     assert "s6" in text or "补缺口" in text
+
+
+# —— 提示词按模板渲染（`02` §11.0.69），standard **逐字不变** ——
+
+STANDARD_SECTIONS_TEXT = """- s1 背景与问题
+- s2 目标与非目标
+- s3 用户与受众
+- s4 范围与边界
+- s5 功能需求
+- s6 业务流程与交互
+- s7 数据与接口
+- s8 非功能需求
+- s9 技术方案与约束
+- s10 假设、约束与依赖
+- s11 风险与开放问题
+- s12 上线、验收与迭代
+- s13 版本历史
+（section_id 只能填上面那个短 id，如 s3；**不要带标题、不要带空格**）"""
+
+STANDARD_SLOTS_TEXT = "\n".join(
+    f"- s8.{name}（{title}，章节槽；写它时给 section_id=s8 + field={name}，不要给 feature_slug）"
+    for name, title in (
+        ("performance", "性能"),
+        ("availability", "可用性"),
+        ("security", "安全"),
+        ("compatibility", "兼容"),
+        ("observability", "可观测"),
+        ("cost", "成本"),
+    )
+)
+
+
+def test_sections_text_reproduces_the_standard_prompt_byte_for_byte():
+    assert sections_text(STD) == STANDARD_SECTIONS_TEXT
+
+
+def test_section_slots_text_reproduces_the_standard_prompt_byte_for_byte():
+    assert section_slots_text(STD) == STANDARD_SLOTS_TEXT
+
+
+def test_sections_text_follows_a_custom_template():
+    """自由 id 的模板：章节表照模板列，末尾那句示例也跟着走。"""
+
+    adapter = adapt(
+        template_from_dict(
+            {
+                "template_id": "t",
+                "title": "x",
+                "sections": [
+                    {"id": "overview", "title": "概览", "purpose": "p"},
+                    {"id": "feat", "title": "功能", "purpose": "p", "role": "feature"},
+                    {"id": "open", "title": "未决", "purpose": "p", "role": "open_questions"},
+                    {"id": "history", "title": "版本", "purpose": "p", "role": "version_history"},
+                ],
+            }
+        )
+    )
+
+    text = sections_text(adapter)
+
+    assert text.startswith("- overview 概览\n- feat 功能\n- open 未决\n- history 版本")
+    assert "如 open" in text  # 示例取第三章（与 standard 同款取法）
+
+
+def test_section_slots_text_says_so_when_the_template_has_none():
+    adapter = adapt(
+        template_from_dict(
+            {
+                "template_id": "t",
+                "title": "x",
+                "sections": [
+                    {"id": "feat", "title": "功能", "purpose": "p", "role": "feature"},
+                    {"id": "open", "title": "未决", "purpose": "p", "role": "open_questions"},
+                    {"id": "history", "title": "版本", "purpose": "p", "role": "version_history"},
+                ],
+            }
+        )
+    )
+
+    assert section_slots_text(adapter) == "（没有章节槽）"
+
+
+def test_placement_text_names_each_chapter_and_its_role():
+    """归位表（`$placement`）：逐章一行 + 角色提示；有槽的章把槽写清楚。"""
+
+    text = placement_text(STD)
+
+    assert "- s5 功能需求：每个功能一棵子树" in text
+    assert "- s6 业务流程与交互：主流程与异常路径，按步骤写清谁在什么时候做什么。" in text
+    assert "写 s8 里的「性能」用章节槽：section_id=s8 + field=performance" in text
+    assert "版本历史" in text and "不用手写" in text
+
+
+def test_placement_text_drops_the_steps_chapter_rule_when_there_is_none():
+    """light 没有步骤章：「跨功能流程写哪一章」那句就不该出现（说了就是教模型往不存在的章写）。"""
+
+    from pmstudio.infrastructure.templates import loader
+
+    light = adapt(loader.load_template_file(loader.TEMPLATES_DIR / "light.toml"))
+    text = placement_text(light)
+
+    assert "s6" not in text
+    assert "- s5 功能需求" in text

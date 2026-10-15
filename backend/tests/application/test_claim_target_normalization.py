@@ -74,3 +74,22 @@ def test_unknown_section_still_fails_loudly():
         normalize_claim_target(
             TargetDraft(zone="body", section_id="s99"), label="need", adapter=STD
         )
+
+
+# —— 填表说明不再写死章节 id（`02` §11.0.69）——
+
+
+def test_target_draft_descriptions_do_not_name_a_fixed_chapter():
+    """`$schema_json` 是模型逐字读的填表说明：写死 s5 会让自定义模板的模型往错章归位。
+
+    只断"功能字段必须落在哪一章"这句——功能字段表是全局的（与章节无关），不动。
+    """
+
+    descriptions = "\n".join(
+        field.description or ""
+        for model in (TargetDraft,)
+        for field in model.model_fields.values()
+    )
+
+    assert "写功能字段时必须是 s5" not in descriptions
+    assert "功能锚点" in descriptions

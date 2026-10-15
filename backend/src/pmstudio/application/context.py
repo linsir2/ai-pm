@@ -32,7 +32,7 @@ from pmstudio.domain.shared.errors import BadTemplateDefinition
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.label import ClaimLabel
-from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS, slot_block_id
+from pmstudio.domain.shared.sections import slot_block_id
 from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.domain.shared.writing import BlockKind
 
@@ -68,20 +68,83 @@ LABEL_HINTS: dict[ClaimLabel, str] = {
 LABELS_TEXT = "\n".join(
     f"- {label.value}（{LABEL_TITLES[label]}）：{LABEL_HINTS[label]}" for label in ClaimLabel
 )
-# 章节表：**只给短 id 与标题**，并明说"section_id 只能填前面那个短 id"。
-# 真模型实测：写成 `section_id: "s3 用户与受众"`（把整行抄进来了）→ 未知章节 → 整轮 502。
-SECTIONS_TEXT = "\n".join(f"- {spec.section_id} {spec.title}" for spec in SECTIONS) + (
-    "\n（section_id 只能填上面那个短 id，如 s3；**不要带标题、不要带空格**）"
-)
+def sections_text(adapter: TemplateAdapter) -> str:
+    """章节表：**只给短 id 与标题**，并明说"section_id 只能填前面那个短 id"。
 
-# 章节槽：section 级内容也可以指定"落到哪个槽"（目前只有 s8 的六项表态）。
-# 与功能字段表分开列，免得模型把槽名当功能字段。
-SECTION_SLOTS_TEXT = "\n".join(
-    f"- {slot_block_id(section_id, slot.name)}（{slot.title}，章节槽；"
-    f"写它时给 section_id={section_id} + field={slot.name}，不要给 feature_slug）"
-    for section_id, slots in SECTION_SLOTS.items()
-    for slot in slots
-) or "（没有章节槽）"
+    走**文档自己的模板**（`02` §11.0.69）：自定义模板里这一句的示例 id 也跟着变——
+    写"如 s3"而模板里根本没有 s3，模型就会去填一个不存在的章节。
+    真模型实测：写成 `section_id: "s3 用户与受众"`（把整行抄进来）→ 未知章节 → 整轮 502。
+    """
+
+    ids = adapter.section_ids
+    # 举例挑**第三章**（原来写死 s3）：第一章像格式说明、末章没人写，
+    # 靠前的普通章最像"随便哪一章"，也让 standard 逐字不变。
+    sample = ids[2] if len(ids) > 2 else ids[0]
+    body = "\n".join(f"- {sid} {adapter.title_of(sid)}" for sid in ids)
+    return f"{body}\n（section_id 只能填上面那个短 id，如 {sample}；**不要带标题、不要带空格**）"
+
+
+def section_slots_text(adapter: TemplateAdapter) -> str:
+    """章节槽：section 级内容也可以指定"落到哪个槽"（standard 里是 s8 的六项表态）。
+
+    与功能字段表分开列，免得模型把槽名当功能字段。模板没有槽就说没有——
+    不列一张空表，也不给一张别的模板的表。
+    """
+
+    rows = [
+        f"- {slot_block_id(section_id, slot.name)}（{slot.title}，章节槽；"
+        f"写它时给 section_id={section_id} + field={slot.name}，不要给 feature_slug）"
+        for section_id in adapter.section_ids
+        for slot in adapter.slots_of(section_id)
+    ]
+    return "\n".join(rows) or "（没有章节槽）"
+
+
+def placement_text(adapter: TemplateAdapter) -> str:
+    """归位表：内容该落到哪一章、怎么落（`$placement` 槽）。
+
+    取代 `analyzer.md` 里那张写死 13 章的表（`02` §11.0.69）：逐章一行（id + 标题 +
+    这一章是干什么的），再按角色补四条"这一章有什么特别规矩"；**步骤章那两条只在模板
+    真的有步骤章时出现**——教模型往不存在的章写，比不教更糟。
+    """
+
+    lines = [
+        f"- {sid} {adapter.title_of(sid)}：{adapter.purpose_of(sid)}"
+
+        for sid in adapter.section_ids
+    ]
+    home = str(adapter.feature_home)
+    open_home = str(adapter.open_home)
+    steps = adapter.steps_section()
+    decision = adapter.decision_section()
+    # 功能怎么走一遍 → 指到功能字段 main_flow（P38 真跑相关性：标了 89% 会写，没标 23%）。
+    # 这条不是模板事实（功能字段表是全局的），但**落点**是：写在哪一章。
+    lines.append(
+        f"- 功能字段只落在 {home} 那一章；章节级内容（目标 / 范围 / 受众 / 整章流程）落在别的章，"
+        f"别都堆进 {home}"
+    )
+    lines.append(
+        f"- 还没定的事落 {open_home}（标题只写问题本身）；"
+        f"{adapter.version_home} 由系统生成，不用手写"
+    )
+    lines.append(
+        f"- 功能**怎么走一遍**（这个功能的正常路径、先后步骤：谁先做什么、做完是什么）"
+        f" → {home}，写法：section_id + feature_slug + `field: main_flow`"
+    )
+    if steps is not None:
+        lines.append(
+            f"- {steps} 写的是**跨功能 / 端到端**的流程与异常路径，kind 必须写 steps；"
+            f"功能**内部**的正常路径写功能字段 main_flow——同一段流程只写一处"
+        )
+    if decision is not None:
+        lines.append(f"- {decision} 写关键决策与备选，kind 写 decision")
+    for sid in adapter.section_ids:
+        for slot in adapter.slots_of(sid):
+            lines.append(
+                f"- 写 {sid} 里的「{slot.title}」用章节槽：section_id={sid} + field={slot.name}"
+                "（不要给 feature_slug）"
+            )
+    return "\n".join(lines)
 
 #: 字段表里"**设计说必填、但代码没标必填**"的那几个：给一句**提示词压力**——它不是判据，
 #: 只是让模型看得见"这一轮该写"。

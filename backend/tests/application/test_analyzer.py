@@ -690,30 +690,37 @@ async def test_guess_without_assumption_is_still_fatal():
         await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
 
 
-def test_analyzer_prompt_routes_backbone_sentences_to_their_chapters():
+async def test_analyzer_prompt_routes_backbone_sentences_to_their_chapters():
     """真跑实测（`.codex/runs/2026-10-01/报告.md` F18）：一份叙述式输入里 12 条主张
     有 **10 条**落进 `s5/*.user_story`，s1/s2/s3/s4 **零条** → 整合者拿不到写那几章的授权
     → 8 个阻塞；而带材料那条车道反而归得准，说明是提示词没说清，不是模型不会。
+
+    2026-10-15（`02` §11.0.69）：那张逐章表从 `.md` 静态文件搬进了 `$placement` 槽
+    （由模板渲染，逐章带 purpose）。守卫跟着搬——**它守的是"提示词里必须有这条路由信号"**，
+    不是"那句话必须写在 .md 里"。目的相同：模型要知道"现状归 s1、目标归 s2…"。
     """
 
-    body = (PROMPTS_DIR / "analyzer.md").read_text(encoding="utf-8")
+    prompts = RecordingPrompts()
+    analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": CLAIMS_REPLY}), prompts)
 
-    # 锚点用归位表的表头（不是某个魔法串）：表在，规则就在
-    assert "这段话在说什么" in body
-    table = body[body.index("这段话在说什么") :]
-    for chapter, phrase in (
-        ("**s1**", "现状、痛点、不做的代价"),
-        ("**s2**", "要达成什么、成功标准"),
-        ("**s3**", "谁在用、什么角色"),
-        ("**s4**", "本期做什么、本期**不做**什么"),
-        ("**s10**", "假设、依赖、外部系统"),
-        ("**s12**", "什么时候上线、怎么验收"),
-        ("**s8**", "性能/可用性/安全/兼容/可观测/成本"),
-        ("**s5**", "section_id + feature_slug"),
+    await analyzer.analyze(adapter=STD, user_input=INPUT, document_state="# 文档")
+
+    placement = prompts.last("analyzer")["placement"]
+    body = (PROMPTS_DIR / "analyzer.md").read_text(encoding="utf-8")
+    for chapter, cue in (
+        ("s1", "为什么现在要做"),
+        ("s2", "要达成什么"),
+        ("s3", "给谁用"),
+        ("s4", "本期做到哪"),
+        ("s10", "假设要写"),
+        ("s12", "怎么上线"),
     ):
-        assert phrase in table, f"{chapter} 那一行没写"
-        assert chapter in table, f"{chapter} 没出现在归位表里"
-    assert "各切一条" in body  # 规则句在表前一句，表里只要六章都在
+        line = next(line for line in placement.splitlines() if line.startswith(f"- {chapter} "))
+        assert cue in line, f"{chapter} 那一行没说清这一章收什么：{line}"
+    # 功能章与"写进去要带什么"在同一条里（锚点 + 字段写法）
+    assert "- s5 功能需求" in placement
+    assert "功能字段只落在 s5 那一章" in placement
+    assert "各切一条" in body  # 一段话混着几类内容要各切一条（规则句留在 .md）
 
 
 async def test_analyzer_still_sends_the_section_table_to_the_model():
@@ -877,3 +884,58 @@ async def test_claim_citing_unknown_eid_fails_packet():
             adapter=STD,
             user_input="按这份材料写", document_state="# 文档", material_eids=frozenset()
         )
+
+
+# —— 归位表随模板走（`02` §11.0.69）：提示词里不再逐章点名 sN ——
+
+
+async def test_analyzer_prompt_carries_a_placement_section_from_the_template():
+    prompts = RecordingPrompts()
+    analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": CLAIMS_REPLY}), prompts)
+
+    await analyzer.analyze(
+        adapter=STD, user_input=INPUT, document_state="# 订单中台（v1）"
+    )
+    slots = prompts.last("analyzer")
+
+    assert "placement" in slots
+    assert "- s5 功能需求" in slots["placement"]
+    assert "写 s8 里的「性能」用章节槽" in slots["placement"]
+
+
+LIGHT_CLAIMS_REPLY = json.dumps(
+    {
+        "basis": "读了这份文档的六章与本轮输入",
+        "claims": [
+            {
+                "text": "运营每天都要用",
+                "raw_span": "运营每天都要用",
+                "label": "fact",
+                "zone": "body",
+                "section_id": "s1",
+            },
+        ],
+        "seats": [{"seat_id": SEAT, "why": "你说到了运营每天在用"}],
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_analyzer_prompt_of_a_template_without_steps_never_mentions_s6():
+    """light 没有步骤章：整段提示词里不该出现 s6（教模型往不存在的章归位）。"""
+
+    from pmstudio.domain.shared.template_adapter import adapt
+    from pmstudio.infrastructure.templates import loader
+
+    light = adapt(loader.load_template_file(loader.TEMPLATES_DIR / "light.toml"))
+    prompts = RecordingPrompts()
+    analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": LIGHT_CLAIMS_REPLY}), prompts)
+
+    await analyzer.analyze(
+        adapter=light, user_input=INPUT, document_state="# 轻量（v1）"
+    )
+    slots = prompts.last("analyzer")
+
+    assert "s6" not in slots["placement"]
+    assert "- s5 功能需求" in slots["placement"]
+    assert "没有章节槽" in slots["section_slots"]

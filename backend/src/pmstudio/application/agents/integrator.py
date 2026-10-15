@@ -12,9 +12,10 @@ from pmstudio.application.context import (
     NO_MATERIAL_TEXT,
     NO_MEMORY_TEXT,
     NO_PENDING_QUESTION_TEXT,
-    SECTION_SLOTS_TEXT,
+    section_slots_text,
 )
 from pmstudio.domain.shared.ids import RoundId
+from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.harness.agents.agent import Agent
 from pmstudio.harness.errors import PacketParseError
 from pmstudio.harness.model.contracts import ModelGateway, PromptLibrary
@@ -63,17 +64,32 @@ class DispositionOutcome:
         return self.envelope.discarded
 
 
-LIMITS_TEXT = "\n".join(
-    [
-        "- 一批最多 5 道题（问出去就 5 个名额，阻塞题优先）。超出的**系统会替你留着，下一批先问**；"
+def limits_text(adapter: TemplateAdapter) -> str:
+    """硬规矩（`$limits` 槽）：限额、去处写法、判重口径。
+
+    按**文档自己的模板**渲染（`02` §11.0.69）：功能章 / 未决章 / 步骤章 / 章节槽 /
+    章数都取适配器；模板里没有步骤章或没有槽，那几条规矩**整条不出现**——教模型往
+    不存在的章或槽里写，比不说更糟。standard 下逐字不变（有相等断言钉住）。
+    """
+
+    home = str(adapter.feature_home)
+    open_home = str(adapter.open_home)
+    steps = adapter.steps_section()
+    steps_id = str(steps) if steps is not None else ""
+    steps_title = adapter.title_of(steps) if steps is not None else ""
+    chapter_count = len(adapter.section_ids)
+    rows = [
+        "- 一批最多 5 道题（问出去就 5 个名额，阻塞题优先）。"
+        "超出的**系统会替你留着，下一批先问**；"
         "`list_items` 放「要写下来但本轮不问」的事，两种东西分开用。"
-        "轮结束还没排上的会落成 s11 未决条目；其中阻塞题会标〔未决·阻塞〕，"
+        f"轮结束还没排上的会落成 {open_home} 未决条目；其中阻塞题会标〔未决·阻塞〕，"
         "**那是会挡住就绪判定的**，所以阻塞题排在前面",
-        "- **s11 未决条目的标题只写问题本身**（例：「量级是多少」）；「本轮已出题」「题位已满」"
+        f"- **{open_home} 未决条目的标题只写问题本身**（例：「量级是多少」）；"
+        "「本轮已出题」「题位已满」"
         "「（open12）」是系统自己的台账，写进标题读者看不懂，而且系统靠标题认「这其实是同一件事」。"
         "行首的条目地址只在出 `remove` 时填进 `entry_id`，出处编号只有 `E…` 这一种",
         "- 内容候选（proposals）**一次整合最多 60 条**（这一轮可能整合好几次，每次都守这 60）；"
-        "同一件事只说一次，优先保留 s5 功能字段与验收标准。"
+        f"同一件事只说一次，优先保留 {home} 功能字段与验收标准。"
         "超了系统会先让你精简一次、再**截断**丢掉多余的——那几条用户拿不到（只留在留痕里），"
         "所以装不下就先出题，或者放进 list_items 下一趟再说",
         "- 一条提案的 **text 就是文档里要出现的那句话**：依据说明、为什么这么定、"
@@ -81,25 +97,33 @@ LIMITS_TEXT = "\n".join(
         "正文越长，这一趟越慢，也越容易撞上输出截断",
         "- dropped_opinions 一轮最多 84 条（7 席 × 12 条）：**每一条**没采用的席位意见都写进去"
         "（handle + 一句话原因）——事后再问「这条为什么没进文档」时，只有这段留痕答得上来",
-        "- **本轮主张点名过的功能已授权**：内容必须落到 "
-        "{zone: body, section_id: s5, feature_slug: <那个功能>, field: <功能字段>}；"
+        f"- **本轮主张点名过的功能已授权**：内容必须落到 "
+        f"{{zone: body, section_id: {home}, feature_slug: <那个功能>, field: <功能字段>}}；"
         "章节级留给目标/范围/受众/端到端流程这类整章内容",
-        "- 一条功能内容都没有时，先把主张点到的每个功能写成 name / one_liner / goal / "
-        "audience / exceptions / acceptance 里的至少一条，让 s5 有东西",
+        f"- 一条功能内容都没有时，先把主张点到的每个功能写成 name / one_liner / goal / "
+        f"audience / exceptions / acceptance 里的至少一条，让 {home} 有东西",
         "- **每个功能的正常路径要有一条 `main_flow`**"
-        "（`{zone: \"body\", section_id: \"s5\", feature_slug: <功能>, field: \"main_flow\"}`，"
+        "（`{zone: \"body\", section_id: \"" + home
+        + "\", feature_slug: <功能>, field: \"main_flow\"}`，"
         "一条提案写完整条：1. …；2. …）：依据（主张 / 答案 / 材料）里**看不出步骤的功能，"
         "就出题问用户**",
-        "- **s6 业务流程与交互**写的是**跨功能/端到端**的流程与异常路径："
-        '{zone: "body", section_id: "s6", kind: "steps"}——**kind 必须写 steps**'
-        "（写成 text 就只是普通正文：这一章会一直判成「还没有主流程」，界面与导出也按步骤排）。"
-        "一条提案写完整条流程（分步写在一段里，像功能字段的 main_flow 那样，"
-        "例如「1. …；2. …；3. …」）。"
-        "s6 的每一步都从主张 / 答案 / 材料里找依据：找得到才写，找不到就出题问用户，或者空着。"
-        "功能**内部**的正常路径写 s5 的 main_flow——同一段流程只写一处",
-        "- **主张落在 s6 的，这一轮必须出一条 s6 的 steps 提案**：把已经写进各功能 main_flow 的步骤"
-        "**按先后顺序串起来**就是它——**串起来不算编造**，步骤只取各功能 main_flow 里已经写过的；"
-        "一步都串不起来，就出题问用户",
+    ]
+    if steps is not None:
+        rows += [
+            f"- **{steps_id} {steps_title}**写的是**跨功能/端到端**的流程与异常路径："
+            f'{{zone: "body", section_id: {steps_id}, kind: "steps"}}——**kind 必须写 steps**'
+            "（写成 text 就只是普通正文：这一章会一直判成「还没有主流程」，界面与导出也按步骤排）。"
+            "一条提案写完整条流程（分步写在一段里，像功能字段的 main_flow 那样，"
+            "例如「1. …；2. …；3. …」）。"
+            f"{steps_id} 的每一步都从主张 / 答案 / 材料里找依据：找得到才写，找不到就出题问用户，"
+            f"或者空着。功能**内部**的正常路径写 {home} 的 main_flow——同一段流程只写一处",
+            f"- **主张落在 {steps_id} 的，这一轮必须出一条 {steps_id} 的 steps 提案**："
+            "把已经写进各功能 main_flow 的步骤"
+            "**按先后顺序串起来**就是它——**串起来不算编造**，"
+            "步骤只取各功能 main_flow 里已经写过的；"
+            "一步都串不起来，就出题问用户",
+        ]
+    rows += [
         "- 上下文里列出的**未决项**本轮必须处理：能定的写内容，并出一条 "
         "{op: remove, entry_id: <那条未决项的 id>} 把它撤下；定不了的出成题",
         "- evidence_refs 里**只放 E 开头的出处编号**（E1、E9…），且是清单里已有的；"
@@ -116,15 +140,37 @@ LIMITS_TEXT = "\n".join(
         "from_opinions 里必须写上它的席位条目地址（seat.xxx:O2）",
         "- 功能子树由主张授权才建：席位想建新功能时，出一道具，kind=decision，"
         "选项 id 用 new_feature_yes / new_feature_no",
-        "- target 必须落在 13 章内，三种写法各配各的字段（配错就是写错去处）："
-        "  ① 章节级 {zone: body, section_id: s2}（配 kind，如 bullet_list）——**只给 "
-        "section_id + kind，不配 field**（one_liner / goal 是「功能字段」，只在 s5 配 "
-        "feature_slug 用；s1/s2 这些章没有字段）；"
-        "  ② 章节槽 {zone: body, section_id: s8, field: compatibility}——只有 s8 有六个槽"
-        "（performance / availability / security / compatibility / observability / cost），"
-        "**只给 section_id + field，不配 feature_slug**；非功能需求优先落到对应的槽里；"
-        "  ③ 功能字段级 {zone: body, section_id: s5, feature_slug: order-export, "
-        "field: acceptance}——**给了 feature_slug 就必须是 s5，field 只能取功能字段表里的名字**",
+        f"- target 必须落在 {chapter_count} 章内，"
+        "三种写法各配各的字段（配错就是写错去处）：",
+    ]
+    # ① 章节级举**第二章**当例子（standard 原来举 s2）：第一章像格式说明、末章没人写。
+    # 与 `sections_text` 的取样同一个理由，规则也只有这一条。
+    ids = adapter.section_ids
+    example_chapter = ids[1] if len(ids) > 1 else ids[0]
+    rows[-1] += (
+        f"  ① 章节级 {{zone: body, section_id: {example_chapter}}}（配 kind，如 bullet_list）——"
+        "**只给 section_id + kind，不配 field**（one_liner / goal 是「功能字段」，只在 "
+        f"{home} 配 feature_slug 用；{example_chapter} 这些章没有字段）；"
+    )
+    slotted = [sid for sid in adapter.section_ids if adapter.slots_of(sid)]
+    if slotted:
+        slot_chapter = slotted[0]
+        slots = adapter.slots_of(slot_chapter)
+        # 例子取**第四个**槽（standard 的 s8 举的是 compatibility）：这句提示词被真跑
+        # 验证过，换个字段名就是无收益的措辞变动，模型行为却可能跟着变。
+        example_slot = slots[3] if len(slots) > 3 else slots[0]
+        names = " / ".join(slot.name for slot in adapter.slots_of(slot_chapter))
+        rows[-1] += (
+            f"  ② 章节槽 {{zone: body, section_id: {slot_chapter}, field: {example_slot.name}}}"
+            f"——只有 {slot_chapter} 有这些槽（{names}），"
+            f"**只给 section_id + field，不配 feature_slug**；优先落到对应的槽里；"
+        )
+    rows[-1] += (
+        f"  ③ 功能字段级 {{zone: body, section_id: {home}, feature_slug: order-export, "
+        f"field: acceptance}}——**给了 feature_slug 就必须是 {home}，"
+        "field 只能取功能字段表里的名字**"
+    )
+    rows += [
         "- field 的合法值分两个命名空间：有 feature_slug 时取功能字段表，没有时取该章的槽表；"
         "两张表都在下面",
         "- 去处写错**只丢那一条**（记进留痕，别人不知道它本来想说什么）；"
@@ -143,7 +189,7 @@ LIMITS_TEXT = "\n".join(
         "界面上矛盾题与缺信息题是分开显示的",
         "- 每条内容候选一句一件事；不确定的去出题",
     ]
-)
+    return "\n".join(rows)
 
 
 
@@ -168,6 +214,7 @@ class Integrator(Agent[IntegrationOutcome, schemas.IntegrationPacket]):
     async def integrate(
         self,
         *,
+        adapter: TemplateAdapter,
         document_state: str,
         claims: str,
         opinions: str,
@@ -208,9 +255,9 @@ class Integrator(Agent[IntegrationOutcome, schemas.IntegrationPacket]):
                 "inspirations_index": inspirations_index,
                 "entry_ids": entry_ids,
                 "external_material": external_material,
-                "limits": LIMITS_TEXT,
+                "limits": limits_text(adapter),
                 "feature_fields": FEATURE_FIELDS_TEXT,
-                "section_slots": SECTION_SLOTS_TEXT,
+                "section_slots": section_slots_text(adapter),
                 "validation_error": validation_error,
                 "authorized_features": authorized_features,
                 "open_items": open_items,

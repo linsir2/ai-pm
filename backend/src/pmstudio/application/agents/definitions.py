@@ -29,6 +29,7 @@ ANALYZER = AgentDefinition(
         "user_input",
         "labels",
         "sections",
+        "placement",
         "feature_fields",
         "section_slots",
         "seat_catalog",

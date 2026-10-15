@@ -15,9 +15,10 @@ from pmstudio.application.context import (
     FEATURE_FIELDS_TEXT,
     LABELS_TEXT,
     NO_MATERIAL_TEXT,
-    SECTION_SLOTS_TEXT,
-    SECTIONS_TEXT,
+    placement_text,
     render_seat_catalog,
+    section_slots_text,
+    sections_text,
 )
 from pmstudio.application.evidence_refs import resolve_evidence_refs
 from pmstudio.application.ports import SeatCatalog
@@ -177,9 +178,10 @@ class ClaimAnalyzer(Agent[Analysis, schemas.ClaimsPacket]):
                 "document_state": document_state,
                 "user_input": user_input,
                 "labels": LABELS_TEXT,
-                "sections": SECTIONS_TEXT,
+                "placement": placement_text(adapter),
+                "sections": sections_text(adapter),
                 "feature_fields": FEATURE_FIELDS_TEXT,
-                "section_slots": SECTION_SLOTS_TEXT,
+                "section_slots": section_slots_text(adapter),
                 "seat_catalog": render_seat_catalog(self._catalog.filter_by_input(user_input)),
                 "external_material": external_material,
                 "project_context": project_context,
