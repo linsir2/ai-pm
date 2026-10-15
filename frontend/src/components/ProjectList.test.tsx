@@ -200,6 +200,12 @@ describe("ProjectList", () => {
     expect(props.onManageTemplates).toHaveBeenCalledTimes(1);
   });
 
+  it("manage_templates_entry_calls_back_once", () => {
+    const props = renderList({ onManageTemplates: vi.fn() });
+    fireEvent.click(screen.getByRole("button", { name: "管理模板 →" }));
+    expect(props.onManageTemplates).toHaveBeenCalledTimes(1);
+  });
+
   it("slim_meta_line_shows_count_model_and_limits_without_claiming_13_chapters", () => {
     renderList({ model: "openai/qwen3.8-flash" });
 
