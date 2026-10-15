@@ -35,10 +35,12 @@ export function needsLoopAttention(round: RoundView | null): boolean {
 }
 
 /** rail 徽标数：未答题数 + 草案待确认组数（0/1）。
+    非任务态（`needsLoopAttention` 为 false，含 done 轮的 draft 残留）一律归零——
+    徽标只给"现在要点开 rail 去干活"计数，不给 stale 投影计数。
     `answer_sets` 的 answered/skipped 是**计数**（`api/types.ts:336`），不是题 id——
     未答 = 当前批题数 − 历批已处理计数（下限 0，不碰 drafts 本地态）。 */
 export function loopBadgeCount(round: RoundView | null): number {
-  if (round === null) return 0;
+  if (round === null || !needsLoopAttention(round)) return 0;
   let done = 0;
   for (const batch of round.answer_sets ?? []) {
     done += batch.answered + batch.skipped;

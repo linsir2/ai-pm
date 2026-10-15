@@ -144,6 +144,17 @@ describe("loopBadgeCount（rail 徽标：未答题数 + 草案组 0/1）", () =>
     expect(loopBadgeCount(round({ questions: one }))).toBe(1);
     expect(loopBadgeCount(round({ questions: [] }))).toBe(0);
   });
+
+  it("非任务态一律归零：done 轮 draft 残留也不计数", () => {
+    const questions = [{ question_id: "q1" }, { question_id: "q2" }];
+    const r = round({
+      step: "done",
+      waiting_on: "none",
+      questions: questions as unknown as RoundView["questions"],
+      draft: { draft_id: "d1", groups: [], proposals: [], gaps: [] },
+    });
+    expect(loopBadgeCount(r)).toBe(0);
+  });
 });
 describe("roundElapsed（开局时长，rounds 列表拼）", () => {
   const rounds = [{ round_id: "r1", created_at: "2026-10-13T10:00:00.000Z" }];
