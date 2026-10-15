@@ -90,6 +90,7 @@ function renderList(over: Partial<Parameters<typeof ProjectList>[0]> = {}) {
     booting: false,
     limits: LIMITS,
     templates: TEMPLATES,
+    onManageTemplates: vi.fn(),
     ...over,
   };
   render(<ProjectList {...props} />);

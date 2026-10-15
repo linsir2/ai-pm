@@ -50,7 +50,7 @@ export function ProjectList({
   /** 从模板库「用这个建项目」带回来的预选项（`06` §2.3）；null = 用既有默认。 */
   initialTemplateId?: string | null;
   /** 模板库入口（`06` §2.4 §1）：与 TopBar 模板按钮同一动作（`setView("templates")`）。 */
-  onManageTemplates?: () => void;
+  onManageTemplates: () => void;
 }) {
   const [active, setActive] = useState("home-new");
   useEffect(() => {
