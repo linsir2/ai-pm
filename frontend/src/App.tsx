@@ -408,7 +408,7 @@ export default function App() {
       <EditScope value={editApi}>
         <ExplorationScope value={researchApi}>
         <DiscussionScope value={discussionApi}>
-        <div className={docOpen ? (loopExpanded ? "shell" : "shell shell--noloop") : "shell shell--nodoc"}>
+        <div className={docOpen ? (loopExpanded ? "shell" : "shell shell--noloop") : (loopExpanded ? "shell shell--nodoc" : "shell shell--nodoc shell--noloop")}>
           <TopBar
             projects={projects}
             project={project}

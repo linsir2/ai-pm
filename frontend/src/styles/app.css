@@ -125,6 +125,27 @@ a {
   padding: var(--space-2) 4px;
 }
 
+/* 文档关 + 右栏折叠：照抄 .shell--noloop 模式，保住 56px rail 列。
+   中列（doc 位）空着（`.doc` 仍 `display: none`），rail 落在右列；
+   `padding-inline: 0` 盖掉上面 `.shell--nodoc .loop` 的居中限宽（56px 列里它本来也就算出 0）。 */
+.shell--nodoc.shell--noloop {
+  grid-template-columns: 208px minmax(0, 1fr) 56px;
+  grid-template-areas:
+    "top top top"
+    "nav doc loop";
+}
+
+.shell--nodoc.shell--noloop .loop {
+  align-items: center;
+  padding-top: var(--space-3);
+  padding-inline: 0;
+}
+
+.shell--nodoc.shell--noloop .loop > .topbar__action {
+  writing-mode: vertical-rl;
+  padding: var(--space-2) 4px;
+}
+
 .shell--plain {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 48px minmax(0, 1fr);
