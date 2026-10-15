@@ -4,6 +4,8 @@
 摘要带模板 → 非 standard 开轮 409 → 重启（同库再 build）后自定义与快照都在。
 """
 
+import json
+
 from tests.e2e.test_closed_loop import (
     CLAIMS_REPLY,
     DRAFT_REPLY,
@@ -241,3 +243,116 @@ async def test_deleting_a_template_leaves_every_existing_project_openable(make_a
     ]
     assert [item["project_id"] for item in listed.json()] == [project["project_id"]]
     assert rebuild.status_code == 404
+
+
+TWO_CLAIMS_REPLY = json.dumps(
+    {
+        "basis": "读了 s1–s13 全文（空文档）与本轮输入",
+        "claims": [
+            {
+                "text": "社区食堂现在靠手工登记订餐",
+                "raw_span": "社区食堂现在靠手工登记订餐",
+                "label": "fact",
+                "zone": "body",
+                "section_id": "s1",
+            },
+            {
+                "text": "下个月 15 号必须上线",
+                "raw_span": "下个月 15 号必须上线",
+                "label": "constraint",
+                "zone": "body",
+                "section_id": "s1",
+            },
+        ],
+        "seats": [
+            {"seat_id": "seat.data_scale", "why": "你说到了单量"},
+        ],
+    },
+    ensure_ascii=False,
+)
+
+DRAFT_CITING_ONLY_E1_REPLY = json.dumps(
+    {
+        "questions": [],
+        "list_items": [],
+        "proposals": [
+            {
+                "op": "add",
+                "target": {"zone": "body", "section_id": "s2"},
+                "text": "把手工登记换成线上订餐",
+                "origin_type": "derived",
+                "evidence_refs": ["E1"],
+                "rationale": "手工登记是现状",
+            },
+        ],
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_an_uncited_claim_lands_at_its_own_target_in_the_draft(make_app):
+    """E6 现场的复刻（`04-未决.md` §N1）：整合者只引用了 E1，E2 没被引用——
+    草案里必须多一条 USER 提案（去处是它自己的 s1，默认勾选），而不是静默消失。"""
+
+    from tests.e2e.test_closed_loop import SEAT_REPLY
+
+    app, _ = make_app(
+        replies={
+            "claims": TWO_CLAIMS_REPLY,
+            "integration": [DRAFT_CITING_ONLY_E1_REPLY],
+        },
+        seat_replies={"seat.data_scale": SEAT_REPLY},
+    )
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "食堂"})
+        ).json()["project_id"]
+        started = await start_round(
+            client,
+            project_id,
+            user_input="社区食堂现在靠手工登记订餐，下个月 15 号必须上线。",
+        )
+        assert started["waiting_on"] == "opening_card"
+
+        opened = await client.post(
+            f"/api/rounds/{started['round_id']}/opening",
+            json={"seats": ["seat.data_scale"], "claim_edits": []},
+        )
+        assert opened.status_code == 200, opened.text
+        draft = opened.json()
+        assert draft["waiting_on"] == "draft_card", draft.get("waiting_on")
+
+        landed = [
+            proposal
+            for proposal in draft["draft"]["proposals"]
+            if proposal["origin_type"] == "user"
+            and proposal["text"] == "下个月 15 号必须上线"
+        ]
+        assert len(landed) == 1, [
+            (item["origin_type"], item["text"], item["target_label"])
+            for item in draft["draft"]["proposals"]
+        ]
+        assert landed[0]["target_label"] == "s1"
+
+        accepted = [
+            proposal["proposal_id"]
+            for proposal in draft["draft"]["proposals"]
+            if proposal["origin_type"] != "proposed"
+        ]
+        assert landed[0]["proposal_id"] in accepted  # USER 默认勾选：不勾等于静默丢
+        confirmed = await client.post(
+            f"/api/rounds/{started['round_id']}/confirm", json={"accepted": accepted}
+        )
+        assert confirmed.status_code == 200, confirmed.text
+
+        workspace = (await client.get(f"/api/projects/{project_id}/workspace")).json()
+        s1 = next(
+            section
+            for section in workspace["document"]["sections"]
+            if section["section_id"] == "s1"
+        )
+        assert any(
+            "下个月 15 号必须上线" in entry["text"]
+            for block in s1["blocks"]
+            for entry in block["entries"]
+        ), s1

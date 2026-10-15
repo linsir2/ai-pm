@@ -1130,6 +1130,76 @@ def landed_answer_proposals(
     return LandedAnswers(proposals=tuple(landed), notes=tuple(notes))
 
 
+def landed_claim_proposals(
+    round_: Round,
+    *,
+    document: Document,
+    cited: frozenset[EvidenceId] = frozenset(),
+    start_index: int = 1,
+) -> LandedAnswers:
+    """主张要么被引用、要么机械落地（D3 向 claims 延伸，`02` §11.0.71）。
+
+    现场：E6「必须 9 月 20 号之前办完」没被任何 proposal 引用，s11 也是空的——
+    它静默消失了（`04-未决.md` §N1）。`unaccounted_drops` 只审计席位意见，
+    `landed_answer_proposals` 只管答案，claims 是三不管地带。
+
+    与 `landed_answer_proposals` 同构，差异只有三处（都是 claims 的形态决定的，
+    不是新规则）：① 编号直接取 `claim.eid`（答案要去账本里按题查，主张自带——
+    v1 里 Assigner 逐条登记，`None` 到不了这里）；② 文本原样（答案要拼选项文案，
+    主张本来就是人话）；③ 没有"空内容"守卫（`Claim.__post_init__` 禁空文本）。
+    """
+
+    adapter = adapt(document.template)
+    existing_features = frozenset(
+        block.feature_slug for block in document.features() if block.feature_slug is not None
+    )
+    authorized = round_.authorized_new_features
+
+    landed: list[Proposal] = []
+    notes: list[str] = []
+    index = start_index
+    for claim in round_.claims:
+        if claim.eid is None:
+            continue  # 认不出编号就没法署名（与答案的"认不出"同 guard）
+        if claim.eid in cited:
+            continue  # 已经被引用（整合者干完了活）
+        slug = claim.target.feature_slug
+        if slug is not None and slug not in existing_features and slug not in authorized:
+            notes.append(
+                f"「{claim.text}」这条输入没落进正文："
+                f"它想写进功能 {slug}，但这个功能还没被授权"
+                "（要写就先答一次「这是不是独立功能」）。"
+            )
+            continue
+        try:
+            kind = _kind_for(claim.target, None, adapter)
+        except (PacketParseError, DomainError) as error:
+            # 去处在**内容层**不合法（如写了不存在的章节）：跳过并说清，
+            # 绝不把整轮打崩——用户刚说完一句话，一个去处写错不该让这一趟全丢。
+            notes.append(
+                f"「{claim.text}」这条输入没落进正文：去处 "
+                f"{claim.target.label()} 不合法（{error}）。"
+            )
+            continue
+        landed.append(
+            Proposal(
+                proposal_id=ProposalId(f"p{index:02d}"),
+                entry_id=EntryId(f"{round_.round_id}#{index:02d}"),
+                op=WriteOp.ADD,
+                target=claim.target,
+                text=claim.text,
+                origin=Origin(
+                    OriginType.USER,
+                    (claim.eid,),
+                    "本轮输入机械落地（整合者没有引用它）",
+                ),
+                kind=kind,
+            )
+        )
+        index += 1
+    return LandedAnswers(proposals=tuple(landed), notes=tuple(notes))
+
+
 def _answer_detail(question: Question, answer: object) -> str:
     """答案的人话：优先用**选项文案**（`new_feature_no` 这种机器 id 不能进正文），否则自由文本。"""
 

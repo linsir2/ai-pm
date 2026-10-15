@@ -698,3 +698,93 @@ def test_open_questions_chapter_is_skipped_in_the_citation_appendix():
     # 它的口径是"不列入清单、但仍可按编号查"：编号不进正文，也不出现在附录清单里
     assert "只被第 5 章未决清单引用" in text
     assert f"- {eid} ·" not in text
+
+
+def with_list_like_entry(document: Document) -> Document:
+    """模型写的条目是多行 markdown（真跑现场：goal 字段里 "- 解决…\\n- 通过…\\n- 丰富…"）。"""
+
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-list",
+                entry_id=EntryId("en-list"),
+                op=WriteOp.ADD,
+                target=Target.body("s1"),
+                text="- 解决老人信息触达难问题\n- 通过数字化流程提升效率\n- 丰富社区文化生活",
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.TEXT,
+            )
+        ],
+        now=NOW,
+        summary="落一条列表式正文",
+    )
+    return document
+
+
+def test_a_list_like_entry_is_rendered_with_a_single_dash():
+    """渲染器自己加 `- `，正文里的那个必须剥掉一个——否则导出里出现 `- - `。"""
+
+    text = export(with_list_like_entry(make_document()), ledger_with_two_entries())
+
+    assert "- 解决老人信息触达难问题" in text
+    assert "- - " not in text
+
+
+def test_continuation_lines_keep_their_indent():
+    """换行续行不能顶格：否则第二行看着像另一条，还丢了编号归属。"""
+
+    text = export(with_list_like_entry(make_document()), ledger_with_two_entries())
+
+    assert "\n  通过数字化流程提升效率" in text
+    assert "\n- 通过数字化" not in text
+    assert "\n  - 通过数字化" not in text
+
+
+def test_plain_text_is_rendered_exactly_as_before():
+    """没列表符的正文逐字不变（老用例全过即证，这里钉住"只动有标记的行"）。"""
+
+    document = make_document()
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-plain",
+                entry_id=EntryId("en-plain"),
+                op=WriteOp.ADD,
+                target=Target.body("s1"),
+                text="社区食堂现在靠手工登记",
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.TEXT,
+            )
+        ],
+        now=NOW,
+        summary="落一条普通正文",
+    )
+    text = export(document, ledger_with_two_entries())
+
+    assert "\n- 社区食堂现在靠手工登记〔E1〕" in text
+
+
+def test_only_unordered_markers_are_stripped():
+    """`-5`（负数）与 `2024. 年报`（有序编号）原样保留：剥错了就是改用户内容。"""
+
+    document = make_document()
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i-num",
+                entry_id=EntryId("en-num"),
+                op=WriteOp.ADD,
+                target=Target.body("s1"),
+                text="-5 个窗口\n2024. 年报已归档",
+                refs=(EvidenceId("E1"),),
+                kind=BlockKind.TEXT,
+            )
+        ],
+        now=NOW,
+        summary="落一条数字正文",
+    )
+    text = export(document, ledger_with_two_entries())
+
+    assert "- -5 个窗口" in text  # 子弹 + "-5" 原文：解析回 "-5" 是忠实的
+    assert "- - " not in text  # artifact 形态（marker + 空格）不在
+    assert "\n  2024. 年报已归档" in text  # 有序编号不动，续行缩进

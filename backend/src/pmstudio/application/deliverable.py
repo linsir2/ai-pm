@@ -14,6 +14,7 @@
    （2026-10-02 P31；真跑 59 份导出实测：附录占全文 51%（中位），其中 63% 从未被引用）。
 """
 
+import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -171,7 +172,8 @@ def _feature(feature: BlockView, *, index: int, chapter: int) -> list[str]:
             continue
         if spec.multiple:
             lines.append(f"- **{spec.title}**：")
-            lines += [f"  - {_entry_line(entry)}" for entry in block.entries]
+            for entry in block.entries:
+                lines += _entry_bullet(entry, indent="  ")
         else:
             lines.append(f"- **{spec.title}**：{_entry_line(block.entries[0])}")
     if missing:
@@ -182,15 +184,57 @@ def _feature(feature: BlockView, *, index: int, chapter: int) -> list[str]:
 def _block_lines(block: BlockView, *, indent: str = "") -> list[str]:
     lines: list[str] = []
     for entry in block.entries:
-        lines.append(f"{indent}- {_entry_line(entry)}")
+        lines += _entry_bullet(entry, indent=indent)
     for child in block.children:
         lines += _block_lines(child, indent=indent)
     return lines
 
 
-def _entry_line(entry) -> str:  # type: ignore[no-untyped-def]
+#: 无序列表符（渲染器自己加 `- `，正文里以它开头的行必须剥掉一个——否则导出里出现
+#: `- - `）。后面必须跟空白（`-5` 不动）；有序编号不动（`"- 1. xxx"` 是合法 markdown，
+#: 无 artifact，不碰）。
+_BULLET_HEAD = re.compile(r"^([-*+])\s+")
+
+
+def _bullet_head(text: str) -> str:
+    """剥掉**一个**行首无序列表符（只剥一个：`"- - x"` 这种正文自带两层的只剥外层）。"""
+
+    return _BULLET_HEAD.sub("", text, count=1)
+
+
+def _entry_bullet(entry, *, indent: str) -> list[str]:  # type: ignore[no-untyped-def]
+    """一条目一颗子弹：每行的行首无序符都剥掉，换行续行缩进两格，出处编号挂末行。
+
+    背景：渲染器曾把条目文本当单行纯文本（`f"{indent}- {text}"`），模型写的多行
+    markdown（`"- a\\n- b"`）于是首行变 `- - a`、续行连缩进都丢
+    （`04-未决.md` §N2 真跑现场）。落库文本与前端显示都不动——改的是渲染，不是真相。
+
+    为什么续行也剥：续行在我们这颗子弹下面**不是列表项**，是同一条目的换行文字——
+    留着它的 `- ` 会解析成嵌套列表（一个条目变出一棵树）。无序符是格式残留，
+    不是内容；`-5`（后面没空白）与有序编号不动——动了就是改用户内容。
+    """
+
+    text_lines = entry.text.split("\n")
+    while len(text_lines) > 1 and text_lines[-1].strip() == "":
+        text_lines.pop()  # 尾换行不是内容
     refs = " ".join(str(eid) for eid in entry.refs)
-    return f"{entry.text}〔{refs}〕" if refs else entry.text
+    out = [f"{indent}- {_bullet_head(text_lines[0])}"]
+    out += [f"{indent}  {_bullet_head(line)}" for line in text_lines[1:]]
+    if refs:
+        out[-1] = f"{out[-1]}〔{refs}〕"
+    return out
+
+
+def _entry_line(entry) -> str:  # type: ignore[no-untyped-def]
+    """内联形状（`- **字段标题**：正文`)用的单行渲染：只剥行首列表符，不处理换行。
+
+    多行正文落进单值字段是另一个形状问题（内联形装不下列表），不在这里解——
+    解它要改这一行的形状（`04-未决.md` §N2 只报 bullet 列表那两处）。refs 仍挂末尾。
+    """
+
+    refs = " ".join(str(eid) for eid in entry.refs)
+    text = _bullet_head(entry.text)
+    return f"{text}〔{refs}〕" if refs else text
 
 
 def _empty_note(section_id: object, readiness: Sequence[ReadinessItem]) -> str:
@@ -281,7 +325,8 @@ def _appendix_a(view: DocumentView, ledger: EvidenceLedger, adapter: TemplateAda
 
 def _appendix_b(view: DocumentView) -> str:
     lines = ["## 附录 B · 偏好区（不进交付物）"]
-    lines += [f"- {_entry_line(entry)}" for entry in view.preference_entries]
+    for entry in view.preference_entries:
+        lines += _entry_bullet(entry, indent="")
     return "\n".join(lines)
 
 

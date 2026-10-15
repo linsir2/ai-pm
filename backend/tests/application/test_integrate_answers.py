@@ -480,8 +480,11 @@ async def test_integrate_round_bad_two_failures_degrades_to_open_questions():
     assert round_.failure is None
     draft = round_.draft
     assert draft is not None
-    # SEAT_REPLY 里只有一条疑问（O1），它要被原样接住
-    assert len(draft.proposals) == 1
+    # SEAT_REPLY 里只有一条疑问（O1），它要被原样接住；
+    # 剧本里的主张没被引用——按 `02` §11.0.71 多一条机械落点（需求变更）
+    assert len(draft.proposals) == 2
+    assert draft.proposals[1].origin.type.value == "user"
+    assert "机械落地" in draft.proposals[1].origin.rationale
     proposal = draft.proposals[0]
     assert proposal.target.section_id == "s11"
     assert proposal.kind is BlockKind.QUESTION
@@ -2139,8 +2142,10 @@ async def test_a_packet_whose_proposals_all_miss_their_entries_degrades():
     round_ = harness.rounds.get(round_id)
     assert round_.step is Step.AWAITING_CONFIRM  # 走的是降级，不是 409
     assert any("未归并" in gap for gap in round_.draft.gaps)
-    # 席位那一条疑问原样落 s11（判断没落点，照旧算"没交代"——`02` §11.1 的口径）
-    assert [proposal.target.section_id for proposal in round_.draft.proposals] == ["s11"]
+    # 席位那一条疑问原样落 s11（判断没落点，照旧算"没交代"——`02` §11.1 的口径）；
+    # 剧本里的主张没被引用——按 `02` §11.0.71 多一条 s5 机械落点（需求变更）
+    assert [proposal.target.section_id for proposal in round_.draft.proposals] == ["s11", "s5"]
+    assert round_.draft.proposals[1].origin.type.value == "user"
 
 
 async def test_an_empty_packet_still_takes_the_graceful_exit():
@@ -2221,4 +2226,7 @@ async def test_an_empty_text_remove_no_longer_degrades_the_round():
     assert harness.gateway.purposes.count("integration") == 1  # 不再重装
     assert round_.draft is not None  # 没降级
     assert not any("两次都过不了校验" in gap for gap in round_.draft.gaps)
-    assert [item.op for item in round_.draft.proposals] == [WriteOp.REMOVE]
+    # 剧本里的主张没被引用——按 `02` §11.0.71 多一条 ADD 机械落点（需求变更）；
+    # 原断言（只有 REMOVE）是"主张静默消失"的旧行为
+    assert [item.op for item in round_.draft.proposals] == [WriteOp.REMOVE, WriteOp.ADD]
+    assert round_.draft.proposals[1].origin.type.value == "user"

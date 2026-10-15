@@ -609,7 +609,12 @@ async def test_a_placeholder_proposal_is_repacked_then_dropped_with_a_trace():
 
     round_ = harness.rounds.get(round_id)
     assert round_.draft is not None  # 没判死
-    assert [item.text for item in round_.draft.proposals] == ["单次导出应在 60 秒内完成"]
+    # 剧本里的主张"导出要快"没被引用——按 `02` §11.0.71 多一条机械落点（需求变更）
+    assert [item.text for item in round_.draft.proposals] == [
+        "单次导出应在 60 秒内完成",
+        "导出要快",
+    ]
+    assert round_.draft.proposals[1].origin.type.value == "user"
     assert [
         (item.handle, item.source)
         for item in round_.dropped

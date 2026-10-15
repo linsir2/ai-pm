@@ -42,6 +42,7 @@ from pmstudio.application.assembly import (
     downgraded_question_proposals,
     draft_of,
     landed_answer_proposals,
+    landed_claim_proposals,
     normalize,
     open_item_keys,
     open_item_proposal,
@@ -1869,6 +1870,16 @@ class IntegrateRound:
                 )
                 proposals += list(landed.proposals)
                 gaps += list(landed.notes)
+                # 主张要么被引用、要么机械落地（D3 向 claims 延伸，`02` §11.0.71）：
+                # claims 与 answers 的编号空间不交（不同账本项），谁先谁后结果一样。
+                landed_claims = landed_claim_proposals(
+                    round_,
+                    document=document,
+                    cited=_cited_eids(proposals, assembled.questions),
+                    start_index=_next_proposal_index(proposals),
+                )
+                proposals += list(landed_claims.proposals)
+                gaps += list(landed_claims.notes)
                 # 清单项的去向（A2）：没人处理的那些落 s11——非阻塞、带去处，
                 # 下一轮的 carried 才问得回原章节，不会"轮一结束就没了"。
                 unhandled = _unhandled_list_items(
