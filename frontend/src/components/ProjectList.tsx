@@ -134,6 +134,7 @@ export function ProjectList({
             error={error}
             initialTemplateId={initialTemplateId}
           />
+          <button type="button" className="home__navlink" onClick={onManageTemplates}>管理模板 →</button>
         </section>
 
         <section id="home-recent" aria-label="最近项目">

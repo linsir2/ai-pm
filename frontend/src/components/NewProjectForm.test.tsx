@@ -89,3 +89,22 @@ it("空名禁提交，失败横幅照常显示", () => {
   ).toBe(true);
   expect(screen.getByText("建项目失败")).toBeTruthy();
 });
+
+it("每张模板卡有名 + about 行", () => {
+  const light: TemplateView = {
+    template_id: "light",
+    title: "轻量版",
+    sections: [
+      { section_id: "s1", title: "背景", purpose: "摆设", role: "backbone", slots: [] },
+      { section_id: "s5", title: "功能", purpose: "摆设", role: "feature", slots: [] },
+    ],
+  };
+  const onCreate = vi.fn();
+  render(
+    <NewProjectForm templates={[light]} onCreate={onCreate} pending={false} error={null} />,
+  );
+
+  const about = screen.getByText("2 章 · 骨架章/功能需求");
+  expect(about).toBeTruthy();
+  expect(about.textContent ?? "").toContain("2 章 · 骨架章/功能需求");
+});

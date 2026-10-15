@@ -4,6 +4,7 @@
 import { useState } from "react";
 
 import type { TemplateView } from "../api/types";
+import { templateAbout } from "../templates/about";
 import { Banner } from "./States";
 
 export function NewProjectForm({
@@ -54,6 +55,7 @@ export function NewProjectForm({
             >
               <span className="tpl-card__title">{item.title}</span>
               <span className="tpl-card__meta">{item.sections.length} 章</span>
+              <span className="tpl-card__about">{templateAbout(item)}</span>
             </button>
           ))}
         </div>
