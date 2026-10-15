@@ -2,16 +2,24 @@
 /* §1 导航修复：左导航只保留两个真锚点，加 scrollspy 高亮；「模板库」改成按钮，
    走 onManageTemplates（与 TopBar 模板按钮同一动作）。 */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
 import type { LimitsView, ProjectSummaryView, TemplateView } from "../api/types";
 import { ProjectList } from "./ProjectList";
 
-afterEach(cleanup);
+let observerCallback: IntersectionObserverCallback | null = null;
 
-// jsdom 没有 IntersectionObserver，先 mock（3 行，一次性）：
+afterEach(() => {
+  cleanup();
+  observerCallback = null;
+});
+
+// jsdom 没有 IntersectionObserver，先 mock（回调捕获版，供 scrollspy 触发）：
 class FakeObserver {
+  constructor(callback: IntersectionObserverCallback) {
+    observerCallback = callback;
+  }
   observe() {}
   unobserve() {}
   disconnect() {}
@@ -50,6 +58,15 @@ const proj: ProjectSummaryView = {
   template_title: "标准版",
 };
 
+function intersect(id: string) {
+  const target = document.getElementById(id);
+  if (observerCallback === null || target === null) throw new Error("scrollspy observer 未就绪");
+  const entry = { isIntersecting: true, target } as unknown as IntersectionObserverEntry;
+  act(() => {
+    observerCallback?.([entry], {} as IntersectionObserver);
+  });
+}
+
 it("左导航只有两个真锚点，模板库是按钮", () => {
   const fn = vi.fn();
   render(
@@ -74,4 +91,29 @@ it("左导航只有两个真锚点，模板库是按钮", () => {
   );
   fireEvent.click(screen.getByRole("button", { name: "模板库" }));
   expect(fn).toHaveBeenCalledTimes(1);
+});
+
+it("scrollspy：home-recent 相交后对应导航项带 active 类、另一项不带", () => {
+  render(
+    <ProjectList
+      projects={[proj]}
+      onOpen={vi.fn()}
+      onCreate={vi.fn()}
+      pending={false}
+      error={null}
+      booting={false}
+      limits={LIMITS}
+      templates={TEMPLATES}
+      onManageTemplates={vi.fn()}
+    />,
+  );
+
+  intersect("home-recent");
+
+  expect(screen.getByRole("link", { name: "最近项目" }).getAttribute("class")).toContain(
+    "home__navlink--active",
+  );
+  expect(screen.getByRole("link", { name: "新建项目" }).getAttribute("class")).not.toContain(
+    "home__navlink--active",
+  );
 });
