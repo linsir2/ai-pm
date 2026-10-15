@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockView, DocumentView } from "../api/types";
-import { chapterAnchors, groupFields, listFeatures, resolveTarget, sectionOfEntry } from "./structure";
+import {
+  chapterAnchors,
+  featureFieldTarget,
+  featureHome,
+  groupFields,
+  listFeatures,
+  resolveTarget,
+  sectionOfEntry,
+} from "./structure";
 
 function entry(id: string, text: string) {
   return { entry_id: id, text, refs: ["E1"] };
@@ -189,5 +197,57 @@ describe("resolveTarget（去处 → 文档落点；点去处跳转的唯一解�
     expect(resolveTarget(targetDoc, "s5/")).toBeNull();
     expect(resolveTarget(targetDoc, "s99")).toBeNull();
     expect(resolveTarget(null, "s5")).toBeNull();
+  });
+});
+
+// —— 功能章不再写死 s5（`02` §11.0.69）：找"含功能块的章" ——
+
+describe("listFeatures · 功能锚点不是 s5 时", () => {
+  const customHome = {
+    document_id: "d1",
+    project_id: "p1",
+    title: "t",
+    version_no: 1,
+    preference_entries: [],
+    feature_gaps: [],
+    sections: [
+      { section_id: "feat", title: "功能", blocks: [orderExport], role: "feature" },
+      { section_id: "open", title: "未决", blocks: [], role: "open_questions" },
+    ],
+  } as unknown as DocumentView;
+
+  it("功能章 id 是 feat 也照样找得到", () => {
+    expect(listFeatures(customHome).map((item) => item.slug)).toEqual(["order-export"]);
+  });
+
+  it("featureHome 返回那一章的 id", () => {
+    expect(featureHome(customHome)).toBe("feat");
+  });
+
+  it("没有功能块时 featureHome 为 null（不猜）", () => {
+    expect(featureHome(null)).toBeNull();
+  });
+});
+
+describe("featureFieldTarget · 手改功能字段写进锚点章", () => {
+  it("写进模板的功能锚点，不是 s5", () => {
+    const doc = {
+      document_id: "d1",
+      project_id: "p1",
+      title: "t",
+      version_no: 1,
+      preference_entries: [],
+      feature_gaps: [],
+      sections: [
+        { section_id: "feat", title: "功能", blocks: [orderExport], role: "feature" },
+      ],
+    } as unknown as DocumentView;
+
+    expect(featureFieldTarget(doc, "order-export", "one_liner")).toEqual({
+      zone: "body",
+      section_id: "feat",
+      feature_slug: "order-export",
+      field: "one_liner",
+    });
   });
 });

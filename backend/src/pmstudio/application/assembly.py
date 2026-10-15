@@ -16,7 +16,6 @@ from pmstudio.application.evidence_refs import candidates_for, normalize_ref
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.readiness import (
     BLOCKING_MARK,
-    SECTION_MIN_ENTRIES,
     SETTLED_MARK,
     ReadinessItem,
     Severity,
@@ -58,9 +57,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.sections import (
-    FEATURE_HOME,
     OPEN_QUESTION_SECTION,
-    section_slot,
 )
 from pmstudio.domain.shared.target import Target, target_from_label
 from pmstudio.domain.shared.template_adapter import TemplateAdapter, adapt
@@ -75,33 +72,16 @@ NEW_FEATURE_NO = "new_feature_no"
 #: 未决清单的家（第 11 章）——常量定义在 `domain/shared/sections.py`（一处），这里只是沿用旧名字
 OPEN_QUESTION_HOME = OPEN_QUESTION_SECTION
 
-#: 缺了这些章节的内容就"交不出去"——命中它们的题目算阻塞型（`01` §4 / `02` §⑤）
-BLOCKING_SECTIONS = frozenset({"s1", "s2", "s3", "s4", "s5", "s8", "s10", "s12"})
+#: 必填功能字段（阻塞规则的一半；另一半是"落在哪些章节"——由 `TemplateAdapter` 算，
+#: `02` §11.0.69）。这条留在这里是因为它跟**章节**无关：哪个字段必填是功能子树的事实。
 REQUIRED_FEATURE_FIELD_NAMES = frozenset(spec.name for spec in REQUIRED_FEATURE_FIELDS)
-
-#: 骨架章节：不写就没有交付物、而真跑里最常被整章漏掉的那六章（报告 F18）
-BACKBONE_SECTIONS = ("s1", "s2", "s3", "s4", "s10", "s12")
-
-#: 章节级内容的**唯一形态**：这一章写出来的东西只有一种块类型——模型写成 `text`（或压根没写）
-#: 都按它落。与 `_covers_a_contradiction` 的机械盖章同一个先例（P10/P11）：`kind` 是**结构事实**，
-#: 不该赌模型记得写；真跑 P36 实测同一个用例 6 次里 2 次写成 `text`、1 次什么都没出。
-#: 只收"整章只有一种形态"的章：s6「业务流程与交互」的内容全是流程
-#: （`01` §4 的判据就是"有没有 `steps` 条目"）。别的章不跟着变。
-SECTION_ONLY_KIND: dict[str, BlockKind] = {"s6": BlockKind.STEPS}
-
-#: 骨架六章的中文名（与 `01-规格.md` §4 的章名一致；只给人看，不当判据）
-BACKBONE_TITLES = {
-    "s1": "背景与问题",
-    "s2": "目标与非目标",
-    "s3": "用户与受众",
-    "s4": "范围与边界",
-    "s10": "假设、约束与依赖",
-    "s12": "上线、验收与迭代",
-}
 
 
 def backbone_gap_lines(
-    *, readiness: Sequence[ReadinessItem], proposals: Sequence[Proposal]
+    *,
+    readiness: Sequence[ReadinessItem],
+    proposals: Sequence[Proposal],
+    adapter: TemplateAdapter,
 ) -> tuple[str, ...]:
     """文档里骨架六章还空着、这一轮也没往那儿写 —— 草案卡上的一句实话（报告 F18）。
 
@@ -112,7 +92,7 @@ def backbone_gap_lines(
     按本轮算会每轮误报一次。这里读的是 `ReadinessChecker` 的事实——填上就不再说话。
     判据只认 `section_min_entries` 这一类阻塞（s1–s4/s10/s12 的"至少 N 条"），
     且**这一轮真写了的那章不算**（写完就该闭嘴）——"真写了"要看**块类型**：
-    s12 要的是验收标准，写一条普通正文不算数（`SECTION_MIN_ENTRIES` 是这条路唯一的尺子，
+    s12 要的是验收标准，写一条普通正文不算数（模板声明的 `min_entries.kind` 是这条路唯一的尺子，
     真跑单轮抽样抓到过：往 s12 写了 1 条 text，文档仍报"还缺 1 条验收标准"，
     而我那句告警因为"写过 s12"就闭嘴了——漏报）。
     """
@@ -122,27 +102,27 @@ def backbone_gap_lines(
         section = proposal.target.section_id
         if section is None:
             continue
-        required = SECTION_MIN_ENTRIES.get(str(section), (1, None))[1]
+        required = adapter.required_kind_for(section)
         if required is None or proposal.kind is required:
             written.add(str(section))
     missing = [
-        section
-        for section in BACKBONE_SECTIONS
-        if section not in written
+        (str(section_id), title, purpose)
+        for section_id, title, purpose, _ in adapter.backbone()
+        if str(section_id) not in written
         and any(
             item.severity is Severity.BLOCKER
             and item.code == "section_min_entries"
-            and str(item.section_id) == section
+            and str(item.section_id) == str(section_id)
             for item in readiness
         )
     ]
     if not missing:
         return ()
-    names = "、".join(f"{section} {BACKBONE_TITLES[section]}" for section in missing)
+    names = "、".join(f"{section_id} {title}" for section_id, title, _ in missing)
+    hints = "；".join(purpose for _, _, purpose in missing)
     return (
         f"⚠ 文档里这几章还是空的（这一轮也没往那儿写）：{names}。"
-        "随手补一条也算——现状与不做的代价、要达成什么、谁在用、本期做与不做、"
-        "假设与依赖、上线时间与验收标准；不补的话导出永远是「未通过」。",
+        f"随手补一条也算——{hints}；不补的话导出永远是「未通过」。",
     )
 
 
@@ -306,12 +286,11 @@ def parse_open_item(text: str) -> OpenItem | None:
 
 
 def _open_item_entries(document: Document) -> tuple[OpenItem, ...]:
-    """s11 里所有**能解析**的未决条目（解析不了的跳过——那是别人写的，不猜）。"""
+    """模板的**开放问题锚点章**里所有能解析的未决条目（解析不了的跳过——那是别人写的，不猜）。"""
 
     view = document.view()
-    section = next(
-        (item for item in view.sections if str(item.section_id) == OPEN_QUESTION_HOME), None
-    )
+    home = str(adapt(document.template).open_home)
+    section = next((item for item in view.sections if str(item.section_id) == home), None)
     if section is None:
         return ()
     found: list[OpenItem] = []
@@ -333,7 +312,7 @@ def open_item_keys(document: Document) -> frozenset[tuple[str, str]]:
 
     keys: set[tuple[str, str]] = set()
     for item in _open_item_entries(document):
-        target_label = item.target_label or OPEN_QUESTION_HOME
+        target_label = item.target_label or str(adapt(document.template).open_home)
         # 判重身份也剥台账话（M7 A′）：老条目带着"本轮已出题（见题『…』）"也要认得出
         keys.add((target_label, normalize(strip_process_notes(item.title))))
     return frozenset(keys)
@@ -601,6 +580,7 @@ def assemble(
         proposals.append(
             _proposal(
                 draft,
+                adapter=adapter,
                 text=text,
                 target=target,
                 refs=refs,
@@ -615,7 +595,7 @@ def assemble(
         feature_questions.append(
             Question(
                 question_id=QuestionId("q0"),  # 占位，收口时统一重编
-                target=Target.body(FEATURE_HOME, feature_slug=FeatureSlug(slug)),
+                target=Target.body(adapter.feature_home, feature_slug=FeatureSlug(slug)),
                 type=QuestionType.SINGLE,
                 title=f"「{slug}」是一个独立功能，还是现有功能的一部分？",
                 why="新建功能子树会改变文档结构，只有用户能拍板（席位不许自己建）",
@@ -676,6 +656,7 @@ def assemble(
             continue
         question = _question(
             item,
+            adapter=adapter,
             target=target,
             known=known,
             ledger=ledger,
@@ -851,6 +832,7 @@ def seat_questions(reviews: Sequence[SeatReview]) -> tuple[tuple[str, Opinion], 
 def degraded_question_proposals(
     reviews: Sequence[SeatReview],
     *,
+    adapter: TemplateAdapter,
     ledger: EvidenceLedger,
     round_id: RoundId,
     now: datetime,
@@ -880,7 +862,7 @@ def degraded_question_proposals(
                 proposal_id=ProposalId(f"p{index:02d}"),
                 entry_id=EntryId(f"{round_id}#open{index:02d}"),
                 op=WriteOp.ADD,
-                target=Target.body(OPEN_QUESTION_HOME),
+                target=Target.body(adapter.open_home),
                 text=f"{opinion.about}：{opinion.claim}（整合失败，未归并；待决人：PM）",
                 origin=Origin(
                     OriginType.SYSTEM_DEFAULT, (eid,), f"整合失败降级：{reason}"
@@ -894,6 +876,7 @@ def degraded_question_proposals(
 def open_question_proposals(
     round_: Round,
     *,
+    adapter: TemplateAdapter,
     system_defaults: Mapping[QuestionId, EvidenceId],
     start_index: int,
     known: frozenset[tuple[str, str]] = frozenset(),
@@ -942,6 +925,7 @@ def open_question_proposals(
         proposals.append(
             open_question_proposal(
                 question,
+                adapter=adapter,
                 eid=eid,
                 index=start_index + offset,
                 round_id=round_.round_id,
@@ -954,6 +938,7 @@ def open_question_proposals(
 def downgraded_question_proposals(
     questions: Sequence[Question],
     *,
+    adapter: TemplateAdapter,
     system_defaults: Mapping[QuestionId, EvidenceId],
     start_index: int,
     round_id: RoundId,
@@ -978,6 +963,7 @@ def downgraded_question_proposals(
         proposals.append(
             open_question_proposal(
                 question,
+                adapter=adapter,
                 eid=eid,
                 index=start_index + offset,
                 round_id=round_id,
@@ -990,6 +976,7 @@ def downgraded_question_proposals(
 def open_question_proposal(
     question: Question,
     *,
+    adapter: TemplateAdapter,
     eid: EvidenceId,
     index: int,
     round_id: RoundId,
@@ -998,6 +985,7 @@ def open_question_proposal(
     """跳过/降级的**题** → s11 提案（文本格式见 `open_item_proposal`）。"""
 
     return open_item_proposal(
+        adapter=adapter,
         title=question.title,
         consequence=question.consequence_if_skipped,
         blocking=question.blocking,
@@ -1011,6 +999,7 @@ def open_question_proposal(
 
 def open_item_proposal(
     *,
+    adapter: TemplateAdapter,
     title: str,
     consequence: str,
     blocking: bool,
@@ -1030,7 +1019,7 @@ def open_item_proposal(
         proposal_id=ProposalId(f"p{index:02d}"),
         entry_id=EntryId(f"{round_id}#open{index:02d}"),
         op=WriteOp.ADD,
-        target=Target.body(OPEN_QUESTION_HOME),
+        target=Target.body(adapter.open_home),
         text=(
             f"{BLOCKING_MARK if blocking else ''}{strip_process_notes(title)}（未决定，待决人：PM；"
             f"跳过后果：{consequence}）"
@@ -1069,6 +1058,7 @@ def landed_answer_proposals(
     空答（既没选项也没自由文本）没有内容可落：跳过，也不留噪声。
     """
 
+    adapter = adapt(document.template)
     by_key = {
         (str(form.form_id), str(question.question_id)): question
         for form in round_.questionnaire_history
@@ -1108,7 +1098,7 @@ def landed_answer_proposals(
                 )
                 continue
             try:
-                kind = _kind_for(question.target, None)
+                kind = _kind_for(question.target, None, adapter)
             except (PacketParseError, DomainError) as error:
                 # 题的去处在**内容层**不合法（如功能字段表里没有这个名字）：跳过并说清，
                 # 绝不把整轮打崩——用户刚答完题，一个字打错不该让这一趟全丢。
@@ -1126,7 +1116,7 @@ def landed_answer_proposals(
                     # 落进 s11 的带「已定」前缀（它不是未决）；其余章节照旧「用户已定：…」
                     text=(
                         f"{SETTLED_MARK}{detail}"
-                        if question.target.section_id == OPEN_QUESTION_HOME
+                        if question.target.section_id == str(adapter.open_home)
                         else f"用户已定：{detail}"
                     ),
                     origin=Origin(
@@ -1135,7 +1125,7 @@ def landed_answer_proposals(
                         "问卷答案机械落地（整合者没有引用它）"
                         + (
                             "，原未决项已定"
-                            if question.target.section_id == OPEN_QUESTION_HOME
+                            if question.target.section_id == str(adapter.open_home)
                             else ""
                         ),
                     ),
@@ -1176,7 +1166,7 @@ def _uncited_answer_eid(
     return found[0].eid
 
 
-def is_blocking(target: Target) -> bool:
+def is_blocking(target: Target, adapter: TemplateAdapter) -> bool:
     """这道题不答，文档就交不出去吗？**规则算，不问模型**（`01` §7）。
 
     命中必填功能字段，或落在"那几章不写就没有交付物"的章节上 → 阻塞；
@@ -1187,7 +1177,7 @@ def is_blocking(target: Target) -> bool:
         return False
     if target.field is not None and target.feature_slug is not None:
         return target.field in REQUIRED_FEATURE_FIELD_NAMES
-    return str(target.section_id) in BLOCKING_SECTIONS
+    return str(target.section_id) in adapter.blocking_sections()
 
 
 # —— 内部 ——
@@ -1371,18 +1361,19 @@ def _claims_contradict(claim_a: str, claim_b: str) -> bool:
     return (a_pos and b_neg) or (a_neg and b_pos)
 
 
-def _kind_for(target: Target, name: str | None) -> BlockKind:
+def _kind_for(target: Target, name: str | None, adapter: TemplateAdapter) -> BlockKind:
     try:
         if target.field is not None:
             if target.feature_slug is not None:
                 return field_spec(target.field).kind
-            slot = section_slot(target.section_id, target.field)
-            assert slot is not None  # Target 已经校验过
+            slot = adapter.slot(target.section_id, target.field or "")
+            assert slot is not None  # 适配器已经校验过（`02` §11.0.69）
             return slot.kind
-        # 章节级内容：这一章只有一种形态时按它落（模型写歪了或没写都算）——见 SECTION_ONLY_KIND
-        section = None if target.section_id is None else str(target.section_id)
-        if section is not None and section in SECTION_ONLY_KIND:
-            return SECTION_ONLY_KIND[section]
+        # 章节级内容：这一章只有一种形态时按它落（模型写歪了或没写都算）——
+        # 与 `_covers_a_contradiction` 的机械盖章同一个先例：kind 是结构事实。
+        only = adapter.only_kind_for(target.section_id) if target.section_id is not None else None
+        if only is not None:
+            return only
         return BlockKind(name) if name else BlockKind.TEXT
     except (DomainError, ValueError) as error:
         raise PacketParseError(
@@ -1428,6 +1419,7 @@ def _proposal_unusable_reason(
 def _proposal(
     draft: schemas.ProposalDraft,
     *,
+    adapter: TemplateAdapter,
     text: str,
     target: Target,
     refs: tuple[EvidenceId, ...],
@@ -1460,7 +1452,7 @@ def _proposal(
                 refs=refs,
                 rationale=draft.rationale,
             ),
-            kind=_kind_for(target, draft.kind),
+            kind=_kind_for(target, draft.kind, adapter),
         )
     except DomainError as error:
         raise PacketParseError(
@@ -1489,6 +1481,7 @@ def _origin_type(
 def _question(
     draft: schemas.QuestionDraft,
     *,
+    adapter: TemplateAdapter,
     target: Target,
     known: frozenset[EvidenceId],
     ledger: EvidenceLedger,
@@ -1551,7 +1544,7 @@ def _question(
             evidence_refs=refs,
             asked_by=tuple(sorted(set(seats))),
             kind=QuestionKind(draft.kind),
-            blocking=is_blocking(target),
+            blocking=is_blocking(target, adapter),
         )
     except DomainError as error:
         raise PacketParseError(
@@ -1581,17 +1574,22 @@ def _entry_text(document: Document, entry_id: str) -> str | None:
 
 
 def _existing_content(document: Document) -> set[tuple[str, str]]:
-    """文档里已有内容的 (target.label(), 归一化文本)，用来机械去重。"""
+    """文档里已有内容的 (target.label(), 归一化文本)，用来机械去重。
 
+    键里的章前缀取**模板的功能锚点**（不是 s5）——否则自定义模板下键与 `Target.label()`
+    对不上，重复内容会静默进文档。
+    """
+
+    home = str(adapt(document.template).feature_home)
     by_id = {block.block_id: block for block in document.blocks}
     keys: set[tuple[str, str]] = set()
     for block in document.blocks:
         if block.field is not None:
             parent = by_id.get(block.parent_id) if block.parent_id is not None else None
             slug = parent.feature_slug if parent is not None else None
-            label = f"{FEATURE_HOME}/{slug}.{block.field}" if slug else str(block.block_id)
+            label = f"{home}/{slug}.{block.field}" if slug else str(block.block_id)
         elif block.kind is BlockKind.FEATURE:
-            label = f"{FEATURE_HOME}/{block.feature_slug}"
+            label = f"{home}/{block.feature_slug}"
         elif block.parent_id is not None:
             label = str(block.parent_id)
         else:

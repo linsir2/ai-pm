@@ -43,15 +43,16 @@ export function readinessHeadline(items: readonly ReadinessItemView[]): string {
 /**
  * 就绪度百分比：**无阻塞章节 / 参与判定的章节**。
  *
- * s13 不参与（与后端判据一致：版本历史不是人写的正文）；
- * 左栏环形图与文档区「就绪度 N%」用同一个算法，这里算一次两处用。
+ * 版本历史章不参与（与后端判据一致：它由版本表生成、不是人写的正文）——判据是
+ * **角色**而不是章节 id：自定义模板里这一章可能叫 `history` 而不是 `s13`
+ * （`02` §11.0.69）。左栏环形图与文档区「就绪度 N%」用同一个算法，这里算一次两处用。
  */
 export function readinessPercent(
   items: readonly ReadinessItemView[],
-  sections: readonly { section_id: string }[],
+  sections: readonly { section_id: string; role?: string }[],
 ): number {
   const { bySection } = readinessSummary(items);
-  const graded = sections.filter((section) => section.section_id !== "s13");
+  const graded = sections.filter((section) => section.role !== "version_history");
   if (graded.length === 0) return 0;
   const ready = graded.filter((section) =>
     (bySection.get(section.section_id) ?? []).every((item) => item.severity !== "blocker"),

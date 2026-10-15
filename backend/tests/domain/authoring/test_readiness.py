@@ -14,8 +14,17 @@ from pmstudio.domain.shared.ids import (
     EvidenceId,
     FeatureSlug,
     ProjectId,
+    SectionId,
 )
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template import (
+    DocumentTemplate,
+    TemplatedSection,
+    TemplateRole,
+    standard_template,
+    template_from_dict,
+)
+from pmstudio.domain.shared.template_adapter import adapt
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from tests.support.builders import NOW, STD, make_document
 
@@ -30,7 +39,7 @@ def empty_doc() -> Document:
 
 
 def by_key(document: Document) -> dict[tuple[str, str], object]:
-    items = ReadinessChecker().check(document.view())
+    items = ReadinessChecker().check(document.view(), adapter=STD)
     return {(item.section_id, item.code): item for item in items}
 
 
@@ -93,14 +102,15 @@ def test_feature_gaps_are_one_item_with_per_feature_details():
 def test_same_section_and_code_is_reported_once():
     keys = [
         (item.section_id, item.code)
-        for item in ReadinessChecker().check(two_thin_features().view())
+        for item in ReadinessChecker().check(two_thin_features().view(), adapter=STD)
     ]
     assert len(keys) == len(set(keys))
 
 
 def test_section_13_is_never_reported():
     assert all(
-        item.section_id != "s13" for item in ReadinessChecker().check(empty_doc().view())
+        item.section_id != "s13"
+        for item in ReadinessChecker().check(empty_doc().view(), adapter=STD)
     )
 
 
@@ -182,7 +192,7 @@ def test_missing_main_flow_is_still_not_a_blocker():
     （升上去 = 每个缺主流程的功能加一条阻塞，P30 里到 0 阻塞的车道会立刻破）。
     """
 
-    items = ReadinessChecker().check(two_thin_features().view())
+    items = ReadinessChecker().check(two_thin_features().view(), adapter=STD)
 
     assert not any(
         item.severity is Severity.BLOCKER and "主流程" in item.title for item in items
@@ -241,3 +251,151 @@ def test_slot_block_is_not_mistaken_for_a_feature_field():
     assert block.field == "performance"
     assert block.field_title == "性能"
     assert block.block_id == BlockId("s8.performance")
+
+
+# —— 模板驱动（`02` §11.0.69）：判据读文档自己的模板，不再读全局 id 表 ——
+
+
+def _light_template():
+    """6 章轻量模板（与 `light.toml` 同形；domain 测试不碰 infrastructure）。"""
+
+    def section(
+        section_id: str, title: str, role: TemplateRole = TemplateRole.PLAIN
+    ) -> TemplatedSection:
+        return TemplatedSection(
+            section_id=SectionId(section_id), title=title, purpose="摆设", role=role
+        )
+
+    return DocumentTemplate(
+        template_id="light",
+        title="轻量版",
+        sections=(
+            section("s1", "背景与问题", TemplateRole.BACKBONE),
+            section("s2", "目标与非目标", TemplateRole.BACKBONE),
+            section("s4", "范围与边界", TemplateRole.BACKBONE),
+            section("s5", "功能需求", TemplateRole.FEATURE),
+            section("s11", "风险与开放问题", TemplateRole.OPEN_QUESTIONS),
+            section("s13", "版本历史", TemplateRole.VERSION_HISTORY),
+        ),
+    )
+
+
+def _custom_template():
+    """自由 id 的 5 章模板：验证"章节 id 不是 sN"时判据照跑。"""
+
+    return template_from_dict(
+        {
+            "template_id": "t",
+            "title": "自建",
+            "sections": [
+                {
+                    "id": "overview",
+                    "title": "概览",
+                    "purpose": "为什么做这件事",
+                    "min_entries": 2,
+                },
+                {"id": "facts", "title": "事实", "purpose": "摆事实"},
+                {
+                    "id": "quality",
+                    "title": "质量",
+                    "purpose": "质量怎么保证",
+                    "slots": [
+                        {"name": "speed", "title": "速度", "kind": "nfr"},
+                        {"name": "safety", "title": "安全", "kind": "nfr"},
+                    ],
+                },
+                {"id": "feat", "title": "功能", "purpose": "做什么", "role": "feature"},
+                {
+                    "id": "open",
+                    "title": "未决",
+                    "purpose": "还没定的",
+                    "role": "open_questions",
+                },
+                {
+                    "id": "history",
+                    "title": "版本",
+                    "purpose": "不用手写",
+                    "role": "version_history",
+                },
+            ],
+        }
+    )
+
+
+def _doc_with(template) -> Document:  # type: ignore[no-untyped-def]
+    return Document.new(
+        document_id=DocumentId("d1"),
+        project_id=ProjectId("p1"),
+        title="文档",
+        now=NOW,
+        template=template,
+    )
+
+
+def test_light_document_is_only_judged_on_its_own_chapters():
+    """light 只有 6 章：模板外的章（s3/s6/s7/s8/s10/s12）一条判据都不该出。"""
+
+    items = ReadinessChecker().check(
+        _doc_with(_light_template()).view(), adapter=adapt(_light_template())
+    )
+
+    assert {item.section_id for item in items} == {"s1", "s2", "s4", "s5"}
+    assert all(item.severity is Severity.BLOCKER for item in items)
+
+
+def test_custom_chapter_ids_are_judged_by_declaration_not_by_s_n():
+    """自由 id 的章照判：`overview` 声明了"至少 2 条"，`facts` 没声明就不判。"""
+
+    template = _custom_template()
+    document = _doc_with(template)
+    write(document, target=Target.body("overview"), text="第一条")
+
+    items = ReadinessChecker().check(document.view(), adapter=adapt(template))
+    overview = [item for item in items if item.section_id == "overview"]
+
+    assert [item.title for item in overview] == ["概览还缺 1 条内容"]
+    assert not [item for item in items if item.section_id == "facts"]
+
+
+def test_custom_chapter_detail_falls_back_to_the_template_purpose():
+    template = _custom_template()
+
+    items = ReadinessChecker().check(_doc_with(template).view(), adapter=adapt(template))
+    overview = next(item for item in items if item.section_id == "overview")
+
+    assert overview.detail == "至少 2 条内容：为什么做这件事"
+
+
+def test_slotted_chapter_is_judged_slot_by_slot():
+    """有槽的章逐槽判（standard 的 s8 六项表态就是它）；detail 列缺哪几项。"""
+
+    template = _custom_template()
+    document = _doc_with(template)
+
+    items = ReadinessChecker().check(document.view(), adapter=adapt(template))
+    quality = next(item for item in items if item.section_id == "quality")
+
+    assert quality.title == "质量还缺 2 项表态"
+    assert quality.detail == "速度、安全"
+
+
+def test_cross_section_link_hint_follows_the_data_role():
+    """跨章链接启发式只在模板标了 `role = "data"` 的章上跑（standard 的 s7）。"""
+
+    standard = standard_template()
+    with_dependencies = two_thin_features()
+    write(
+        with_dependencies,
+        target=Target.feature_field(
+            "order-export", "dependencies", home=STD.feature_home
+        ),
+        text="订单服务",
+    )
+
+    items = ReadinessChecker().check(with_dependencies.view(), adapter=adapt(standard))
+    assert [item.section_id for item in items if item.code == "cross_section_link"] == ["s7"]
+
+    # light 没有数据与接口这类章 → 整条启发式不跑（不是跑到别的章上）
+    light = _light_template()
+    items_light = ReadinessChecker().check(with_dependencies.view(), adapter=adapt(light))
+    assert not [item for item in items_light if item.code == "cross_section_link"]

@@ -4,10 +4,33 @@
    依据都来自后端 block 的 `field` 与 `kind`（`domain/authoring/schema.py` 是真相源）。 */
 
 import type { BlockView, DocumentView, Entry } from "../api/types";
+import type { TargetRequest } from "../api/client";
 import { parseTarget } from "../labels";
 import { fieldTitle } from "../state/schema";
 
-export const FEATURE_HOME = "s5";
+/** 功能子树挂在哪一章（`02` §11.0.69）：**看块的结构**，不认章节 id。
+ *
+ *  `s5` 只是 `standard` 那套模板的锚点 id——自定义模板的功能章可以叫 `feat`、`功能`…
+ *  这里找"顶层带 feature 块的章"，找不到就 null（不猜，调用方说实话）。 */
+export function featureHome(doc: DocumentView | null): string | null {
+  if (doc === null) return null;
+  return doc.sections.find((section) => section.blocks.some((b) => b.kind === "feature"))
+    ?.section_id ?? null;
+}
+
+/** 手改"加一个功能字段"要发去处的 target：章节取功能锚点（`App.tsx` 用）。
+ *
+ *  找不到功能章就 null——发一个 s5 去处在自定义模板下会被后端拒（未知章节），
+ *  与其发一个必失败的请求，不如让调用方说清楚。 */
+export function featureFieldTarget(
+  doc: DocumentView | null,
+  featureSlug: string,
+  field: string,
+): TargetRequest | null {
+  const home = featureHome(doc);
+  if (home === null) return null;
+  return { zone: "body", section_id: home, feature_slug: featureSlug, field };
+}
 
 export interface FeatureSummary {
   blockId: string;
@@ -20,7 +43,9 @@ export interface FeatureSummary {
 
 export function listFeatures(doc: DocumentView | null): FeatureSummary[] {
   if (doc === null) return [];
-  const home = doc.sections.find((section) => section.section_id === FEATURE_HOME);
+  const homeId = featureHome(doc);
+  if (homeId === null) return [];
+  const home = doc.sections.find((section) => section.section_id === homeId);
   if (home === undefined) return [];
 
   const walk = (blocks: BlockView[]): FeatureSummary[] =>

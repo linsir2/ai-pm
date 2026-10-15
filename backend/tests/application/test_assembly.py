@@ -24,6 +24,7 @@ from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.ids import (
     EntryId,
     EvidenceId,
+    FeatureSlug,
     FormId,
     ProjectId,
     ProposalId,
@@ -31,6 +32,8 @@ from pmstudio.domain.shared.ids import (
     RoundId,
 )
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template import template_from_dict
+from pmstudio.domain.shared.template_adapter import adapt
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.harness.errors import PacketParseError
 from tests.support.builders import (
@@ -368,7 +371,7 @@ def test_skipped_questions_keep_their_own_batchs_title():
             QuestionId("q1"): EvidenceId("E1"),
             QuestionId("q2"): EvidenceId("E2"),
         },
-        start_index=1,
+        start_index=1, adapter=STD,
     )
 
     assert len(items) == 2
@@ -604,9 +607,9 @@ def test_question_is_blocking_when_target_hits_a_required_feature_field():
 
 
 def test_question_is_not_blocking_for_a_non_blocking_section_or_preference():
-    assert assembly.is_blocking(Target.body("s7")) is False
-    assert assembly.is_blocking(Target.body("s8", field="performance")) is True
-    assert assembly.is_blocking(Target.preference()) is False
+    assert assembly.is_blocking(Target.body("s7"), STD) is False
+    assert assembly.is_blocking(Target.body("s8", field="performance"), STD) is True
+    assert assembly.is_blocking(Target.preference(), STD) is False
 
 
 def test_skipped_blocking_question_lands_in_s11_with_the_marker():
@@ -629,10 +632,20 @@ def test_skipped_blocking_question_lands_in_s11_with_the_marker():
     )
 
     marked = assembly.open_question_proposal(
-        blocking, eid=EvidenceId("E9"), index=1, round_id=ROUND_ID, rationale="跳过的题按题面后果"
+        blocking,
+        eid=EvidenceId("E9"),
+        index=1,
+        round_id=ROUND_ID,
+        rationale="跳过的题按题面后果",
+        adapter=STD,
     )
     plain_proposal = assembly.open_question_proposal(
-        plain, eid=EvidenceId("E10"), index=2, round_id=ROUND_ID, rationale="跳过的题按题面后果"
+        plain,
+        eid=EvidenceId("E10"),
+        index=2,
+        round_id=ROUND_ID,
+        rationale="跳过的题按题面后果",
+        adapter=STD,
     )
 
     assert marked.text.startswith("〔未决·阻塞〕")
@@ -892,7 +905,7 @@ def test_open_question_proposals_use_system_default_evidence_and_s11():
     proposals = assembly.open_question_proposals(
         round_after_skipping_a_question(),
         system_defaults={QuestionId("q1"): EvidenceId("E9")},
-        start_index=3,
+        start_index=3, adapter=STD,
     )
 
     assert len(proposals) == 1
@@ -910,7 +923,7 @@ def test_open_question_proposals_use_system_default_evidence_and_s11():
 def test_open_question_proposals_bad_missing_system_default_eid():
     with pytest.raises(PacketParseError) as exc:
         assembly.open_question_proposals(
-            round_after_skipping_a_question(), system_defaults={}, start_index=1
+            round_after_skipping_a_question(), system_defaults={}, start_index=1, adapter=STD
         )
     assert exc.value.details["question_id"] == "q1"
 
@@ -1577,7 +1590,7 @@ def test_open_item_text_carries_its_target():
         eid=EvidenceId("E9"),
         index=1,
         round_id=ROUND_ID,
-        rationale="跳过的题按题面后果落开放问题",
+        rationale="跳过的题按题面后果落开放问题", adapter=STD,
     )
 
     assert proposal.text.endswith("〔去处：s5/order-export.acceptance〕")
@@ -1604,7 +1617,7 @@ def test_an_open_item_with_a_chapter_slot_keeps_it():
         eid=EvidenceId("E9"),
         index=1,
         round_id=ROUND_ID,
-        rationale="跳过的题按题面后果落开放问题",
+        rationale="跳过的题按题面后果落开放问题", adapter=STD,
     )
 
     parsed = assembly.parse_open_item(proposal.text)
@@ -1712,7 +1725,7 @@ def test_process_notes_are_stripped_before_landing_in_s11():
         eid=EvidenceId("E9"),
         index=1,
         round_id=ROUND_ID,
-        rationale="跳过的题按题面后果落开放问题",
+        rationale="跳过的题按题面后果落开放问题", adapter=STD,
     )
 
     assert "本轮已出题" not in proposal.text
@@ -1730,7 +1743,7 @@ def test_entry_addresses_never_reach_the_document():
         eid=EvidenceId("E9"),
         index=1,
         round_id=ROUND_ID,
-        rationale="跳过的题按题面后果落开放问题",
+        rationale="跳过的题按题面后果落开放问题", adapter=STD,
     )
 
     assert "open61" not in proposal.text
@@ -1751,7 +1764,7 @@ def test_seat_inclination_sentence_is_not_stripped():
         eid=EvidenceId("E9"),
         index=1,
         round_id=ROUND_ID,
-        rationale="跳过的题按题面后果落开放问题",
+        rationale="跳过的题按题面后果落开放问题", adapter=STD,
     )
 
     assert "席位判断 E157 给出默认「要留痕」的倾向，但用户尚未拍板。" in proposal.text
@@ -2017,7 +2030,7 @@ def backbone_proposal(section_id: str) -> Proposal:
 def test_backbone_gaps_name_the_empty_chapters():
     lines = assembly.backbone_gap_lines(
         readiness=(backbone_blocker("s1"), backbone_blocker("s2"), backbone_blocker("s8")),
-        proposals=(),
+        proposals=(), adapter=STD,
     )
 
     assert len(lines) == 1
@@ -2030,7 +2043,7 @@ def test_backbone_gaps_name_the_empty_chapters():
 def test_backbone_gaps_skip_the_chapter_this_round_writes_to():
     lines = assembly.backbone_gap_lines(
         readiness=(backbone_blocker("s1"), backbone_blocker("s2")),
-        proposals=(backbone_proposal("s1"),),
+        proposals=(backbone_proposal("s1"),), adapter=STD,
     )
 
     assert len(lines) == 1
@@ -2042,12 +2055,12 @@ def test_backbone_gaps_are_silent_when_nothing_is_blocking():
     """骨架填上了（就绪度不再报阻塞）→ 一个字都不说，别每轮误报一次。"""
 
     warn_only = replace(backbone_blocker("s1"), severity=Severity.WARN)
-    assert assembly.backbone_gap_lines(readiness=(warn_only,), proposals=()) == ()
-    assert assembly.backbone_gap_lines(readiness=(), proposals=()) == ()
+    assert assembly.backbone_gap_lines(readiness=(warn_only,), proposals=(), adapter=STD) == ()
+    assert assembly.backbone_gap_lines(readiness=(), proposals=(), adapter=STD) == ()
 
 
 def test_backbone_gaps_ignore_an_entry_of_the_wrong_kind():
-    """s12 要的是**验收标准**（见 `SECTION_MIN_ENTRIES`）：写一条普通正文不算填上。
+    """s12 要的是**验收标准**（模板声明的 `min_entries.kind`）：写一条普通正文不算填上。
 
     真跑单轮抽样抓到的：这一轮往 s12 写了 1 条 `text`，文档里 s12 仍然报
     "还缺 1 条验收标准"，而我那句告警因为"写过 s12"就闭嘴了——等于漏报。
@@ -2055,7 +2068,7 @@ def test_backbone_gaps_ignore_an_entry_of_the_wrong_kind():
 
     text_entry = replace(backbone_proposal("s12"), kind=BlockKind.TEXT)
     lines = assembly.backbone_gap_lines(
-        readiness=(backbone_blocker("s12"),), proposals=(text_entry,)
+        readiness=(backbone_blocker("s12"),), proposals=(text_entry,), adapter=STD
     )
 
     assert len(lines) == 1
@@ -2063,7 +2076,9 @@ def test_backbone_gaps_ignore_an_entry_of_the_wrong_kind():
 
     acceptance = replace(backbone_proposal("s12"), kind=BlockKind.ACCEPTANCE)
     assert (
-        assembly.backbone_gap_lines(readiness=(backbone_blocker("s12"),), proposals=(acceptance,))
+        assembly.backbone_gap_lines(
+            readiness=(backbone_blocker("s12"),), proposals=(acceptance,), adapter=STD
+        )
         == ()
     )
 
@@ -2462,3 +2477,140 @@ def test_cited_eids_unions_proposals_and_questions():
         {EvidenceId("E1"), EvidenceId("E2")}
     )
 
+
+
+# —— 模板驱动（`02` §11.0.69）：阻塞 / 骨架 / 整章形态都不再读全局 id 表 ——
+
+
+def _steps_template():
+    """自由 id 模板：功能锚点 `feat`、步骤章 `flow`（模型写歪也按 steps 落）。"""
+
+    return template_from_dict(
+        {
+            "template_id": "t",
+            "title": "自建",
+            "sections": [
+                {"id": "feat", "title": "功能", "purpose": "做什么", "role": "feature"},
+                {
+                    "id": "flow",
+                    "title": "流程",
+                    "purpose": "怎么走一遍",
+                    "role": "steps",
+                    "min_entries": 2,
+                },
+                {"id": "open", "title": "未决", "purpose": "还没定的", "role": "open_questions"},
+                {
+                    "id": "history",
+                    "title": "版本",
+                    "purpose": "不用手写",
+                    "role": "version_history",
+                },
+            ],
+        },
+    )
+
+
+def test_blocking_chapters_follow_the_templates_own_declarations():
+    """阻塞章节 = 功能锚点 ∪ 有条数判据的章 ∪ 有槽的章（适配器算，标准逐字复刻）。"""
+
+    standard = STD
+    assert assembly.is_blocking(Target.body("s8"), standard) is True
+    assert assembly.is_blocking(Target.body("s7"), standard) is False
+
+    steps = adapt(_steps_template())
+    assert assembly.is_blocking(Target.body("flow"), steps) is True
+    assert assembly.is_blocking(Target.body("s8"), steps) is False  # 模板里没有这一章
+    assert assembly.is_blocking(Target.preference(), steps) is False
+
+
+def test_backbone_gaps_name_the_empty_chapters_of_the_document_template():
+    """告警的章节集合来自模板；提示句用各章自己的 purpose（standard 用原文案）。"""
+
+    template = template_from_dict(
+        {
+            "template_id": "t",
+            "title": "自建",
+            "sections": [
+                {
+                    "id": "why",
+                    "title": "为什么做",
+                    "purpose": "现状有什么代价",
+                    "role": "backbone",
+                    "min_entries": 1,
+                },
+                {"id": "feat", "title": "功能", "purpose": "做什么", "role": "feature"},
+                {"id": "open", "title": "未决", "purpose": "还没定的", "role": "open_questions"},
+                {
+                    "id": "history",
+                    "title": "版本",
+                    "purpose": "不用手写",
+                    "role": "version_history",
+                },
+            ],
+        }
+    )
+
+    lines = assembly.backbone_gap_lines(
+        readiness=(backbone_blocker("why"),),
+        proposals=(),
+        adapter=adapt(template),
+    )
+
+    assert len(lines) == 1
+    assert "why 为什么做" in lines[0]
+    assert "现状有什么代价" in lines[0]
+
+
+def test_dedup_key_uses_the_templates_feature_anchor():
+    """去重键用**锚点章**（`feat/slug`），不是 s5——自定义模板下 s5 是错的。
+
+    真命题是"与文档既有内容重复的那条提案被去重"：键拼成 `s5/slug` 就命中不了文档里
+    已有的那条，重复内容会静默进文档。
+    """
+
+    from pmstudio.domain.authoring.instruction import WriteInstruction
+    from pmstudio.domain.shared.ids import DocumentId, EntryId
+
+    template = _steps_template()
+    document = Document.new(
+        document_id=DocumentId("d1"),
+        project_id=ProjectId("p1"),
+        title="自建文档",
+        now=NOW,
+        template=template,
+    )
+    document.apply(
+        [
+            WriteInstruction(
+                instruction_id="i1",
+                entry_id=EntryId("en1"),
+                op=WriteOp.ADD,
+                target=Target.feature_field(
+                    "order-export", "one_liner", home=adapt(template).feature_home
+                ),
+                text="把订单导出成表格",
+                refs=(EvidenceId("E1"),),
+            )
+        ],
+        now=NOW,
+        summary="先写一条",
+        authorized_new_features=frozenset({FeatureSlug("order-export")}),
+    )
+
+    base = proposal_draft()
+    base["target"] = {
+        "zone": "body",
+        "section_id": "feat",
+        "feature_slug": "order-export",
+        "field": "one_liner",
+    }
+    base["text"] = "把订单导出成表格"
+
+    result = assembly.assemble(
+        packet(proposals=[dict(base)]),
+        round_=make_round(),
+        document=document,
+        ledger=ledger_with_two_entries(),
+    )
+
+    assert result.proposals == ()

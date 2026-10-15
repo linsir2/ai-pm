@@ -177,17 +177,19 @@ export interface AnswersBody {
   skipped: string[];
 }
 
+/** 写去处的形状（`{section_id, feature_slug, field}`）：字段块不存在也能加。 */
+export interface TargetRequest {
+  zone: "body" | "preference";
+  section_id?: string;
+  feature_slug?: string;
+  field?: string;
+}
+
 export interface EditBody {
   op: "add" | "replace" | "remove";
   entry_id?: string | null;
   block_id?: string | null;
-  /** 加一条时也能给完整去处（`{section_id, feature_slug, field}`）：字段块不存在也能加。 */
-  target?: {
-    zone: "body" | "preference";
-    section_id?: string;
-    feature_slug?: string;
-    field?: string;
-  } | null;
+  target?: TargetRequest | null;
   text?: string;
 }
 

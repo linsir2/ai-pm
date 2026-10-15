@@ -573,11 +573,11 @@ class StartRound:
         # 它每轮都要的"文档现状概貌"已由下面的 `$project_context` 给全。摘要保留十三章骨架
         # 与每条目一句、不给 id 与编号（引不了，给了只会诱导去引）。
         document_state = render_document_topics(
-            view, readiness=self._checker.check(view)
+            view, readiness=self._checker.check(view, adapter=adapt(document.template))
         )
         memory_entries = self._memory.get(round_.project_id).entries if self._memory else ()
         project_context = render_project_context(
-            build_project_context(view, memory_entries)
+            build_project_context(view, memory_entries, adapter=adapt(document.template))
         )
         # 上一次失败留下的报错就是这次第一次尝试的起点（同整合那条路，P13 C1/C2）。
         # **没有 hint 就不开事务**：寻常路径的事务数被既有用例钉着（不许为只读开事务）。
@@ -943,7 +943,9 @@ class RunSeatRound:
         ledger = self._evidence.get(round_.project_id)
         pending = tuple(self._catalog.by_id(seat_id) for seat_id in round_.pending_seats)
         view = document.view()
-        window = document_window(view, readiness=self._checker.check(view))
+        window = document_window(
+            view, readiness=self._checker.check(view, adapter=adapt(document.template))
+        )
         document_state = window.text
         claims_text = render_claims(round_.claims)
         answered_text = render_answers(round_, ledger=ledger)
@@ -965,7 +967,9 @@ class RunSeatRound:
         pass_index = round_.seat_round_count
         # L1 项目上下文：每轮都注入，让席位知道"我们在哪"
         project_context = render_project_context(
-            build_project_context(view, self._memory.get(round_.project_id).entries)
+            build_project_context(
+                view, self._memory.get(round_.project_id).entries, adapter=adapt(document.template)
+            )
         )
         # L2 观察索引：上一轮席位的洞察，渐进式披露
         observations_index = self._build_observations_index(round_.project_id)
@@ -1740,6 +1744,7 @@ class IntegrateRound:
             round_ = self._rounds.get(round_id)
             ledger = self._evidence.get(round_.project_id)
             document = self._documents.get(round_.project_id)
+            adapter = adapt(document.template)
             now = self._clock.now()
             # 只有**真被问出去**的那几条才从轮内队列出队（carried 里还混着 s11 来的题）
             asked = {question_key(item) for item in assembled.questions}
@@ -1756,6 +1761,7 @@ class IntegrateRound:
             if assembled.degrade_reason is not None:
                 degraded_proposals = degraded_question_proposals(
                     round_.current_reviews,
+                    adapter=adapter,
                     ledger=ledger,
                     round_id=round_id,
                     now=now,
@@ -1770,6 +1776,7 @@ class IntegrateRound:
             proposals += list(
                 open_question_proposals(
                     round_,
+                    adapter=adapter,
                     system_defaults=system_defaults,
                     start_index=_next_proposal_index(proposals),
                     known=known_open_items,
@@ -1807,6 +1814,7 @@ class IntegrateRound:
                 proposals += list(
                     downgraded_question_proposals(
                         landable,
+                        adapter=adapter,
                         system_defaults=system_defaults,
                         start_index=_next_proposal_index(proposals),
                         round_id=round_id,
@@ -1837,6 +1845,7 @@ class IntegrateRound:
                     proposals += list(
                         downgraded_question_proposals(
                             landable_leftover,
+                            adapter=adapter,
                             system_defaults=defaults,
                             start_index=_next_proposal_index(proposals),
                             round_id=round_id,
@@ -1898,6 +1907,7 @@ class IntegrateRound:
                         )
                         proposals.append(
                             open_item_proposal(
+                                adapter=adapter,
                                 title=item.text,
                                 consequence="先搁着，不影响本轮交付",
                                 blocking=False,  # C4：清单项不堵交付
@@ -2098,8 +2108,9 @@ class IntegrateRound:
         # 骨架六章还空着就说一句（报告 F18）：走 `gaps` 这条既有通道，
         # 前端 `DraftDrawer` 已经在渲染它（"写入后仍然空着的必填项"），一个字都不用改。
         gaps = gaps + backbone_gap_lines(
-            readiness=self._checker.check(document.view()),
+            readiness=self._checker.check(document.view(), adapter=adapt(document.template)),
             proposals=assembled.proposals,
+            adapter=adapt(document.template),
         )
         return assembled, gaps
 
@@ -2176,7 +2187,7 @@ class IntegrateRound:
                 )
                 outcome = await self._integrator.integrate(
                     document_state=render_document_state(
-                        view, readiness=self._checker.check(view)
+                        view, readiness=self._checker.check(view, adapter=adapt(document.template))
                     ),
                     claims=render_claims(round_.claims),
                     opinions=render_reviews(
@@ -2193,7 +2204,11 @@ class IntegrateRound:
             project_memory=render_memory(self._memory.get(round_.project_id).entries),
             # L1 项目上下文：让整合者知道"我们在哪"
             project_context=render_project_context(
-                build_project_context(view, self._memory.get(round_.project_id).entries)
+                build_project_context(
+                    view,
+                    self._memory.get(round_.project_id).entries,
+                    adapter=adapt(document.template),
+                )
             ),
             # L2 观察索引：上一轮席位的洞察
             observations_index=self._build_observations_index(round_.project_id),
@@ -3164,7 +3179,7 @@ class GetWorkspace:
                 self._tools, keys=self._available_tool_keys
             )
             is not None,
-            readiness=self._checker.check(view),
+            readiness=self._checker.check(view, adapter=adapt(document.template)),
             memory=self._memory.get(project_id).entries,
         )
 
@@ -3626,7 +3641,7 @@ class ExportMarkdown:
         view = document.view()
         return render_markdown(
             view=view,
-            readiness=self._checker.check(view),
+            readiness=self._checker.check(view, adapter=adapt(document.template)),
             versions=document.versions,
             ledger=self._evidence.get(project_id),
             exported_at=self._clock.now(),
@@ -4179,7 +4194,9 @@ class RunInquiry:
                 focus = entry_focus(view, exploration.scope.ref or "")
             except UnknownEntryId:
                 focus = None  # 条目在调研期间被删了：不装作看得见
-        window = document_window(view, readiness=self._checker.check(view))
+        window = document_window(
+            view, readiness=self._checker.check(view, adapter=adapt(document.template))
+        )
         document_state = window.text
         memory_text = render_memory(self._memory.get(exploration.project_id).entries)
         scope_text = scope_line(exploration.scope, focus=focus)
@@ -4523,7 +4540,9 @@ def _discussion_window(
 
     document = documents.get(thread.project_id)
     view = document.view()
-    window = document_window(view, readiness=checker.check(view), topic=thread.topic)
+    window = document_window(
+        view, readiness=checker.check(view, adapter=adapt(document.template)), topic=thread.topic
+    )
     ledger = evidence.get(thread.project_id)
     known_eids = window.known_eids(ledger) | (
         visible_eids(history) & window.ledger_ids(ledger)
@@ -5325,7 +5344,9 @@ class RunSimInquiry:
             raise TooManySimInquiries(limit=MAX_SIM_INQUIRIES_PER_ROUND)
         document = self._documents.get(round_.project_id)
         view = document.view()
-        window = document_window(view, readiness=self._checker.check(view))
+        window = document_window(
+            view, readiness=self._checker.check(view, adapter=adapt(document.template))
+        )
         document_state = window.text
         memory_text = render_memory(self._memory.get(round_.project_id).entries)
         # 接地三源（`02` §11.0.47）：文档 ＋ 本轮用户的话（带 E 编号）＋ 本轮材料。
@@ -5665,7 +5686,7 @@ class RunSimReview:
         # `07 §7.12` 第 2 项 / 判据①「删优先于排」。节级条目以"未展开 N 条"交代。
         document_state = render_document_state(
             view,
-            readiness=self._checker.check(view),
+            readiness=self._checker.check(view, adapter=adapt(document.template)),
             feature_slugs=frozenset(feature_slugs),
         )
         memory_text = render_memory(self._memory.get(round_.project_id).entries)

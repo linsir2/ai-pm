@@ -355,3 +355,34 @@ def test_adapter_handles_a_template_built_in_code(standard: TemplateAdapter):
     assert adapter.feature_home == SectionId("f")
     assert adapter.number_of(SectionId("v")) == 4
     assert adapter.blocking_sections() == frozenset({"f"})
+
+# —— DATA role（作者 2026-10-15 拍板）：跨章链接启发式的载体 ——
+
+
+def test_standard_data_section_is_s7(standard: TemplateAdapter):
+    assert standard.data_section() == SectionId("s7")
+
+
+def test_data_section_is_none_when_the_template_has_no_such_chapter(light: TemplateAdapter):
+    """light 没有"数据与接口"这类章 → 那条跨章 warn 整条不跑（不是跑到别的章上）。"""
+
+    assert light.data_section() is None
+
+
+def test_custom_template_may_mark_its_own_data_chapter():
+    adapter = adapt(
+        template_from_dict(
+            {
+                "template_id": "t",
+                "title": "x",
+                "sections": [
+                    {"id": "data", "title": "数据", "purpose": "p", "role": "data"},
+                    {"id": "s5", "title": "F", "purpose": "p", "role": "feature"},
+                    {"id": "s11", "title": "Q", "purpose": "p", "role": "open_questions"},
+                    {"id": "s13", "title": "V", "purpose": "p", "role": "version_history"},
+                ],
+            }
+        )
+    )
+
+    assert adapter.data_section() == SectionId("data")

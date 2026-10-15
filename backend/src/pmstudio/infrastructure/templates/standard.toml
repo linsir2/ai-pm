@@ -50,7 +50,7 @@ role = "steps"
 id = "s7"
 title = "数据与接口"
 purpose = "有哪些实体、和外部怎么对接。"
-role = "plain"
+role = "data"
 
 [[sections]]
 id = "s8"

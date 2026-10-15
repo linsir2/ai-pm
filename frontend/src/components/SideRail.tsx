@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import type { BlockView, DocumentView, ReadinessItemView, RoundView } from "../api/types";
 import { STATUS_TEXT, sectionStatus, statusClass } from "../document/status";
 import { readinessPercent, readinessSummary } from "../document/readiness";
-import { listFeatures } from "../document/structure";
+import { featureHome, listFeatures } from "../document/structure";
 import { fieldTitle } from "../state/schema";
 import { ReadinessRing } from "./ReadinessRing";
 
@@ -41,8 +41,14 @@ export function SideRail({
   onSelectSection: (sectionId: string) => void;
   onSelectNode: (sectionId: string, blockId: string) => void;
 }) {
-  const [open, setOpen] = useState<Record<string, boolean>>({ s5: true });
+  // 默认展开功能那一章（模板的锚点，不是 s5）。文档还没来时先开着，等文档到了再校正。
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   const features = listFeatures(doc);
+  const home = featureHome(doc);
+
+  useEffect(() => {
+    if (home !== null) setOpen((current) => (current[home] === true ? current : { ...current, [home]: true }));
+  }, [home]);
 
   // 切到哪一章就把它展开：不然点树会像没反应。
   useEffect(() => {
@@ -90,7 +96,7 @@ export function SideRail({
           const status = sectionStatus(section, round);
           const on = activeSection === section.section_id;
           const children =
-            section.section_id === "s5"
+            home !== null && section.section_id === home
               ? features.flatMap((feature) => [
                   {
                     id: `block-${feature.blockId}`,
@@ -140,8 +146,8 @@ export function SideRail({
                         <button
                           type="button"
                           className="rail__item rail__item--flush rail__item--feature"
-                          onClick={() => onSelectNode("s5", child.id)}
-                          title={`s5 · feature#${child.slug}`}
+                          onClick={() => home !== null && onSelectNode(home, child.id)}
+                          title={`${home} · feature#${child.slug}`}
                         >
                           <span className="feature__slug">feature#{child.slug}</span>
                           <span className="rail__label">{child.text}</span>
@@ -154,7 +160,7 @@ export function SideRail({
                               <button
                                 type="button"
                                 className="rail__item rail__item--leaf"
-                                onClick={() => onSelectNode("s5", kid.id)}
+                                onClick={() => home !== null && onSelectNode(home, kid.id)}
                               >
                                 <span className="rail__label">{kid.text}</span>
                               </button>

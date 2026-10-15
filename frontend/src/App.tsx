@@ -23,7 +23,7 @@ import { EvidenceScope } from "./components/EvidenceContext";
 import { DiscussionScope } from "./components/DiscussionContext";
 import { ExplorationScope } from "./components/ExplorationContext";
 import { jumpToChunk, jumpToEntry, jumpToEvidence } from "./components/jump";
-import { resolveTarget, sectionOfEntry } from "./document/structure";
+import { featureFieldTarget, featureHome, resolveTarget, sectionOfEntry } from "./document/structure";
 import { LoopColumn } from "./components/LoopColumn";
 import type { LoopTab } from "./components/LoopColumn";
 import { MaterialLibrary } from "./components/MaterialLibrary";
@@ -199,7 +199,13 @@ export default function App() {
         return;
       }
       if (hit.kind === "feature") {
-        setActiveSection("s5");
+        // 跳到功能**实际所在**的那一章（模板锚点，不是 s5）
+        const home = featureHome(doc);
+        if (home === null) {
+          data.notify("这份文档里还没有功能，跳不过去");
+          return;
+        }
+        setActiveSection(home);
         setPendingScroll(`block-${hit.ref}`);
         return;
       }
@@ -240,12 +246,15 @@ export default function App() {
         }),
       add: (blockId: string, text: string) =>
         void data.editEntry({ op: "add", block_id: blockId, text }),
-      addField: (featureSlug: string, field: string, text: string) =>
-        void data.editEntry({
-          op: "add",
-          target: { zone: "body", section_id: "s5", feature_slug: featureSlug, field },
-          text,
-        }),
+      addField: (featureSlug: string, field: string, text: string) => {
+        // 去处取模板的功能锚点（`02` §11.0.69）：发 s5 会在自定义模板下被后端拒
+        const target = featureFieldTarget(doc, featureSlug, field);
+        if (target === null) {
+          data.notify("这份文档里还没有功能章节，这一条加不进去");
+          return;
+        }
+        void data.editEntry({ op: "add", target, text });
+      },
       remove: (blockId: string, entryId: string) =>
         void data.editEntry({
           op: "remove",

@@ -30,6 +30,11 @@ class TemplateRole(StrEnum):
     STEPS = "steps"
     #: 关键决策与备选（s9 的形态）
     DECISION = "decision"
+    #: 数据与接口类章节（s7）：承载"实体 / 对外接口"这类**可被跨章引用**的内容。
+    #: 它不是锚点，标不标都不影响文档合法性——标了才有一条启发式判据
+    #: （功能写了依赖却没写对接方式 → 提示，见 `ReadinessChecker._cross_links`）。
+    #: 作者 2026-10-15 拍板：不标 = 不判（模板作者自己决定要不要这条提示）。
+    DATA = "data"
     #: 骨架章（就绪度"至少 N 条"那类判据的候选）
     BACKBONE = "backbone"
     #: 纯内容章（引擎无特殊语义）
@@ -272,7 +277,7 @@ _ROLE_BY_SECTION_ID = {
     "s4": TemplateRole.BACKBONE,
     "s5": TemplateRole.FEATURE,
     "s6": TemplateRole.STEPS,
-    "s7": TemplateRole.PLAIN,
+    "s7": TemplateRole.DATA,
     "s8": TemplateRole.PLAIN,
     "s9": TemplateRole.DECISION,
     "s10": TemplateRole.BACKBONE,

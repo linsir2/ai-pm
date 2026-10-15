@@ -16,7 +16,11 @@ from enum import StrEnum
 from pmstudio.domain.authoring.blocks import Entry
 from pmstudio.domain.authoring.views import BlockView, DocumentView, SectionView
 from pmstudio.domain.shared.ids import SectionId
-from pmstudio.domain.shared.sections import OPEN_QUESTION_SECTION, SECTION_SLOTS
+from pmstudio.domain.shared.template import MinEntries, TemplateRole
+from pmstudio.domain.shared.template_adapter import (
+    ROLE_PRESENCE_LABEL,
+    TemplateAdapter,
+)
 from pmstudio.domain.shared.writing import BlockKind
 
 #: 阻塞型未决条目的前缀（`01` §4：命中它的 s11 才挡交付）
@@ -24,23 +28,6 @@ BLOCKING_MARK = "〔未决·阻塞〕"
 #: 已定记录的前缀（`P28 T5`）：s11 目标题的答案落进来时带这个前缀——
 #: 它是"这个问题已经定了"的记录，**不算未决**，不挡交付。
 SETTLED_MARK = "〔已定〕"
-
-#: 章节级"至少几条非空条目"：(条数下限, 只数哪种块；None = 不挑种类)
-SECTION_MIN_ENTRIES: dict[str, tuple[int, BlockKind | None]] = {
-    "s1": (1, None),
-    "s2": (2, None),
-    "s3": (1, None),
-    "s4": (2, None),
-    "s10": (1, None),
-    "s12": (1, BlockKind.ACCEPTANCE),
-}
-
-#: 有内容就该有的块类型（结构关联，warn）：章节 → 该有的块类型
-KIND_PRESENCE: dict[str, tuple[BlockKind, str]] = {
-    "s6": (BlockKind.STEPS, "主流程"),
-    "s9": (BlockKind.DECISION, "技术决策"),
-}
-
 
 class Severity(StrEnum):
     BLOCKER = "blocker"
@@ -57,70 +44,95 @@ class ReadinessItem:
 
 
 class ReadinessChecker:
-    def check(self, view: DocumentView) -> tuple[ReadinessItem, ...]:
+    def check(
+        self, view: DocumentView, *, adapter: TemplateAdapter
+    ) -> tuple[ReadinessItem, ...]:
+        """判据读**这一份文档的模板视角**（`02` §11.0.69）。
+
+        `adapter` 必填：漏传等于按另一套章节判（同一个检查器同时服务不同模板的文档）。
+        走哪几章、缺几条、哪几项表态，全是模板的声明与角色，不是本文件的 id 表。
+        """
+
         by_id = {str(section.section_id): section for section in view.sections}
         items: list[ReadinessItem] = []
-        items += self._section_min_entries(by_id)
-        items += self._feature_gaps(view)
-        items += self._kind_presence(by_id)
-        items += self._cross_links(by_id, view)
-        items += self._open_questions(by_id.get(OPEN_QUESTION_SECTION))
+        items += self._section_min_entries(by_id, adapter)
+        items += self._feature_gaps(view, adapter)
+        items += self._kind_presence(by_id, view, adapter)
+        items += self._cross_links(by_id, view, adapter)
+        items += self._open_questions(by_id.get(str(adapter.open_home)), adapter)
         return tuple(items)
 
     # —— 判据 ——
-    def _section_min_entries(self, by_id: dict[str, SectionView]) -> list[ReadinessItem]:
+    def _section_min_entries(
+        self, by_id: dict[str, SectionView], adapter: TemplateAdapter
+    ) -> list[ReadinessItem]:
         items: list[ReadinessItem] = []
-        for section_id, (minimum, kind) in SECTION_MIN_ENTRIES.items():
-            section = by_id.get(section_id)
+        # 走**文档自己的章节**（不是全局 13 章表）：模板没声明的章一条都不判。
+        for section_id in adapter.section_ids:
+            section = by_id.get(str(section_id))
             if section is None:
+                continue
+            # 槽判据与条数判据是**两件事**：有槽的章（如 standard 的 s8）没声明条数，
+            # 照样要逐槽判。顺序不影响去重——同一 (章节, code) 各出一条。
+            items += self._slot_gaps(section, adapter)
+            declared = adapter.min_entries_for(section_id)
+            if declared is None:
                 continue
             entries = [
                 entry
                 for block in section.blocks
-                for entry in _entries_with_kind(block, kind)
+                for entry in _entries_with_kind(block, declared.kind)
             ]
-            if len(entries) >= minimum:
+            if len(entries) >= declared.count:
                 continue
-            what = "验收标准" if kind is BlockKind.ACCEPTANCE else "内容"
+            what = "验收标准" if declared.kind is BlockKind.ACCEPTANCE else "内容"
             items.append(
                 ReadinessItem(
-                    section_id=section_id,
+                    section_id=str(section_id),
                     code="section_min_entries",
-                    title=f"{section.title}还缺 {minimum - len(entries)} 条{what}",
-                    detail=_SECTION_DETAIL[section_id],
+                    title=f"{section.title}还缺 {declared.count - len(entries)} 条{what}",
+                    detail=_section_detail(adapter, section_id, declared),
                     severity=Severity.BLOCKER,
                 )
             )
-        items += self._nfr_slots(by_id.get("s8"))
         return items
 
-    def _nfr_slots(self, section: SectionView | None) -> list[ReadinessItem]:
-        if section is None:
+    def _slot_gaps(
+        self, section: SectionView, adapter: TemplateAdapter
+    ) -> list[ReadinessItem]:
+        """有槽的章逐槽判（standard 的 s8「非功能需求还缺 N 项表态」就是它）。
+
+        规则是"有槽即判"、不靠 role：槽是模板声明的骨架，缺项等于这一章没表态
+        （加一个 NFR 专属 role 就是没人读的投机——`02` §11.0.68` 的原话）。
+        """
+
+        slots = adapter.slots_of(section.section_id)
+        if not slots:
             return []
-        slots = SECTION_SLOTS.get(SectionId("s8"), ())
-        missing = [
-            slot for slot in slots if not _slot_entries(section, slot.name)
-        ]
+        missing = [slot for slot in slots if not _slot_entries(section, slot.name)]
         if not missing:
             return []
         return [
             ReadinessItem(
-                section_id="s8",
+                section_id=str(section.section_id),
                 code="section_min_entries",
-                title=f"非功能需求还缺 {len(missing)} 项表态",
+                title=f"{section.title}还缺 {len(missing)} 项表态",
                 detail="、".join(slot.title for slot in missing),
                 severity=Severity.BLOCKER,
             )
         ]
 
-    def _feature_gaps(self, view: DocumentView) -> list[ReadinessItem]:
-        features = _features(view)
+    def _feature_gaps(
+        self, view: DocumentView, adapter: TemplateAdapter
+    ) -> list[ReadinessItem]:
+        home = str(adapter.feature_home)
+        features = _features(view, adapter)
         if not features:
             return [
                 ReadinessItem(
-                    section_id="s5",
+                    section_id=home,
                     code="feature_field_empty",
-                    title="功能需求还没有任何功能",
+                    title=f"{adapter.title_of(home)}还没有任何功能",
                     detail="还没有任何功能",
                     severity=Severity.BLOCKER,
                 )
@@ -135,7 +147,7 @@ class ReadinessChecker:
         )
         return [
             ReadinessItem(
-                section_id="s5",
+                section_id=home,
                 code="feature_field_empty",
                 title="功能字段还有缺口",
                 detail=detail,
@@ -143,12 +155,23 @@ class ReadinessChecker:
             )
         ]
 
-    def _kind_presence(self, by_id: dict[str, SectionView]) -> list[ReadinessItem]:
+    def _kind_presence(
+        self, by_id: dict[str, SectionView], view: DocumentView, adapter: TemplateAdapter
+    ) -> list[ReadinessItem]:
+        """有内容就该有某种块的章（结构关联，warn）：走模板标了 steps / decision 的章。"""
+
         items: list[ReadinessItem] = []
-        for section_id, (kind, label) in KIND_PRESENCE.items():
-            section = by_id.get(section_id)
+        for role, section_id in (
+            (TemplateRole.STEPS, adapter.steps_section()),
+            (TemplateRole.DECISION, adapter.decision_section()),
+        ):
+            if section_id is None:
+                continue
+            section = by_id.get(str(section_id))
             if section is None:
                 continue
+            kind = role_to_kind(role)
+            label = ROLE_PRESENCE_LABEL[role]
             entries = [
                 entry for block in section.blocks for entry in _entries_with_kind(block, kind)
             ]
@@ -159,7 +182,7 @@ class ReadinessChecker:
                 continue
             items.append(
                 ReadinessItem(
-                    section_id=section_id,
+                    section_id=str(section_id),
                     code="section_kind_present",
                     title=f"{section.title}还没有{label}",
                     detail=f"这类内容用 {kind.value} 块写；拿不准就出题问用户",
@@ -169,17 +192,26 @@ class ReadinessChecker:
         return items
 
     def _cross_links(
-        self, by_id: dict[str, SectionView], view: DocumentView
+        self, by_id: dict[str, SectionView], view: DocumentView, adapter: TemplateAdapter
     ) -> list[ReadinessItem]:
-        s7 = by_id.get("s7")
-        if s7 is None:
+        """功能写了依赖、而数据与接口那章还是空的 → warn。
+
+        落点由模板的 `role = "data"` 指（standard 的 s7）；模板没标就**整条不跑**
+        （作者 2026-10-15 拍板）——启发式宁可没有，也不能指到别的章上。
+        """
+
+        data_id = adapter.data_section()
+        if data_id is None:
+            return []
+        section = by_id.get(str(data_id))
+        if section is None:
             return []
         has_dependencies = any(
-            _field_entries(feature, "dependencies") for feature in _features(view)
+            _field_entries(feature, "dependencies") for feature in _features(view, adapter)
         )
         has_interface = any(
             entry
-            for block in s7.blocks
+            for block in section.blocks
             if block.kind in (BlockKind.INTERFACE, BlockKind.ENTITY)
             for entry in block.entries
         )
@@ -187,7 +219,7 @@ class ReadinessChecker:
             return []
         return [
             ReadinessItem(
-                section_id="s7",
+                section_id=str(data_id),
                 code="cross_section_link",
                 title="功能写了依赖，但数据与接口还是空的",
                 detail="依赖要写清对接方式：用 interface / entity 块补一条",
@@ -195,7 +227,9 @@ class ReadinessChecker:
             )
         ]
 
-    def _open_questions(self, section: SectionView | None) -> list[ReadinessItem]:
+    def _open_questions(
+        self, section: SectionView | None, adapter: TemplateAdapter
+    ) -> list[ReadinessItem]:
         if section is None:
             return []
         # 已定记录不算未决（`P28 T5`）：不带这一句，"答过的问题"会被算成"还开着的问题"，
@@ -213,7 +247,7 @@ class ReadinessChecker:
             detail = "；".join(entry.text.removeprefix(BLOCKING_MARK) for entry in blocking[:3])
             return [
                 ReadinessItem(
-                    section_id=OPEN_QUESTION_SECTION,
+                    section_id=str(adapter.open_home),
                     code="open_blocking_question",
                     title=f"有 {len(blocking)} 项阻塞未决",
                     detail=detail,
@@ -222,7 +256,7 @@ class ReadinessChecker:
             ]
         return [
             ReadinessItem(
-                section_id=OPEN_QUESTION_SECTION,
+                section_id=str(adapter.open_home),
                 code="open_blocking_question",
                 title=f"有 {len(entries)} 项未决（没标阻塞）",
                 detail="未决不挡交付，但每条要有待决人",
@@ -243,6 +277,24 @@ _SECTION_DETAIL = {
 }
 
 
+def _section_detail(
+    adapter: TemplateAdapter, section_id: SectionId | str, declared: MinEntries
+) -> str:
+    """缺口明细文案：standard 用原文案（导出与界面都见过它），别的模板用 purpose 兜底。"""
+
+    legacy = _SECTION_DETAIL.get(str(section_id))
+    if legacy is not None:
+        return legacy
+    what = "验收标准" if declared.kind is BlockKind.ACCEPTANCE else "内容"
+    return f"至少 {declared.count} 条{what}：{adapter.purpose_of(section_id)}"
+
+
+def role_to_kind(role: TemplateRole) -> BlockKind:
+    """角色 → 这一章该有的块类型（与适配器 `only_kind_for` 同一条映射）。"""
+
+    return BlockKind.STEPS if role is TemplateRole.STEPS else BlockKind.DECISION
+
+
 def _entries_with_kind(block: BlockView, kind: BlockKind | None) -> list[Entry]:
     entries: list[Entry] = []
     if kind is None or block.kind is kind:
@@ -259,8 +311,11 @@ def _slot_entries(section: SectionView, slot_name: str) -> list[Entry]:
     return []
 
 
-def _features(view: DocumentView) -> list[BlockView]:
-    section = next((item for item in view.sections if str(item.section_id) == "s5"), None)
+def _features(view: DocumentView, adapter: TemplateAdapter) -> list[BlockView]:
+    """功能子树：找模板的**功能锚点章**（不是 s5——那只是 standard 的锚点 id）。"""
+
+    home = str(adapter.feature_home)
+    section = next((item for item in view.sections if str(item.section_id) == home), None)
     if section is None:
         return []
     return [block for block in section.blocks if block.kind is BlockKind.FEATURE]

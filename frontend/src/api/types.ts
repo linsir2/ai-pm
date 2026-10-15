@@ -37,6 +37,9 @@ export interface SectionView {
   section_id: string;
   title: string;
   blocks: BlockView[];
+  /** 这一章在模板里的角色（后端 `TemplateRole` 的值）。老文档/老接口没有这个字段，
+      缺省按 plain 处理——判据里只有 version_history 用到它。 */
+  role?: string;
 }
 
 export interface DocumentView {

@@ -459,7 +459,7 @@ def test_workspace_view_carries_readiness_items():
         template_id="standard",
         template_title="标准版",
     )
-    items = ReadinessChecker().check(document.view())
+    items = ReadinessChecker().check(document.view(), adapter=STD)
 
     view = dto.workspace_view(
         project=project, document=document.view(), round_=None, readiness=items

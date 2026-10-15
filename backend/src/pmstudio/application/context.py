@@ -28,10 +28,12 @@ from pmstudio.domain.round.draft import Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import Question
 from pmstudio.domain.round.round import Round
+from pmstudio.domain.shared.errors import BadTemplateDefinition
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS, slot_block_id
+from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.domain.shared.writing import BlockKind
 
 LABEL_TITLES: dict[ClaimLabel, str] = {
@@ -1193,21 +1195,24 @@ def _section_entry_count(section) -> int:
     return sum(count_block(b) for b in section.blocks)
 
 
-def _compute_coverage(view) -> tuple[tuple[str, str], ...]:
-    """计算每个章节的覆盖状态: empty / partial / complete。"""
-    from pmstudio.domain.authoring.readiness import SECTION_MIN_ENTRIES
-    section_minimums: dict[str, int] = {
-        sid: min_val for sid, (min_val, _) in SECTION_MIN_ENTRIES.items()
-    }
-    for sid in ("s5", "s6", "s7", "s9", "s11"):
-        section_minimums.setdefault(sid, 2)
-    section_minimums.setdefault("s8", 6)
+def _compute_coverage(view, adapter: TemplateAdapter) -> tuple[tuple[str, str], ...]:
+    """每个章节的覆盖状态: empty / partial / complete。
+
+    下限走**模板**（声明值 / 槽数 / 角色缺省，见 `TemplateAdapter.coverage_minimum`），
+    不再是本模块另抄一份 id-keyed 表——两份阈值迟早会漂。
+
+    版本历史章例外：`coverage_minimum` 对它抛错（它永不参与判定），这里捕获取 1，
+    于是空版本章照旧显示 `empty`——与今天逐字一致，不借迁移之机改语义。
+    """
 
     result: list[tuple[str, str]] = []
     for section in view.sections:
         sid = str(section.section_id)
         count = _section_entry_count(section)
-        minimum = section_minimums.get(sid, 1)
+        try:
+            minimum = adapter.coverage_minimum(sid)
+        except BadTemplateDefinition:
+            minimum = 1
 
         if count == 0:
             state = "empty"
@@ -1224,13 +1229,20 @@ def build_project_context(
     document_view,
     memory_entries: Sequence[MemoryEntry],
     readiness: tuple = (),
+    *,
+    adapter: TemplateAdapter,
 ) -> ProjectContext:
-    """从文档现状 + 记忆 + 就绪度构建 L1 项目上下文（纯函数）。"""
-    sections_covered = _compute_coverage(document_view)
+    """从文档现状 + 记忆 + 就绪度构建 L1 项目上下文（纯函数）。
+
+    `adapter` 必填：功能与未决分别取模板的**功能锚点**与**开放问题锚点**——自定义模板里
+    这两章的 id 可以是任何自由文本（`02` §11.0.69）。
+    """
+
+    sections_covered = _compute_coverage(document_view, adapter)
 
     features_defined: list[str] = []
     for section in document_view.sections:
-        if str(section.section_id) == "s5":
+        if str(section.section_id) == str(adapter.feature_home):
             for block in section.blocks:
                 if block.feature_slug:
                     features_defined.append(str(block.feature_slug))
@@ -1243,7 +1255,7 @@ def build_project_context(
 
     open_questions: list[str] = []
     for section in document_view.sections:
-        if str(section.section_id) == "s11":
+        if str(section.section_id) == str(adapter.open_home):
             for block in section.blocks:
                 if block.kind == "open_questions":
                     open_questions.extend(block.entries)

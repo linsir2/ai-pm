@@ -117,7 +117,7 @@ def test_header_carries_title_version_time_and_readiness_stamp():
     text = export(
         document,
         ledger_with_two_entries(),
-        ReadinessChecker().check(document.view()),
+        ReadinessChecker().check(document.view(), adapter=STD),
     )
 
     assert text.startswith("# 产品文档 · 订单中台（v1）")
@@ -137,7 +137,7 @@ def test_empty_section_is_explicit_instead_of_silently_skipped():
     text = export(
         make_document(),
         ledger_with_two_entries(),
-        ReadinessChecker().check(make_document().view()),
+        ReadinessChecker().check(make_document().view(), adapter=STD),
     )
 
     assert "## 1 背景与问题" in text
@@ -421,7 +421,7 @@ def test_the_empty_section_note_does_not_talk_to_the_model():
     text = export(
         document,
         ledger_with_two_entries(),
-        ReadinessChecker().check(document.view()),
+        ReadinessChecker().check(document.view(), adapter=STD),
     )
     s6 = text.split("## 6 业务流程与交互", 1)[1].split("## 7 ", 1)[0]
 
@@ -450,7 +450,7 @@ def test_filename_carries_title_and_version():
 def test_readiness_appendix_lists_unfinished_items():
     document = make_document()
     items = (
-        ReadinessChecker().check(document.view())[0],
+        ReadinessChecker().check(document.view(), adapter=STD)[0],
     )
     text = export(document, ledger_with_two_entries(), items)
 

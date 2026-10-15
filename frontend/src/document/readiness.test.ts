@@ -68,7 +68,7 @@ describe("readinessPercent", () => {
     { section_id: "s1" },
     { section_id: "s2" },
     { section_id: "s6" },
-    { section_id: "s13" }, // 不参与判定
+    { section_id: "s13", role: "version_history" }, // 不参与判定
   ];
 
   it("无阻塞章节占比：s1 有阻塞，s2/s6 干净 → 2/3", () => {
@@ -76,13 +76,13 @@ describe("readinessPercent", () => {
     expect(readinessPercent(items, sections)).toBe(67);
   });
 
-  it("s13 不参与：即使只有 s13 干净也不拉低分母", () => {
+  it("版本历史章不参与：即使它干净也不拉低分母", () => {
     expect(readinessPercent([], sections)).toBe(100);
   });
 
   it("没有可判章节就是 0", () => {
     expect(readinessPercent([], [])).toBe(0);
-    expect(readinessPercent([], [{ section_id: "s13" }])).toBe(0);
+    expect(readinessPercent([], [{ section_id: "s13", role: "version_history" }])).toBe(0);
   });
 
   it("全都有阻塞就是 0", () => {
@@ -125,5 +125,29 @@ describe("readinessHeadline", () => {
 
   it("没有缺口就是空分组（抽屉里那句「没有缺口」由组件说）", () => {
     expect(readinessBySection([], [{ section_id: "s1", title: "背景与问题" }])).toEqual([]);
+  });
+});
+
+describe("readinessPercent · 版本历史按 role 排除（`02` §11.0.69）", () => {
+  it("light 六章：版本历史章角色是 version_history，不进分母", () => {
+    const light = [
+      { section_id: "s1", role: "backbone" },
+      { section_id: "s2", role: "backbone" },
+      { section_id: "s4", role: "backbone" },
+      { section_id: "s5", role: "feature" },
+      { section_id: "s11", role: "open_questions" },
+      { section_id: "s13", role: "version_history" },
+    ];
+
+    expect(readinessPercent([], light)).toBe(100);
+  });
+
+  it("自定义模板里没有 version_history 角色的章也照常参与", () => {
+    const custom = [
+      { section_id: "overview", role: "plain" },
+      { section_id: "history", role: "plain" },
+    ];
+
+    expect(readinessPercent([], custom)).toBe(100);
   });
 });

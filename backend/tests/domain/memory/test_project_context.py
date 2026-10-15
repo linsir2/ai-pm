@@ -14,10 +14,12 @@ from pmstudio.domain.authoring.views import (
 from pmstudio.domain.memory.context import ProjectContext
 from pmstudio.domain.memory.memory import MemoryEntry, MemoryKind
 from pmstudio.domain.shared.ids import (
+    DocumentId,
     EvidenceId,
     ProjectId,
     SectionId,
 )
+from tests.support.builders import STD
 
 NOW = datetime(2026, 10, 8, 10, 0, 0)
 PROJECT = ProjectId("p-ctx-test")
@@ -57,7 +59,7 @@ class TestBuildProjectContext:
 
     def test_empty_document_returns_empty_context(self):
         doc = _document()
-        ctx = build_project_context(doc, (), ())
+        ctx = build_project_context(doc, (), (), adapter=STD)
         assert ctx.domain == ""
         assert ctx.target_users == ""
         assert ctx.core_value == ""
@@ -66,7 +68,7 @@ class TestBuildProjectContext:
 
     def test_coverage_empty_sections(self):
         doc = _document(_section("s1"), _section("s5"))
-        ctx = build_project_context(doc, (), ())
+        ctx = build_project_context(doc, (), (), adapter=STD)
         covered = dict(ctx.sections_covered)
         assert covered.get("s1") == "empty"
         assert covered.get("s5") == "empty"
@@ -77,7 +79,7 @@ class TestBuildProjectContext:
             _section("s2", "目标"),
             _section("s5", "功能需求"),
         )
-        ctx = build_project_context(doc, (), ())
+        ctx = build_project_context(doc, (), (), adapter=STD)
         covered = dict(ctx.sections_covered)
         assert covered["s1"] == "complete"  # ≥2 entries, meets minimum
         assert covered["s2"] == "partial"  # 1 entry, below minimum
@@ -103,13 +105,13 @@ class TestBuildProjectContext:
             ),
         )
         doc = _document(s5)
-        ctx = build_project_context(doc, (), ())
+        ctx = build_project_context(doc, (), (), adapter=STD)
         assert set(ctx.features_defined) == {"feature-a", "feature-b"}
 
     def test_top_decisions_from_memory(self):
         entries = tuple(_entry(f"决策{i}", MemoryKind.DECISION) for i in range(15))
         doc = _document(_section("s1", "背景"))
-        ctx = build_project_context(doc, entries, ())
+        ctx = build_project_context(doc, entries, (), adapter=STD)
         # 最多取 10 条
         assert len(ctx.top_decisions) == 10
         assert all("决策" in d for d in ctx.top_decisions)
@@ -121,7 +123,7 @@ class TestBuildProjectContext:
             _entry("否掉", MemoryKind.REJECTED),
         )
         doc = _document(_section("s1", "背景"))
-        ctx = build_project_context(doc, entries, ())
+        ctx = build_project_context(doc, entries, (), adapter=STD)
         assert ctx.top_decisions == ("决策",)
 
     def test_open_questions_from_s11(self):
@@ -137,7 +139,7 @@ class TestBuildProjectContext:
             ),
         )
         doc = _document(s11)
-        ctx = build_project_context(doc, (), ())
+        ctx = build_project_context(doc, (), (), adapter=STD)
         assert set(ctx.open_questions) == {"退还周期多长？", "老年用户如何使用？"}
 
 
@@ -196,3 +198,99 @@ class TestRenderProjectContext:
         text = render_project_context(ctx)
         lines = text.strip().split("\n")
         assert len(lines) <= 30, f"渲染超过 30 行: {len(lines)} 行"
+
+
+class TestTemplateDrivenCoverage:
+    """覆盖度与功能提取走**文档自己的模板**（`02` §11.0.69），不是全局 s5/13 章表。"""
+
+    def test_light_document_is_covered_on_its_own_six_chapters(self):
+        from pmstudio.domain.authoring.document import Document
+        from pmstudio.domain.shared.template import (
+            DocumentTemplate,
+            TemplatedSection,
+            TemplateRole,
+        )
+        from pmstudio.domain.shared.template_adapter import adapt
+
+        def section(sid: str, title: str, role=TemplateRole.PLAIN) -> TemplatedSection:
+            return TemplatedSection(
+                section_id=SectionId(sid), title=title, purpose="摆设", role=role
+            )
+
+        light = DocumentTemplate(
+            template_id="light",
+            title="轻量版",
+            sections=(
+                section("s1", "背景与问题", TemplateRole.BACKBONE),
+                section("s2", "目标与非目标", TemplateRole.BACKBONE),
+                section("s4", "范围与边界", TemplateRole.BACKBONE),
+                section("s5", "功能需求", TemplateRole.FEATURE),
+                section("s11", "风险与开放问题", TemplateRole.OPEN_QUESTIONS),
+                section("s13", "版本历史", TemplateRole.VERSION_HISTORY),
+            ),
+        )
+        document = Document.new(
+            document_id=DocumentId("d1"), project_id=ProjectId("p1"), title="t", now=NOW,
+            template=light,
+        )
+
+        ctx = build_project_context(document.view(), (), (), adapter=adapt(light))
+
+        assert [sid for sid, _ in ctx.sections_covered] == [
+            "s1", "s2", "s4", "s5", "s11", "s13",
+        ]
+        assert all(state == "empty" for _, state in ctx.sections_covered)
+
+    def test_version_history_chapter_stays_empty_like_it_is_today(self):
+        """版本历史不参与覆盖度判定，但**状态照旧是 empty**（保住今天的提示词字节，
+        不趁机改语义）；`coverage_minimum` 对它抛错，这里捕获取 1。"""
+
+        doc = _document(_section("s13"))
+        ctx = build_project_context(doc, (), (), adapter=STD)
+        assert dict(ctx.sections_covered)["s13"] == "empty"
+
+    def test_features_come_from_the_templates_feature_anchor(self):
+        """功能提取认**锚点章**，不认 id 字面量 s5：自定义模板的功能章叫 `feat` 也照样提。"""
+
+        from pmstudio.domain.shared.template import template_from_dict
+        from pmstudio.domain.shared.template_adapter import adapt
+
+        custom = template_from_dict(
+            {
+                "template_id": "t",
+                "title": "x",
+                "sections": [
+                    {"id": "feat", "title": "功能", "purpose": "p", "role": "feature"},
+                    {"id": "open", "title": "未决", "purpose": "p", "role": "open_questions"},
+                    {
+                        "id": "history",
+                        "title": "版本",
+                        "purpose": "p",
+                        "role": "version_history",
+                    },
+                ],
+            }
+        )
+        feature_section = SectionView(
+            section_id=SectionId("feat"),
+            title="功能",
+            blocks=(
+                BlockView(
+                    block_id="feat-order-export",
+                    kind="feature",
+                    feature_slug="order-export",
+                    entries=(),
+                ),
+            ),
+        )
+        doc = DocumentView(
+            document_id=DocumentId("d1"),
+            project_id=ProjectId("p1"),
+            title="t",
+            version_no=1,
+            sections=(feature_section,),
+        )
+
+        ctx = build_project_context(doc, (), (), adapter=adapt(custom))
+
+        assert ctx.features_defined == ("order-export",)

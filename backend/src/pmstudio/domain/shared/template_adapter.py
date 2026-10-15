@@ -136,6 +136,15 @@ class TemplateAdapter:
 
         return self._first_with_role(TemplateRole.DECISION)
 
+    def data_section(self) -> SectionId | None:
+        """数据与接口类章节（standard 的 s7）：跨章链接启发式的落点。
+
+        模板没标 `role = "data"` 就给 None——调用方据此**整条不跑**，而不是退到别的章上
+        （启发式判据宁可没有，也不能指错地方）。
+        """
+
+        return self._first_with_role(TemplateRole.DATA)
+
     def only_kind_for(self, section_id: SectionId | str) -> BlockKind | None:
         """这一章的内容只有一种块类型时给那个类型（模型写歪或没写都按它落）。"""
 
