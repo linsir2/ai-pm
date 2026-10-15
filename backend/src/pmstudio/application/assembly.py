@@ -56,9 +56,6 @@ from pmstudio.domain.shared.ids import (
     RoundId,
 )
 from pmstudio.domain.shared.label import Zone
-from pmstudio.domain.shared.sections import (
-    OPEN_QUESTION_SECTION,
-)
 from pmstudio.domain.shared.target import Target, target_from_label
 from pmstudio.domain.shared.template_adapter import TemplateAdapter, adapt
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
@@ -68,9 +65,6 @@ PURPOSE = "integration"
 
 NEW_FEATURE_YES = "new_feature_yes"
 NEW_FEATURE_NO = "new_feature_no"
-
-#: 未决清单的家（第 11 章）——常量定义在 `domain/shared/sections.py`（一处），这里只是沿用旧名字
-OPEN_QUESTION_HOME = OPEN_QUESTION_SECTION
 
 #: 必填功能字段（阻塞规则的一半；另一半是"落在哪些章节"——由 `TemplateAdapter` 算，
 #: `02` §11.0.69）。这条留在这里是因为它跟**章节**无关：哪个字段必填是功能子树的事实。

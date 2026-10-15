@@ -38,6 +38,7 @@ from tests.support.builders import (
     PROJECT,
     ROUND_ID,
     SEAT,
+    STD,
     document_with_feature,
     make_document,
     make_round,
@@ -1435,7 +1436,9 @@ def test_retiring_an_answered_open_item_cites_this_rounds_answer():
         now=NOW,
     )
 
-    proposals = _retire_answered_open_items(round_, ledger=ledger, start_index=1)
+    proposals = _retire_answered_open_items(
+        round_, ledger=ledger, start_index=1, adapter=STD
+    )
 
     assert [item.origin.refs for item in proposals] == [(mine,)]
     assert [str(item.entry_id) for item in proposals] == ["r0#open01"]

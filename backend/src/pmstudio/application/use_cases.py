@@ -32,7 +32,6 @@ from pmstudio.application.agents.sim_inquirer import (
 )
 from pmstudio.application.assembly import (
     NEW_FEATURE_YES,
-    OPEN_QUESTION_HOME,
     Assembly,
     assemble,
     backbone_gap_lines,
@@ -1312,7 +1311,7 @@ class IntegrationResult:
     carried_from_open_items: tuple[Question, ...] = ()
 
 def _retire_answered_open_items(
-    round_: Round, *, ledger: EvidenceLedger, start_index: int
+    round_: Round, *, ledger: EvidenceLedger, start_index: int, adapter: TemplateAdapter
 ) -> tuple[Proposal, ...]:
     """这一轮**被回答过**、且来自 s11 未决条目的题 → 各出一条 `remove` 把未决项撤下。
 
@@ -1342,7 +1341,7 @@ def _retire_answered_open_items(
                 proposal_id=ProposalId(f"p{index:02d}"),
                 entry_id=EntryId(entry_id),
                 op=WriteOp.REMOVE,
-                target=Target.body(OPEN_QUESTION_HOME),
+                target=Target.body(adapter.open_home),
                 text="本轮已回答，撤下这条未决项",
                 origin=Origin(OriginType.SYSTEM_DEFAULT, (EvidenceId(eid),)),
                 kind=BlockKind.QUESTION,
@@ -1859,6 +1858,7 @@ class IntegrateRound:
                         round_,
                         ledger=ledger,
                         start_index=_next_proposal_index(proposals),
+                        adapter=adapter,
                     )
                 )
                 # 答案要么被引用、要么机械落地（D3）：跨轮去重只认文档，答案不落地下一轮必然再问

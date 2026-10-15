@@ -1,4 +1,17 @@
-"""13 章骨架。三个上下文都要用这套 id 说话，所以放在 shared。"""
+"""13 章骨架——**`standard` 模板的原材料**，不是引擎的章节真相源（`02` §11.0.69）。
+
+切割线（`tests/architecture/test_section_tables.py` 守着）：
+
+- `SECTIONS` / `SECTION_SLOTS` / `SlotSpec` / `slot_block_id` 是**原料**：
+  `template.py` 拿它们算出 `standard_template()`，`/schema` 吐静态目录，
+  块 id 命名用它——照旧可 import；
+- `SECTION_IDS` / `SECTION_BY_ID` / `section_spec` / `section_slot` 是**按 id 查
+  standard 的表**：
+  引擎读它就等于把 standard 当真相源（自定义模板里那一章的标题与槽会被 standard 顶掉），
+  所以**只许测试引用**，src 里 import 即红；
+- "未决清单的家""功能子树的家"不再有常量：它们是模板的**锚点**，走
+  `TemplateAdapter.open_home` / `.feature_home`。
+"""
 
 from dataclasses import dataclass
 
@@ -14,11 +27,6 @@ class SectionSpec:
     #: 这一章是干什么的（一句话）。界面章节头显示它，来源是本文件的唯一一份。
     purpose: str
     allows_features: bool = False
-
-
-#: 未决清单落在第 11 章「风险与开放问题」——它既是"还没定的事"的家，也是**跨轮队列本身**
-#: （`02-编排与数据.md` §11.0.10：不另建表）。汇编层、就绪度、导出附录都要认它，**只写一次**。
-OPEN_QUESTION_SECTION = "s11"
 
 
 SECTIONS: tuple[SectionSpec, ...] = (
@@ -80,9 +88,7 @@ SECTIONS: tuple[SectionSpec, ...] = (
 )
 
 SECTION_IDS: tuple[SectionId, ...] = tuple(spec.section_id for spec in SECTIONS)
-SECTION_TITLES: dict[SectionId, str] = {spec.section_id: spec.title for spec in SECTIONS}
 SECTION_BY_ID: dict[SectionId, SectionSpec] = {spec.section_id: spec for spec in SECTIONS}
-FEATURE_HOME = SectionId("s5")
 
 
 @dataclass(frozen=True, slots=True)
