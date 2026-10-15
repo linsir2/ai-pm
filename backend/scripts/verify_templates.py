@@ -104,11 +104,11 @@ def main() -> int:
         status, body = call(
             base, "POST", f"/api/projects/{project_id}/rounds", {"input": "写点东西"}
         )
+        # 门已删（`02` §11.0.69）：自定义模板能开轮了。
+        # 注意这里会真的调模型（claims）——只有带 --write 才走这条路。
         check(
-            "round gate 409",
-            status == 409
-            and isinstance(body, dict)
-            and body.get("code") == "template_rounds_unsupported",
+            "custom template can start a round",
+            status == 200 and isinstance(body, dict) and "round_id" in body,
             f"{status} {body}",
         )
         status, missing = call(base, "GET", "/api/templates/nope")

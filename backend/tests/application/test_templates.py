@@ -110,21 +110,23 @@ async def test_create_project_with_custom_template_builds_its_roots():
     assert document.template.template_id == template_id
 
 
-async def test_starting_a_round_on_non_standard_template_is_rejected_explicitly():
-    """非 standard 模板跑轮：引擎还没迁完（切片 2），明确拒绝，不烧调用、不报含糊错。"""
+async def test_starting_a_round_on_a_custom_template_is_allowed_now():
+    """非 standard 模板跑轮不再被拒（`02` §11.0.69：引擎消费者全部迁完，门删）。
 
-    from pmstudio.application.errors import TemplateRoundsUnsupported
+    这条替代 `test_starting_a_round_on_non_standard_template_is_rejected_explicitly`
+    ——那条钉的是"迁移完成前先拒绝"，迁移完成即作废（需求变更，不是测试出错）。
+    """
+
     from pmstudio.domain.shared.ids import ProjectId
 
     harness = Harness(replies={})
-    template_id = await harness.create_template()(
-        title="自建", sections=triple_sections()
-    )
+    template_id = await harness.create_template()(title="自建", sections=triple_sections())
     summary = await harness.create_project()(title="自建项目", template_id=template_id)
 
-    with pytest.raises(TemplateRoundsUnsupported):
-        await harness.start_round().create(
-            project_id=ProjectId(summary.project_id), user_input="写点东西"
-        )
+    round_id = await harness.start_round().create(
+        project_id=ProjectId(summary.project_id), user_input="写点东西"
+    )
 
-    assert harness.rounds.all_rounds() == ()
+    assert len(harness.rounds.all_rounds()) == 1
+    assert round_id
+

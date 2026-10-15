@@ -25,7 +25,7 @@ from pmstudio.application.ports import SeatCatalog
 from pmstudio.domain.round.claim import Assumption, Claim, Contradiction
 from pmstudio.domain.round.round import DroppedItem, DropSource, SeatNomination
 from pmstudio.domain.round.web_query import MAX_WEB_QUERIES, WebQuery
-from pmstudio.domain.shared.errors import DomainError
+from pmstudio.domain.shared.errors import DomainError, UnknownSection
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.template_adapter import TemplateAdapter
@@ -429,14 +429,34 @@ def claims_from_packet(
             )
             assumption = None
         try:
+            claim_target = schemas.normalize_claim_target(
+                draft, label=draft.label, adapter=adapter
+            )
+        except UnknownSection as error:
+            # 去处落在**这套模板之外**（light 里没有 s3/s6/s10…，或者模型编了个 s99）：
+            # 内容本身没问题，只是放错了章 → **丢那一条 + 留痕**，与提案同一套规矩
+            # （`assembly._target_or_drop`，2026-09-28 作者拍板："去处写错只丢那一条"）。
+            # 原话仍在用户输入里，用户在开场卡看得见剩下的、也能自己补；判死整轮是浪费。
+            dropped.append(
+                DroppedItem(
+                    handle=f"主张 {claim_id}",
+                    reason=(
+                        f"{error.message}；这条内容已留下但没进文档——"
+                        f"这一套模板的章节只有 {'、'.join(map(str, adapter.section_ids))}"
+                    ),
+                    source=DropSource.ASSEMBLY,
+                    seat_id=None,
+                    pass_index=1,
+                )
+            )
+            continue
+        try:
             claims.append(
                 Claim(
                     claim_id=claim_id,
                     text=draft.text.strip(),
                     label=ClaimLabel(draft.label),
-                    target=schemas.normalize_claim_target(
-                        draft, label=draft.label, adapter=adapter
-                    ),
+                    target=claim_target,
                     raw_span=span,
                     assumption=(
                         Assumption(

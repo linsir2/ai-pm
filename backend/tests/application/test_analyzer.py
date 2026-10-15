@@ -9,12 +9,17 @@ from pmstudio.domain.round.round import DropSource, SeatNomination
 from pmstudio.domain.round.web_query import WebQuery
 from pmstudio.domain.shared.label import ClaimLabel
 from pmstudio.domain.shared.target import Target
+from pmstudio.domain.shared.template_adapter import adapt
 from pmstudio.harness.errors import PacketParseError
 
 #: 提示词本体：归位规则这类"模型每轮都看得见"的东西，钉在文件上比钉在槽里准
 from pmstudio.harness.prompt import PROMPTS_DIR  # 路径跟随资源，别在这里重算
+from pmstudio.infrastructure.templates import loader
 from tests.support.builders import SEAT, STD, make_seat
 from tests.support.doubles import RecordingPrompts, ScriptedModelGateway, StaticSeatCatalog
+
+#: light 的适配器（章节里没有 s3/s6/s7/s8/s9/s10/s12）
+LIGHT = adapt(loader.load_template_file(loader.TEMPLATES_DIR / "light.toml"))
 
 INPUT = "想做个订单导出的功能，运营每天都要用，数据量大概几万。登录页太丑了。下个月必须上线。"
 
@@ -939,3 +944,83 @@ async def test_analyzer_prompt_of_a_template_without_steps_never_mentions_s6():
     assert "s6" not in slots["placement"]
     assert "- s5 功能需求" in slots["placement"]
     assert "没有章节槽" in slots["section_slots"]
+
+
+# —— 去处落在模板外：丢那一条 + 留痕，不炸整轮（`02` §11.0.69）——
+
+
+def _reply_with(*targets: dict) -> str:
+    return json.dumps(
+        {
+            "basis": "读了这套文档与本轮输入",
+            "claims": [
+                {
+                    "text": text,
+                    "raw_span": text,
+                    "label": "fact",
+                    "zone": "body",
+                    **target,
+                }
+                for text, target in (
+                    ("运营每天手工对表", {"section_id": "s1"}),
+                    ("数据量大概几万", {"section_id": "s10"}),
+                    ("登录页太丑了", {"section_id": "s3"}),
+                )
+                if target is not None
+            ]
+            if False
+            else [
+                {
+                    "text": text,
+                    "raw_span": text,
+                    "label": "fact",
+                    "zone": "body",
+                    **target,
+                }
+                for text, target in zip(
+                    ("运营每天手工对表", "数据量大概几万", "登录页太丑了"), targets
+                )
+            ],
+            "seats": [{"seat_id": SEAT, "why": "说到运营"}],
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_a_claim_pointing_outside_the_template_is_dropped_not_fatal():
+    """light 里没有 s3/s6/s7/s8/s9/s10/s12：模型写其中之一时**丢那一条 + 留痕**。
+
+    为什么不是判死整轮：与提案同一套规矩（`assembly._target_or_drop`、"去处写错只丢
+    那一条"，2026-09-28 作者拍板）——内容本身没问题，只是放错了章；原话仍在输入里，
+    用户在开场卡看得见剩下那些，也能自己补。
+    """
+
+    prompts = RecordingPrompts()
+    reply = _reply_with(
+        {"section_id": "s1"},
+        {"section_id": "s10"},  # 标准版的章，light 里没有
+        {"section_id": "s4"},
+    )
+    analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": reply}), prompts)
+
+    analysis = await analyzer.analyze(
+        adapter=LIGHT, user_input="运营每天手工对表，数据量大概几万，登录页太丑了", document_state=""
+    )
+
+    assert [claim.text for claim in analysis.claims] == ["运营每天手工对表", "登录页太丑了"]
+    dropped = [item.handle for item in analysis.dropped]
+    assert any("s10" in item.reason for item in analysis.dropped), analysis.dropped
+
+
+async def test_the_drop_trace_names_the_template_and_where_it_can_go():
+    prompts = RecordingPrompts()
+    reply = _reply_with({"section_id": "s1"}, {"section_id": "s99"}, {"section_id": "s1"})
+    analyzer = make_analyzer(ScriptedModelGateway(replies={"claims": reply}), prompts)
+
+    analysis = await analyzer.analyze(
+        adapter=LIGHT, user_input="运营每天手工对表，数据量大概几万，登录页太丑了", document_state=""
+    )
+
+    reason = next(item.reason for item in analysis.dropped if "s99" in item.reason)
+    assert "轻量版" in reason
+    assert "s1" in reason and "s5" in reason  # 说清这一套模板真有哪些章
