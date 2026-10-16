@@ -15,3 +15,11 @@ def test_wrong_password_is_false_not_raise():
 
 def test_same_password_hashes_differ():
     assert hash_password("x") != hash_password("x")
+
+
+def test_empty_hash_is_false_not_raise():
+    assert verify_password("", "x") is False
+
+
+def test_garbage_hash_is_false_not_raise():
+    assert verify_password("not-a-argon2-hash", "x") is False
