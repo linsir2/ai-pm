@@ -106,7 +106,6 @@ def test_deleting_a_template_that_is_not_there_is_an_error(tmp_path):
     connection.close()
 
 
-#: v13 起存量内容必须有归属：老库得有 admin，回填才填得上（否则启动熔断）。
 OLD_DOCUMENTS_DDL = """
 CREATE TABLE documents (
   project_id         TEXT PRIMARY KEY,
@@ -118,16 +117,6 @@ CREATE TABLE documents (
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL
 );
-CREATE TABLE users (
-  user_id       TEXT PRIMARY KEY,
-  username      TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  status        TEXT NOT NULL DEFAULT 'pending',
-  role          TEXT NOT NULL DEFAULT 'user',
-  approved_by   TEXT,
-  approved_at   TEXT,
-  created_at    TEXT NOT NULL
-);
 """
 
 
@@ -137,11 +126,6 @@ def test_an_old_db_gets_templates_table_and_documents_template_column(tmp_path):
     path = tmp_path / "old.db"
     old = sqlite3.connect(path)
     old.executescript(OLD_DOCUMENTS_DDL)
-    old.execute(
-        "INSERT INTO users (user_id, username, password_hash, status, role, created_at)"
-        " VALUES ('u-admin', 'admin', 'x', 'active', 'admin',"
-        "  '2026-09-01T00:00:00+00:00')"
-    )
     old.execute(
         "INSERT INTO documents (project_id, document_id, title, blocks,"
         " preference_entries, tombstones, created_at, updated_at) VALUES"

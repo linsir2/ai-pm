@@ -178,8 +178,12 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     ids = UuidIdGenerator()
     bus = InProcessEventBus()
     users = SqliteUserRepository(connection)
-    sessions = SqliteSessionRepository(connection)
+    # 次序是契约（Ruling 13）：先种首 admin，再回填存量 owner，最后熔断。
+    # 反过来（connect 里熔断）会让"存量内容 + users 空 + FIRST_ADMIN"的首次升级永远卡住。
     _seed_first_admin(users, settings)
+    database.backfill_owners(connection)
+    database.assert_owners_backfilled(connection)
+    sessions = SqliteSessionRepository(connection)
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
     explorations = SqliteExplorationRepository(connection)

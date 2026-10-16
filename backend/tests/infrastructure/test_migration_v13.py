@@ -1,11 +1,13 @@
-"""迁移 v13：owner 列 + 回填 + NULL 熔断（多用户改造，裁决 A）。
+"""迁移 v13：owner 列 + 回填 + NULL 熔断（多用户改造，裁决 A / Ruling 13）。
 
 v12 的库没有任何归属。13 给 **13 张表**补上 `owner_id TEXT`：12 张项目域表
 （documents 及其余 join projects 的表）+ `templates`。存量行回填给首个 admin；
 `templates` 的 builtin 行留 NULL（出厂模板人人可见）。补不齐就熔断——
 宁可起不来，也不让没归属的内容悄悄漏给所有人。
 
-豁免不加列的：users / sessions / model_calls。
+次序是契约（Ruling 13）：`connect()` **只建表+迁移，不熔断**；组装点按
+`connect → 建 users → 种首 admin → backfill_owners → assert_owners_backfilled` 走。
+本文件按同一顺序显式调用。豁免不加列的：users / sessions / model_calls。
 """
 
 import sqlite3
@@ -166,17 +168,11 @@ CREATE TABLE users (
 """
 
 
-def _old_db(path, *, admin: bool, content: bool) -> None:
-    """手建一个 v12 形状的库：可选塞 admin、可选塞 1 项目 + 1 轮次 + 模板。"""
+def _old_v12_db(path, *, content: bool) -> None:
+    """手建一个 v12 形状的库：可选塞 1 项目 + 1 轮次 + 内置/自建模板。"""
 
     old = sqlite3.connect(path)
     old.executescript(OLD_V12_DDL)
-    if admin:
-        old.execute(
-            "INSERT INTO users (user_id, username, password_hash, status, role,"
-            " created_at) VALUES (?, 'admin', 'x', 'active', 'admin', ?)",
-            (ADMIN_ID, NOW.isoformat()),
-        )
     if content:
         old.execute(
             "INSERT INTO documents (project_id, document_id, title, template, blocks,"
@@ -203,11 +199,33 @@ def _old_db(path, *, admin: bool, content: bool) -> None:
     old.close()
 
 
-def test_v12_db_migrates_to_v13_with_owners(tmp_path):
-    path = tmp_path / "old.db"
-    _old_db(path, admin=True, content=True)
+def _seed_admin(connection) -> None:  # type: ignore[no-untyped-def]
+    """组装点的种子动作：users 为空才建首 admin（幂等，照 `_seed_first_admin` 语义）。"""
+
+    if connection.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None:
+        return
+    connection.execute(
+        "INSERT INTO users (user_id, username, password_hash, status, role,"
+        " created_at) VALUES (?, 'admin', 'x', 'active', 'admin', ?)",
+        (ADMIN_ID, NOW.isoformat()),
+    )
+
+
+def _connect_and_backfill(path):  # type: ignore[no-untyped-def]
+    """组装点的次序：connect → 种 admin → 回填 → 熔断校验。"""
 
     connection = database.connect(path)
+    _seed_admin(connection)
+    database.backfill_owners(connection)
+    database.assert_owners_backfilled(connection)
+    return connection
+
+
+def test_v12_db_migrates_to_v13_with_owners(tmp_path):
+    path = tmp_path / "old.db"
+    _old_v12_db(path, content=True)
+
+    connection = _connect_and_backfill(path)
 
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
     assert (
@@ -247,14 +265,26 @@ def test_v12_db_migrates_to_v13_with_owners(tmp_path):
     connection.close()
 
 
-def test_breaker_refuses_startup_when_owners_left_null(tmp_path):
-    """没有 admin 就别指望回填：存量行仍无归属 → connect 当场熔断、点名表。"""
+def test_connect_alone_never_fuses_but_assert_catches_orphans(tmp_path):
+    """Ruling 13：connect 不熔断（否则首次升级卡在 seed 之前）。
+
+    "只 connect 不 backfill → 不抛"与"null 行还在时 assert → 抛、点名表"的对照，
+    回填之后 assert 又不再抛。
+    """
 
     path = tmp_path / "orphan.db"
-    _old_db(path, admin=False, content=True)
+    _old_v12_db(path, content=True)
+
+    connection = database.connect(path)  # 不熔断：还没到校验那一步
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
 
     with pytest.raises(RuntimeError, match="documents"):
-        database.connect(path)
+        database.assert_owners_backfilled(connection)
+
+    _seed_admin(connection)
+    database.backfill_owners(connection)
+    database.assert_owners_backfilled(connection)  # 不再抛
+    connection.close()
 
 
 def test_fresh_db_is_built_in_v13_shape(tmp_path):
@@ -282,10 +312,10 @@ def test_migration_is_idempotent(tmp_path):
     """再连一次不许炸、不许改写已有 owner。"""
 
     path = tmp_path / "old.db"
-    _old_db(path, admin=True, content=True)
-    database.connect(path).close()
+    _old_v12_db(path, content=True)
+    _connect_and_backfill(path).close()
 
-    connection = database.connect(path)
+    connection = _connect_and_backfill(path)
 
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
     assert (

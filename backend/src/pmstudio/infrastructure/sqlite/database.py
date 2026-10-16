@@ -65,7 +65,6 @@ def connect(db_path: Path) -> sqlite3.Connection:
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     migrate(connection)
-    assert_owner_coverage(connection)
     connection.execute(f"PRAGMA user_version = {USER_VERSION}")
     return connection
 
@@ -100,8 +99,6 @@ def migrate(connection: sqlite3.Connection) -> None:
             if name in existing:
                 connection.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
 
-    backfill_owners(connection)
-
 
 def backfill_owners(connection: sqlite3.Connection) -> None:
     """存量行补归属：只填 NULL（幂等），owner = 首个 admin。
@@ -131,9 +128,11 @@ def backfill_owners(connection: sqlite3.Connection) -> None:
             )
 
 
-def assert_owner_coverage(connection: sqlite3.Connection) -> None:
+def assert_owners_backfilled(connection: sqlite3.Connection) -> None:
     """任一内容表还有 NULL owner 就拒绝启动：缺归属的内容不该悄悄漏出去。
 
+    由组装点（`build_container`）在"建 users → 种首 admin → `backfill_owners`"之后调用，
+    **不在 `connect()` 里**——否则存量库会在 admin 种子落库之前先熔断，永远升不上来。
     `templates` 只查自建行——builtin 行留 NULL 是规矩，不是漏网。
     """
 
