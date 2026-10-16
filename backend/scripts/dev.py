@@ -97,6 +97,9 @@ def main() -> int:
     sys.path.insert(0, str(SRC))
     import uvicorn  # 放在 sys.path 之后导入，免得 src 还没进路径
 
+    # **单 worker 是正确性约束，不是性能取舍**（多用户改造 §0.9）：owner 上下文是
+    # 进程内的 contextvar，内存登录限流也是进程内状态；开多 worker 会让它们各自为政
+    # （越权、限流失效）。SQLite 单文件写也是按单进程设计的。**不要加 `--workers`。**
     uvicorn.run(
         "pmstudio.bootstrap.container:build_app",
         factory=True,

@@ -59,7 +59,11 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
 
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
+    # 显式 `timeout=10.0`（多用户改造 §0.9）：Python 默认 5.0 是隐式的，写出来是为了
+    # "并发写等锁最多等多久"这件事有个可见的数；单 worker + 短事务是前提，见 `scripts/dev.py`。
+    connection = sqlite3.connect(
+        db_path, isolation_level=None, check_same_thread=False, timeout=10.0
+    )
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA foreign_keys = ON")

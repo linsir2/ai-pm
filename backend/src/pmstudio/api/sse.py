@@ -1,13 +1,19 @@
-"""SSE：只推事件，不做业务。心跳保证连接不被中间层掐掉。"""
+"""SSE：只推事件，不做业务。心跳保证连接不被中间层掐掉；按 owner 裁剪保证不漏投。
+
+多用户改造 Task 6：事件本身仍是全局总线（订阅者能收到**所有人**项目的通知），
+归属裁剪放在这一层——`event_stream` 拿到一条事件先问 `visible`，不是自己的直接跳过。
+**不动总线/发布侧的机制**（`harness.events`、各用例的 `publish`），只在这一处收口。
+"""
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
-from pmstudio.harness.events import EventStream
+from pmstudio.harness.events import Event, EventStream
 
 DEFAULT_HEARTBEAT_SECONDS = 15.0
 
@@ -26,8 +32,46 @@ def as_json(value: object) -> object:
     return value
 
 
+def owner_visible(
+    *, scope: Any, list_owned: Any, owner: Any
+) -> Callable[[Event], Awaitable[bool]]:
+    """造一个"这条事件的项目归当前用户吗"的判据（按 owner 裁剪 SSE）。
+
+    - `scope`：owner 上下文模块（`set_owner_scope` / `clear_owner_scope`）。**每次判断
+      都要在 scope 下取**，因为 SSE 生成器是在请求依赖收尾之后才跑的（见 `routes.events`）。
+    - `list_owned`：为零参的 async 可调用，返回当前 scope 下该用户拥有的项目摘要
+      （生产传 `services.list_projects`）。遇到没判过的项目 id 才重取一次（新项目会在
+      连接建立之后才出现，一次性快照会把它漏掉）。
+
+    每次判断都恢复 scope（`finally`），绝不把归属漏出去。
+
+    归属**只判一次就缓存**（owner 写入后不可改，§0.7）：别人的项目永远不会变成自己的，
+    自己的也不会变别人的。所以缓存布尔值安全，且避免每条外部事件都查一次库。
+    """
+
+    seen: dict[str, bool] = {}
+
+    async def visible(event: Event) -> bool:
+        project_id = event.project_id
+        if project_id in seen:
+            return seen[project_id]
+        token = scope.set_owner_scope(owner)
+        try:
+            owned = await list_owned()
+        finally:
+            scope.clear_owner_scope(token)
+        owned_ids = {str(item.project_id) for item in owned}
+        seen[project_id] = project_id in owned_ids
+        return seen[project_id]
+
+    return visible
+
+
 async def event_stream(
-    stream: EventStream, *, heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS
+    stream: EventStream,
+    *,
+    heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
+    visible: Callable[[Event], Awaitable[bool]] | None = None,
 ) -> AsyncIterator[str]:
     iterator = stream.subscribe()
     # 建流先发一行注释：`EventSource` 的 onopen 因此立刻到，顶栏不用等 15 秒心跳
@@ -41,5 +85,7 @@ async def event_stream(
             continue
         except StopAsyncIteration:
             return
+        if visible is not None and not await visible(event):
+            continue
         payload = json.dumps(as_json(event), ensure_ascii=False)
         yield f"event: {event.name}\ndata: {payload}\n\n"

@@ -210,7 +210,7 @@ async def _call_admin_endpoint(client, method, path, *, cookies=None):
 async def test_admin_endpoints_require_login(make_app, method, path):
     """未登录调任一管理端点 → 401（不是 403：先身份后角色）。"""
 
-    app, _ = make_app(replies={})
+    app, _ = make_app(replies={}, autologin=False)
     async with async_client(app) as client:
         resp = await _call_admin_endpoint(client, method, path)
         assert resp.status_code == 401
@@ -262,7 +262,7 @@ async def test_reject_user_blocks_login(make_app):
 async def test_admin_lists_users_with_base_fields(make_app):
     """admin 列用户 → 200，每条含基础字段（无用量占位键）。"""
 
-    app, _ = make_app(replies={})
+    app, _ = make_app(replies={}, autologin=False)
     async with async_client(app) as client:
         _seed_active_admin(app)
         admin = await _admin_cookie(client)

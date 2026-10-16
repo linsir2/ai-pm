@@ -11,12 +11,20 @@ async def test_container_wires_everything_and_serves_health(tmp_path):
         model="openai/gpt-4o-mini",
         api_key="sk-test",
         api_base=None,
+        # Task 6 起业务端点要身份：这个"装配齐全"用例种一个首管理员，登录后再建项目。
+        first_admin_username="root",
+        first_admin_password="root-s3cret",
     )
 
     container = build_container(settings)
 
     async with async_client(container.app) as client:
         health = await client.get("/api/health")
+        login = await client.post(
+            "/api/auth/login", json={"username": "root", "password": "root-s3cret"}
+        )
+        assert login.status_code == 200
+        client.cookies = login.cookies
         created = await client.post("/api/projects", json={"title": "订单中台"})
 
     assert health.json() == {

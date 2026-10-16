@@ -4,15 +4,20 @@
 两次 `build_app(tmp_path, ...)` 用同一个 db 文件 = **换一个进程接着跑**（内存里什么都没留下）。
 """
 
+import hashlib
+import secrets
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 
+from pmstudio.api.deps import SESSION_COOKIE
 from pmstudio.bootstrap.container import build_container
 from pmstudio.bootstrap.settings import Settings
 from pmstudio.domain.shared.ids import UserId
+from pmstudio.infrastructure.security import hash_password
 from pmstudio.infrastructure.sqlite import owner_scope
 from tests.support.doubles import ScriptedModelGateway
 
@@ -21,6 +26,38 @@ from tests.support.doubles import ScriptedModelGateway
 #: 让既有 e2e 无需逐处传 owner。contextvar 在测试体（同 async 任务）里设，会传给 await 的 app。
 E2E_OWNER = UserId("u-e2e-owner")
 
+#: 自动登录用户（多用户改造 Task 6 / Ruling 3）：`require_user` 挂上以后，既有 e2e 若不登录
+#: 会全变 401。这里在装配时种一个 active 用户 + 一个会话，`async_client` 把它作为默认 cookie
+#: 带上——**一处**公共入口，既有 e2e 不必逐个改。auth 用例自己传 `autologin=False` 关掉。
+E2E_USERNAME = "e2e-harness"
+E2E_PASSWORD = "e2e-harness-pw"
+
+
+def _ensure_authed_user(app: FastAPI) -> None:
+    """幂等地种一个"测试操作者"并造一条会话，把 cookie 放到 `app.state.test_cookie`。
+
+    幂等是为了 `test_resume` 那种"同一个 db 换进程重建"——第二次不能重名注册。
+    """
+
+    users = app.state.auth.users
+    record = users.get_by_name(E2E_USERNAME)
+    if record is None:
+        user_id = users.register(
+            username=E2E_USERNAME, password_hash=hash_password(E2E_PASSWORD), role="admin"
+        )
+        users.set_status(user_id, "active")
+    else:
+        user_id = record.user_id
+    token = secrets.token_urlsafe(24)
+    now = datetime.now(UTC)
+    app.state.auth.sessions.create(
+        user_id=user_id,
+        token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        expires_at=now + timedelta(days=1),
+        now=now,
+    )
+    app.state.test_cookie = {SESSION_COOKIE: token}
+
 
 def build_app(
     tmp_path: Path,
@@ -28,6 +65,7 @@ def build_app(
     replies: dict[str, str | Sequence[str]],
     seat_replies: dict[str, str | Sequence[str]] | None = None,
     first_admin: bool = False,
+    autologin: bool = True,
 ) -> tuple[FastAPI, ScriptedModelGateway]:
     owner_scope.set_owner_scope(E2E_OWNER)
     gateway = ScriptedModelGateway(replies=replies, seat_replies=seat_replies or {})
@@ -42,6 +80,8 @@ def build_app(
         first_admin_password="test-admin-password" if first_admin else None,
     )
     container = build_container(settings, gateway=gateway)
+    if autologin:
+        _ensure_authed_user(container.app)
     return container.app, gateway
 
 
@@ -51,7 +91,10 @@ def make_app(tmp_path):
         *,
         replies: dict[str, str | Sequence[str]],
         seat_replies: dict[str, str | Sequence[str]] | None = None,
+        autologin: bool = True,
     ) -> tuple[FastAPI, ScriptedModelGateway]:
-        return build_app(tmp_path, replies=replies, seat_replies=seat_replies)
+        return build_app(
+            tmp_path, replies=replies, seat_replies=seat_replies, autologin=autologin
+        )
 
     return _make

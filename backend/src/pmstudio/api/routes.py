@@ -3,9 +3,10 @@
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
+from pmstudio.api.deps import require_user
 from pmstudio.api.schemas import (
     AnswersRequest,
     ConfirmRequest,
@@ -23,13 +24,14 @@ from pmstudio.api.schemas import (
     StartRoundRequest,
     TemplateCreateRequest,
 )
-from pmstudio.api.sse import as_json, event_stream
+from pmstudio.api.sse import as_json, event_stream, owner_visible
 from pmstudio.application.commands import RoundCommand
 from pmstudio.application.errors import MaterialTooLarge
 from pmstudio.application.use_cases import (
     MAX_MATERIAL_BYTES,
     AnswerInput,
     ClaimEdit,
+    UserView,
 )
 from pmstudio.domain.discussion.thread import QuestionSnapshot
 from pmstudio.domain.exploration.exploration import ExplorationScope, ScopeKind
@@ -39,6 +41,11 @@ from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
 
 router = APIRouter()
+
+#: 每个业务端点的身份依赖（多用户改造 Task 6）：`require_user` 验 cookie + 把当前用户
+#: 装进 owner 上下文；拿不到身份即 401。用一个别名是为了让几十个签名保持一行，
+#: 语义就是 `Annotated[UserView, Depends(require_user)]`（与 `api/auth.py` 逐字同义）。
+CurrentUser = Annotated[UserView, Depends(require_user)]
 
 
 def services_of(request: Request):  # type: ignore[no-untyped-def]
@@ -53,7 +60,7 @@ async def health(request: Request) -> dict[str, str]:
 
 
 @router.get("/schema")
-async def schema(request: Request):  # type: ignore[no-untyped-def]
+async def schema(request: Request, user: CurrentUser):  # type: ignore[no-untyped-def]
     """现行结构：13 章（含说明与槽）、功能字段表、三处上限、**＋讨论角色**。
 
     界面不再自己抄一份字段中文名、上限常量与角色表——那几份的真相源在后端
@@ -64,7 +71,7 @@ async def schema(request: Request):  # type: ignore[no-untyped-def]
 
 
 @router.post("/projects", status_code=201)
-async def create_project(request: Request, body: CreateProjectRequest):  # type: ignore[no-untyped-def]
+async def create_project(request: Request, body: CreateProjectRequest, user: CurrentUser):  # type: ignore[no-untyped-def]
     summary = await services_of(request).create_project(
         title=body.title, template_id=body.template_id
     )
@@ -72,14 +79,14 @@ async def create_project(request: Request, body: CreateProjectRequest):  # type:
 
 
 @router.get("/templates")
-async def list_templates(request: Request):  # type: ignore[no-untyped-def]
+async def list_templates(request: Request, user: CurrentUser):  # type: ignore[no-untyped-def]
     """模板库全文（创建页的选择器读它）。"""
 
     return as_json(await services_of(request).list_templates())
 
 
 @router.post("/templates", status_code=201)
-async def create_template(request: Request, body: TemplateCreateRequest):  # type: ignore[no-untyped-def]
+async def create_template(request: Request, body: TemplateCreateRequest, user: CurrentUser):  # type: ignore[no-untyped-def]
     template = await services_of(request).create_template(
         title=body.title,
         sections=[item.model_dump() for item in body.sections],
@@ -90,13 +97,13 @@ async def create_template(request: Request, body: TemplateCreateRequest):  # typ
 
 
 @router.get("/templates/{template_id}")
-async def get_template(request: Request, template_id: str):  # type: ignore[no-untyped-def]
+async def get_template(request: Request, template_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     return as_json(await services_of(request).get_template(template_id=template_id))
 
 
 @router.put("/templates/{template_id}")
 async def update_template(  # type: ignore[no-untyped-def]
-    request: Request, template_id: str, body: TemplateCreateRequest
+    request: Request, template_id: str, body: TemplateCreateRequest, user: CurrentUser
 ):
     """整份替换一套模板（`02` §11.0.70）。body 复用创建那份：形状一样，不另立契约。
 
@@ -114,7 +121,7 @@ async def update_template(  # type: ignore[no-untyped-def]
 
 
 @router.delete("/templates/{template_id}", status_code=204)
-async def delete_template(request: Request, template_id: str):  # type: ignore[no-untyped-def]
+async def delete_template(request: Request, template_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """删一套自建模板。已经用它的项目照常打开（快照模型，见 `02` §11.0.70）。"""
 
     await services_of(request).delete_template(template_id=template_id)
@@ -122,24 +129,24 @@ async def delete_template(request: Request, template_id: str):  # type: ignore[n
 
 
 @router.get("/projects")
-async def list_projects(request: Request):  # type: ignore[no-untyped-def]
+async def list_projects(request: Request, user: CurrentUser):  # type: ignore[no-untyped-def]
     return as_json(await services_of(request).list_projects())
 
 
 @router.get("/projects/{project_id}/workspace")
-async def get_workspace(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+async def get_workspace(request: Request, project_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     view = await services_of(request).workspace(project_id=ProjectId(project_id))
     return as_json(view)
 
 
 @router.get("/projects/{project_id}/document")
-async def get_document(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+async def get_document(request: Request, project_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     view = await services_of(request).get_document(project_id=ProjectId(project_id))
     return as_json(view)
 
 
 @router.get("/projects/{project_id}/export/markdown")
-async def export_markdown(request: Request, project_id: str) -> Response:
+async def export_markdown(request: Request, project_id: str, user: CurrentUser) -> Response:
     """导出一份可以递出去的 Markdown。
 
     文件名可能是中文（项目名），所以 `Content-Disposition` 双写：
@@ -159,7 +166,7 @@ async def export_markdown(request: Request, project_id: str) -> Response:
 
 
 @router.post("/projects/{project_id}/edits")
-async def edit_entry(request: Request, project_id: str, body: EditEntryRequest):  # type: ignore[no-untyped-def]
+async def edit_entry(request: Request, project_id: str, body: EditEntryRequest, user: CurrentUser):  # type: ignore[no-untyped-def]
     """用户手改文档。一次改动一版，改过的块之后 AI 不能再动。"""
 
     result = await services_of(request).edit_entry(
@@ -183,7 +190,7 @@ async def edit_entry(request: Request, project_id: str, body: EditEntryRequest):
 
 
 @router.get("/projects/{project_id}/versions")
-async def list_versions(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+async def list_versions(request: Request, project_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """版本列表：底栏的版本历史抽屉读它。只读，不产生版本。"""
 
     return as_json(await services_of(request).get_versions(project_id=ProjectId(project_id)))
@@ -191,7 +198,7 @@ async def list_versions(request: Request, project_id: str):  # type: ignore[no-u
 
 @router.get("/projects/{project_id}/versions/{version_no}/diff")
 async def version_diff(  # type: ignore[no-untyped-def]
-    request: Request, project_id: str, version_no: int, to: int
+    request: Request, project_id: str, version_no: int, to: int, user: CurrentUser
 ):
     """两个版本的差异：`to` 是拿谁来比（不传由 FastAPI 直接 422）。"""
 
@@ -205,7 +212,7 @@ async def version_diff(  # type: ignore[no-untyped-def]
 
 @router.post("/projects/{project_id}/versions/{version_no}/rollback")
 async def rollback_version(  # type: ignore[no-untyped-def]
-    request: Request, project_id: str, version_no: int
+    request: Request, project_id: str, version_no: int, user: CurrentUser
 ):
     """回到这一版：产生**新**的一版（`trigger=rollback`），旧版本一个都不删。"""
 
@@ -217,7 +224,7 @@ async def rollback_version(  # type: ignore[no-untyped-def]
 
 
 @router.get("/projects/{project_id}/evidence/{eid}")
-async def evidence_lookup(request: Request, project_id: str, eid: str):  # type: ignore[no-untyped-def]
+async def evidence_lookup(request: Request, project_id: str, eid: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """按编号查处方：原话、来路、链条、被谁引用（界面跨轮跳转靠它）。"""
 
     return as_json(
@@ -226,7 +233,9 @@ async def evidence_lookup(request: Request, project_id: str, eid: str):  # type:
 
 
 @router.post("/projects/{project_id}/rounds")
-async def start_round(request: Request, project_id: str, body: StartRoundRequest):  # type: ignore[no-untyped-def]
+async def start_round(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, body: StartRoundRequest, user: CurrentUser
+):
     view = await services_of(request).runner.run(
         RoundCommand(
             kind="start",
@@ -240,7 +249,7 @@ async def start_round(request: Request, project_id: str, body: StartRoundRequest
 
 
 @router.get("/projects/{project_id}/rounds")
-async def list_rounds(request: Request, project_id: str, limit: int = 20):  # type: ignore[no-untyped-def]
+async def list_rounds(request: Request, project_id: str, user: CurrentUser, limit: int = 20):  # type: ignore[no-untyped-def]
     """这个项目走过的轮次（最新在前）：闭环区顶上那串时间线读它。"""
 
     return as_json(
@@ -250,7 +259,10 @@ async def list_rounds(request: Request, project_id: str, limit: int = 20):  # ty
 
 @router.post("/projects/{project_id}/attachments", status_code=201)
 async def upload_attachment(  # type: ignore[no-untyped-def]
-    request: Request, project_id: str, file: Annotated[UploadFile, File()]
+    request: Request,
+    project_id: str,
+    file: Annotated[UploadFile, File()],
+    user: CurrentUser,
 ):
     """上传一份材料（multipart）。**解析在事务外**，落库在事务内；材料永远不写文档。"""
 
@@ -273,7 +285,7 @@ async def upload_attachment(  # type: ignore[no-untyped-def]
 
 
 @router.get("/projects/{project_id}/attachments")
-async def list_attachments(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+async def list_attachments(request: Request, project_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """这个项目有哪些材料（**只回摘要**，块正文不进列表）。"""
 
     return as_json(
@@ -283,7 +295,7 @@ async def list_attachments(request: Request, project_id: str):  # type: ignore[n
 
 @router.post("/projects/{project_id}/attachments/fetch", status_code=201)
 async def fetch_attachment(  # type: ignore[no-untyped-def]
-    request: Request, project_id: str, body: FetchRequest
+    request: Request, project_id: str, body: FetchRequest, user: CurrentUser
 ):
     """按网址抓一份网页材料（用户点名的那一页）：**抓取在事务外、落库在事务内**。
 
@@ -299,7 +311,7 @@ async def fetch_attachment(  # type: ignore[no-untyped-def]
 
 @router.delete("/projects/{project_id}/attachments/{material_id}")
 async def delete_attachment(  # type: ignore[no-untyped-def]
-    request: Request, project_id: str, material_id: str
+    request: Request, project_id: str, material_id: str, user: CurrentUser
 ):
     """删一份材料。**只有没被引用过的才准删**（编号发出即冻结，`P19`）——
     被引用过就 409，消息里会列出是哪几个编号。返回刷新后的材料列表。"""
@@ -313,7 +325,7 @@ async def delete_attachment(  # type: ignore[no-untyped-def]
 
 @router.post("/projects/{project_id}/attachments/{material_id}/reparse")
 async def reparse_attachment(  # type: ignore[no-untyped-def]
-    request: Request, project_id: str, material_id: str
+    request: Request, project_id: str, material_id: str, user: CurrentUser
 ):
     """用**当前解析器**把这份材料的原始字节重读一遍（不用重传文件）。
 
@@ -329,20 +341,20 @@ async def reparse_attachment(  # type: ignore[no-untyped-def]
 
 
 @router.get("/projects/{project_id}/search")
-async def search(request: Request, project_id: str, q: str = ""):  # type: ignore[no-untyped-def]
+async def search(request: Request, project_id: str, user: CurrentUser, q: str = ""):  # type: ignore[no-untyped-def]
     """在这个项目里搜（F6）：条目 / 功能 / 编号 / 席位发言。空查询回空，不回全量。"""
 
     return as_json(await services_of(request).search(project_id=ProjectId(project_id), query=q))
 
 
 @router.get("/rounds/{round_id}")
-async def get_round(request: Request, round_id: str):  # type: ignore[no-untyped-def]
+async def get_round(request: Request, round_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     view = await services_of(request).get_round(round_id=RoundId(round_id))
     return as_json(view)
 
 
 @router.post("/rounds/{round_id}/opening")
-async def submit_opening(request: Request, round_id: str, body: OpeningRequest):  # type: ignore[no-untyped-def]
+async def submit_opening(request: Request, round_id: str, body: OpeningRequest, user: CurrentUser):  # type: ignore[no-untyped-def]
     edits = tuple(
         ClaimEdit(
             claim_id=item.claim_id,
@@ -369,7 +381,7 @@ async def submit_opening(request: Request, round_id: str, body: OpeningRequest):
 
 
 @router.post("/rounds/{round_id}/answers")
-async def submit_answers(request: Request, round_id: str, body: AnswersRequest):  # type: ignore[no-untyped-def]
+async def submit_answers(request: Request, round_id: str, body: AnswersRequest, user: CurrentUser):  # type: ignore[no-untyped-def]
     view = await services_of(request).runner.run(
         RoundCommand(
             kind="submit_answers",
@@ -390,7 +402,7 @@ async def submit_answers(request: Request, round_id: str, body: AnswersRequest):
 
 
 @router.post("/rounds/{round_id}/confirm")
-async def confirm(request: Request, round_id: str, body: ConfirmRequest):  # type: ignore[no-untyped-def]
+async def confirm(request: Request, round_id: str, body: ConfirmRequest, user: CurrentUser):  # type: ignore[no-untyped-def]
     view = await services_of(request).runner.run(
         RoundCommand(
             kind="confirm",
@@ -403,7 +415,7 @@ async def confirm(request: Request, round_id: str, body: ConfirmRequest):  # typ
 
 
 @router.post("/rounds/{round_id}/retry")
-async def retry(request: Request, round_id: str):  # type: ignore[no-untyped-def]
+async def retry(request: Request, round_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     view = await services_of(request).runner.run(
         RoundCommand(kind="retry", round_id=round_id)
     )
@@ -411,7 +423,7 @@ async def retry(request: Request, round_id: str):  # type: ignore[no-untyped-def
 
 
 @router.post("/rounds/{round_id}/dig")
-async def dig(request: Request, round_id: str):  # type: ignore[no-untyped-def]
+async def dig(request: Request, round_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """草案卡上的"继续深挖"：回到席位轮再问一批（P14 C6）。
 
     与 `/retry` 同款薄封装——真正的动作在 `DigRound` 与图的路由里。
@@ -422,7 +434,7 @@ async def dig(request: Request, round_id: str):  # type: ignore[no-untyped-def]
 
 
 @router.post("/rounds/{round_id}/sim-inquiry")
-async def run_sim_inquiry(request: Request, round_id: str):  # type: ignore[no-untyped-def]
+async def run_sim_inquiry(request: Request, round_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """草案卡上的"去模拟调研"：轮内动作（不碰 step），跑完界面读回最新投影。"""
 
     view = await services_of(request).runner.run(
@@ -433,7 +445,7 @@ async def run_sim_inquiry(request: Request, round_id: str):  # type: ignore[no-u
 
 @router.post("/rounds/{round_id}/sim-review")
 async def run_sim_review(  # type: ignore[no-untyped-def]
-    request: Request, round_id: str, body: RunSimReviewRequest
+    request: Request, round_id: str, body: RunSimReviewRequest, user: CurrentUser
 ):
     """草案卡上的"模拟评测"（M11）：轮内动作（不碰 step），跑完界面读回最新投影。"""
 
@@ -450,7 +462,7 @@ async def run_sim_review(  # type: ignore[no-untyped-def]
 
 @router.post("/rounds/{round_id}/sim-inquiry/keep")
 async def keep_sim_inquiry(  # type: ignore[no-untyped-def]
-    request: Request, round_id: str, body: KeepSimInquiryRequest
+    request: Request, round_id: str, body: KeepSimInquiryRequest, user: CurrentUser
 ):
     """收下模拟的勾选为材料（空选择直接拒；同选择重复收下幂等）。"""
 
@@ -462,7 +474,7 @@ async def keep_sim_inquiry(  # type: ignore[no-untyped-def]
 
 
 @router.post("/rounds/{round_id}/abandon")
-async def abandon_round(request: Request, round_id: str):  # type: ignore[no-untyped-def]
+async def abandon_round(request: Request, round_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """放弃这一轮：先记状态、再取消正在跑的模型调用（`02` §7）。
 
     它**不走 `runner.run()`**：被那条路拦住的正是"重试"，而放弃恰恰是重试之外的另一个出口。
@@ -474,7 +486,7 @@ async def abandon_round(request: Request, round_id: str):  # type: ignore[no-unt
 
 @router.post("/projects/{project_id}/explorations")
 async def start_exploration(  # type: ignore[no-untyped-def]
-    request: Request, project_id: str, body: StartExplorationRequest
+    request: Request, project_id: str, body: StartExplorationRequest, user: CurrentUser
 ):
     """发起一趟调研（M8）：请求内跑完，失败也返回 200 + status=failed（可重试）。
 
@@ -491,7 +503,7 @@ async def start_exploration(  # type: ignore[no-untyped-def]
 
 
 @router.get("/projects/{project_id}/explorations")
-async def list_explorations(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+async def list_explorations(request: Request, project_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """这个项目走过的探索（最新在前）：过目台与历史都读它（≤20 条）。"""
 
     return as_json(
@@ -500,7 +512,7 @@ async def list_explorations(request: Request, project_id: str):  # type: ignore[
 
 
 @router.post("/explorations/{exploration_id}/retry")
-async def retry_exploration(request: Request, exploration_id: str):  # type: ignore[no-untyped-def]
+async def retry_exploration(request: Request, exploration_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """重跑一趟失败的调研：只补这趟没跑完的那次调用（不重跑已经跑完的）。"""
 
     return as_json(
@@ -509,7 +521,7 @@ async def retry_exploration(request: Request, exploration_id: str):  # type: ign
 
 
 @router.post("/explorations/{exploration_id}/abandon")
-async def abandon_exploration(request: Request, exploration_id: str):  # type: ignore[no-untyped-def]
+async def abandon_exploration(request: Request, exploration_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """放弃这一趟：**先写状态、再取消**（与放弃一轮同一条顺序与理由）。"""
 
     return as_json(
@@ -521,7 +533,8 @@ async def abandon_exploration(request: Request, exploration_id: str):  # type: i
 
 @router.post("/explorations/{exploration_id}/candidates/{candidate_id}/keep")
 async def keep_candidate(  # type: ignore[no-untyped-def]
-    request: Request, exploration_id: str, candidate_id: str, body: KeepRequest
+    request: Request, exploration_id: str, candidate_id: str, body: KeepRequest,
+    user: CurrentUser,
 ):
     """收下一条候选：`seed` = 预填下一轮输入；`material` = 落一份材料（幂等）。"""
 
@@ -535,7 +548,9 @@ async def keep_candidate(  # type: ignore[no-untyped-def]
 
 
 @router.post("/explorations/{exploration_id}/candidates/{candidate_id}/dismiss")
-async def dismiss_candidate(request: Request, exploration_id: str, candidate_id: str):  # type: ignore[no-untyped-def]
+async def dismiss_candidate(  # type: ignore[no-untyped-def]
+    request: Request, exploration_id: str, candidate_id: str, user: CurrentUser
+):
     """删掉一条候选：终态——不过目台、不回流。"""
 
     return as_json(
@@ -547,7 +562,7 @@ async def dismiss_candidate(request: Request, exploration_id: str, candidate_id:
 
 @router.post("/projects/{project_id}/discussions")
 async def start_discussion(  # type: ignore[no-untyped-def]
-    request: Request, project_id: str, body: StartDiscussionRequest
+    request: Request, project_id: str, body: StartDiscussionRequest, user: CurrentUser
 ):
     """开一条讨论线程（M9/M18）：同（项目，归一化主题，角色集合）的 open 线程幂等返。"""
 
@@ -567,7 +582,7 @@ async def start_discussion(  # type: ignore[no-untyped-def]
 
 
 @router.get("/projects/{project_id}/discussions")
-async def list_discussions(request: Request, project_id: str):  # type: ignore[no-untyped-def]
+async def list_discussions(request: Request, project_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """这个项目的讨论线程（最新在前，≤20 条）。"""
 
     return as_json(
@@ -577,7 +592,7 @@ async def list_discussions(request: Request, project_id: str):  # type: ignore[n
 
 @router.post("/discussions/{discussion_id}/say")
 async def say_to_thread(  # type: ignore[no-untyped-def]
-    request: Request, discussion_id: str, body: SayRequest
+    request: Request, discussion_id: str, body: SayRequest, user: CurrentUser
 ):
     """追问一轮：模型跑完、校验通过才原子记一对（user＋assistant）。"""
 
@@ -589,7 +604,7 @@ async def say_to_thread(  # type: ignore[no-untyped-def]
 
 
 @router.post("/discussions/{discussion_id}/cards")
-async def assemble_cards(request: Request, discussion_id: str):  # type: ignore[no-untyped-def]
+async def assemble_cards(request: Request, discussion_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """把讨论总结成 1-3 张灵感卡（无 body：总结对象就是整段讨论）。"""
 
     return as_json(
@@ -601,7 +616,8 @@ async def assemble_cards(request: Request, discussion_id: str):  # type: ignore[
 
 @router.post("/discussions/{discussion_id}/cards/{card_id}/keep")
 async def keep_discussion_card(  # type: ignore[no-untyped-def]
-    request: Request, discussion_id: str, card_id: str, body: KeepRequest
+    request: Request, discussion_id: str, card_id: str, body: KeepRequest,
+    user: CurrentUser,
 ):
     """收下一张卡：`seed` = 预填下一轮输入；`material` = 落一份材料（幂等）。"""
 
@@ -614,7 +630,7 @@ async def keep_discussion_card(  # type: ignore[no-untyped-def]
 
 @router.post("/discussions/{discussion_id}/cards/{card_id}/dismiss")
 async def dismiss_discussion_card(  # type: ignore[no-untyped-def]
-    request: Request, discussion_id: str, card_id: str
+    request: Request, discussion_id: str, card_id: str, user: CurrentUser
 ):
     """忽略一张卡：终态——不进灵感箱、不回流（同卡重复忽略幂等）。"""
 
@@ -626,7 +642,7 @@ async def dismiss_discussion_card(  # type: ignore[no-untyped-def]
 
 
 @router.post("/discussions/{discussion_id}/close")
-async def close_discussion(request: Request, discussion_id: str):  # type: ignore[no-untyped-def]
+async def close_discussion(request: Request, discussion_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """关掉一条线程：终态幂等（无 body）。"""
 
     return as_json(
@@ -637,7 +653,7 @@ async def close_discussion(request: Request, discussion_id: str):  # type: ignor
 
 
 @router.post("/discussions/{discussion_id}/run-round")
-async def run_panel_round(request: Request, discussion_id: str):  # type: ignore[no-untyped-def]
+async def run_panel_round(request: Request, discussion_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """跑一轮 panel 自主讨论（M18）：本轮在场者并行发言 → 综合 → 落库。
 
     一次只跑一轮；N 轮由前端循环驱动。失败保留已落库的 turn、无综合，重试补剩余发言者。
@@ -653,7 +669,7 @@ async def run_panel_round(request: Request, discussion_id: str):  # type: ignore
 
 @router.post("/discussions/{discussion_id}/join")
 async def join_panel(  # type: ignore[no-untyped-def]
-    request: Request, discussion_id: str, body: JoinPanelRequest
+    request: Request, discussion_id: str, body: JoinPanelRequest, user: CurrentUser
 ):
     """中途拉人进 panel（M18）：下一轮生效，不追补、不重跑。"""
 
@@ -665,7 +681,7 @@ async def join_panel(  # type: ignore[no-untyped-def]
 
 
 @router.post("/discussions/{discussion_id}/abort-run")
-async def abort_panel_round(request: Request, discussion_id: str):  # type: ignore[no-untyped-def]
+async def abort_panel_round(request: Request, discussion_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """停掉正在跑的那一轮（M18）：只让在途调用停下来，不写状态。
 
     已落库的 turn 照留，线程还是 open；没在跑时幂等成功。
@@ -678,17 +694,26 @@ async def abort_panel_round(request: Request, discussion_id: str):  # type: igno
 
 
 @router.get("/events")
-async def events(request: Request) -> StreamingResponse:
-    stream = services_of(request).stream
+async def events(request: Request, user: CurrentUser) -> StreamingResponse:
+    services = services_of(request)
+    # 归属裁剪在**每一条事件**上判：`owner_visible` 自己在 owner 上下文里取，
+    # 因为流是在 `require_user` 依赖收尾之后才跑的（那一刻设的上下文已经不在了）。
+    visible = owner_visible(
+        scope=request.app.state.owner_scope,
+        list_owned=services.list_projects,
+        owner=user.user_id,
+    )
     return StreamingResponse(
-        event_stream(stream),
+        event_stream(services.stream, visible=visible),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
 @router.delete("/projects/{project_id}/memory/{memory_id}", status_code=204)
-async def forget_memory(request: Request, project_id: str, memory_id: str) -> Response:
+async def forget_memory(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, memory_id: str, user: CurrentUser
+) -> Response:
     """忘掉一条记忆（M6）。**唯一一条不走确认卡**的记忆写入：用户要能立刻收回一条。
 
     删不掉（这条不在记忆里）→ 404（`UnknownMemoryEntry` 由错误处理器翻译）。

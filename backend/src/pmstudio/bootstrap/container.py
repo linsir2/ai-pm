@@ -98,7 +98,7 @@ from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.personas.catalog import load_personas
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.security import hash_password, verify_password
-from pmstudio.infrastructure.sqlite import database
+from pmstudio.infrastructure.sqlite import database, owner_scope
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
 from pmstudio.infrastructure.sqlite.materials import SqliteLikeRetriever, SqliteMaterialStore
@@ -658,6 +658,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     )
     app = create_app(services)
     app.state.auth = auth_services
+    # owner 上下文由 api 层（`require_user` / SSE 归属过滤）经 `app.state` 取用：
+    # api 不许 import infrastructure（分层守卫），装配点把实现注进去（依赖倒置）。
+    app.state.owner_scope = owner_scope
     return Container(settings=settings, app=app)
 def build_app() -> FastAPI:
     """`uvicorn pmstudio.bootstrap.container:build_app --factory` 的入口。"""
