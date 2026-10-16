@@ -24,6 +24,22 @@ import type {
 
 const BASE = "/api";
 
+/** 当前登录用户的投影（后端 `GetMe` 回什么就读什么）。 */
+export interface AuthUser {
+  user_id: string;
+  username: string;
+  role: string;
+  status: string;
+}
+
+/** 会话失效（任一端点回 401）时的**一处**通知口：AuthProvider 注册它清身份，
+   界面据此回到登录页——省的每个调用各写一遍 401 处理。 */
+let notifyUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  notifyUnauthorized = handler;
+}
+
 /** 起轮的请求体（工具层 C-2 起带材料 id；M12 起种子是 `来源:id#条目id`）。 */
 export interface StartBody {
   input: string;
@@ -131,6 +147,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    // 401 = 没身份 / 会话过期（登录失败也走这里）：统一抛 `unauthorized`，
+    // 并通知**一处**（AuthProvider 清身份 → 界面回登录页）。
+    if (response.status === 401) {
+      notifyUnauthorized?.();
+      const message =
+        typeof body.message === "string" ? body.message : "未登录或登录已过期";
+      throw new ApiError("unauthorized", message, (body.details as Record<string, unknown>) ?? {});
+    }
     throw apiErrorFrom(response.status, body, "请求失败");
   }
   // **空 body 不许调 `.json()`**——204 / 205 / 空字符串 body 上它抛
@@ -195,6 +219,52 @@ export interface EditBody {
 
 export const api = {
   health: () => request<{ status: string; model: string }>("/health"),
+
+  // ── 认证与账号（Task 3 端点）─────────────────────────────────────────────
+  /** 读当前会话（cookie 自动带）：未登录一律 401 → 抛 `unauthorized`。 */
+  me: () => request<AuthUser>("/auth/me"),
+
+  /** 登录：成功后 cookie 由后端 `Set-Cookie` 落地，前端不碰 token。 */
+  login: (username: string, password: string) =>
+    request<AuthUser>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+
+  /** 注册：落一个 pending 用户（要管理员审批后才登得进）。 */
+  register: (username: string, password: string) =>
+    request<AuthUser>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+
+  /** 登出：后端删 cookie 并吊销会话。 */
+  logout: () =>
+    request<{ status: string }>("/auth/logout", { method: "POST", body: "{}" }),
+
+  /** 管理员：全部用户（基础字段）。 */
+  users: () => request<{ users: AuthUser[] }>("/auth/users"),
+
+  /** 管理员：审批通过（pending → active）。 */
+  approve: (userId: string) =>
+    request<AuthUser>("/auth/approve", {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId }),
+    }),
+
+  /** 管理员：拒绝（pending → rejected）。 */
+  reject: (userId: string) =>
+    request<AuthUser>("/auth/reject", {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId }),
+    }),
+
+  /** 管理员：封禁（置 banned 并当场吊销该用户全部会话）。 */
+  ban: (userId: string) =>
+    request<AuthUser>("/auth/ban", {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId }),
+    }),
 
   schema: () => request<SchemaView>("/schema"),
 

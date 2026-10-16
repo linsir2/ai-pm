@@ -36,14 +36,47 @@ import { ReadinessDrawer } from "./components/ReadinessDrawer";
 import { ResearchDrawer } from "./components/ResearchDrawer";
 import { SideRail } from "./components/SideRail";
 import { Banner, Skeleton } from "./components/States";
+import { LoginView } from "./components/LoginView";
 import { TopBar } from "./components/TopBar";
 import { VersionDrawer } from "./components/VersionDrawer";
+import { AuthProvider, useAuth } from "./state/auth";
 import { useRoundDrafts } from "./state/useRoundDrafts";
 import { useWorkspaceData } from "./state/useWorkspaceData";
 
 const THEME_KEY = "pmstudio-theme";
 
+/* 装配点：Provider 在外，守卫在内。未登录（或身份还没读回来）时**不挂载工作区**——
+   否则 useWorkspaceData 的启动 effect 会在未登录时报一堆 401，登录后又不重跑。 */
 export default function App() {
+  return (
+    <AuthProvider>
+      <AppRoot />
+    </AuthProvider>
+  );
+}
+
+function AppRoot() {
+  const { user, ready } = useAuth();
+  if (!ready) {
+    return (
+      <div className="shell shell--plain">
+        <main className="doc" aria-label="正在读取身份">
+          <div className="doc__inner">
+            <Skeleton lines={3} label="正在读身份" />
+          </div>
+        </main>
+      </div>
+    );
+  }
+  // 守卫：无 user 即登录页，workspace / projects / templates / admin 一个都不渲染。
+  if (user === null) {
+    return <LoginView />;
+  }
+  return <Workspace />;
+}
+
+function Workspace() {
+  const { user, logout } = useAuth();
   const data = useWorkspaceData();
   const { state, projects } = data;
   const round = state.round;
@@ -80,7 +113,9 @@ export default function App() {
       `?project=` 才是要留着刷新恢复的那一个（两者性质不同，混在一起就要回答
       "刷新时有 view=projects 没 project 该去哪"）。
       用枚举而不是两个 boolean：两个 boolean 表达互斥视图迟早会出第四种组合。 */
-  const [view, setView] = useState<"workspace" | "projects" | "templates">("workspace");
+  const [view, setView] = useState<"workspace" | "projects" | "templates" | "admin">(
+    "workspace",
+  );
   /** 从模板库点「用这个建项目」带回来的模板（null = 不预选，回到既有默认）。 */
   const [pickedTemplateId, setPickedTemplateId] = useState<string | null>(null);
   const listing = view === "projects";
@@ -318,6 +353,8 @@ export default function App() {
           templatesActive={false}
           theme={theme}
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+          user={user ?? undefined}
+          onLogout={() => void logout()}
         />
         <main className="doc" aria-label="项目列表">
           <ProjectList
@@ -357,6 +394,8 @@ export default function App() {
           templatesActive
           theme={theme}
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+          user={user ?? undefined}
+          onLogout={() => void logout()}
         />
         <main className="doc" aria-label="模板库">
           <TemplateLibraryScreen
@@ -384,6 +423,8 @@ export default function App() {
           onTemplates={() => setView("templates")}
           theme={theme}
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+          user={user ?? undefined}
+          onLogout={() => void logout()}
         />
         <main className="doc" aria-label="产品文档">
           <div className="doc__inner">
@@ -422,6 +463,8 @@ export default function App() {
             onOpenLibrary={() => setLibraryOpen(true)}
             theme={theme}
             onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+            user={user ?? undefined}
+            onLogout={() => void logout()}
             search={
               project === null
                 ? null

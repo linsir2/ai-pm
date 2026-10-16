@@ -1,3 +1,4 @@
+import type { AuthUser } from "../api/client";
 import type { ProjectSummaryView, SearchHitView, SearchResultsView } from "../api/types";
 import { Logo } from "./Logo";
 import { SearchBox } from "./SearchBox";
@@ -36,6 +37,8 @@ export function TopBar({
   docOpen = true,
   onToggleDoc,
   search = null,
+  user,
+  onLogout,
 }: {
   projects: ProjectSummaryView[];
   project: ProjectSummaryView | null;
@@ -66,6 +69,10 @@ export function TopBar({
     onQueryChange: (query: string) => void;
     onPick: (hit: SearchHitView) => void;
   } | null;
+  /** 当前用户（Task 7）：传了就显示用户菜单；不传整块不画（未登录页用不到顶栏）。 */
+  user?: AuthUser;
+  /** 登出：用户菜单里的按钮。 */
+  onLogout?: () => void;
 }) {
   const connectionText =
     connection === "open"
@@ -178,6 +185,19 @@ export function TopBar({
       >
         {theme === "dark" ? "亮色" : "暗色"}
       </button>
+
+      {user !== undefined && (
+        <span className="topbar__user">
+          <span className="topbar__user-name" title={user.role}>
+            {user.username}
+          </span>
+          {onLogout !== undefined && (
+            <button type="button" className="btn btn--ghost btn--sm" onClick={onLogout}>
+              登出
+            </button>
+          )}
+        </span>
+      )}
     </header>
   );
 }
