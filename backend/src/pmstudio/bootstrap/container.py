@@ -637,7 +637,11 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             ttl_days=settings.session_ttl_days,
         ),
         get_me=GetMe(
-            users=users, sessions=sessions, clock=clock, ttl_days=settings.session_ttl_days
+            users=users,
+            sessions=sessions,
+            clock=clock,
+            ttl_days=settings.session_ttl_days,
+            absolute_days=settings.session_absolute_days,
         ),
         logout=LogoutUser(sessions=sessions),
         approve_user=ApproveUser(users=users, clock=clock),

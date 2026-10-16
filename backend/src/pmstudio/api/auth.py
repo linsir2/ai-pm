@@ -59,9 +59,12 @@ def _user_json(view: UserView) -> dict[str, str]:
 
 
 def _is_secure(request: Request) -> bool:
-    """`Secure` 属性按请求实际协议给：本机 http 开发不带，公网 https（Caddy
-    `X-Forwarded-Proto`）带上。写死 `secure=True` 会让本地 http 下的 cookie 根本不发回，
-    写死 `False` 又会让公网 session 明文过线——按协议判是唯一两者都对的写法。"""
+    """`Secure` 属性按请求实际协议给：**本地 dev / http 测试传输**（`ASGITransport`）不带，
+    **公网 https**（Caddy 反代发的 `X-Forwarded-Proto: https`）才带——写死 `secure=True`
+    会让本地 http 下的 cookie 根本不发回（登录后下一次请求就 401），写死 `False` 又会让公网
+    session 贴着明文过线；按协议判是唯一两者都对的写法。前提：生产 uvicorn 要信任代理头
+    （`--proxy-headers`），否则 Caddy 后面 `url.scheme` 恒为 http，这条就退化成永久不带 Secure。
+    """
 
     scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
     return scheme == "https"
@@ -99,6 +102,7 @@ async def login(
         SESSION_COOKIE,
         token,
         httponly=True,
+        # 条件化理由见 `_is_secure`：http 测试传输/本地 dev 不带 Secure，生产 https 才带
         secure=_is_secure(request),
         samesite="lax",
         max_age=_auth(request).cookie_max_age,

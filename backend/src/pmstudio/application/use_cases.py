@@ -6064,18 +6064,26 @@ class AuthenticateUser:
 
 
 class GetMe:
-    """cookie 明文 token → 当前用户。过期 / 吊销 / 用户非 active → 401。
+    """cookie 明文 token → 当前用户。过期 / 超绝对上限 / 吊销 / 用户非 active → 401。
 
-    过期判断在这里（仓储不判）：先比 `expires_at`，再按半窗做滑动续期（`§0.11`）。
+    过期判断在这里（仓储不判）：先比 `created_at + 绝对上限`（滑动续期**动不了**这个锚点），
+    再比 `expires_at`，最后按半窗做滑动续期（`§0.11`）。
     """
 
     def __init__(
-        self, *, users: UserStore, sessions: SessionStore, clock: Clock, ttl_days: int
+        self,
+        *,
+        users: UserStore,
+        sessions: SessionStore,
+        clock: Clock,
+        ttl_days: int,
+        absolute_days: int,
     ) -> None:
         self._users = users
         self._sessions = sessions
         self._clock = clock
         self._ttl_days = ttl_days
+        self._absolute_days = absolute_days
 
     async def __call__(self, *, token: str) -> UserView:
         if not token:
@@ -6083,7 +6091,13 @@ class GetMe:
         now = self._clock.now()
         token_hash = _sha256(token)
         session = self._sessions.get_by_token_hash(token_hash)
-        if session is None or session.expires_at <= now:
+        if session is None:
+            raise _unauthenticated()
+        if now - session.created_at > timedelta(days=self._absolute_days):
+            # 绝对上限：从建会话起算，滑动续期只动 expires_at，越不过它——到期即吊销
+            self._sessions.revoke_user(session.user_id)
+            raise _unauthenticated()
+        if session.expires_at <= now:
             raise _unauthenticated()
         record = self._users.get_by_id(session.user_id)
         if record is None or record.status != "active":

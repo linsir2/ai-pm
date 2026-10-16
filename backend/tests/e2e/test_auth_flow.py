@@ -10,6 +10,8 @@
 import hashlib
 from datetime import UTC, datetime, timedelta
 
+from pmstudio.bootstrap.container import build_container
+from pmstudio.bootstrap.settings import Settings
 from pmstudio.domain.shared.ids import UserId
 from pmstudio.infrastructure.security import hash_password
 from tests.support.api_client import async_client
@@ -124,3 +126,62 @@ async def test_expired_session_is_unauthorized(make_app):
         )
         resp = await client.get("/api/auth/me", cookies={"pm_session": token})
         assert resp.status_code == 401
+
+
+async def test_session_past_absolute_cap_is_unauthorized(make_app):
+    """绝对上限（90 天）：会话再新（滑动未过期），从 created_at 起超 90 天即 401。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        admin_id = _seed_active_admin(app)
+        token = "aged-token"
+        long_ago = datetime.now(UTC) - timedelta(days=91)
+        app.state.auth.sessions.create(
+            user_id=UserId(str(admin_id)),
+            token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+            # 滑动没过期（30 天后才到），唯独 created_at 超了绝对上限
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+            now=long_ago,
+        )
+        resp = await client.get("/api/auth/me", cookies={"pm_session": token})
+        assert resp.status_code == 401
+
+
+async def test_login_cookie_secure_only_behind_https(make_app):
+    """Secure 按请求协议给：`X-Forwarded-Proto: https`（Caddy 反代）才带，本地 http 不带。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        plain = await client.post(
+            "/api/auth/login", json={"username": "root", "password": ADMIN_PW}
+        )
+        assert "Secure" not in plain.headers["set-cookie"]
+        forwarded = await client.post(
+            "/api/auth/login",
+            json={"username": "root", "password": ADMIN_PW},
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        assert "Secure" in forwarded.headers["set-cookie"]
+
+
+def test_seed_first_admin_builds_once(tmp_path):
+    """首管理员种子：空库首启建一个 active admin；非空库再启动不重复建、不覆盖。"""
+
+    settings = Settings(
+        db_path=tmp_path / "pmstudio.db",
+        model="scripted",
+        api_key="test-key",
+        api_base=None,
+        first_admin_username="root",
+        first_admin_password="root-s3cret",
+    )
+
+    first = build_container(settings)
+    seeded = first.app.state.auth.users.list_all()
+    assert [record.username for record in seeded] == ["root"]
+    assert seeded[0].role == "admin"
+    assert seeded[0].status == "active"
+
+    second = build_container(settings)
+    assert [record.username for record in second.app.state.auth.users.list_all()] == ["root"]

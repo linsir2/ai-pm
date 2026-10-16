@@ -357,6 +357,7 @@ class SessionRecord:
     user_id: UserId
     token_hash: str
     expires_at: datetime
+    created_at: datetime
     last_seen_at: datetime
     ip: str
     user_agent: str

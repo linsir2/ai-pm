@@ -139,15 +139,16 @@ class SqliteSessionRepository:
         self._connection.execute(
             """
             INSERT INTO sessions (session_id, user_id, token_hash, expires_at,
-                                  last_seen_at, ip, user_agent)
+                                  created_at, last_seen_at, ip, user_agent)
             VALUES (:session_id, :user_id, :token_hash, :expires_at,
-                    :last_seen_at, :ip, :user_agent)
+                    :created_at, :last_seen_at, :ip, :user_agent)
             """,
             {
                 "session_id": session_id,
                 "user_id": str(user_id),
                 "token_hash": token_hash,
                 "expires_at": _iso(expires_at),
+                "created_at": _iso(now),
                 "last_seen_at": _iso(now),
                 "ip": ip,
                 "user_agent": user_agent,
@@ -158,6 +159,7 @@ class SqliteSessionRepository:
             user_id=user_id,
             token_hash=token_hash,
             expires_at=expires_at,
+            created_at=now,
             last_seen_at=now,
             ip=ip,
             user_agent=user_agent,
@@ -204,6 +206,7 @@ class SqliteSessionRepository:
             user_id=UserId(row["user_id"]),
             token_hash=row["token_hash"],
             expires_at=datetime.fromisoformat(row["expires_at"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
             last_seen_at=datetime.fromisoformat(row["last_seen_at"]),
             ip=row["ip"],
             user_agent=row["user_agent"],

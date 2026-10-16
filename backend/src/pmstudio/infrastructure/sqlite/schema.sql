@@ -183,11 +183,13 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- 登录会话：**明文 token 永不入库**，只存 `hashlib.sha256` 的十六进制摘要。
 -- 过期由调用方判（`expires_at` 是列，方便"这个用户的活会话"这类查询）。
+-- `created_at` 是绝对上限（90 天）的锚点：滑动续期只动 `expires_at`，绝不动它。
 CREATE TABLE IF NOT EXISTS sessions (
   session_id  TEXT PRIMARY KEY,
   user_id     TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
   token_hash  TEXT NOT NULL,
   expires_at  TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
   last_seen_at TEXT NOT NULL,
   ip          TEXT NOT NULL DEFAULT '',
   user_agent  TEXT NOT NULL DEFAULT '',
