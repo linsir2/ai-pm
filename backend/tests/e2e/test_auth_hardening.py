@@ -6,12 +6,15 @@
 
 import time
 
+from pmstudio.bootstrap.settings import LOGIN_MAX_FAILS
 from tests.support.api_client import async_client
 
 PW = "alice-s3cret"
 
-#: 与 `Settings.LOGIN_MAX_FAILS` 默认一致；测试不覆写配置，直接按默认阈值打。
-MAX_FAILS = 5
+#: 锁定阈值**取自真实配置**（`Settings.login_max_fails` 的默认源），不硬编码——
+#: 改默认值/环境变量时测试自动跟随，防"测试写死 5、实现漂到别的值"的错位。
+#: `make_app` 不覆写 `login_max_fails`，故这里读到的默认即本测试引擎的实际阈值。
+MAX_FAILS = LOGIN_MAX_FAILS
 
 
 def _seed_active_user(app, *, username: str, password: str, role: str = "user"):
