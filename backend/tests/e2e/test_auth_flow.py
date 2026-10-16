@@ -181,6 +181,86 @@ async def test_session_past_absolute_cap_is_unauthorized(make_app):
         assert resp.status_code == 401
 
 
+async def test_logout_revokes_only_current_session(make_app):
+    """两设备登录：一台登出只踢它自己，另一台仍可用（per-device 会话，Ruling 18）。"""
+
+    app, _ = make_app(replies={}, autologin=False)
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        first = await client.post(
+            "/api/auth/login", json={"username": "root", "password": ADMIN_PW}
+        )
+        second = await client.post(
+            "/api/auth/login", json={"username": "root", "password": ADMIN_PW}
+        )
+        assert first.status_code == second.status_code == 200
+        token_a = first.cookies["pm_session"]
+        token_b = second.cookies["pm_session"]
+        assert token_a != token_b
+
+        out = await client.post("/api/auth/logout", cookies={"pm_session": token_a})
+        assert out.status_code == 200
+
+        dead = await client.get("/api/auth/me", cookies={"pm_session": token_a})
+        assert dead.status_code == 401
+        alive = await client.get("/api/auth/me", cookies={"pm_session": token_b})
+        assert alive.status_code == 200
+
+
+async def test_absolute_cap_revokes_only_matched_session(make_app):
+    """90 天绝对上限命中哪条吊销哪条：同一用户的另一条会话不受影响（Ruling 18）。"""
+
+    app, _ = make_app(replies={}, autologin=False)
+    async with async_client(app) as client:
+        admin_id = _seed_active_admin(app)
+        now = datetime.now(UTC)
+        aged_token = "aged-token"
+        fresh_token = "fresh-token"
+        aged_hash = hashlib.sha256(aged_token.encode("utf-8")).hexdigest()
+        app.state.auth.sessions.create(
+            user_id=UserId(str(admin_id)),
+            token_hash=aged_hash,
+            expires_at=now + timedelta(days=30),
+            now=now - timedelta(days=91),
+        )
+        app.state.auth.sessions.create(
+            user_id=UserId(str(admin_id)),
+            token_hash=hashlib.sha256(fresh_token.encode("utf-8")).hexdigest(),
+            expires_at=now + timedelta(days=30),
+            now=now,
+        )
+
+        aged = await client.get("/api/auth/me", cookies={"pm_session": aged_token})
+        assert aged.status_code == 401
+        assert app.state.auth.sessions.get_by_token_hash(aged_hash) is None
+        fresh = await client.get("/api/auth/me", cookies={"pm_session": fresh_token})
+        assert fresh.status_code == 200
+
+
+async def test_me_reissues_cookie_when_sliding_renews(make_app):
+    """`/me` 滑动续期时重发 `pm_session`（同 cookie、新 Max-Age=ttl），浏览器侧滑动才生效。"""
+
+    app, _ = make_app(replies={}, autologin=False)
+    async with async_client(app) as client:
+        admin_id = _seed_active_admin(app)
+        token = "sliding-token"
+        now = datetime.now(UTC)
+        app.state.auth.sessions.create(
+            user_id=UserId(str(admin_id)),
+            token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+            expires_at=now + timedelta(days=30),
+            now=now - timedelta(days=20),  # last_seen 20 天前 > ttl/2（15 天），触发续期
+        )
+
+        resp = await client.get("/api/auth/me", cookies={"pm_session": token})
+
+        assert resp.status_code == 200
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert "pm_session=" in set_cookie
+        assert f"Max-Age={app.state.auth.cookie_max_age}" in set_cookie
+        assert "httponly" in set_cookie.lower()
+
+
 async def test_login_cookie_secure_only_behind_https(make_app):
     """Secure 按请求协议给：`X-Forwarded-Proto: https`（Caddy 反代）才带，本地 http 不带。"""
 

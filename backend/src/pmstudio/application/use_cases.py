@@ -6089,7 +6089,9 @@ class GetMe:
         self._ttl_days = ttl_days
         self._absolute_days = absolute_days
 
-    async def __call__(self, *, token: str) -> UserView:
+    async def __call__(self, *, token: str) -> tuple[UserView, bool]:
+        """回 `(用户, 本轮是否做了滑动续期)`；续期与否供 `/me` 决定要不要重发 cookie。"""
+
         if not token:
             raise _unauthenticated()
         now = self._clock.now()
@@ -6098,23 +6100,25 @@ class GetMe:
         if session is None:
             raise _unauthenticated()
         if now - session.created_at > timedelta(days=self._absolute_days):
-            # 绝对上限：从建会话起算，滑动续期只动 expires_at，越不过它——到期即吊销
-            self._sessions.revoke_user(session.user_id)
+            # 绝对上限：从建会话起算，滑动续期只动 expires_at，越不过它——到期即吊销**这一条**
+            self._sessions.revoke_by_token_hash(token_hash)
             raise _unauthenticated()
         if session.expires_at <= now:
             raise _unauthenticated()
         record = self._users.get_by_id(session.user_id)
         if record is None or record.status != "active":
             raise _unauthenticated()
+        renewed = False
         if now - session.last_seen_at > timedelta(days=self._ttl_days) / 2:
             self._sessions.touch(
                 token_hash, now=now, expires_at=now + timedelta(days=self._ttl_days)
             )
-        return _user_view(record)
+            renewed = True
+        return _user_view(record), renewed
 
 
 class LogoutUser:
-    """登出即吊销该用户全部活会话（仓储只有这一种吊销入口）。幂等。"""
+    """登出只吊销**当前这条**会话（per-device，Ruling 18）；其余设备照旧。幂等。"""
 
     def __init__(self, *, sessions: SessionStore) -> None:
         self._sessions = sessions
@@ -6122,9 +6126,7 @@ class LogoutUser:
     async def __call__(self, *, token: str) -> None:
         if not token:
             return
-        session = self._sessions.get_by_token_hash(_sha256(token))
-        if session is not None:
-            self._sessions.revoke_user(session.user_id)
+        self._sessions.revoke_by_token_hash(_sha256(token))
 
 
 class ApproveUser:

@@ -25,7 +25,9 @@ SESSION_COOKIE = "pm_session"
 
 async def require_user(request: Request) -> AsyncIterator[UserView]:
     token = request.cookies.get(SESSION_COOKIE, "")
-    user = await request.app.state.auth.get_me(token=token)
+    user, renewed = await request.app.state.auth.get_me(token=token)
+    # 滑动续期发生在 `GetMe` 里；端点（如 `/me`）据这个标记重发 cookie 让浏览器侧跟上
+    request.state.session_renewed = renewed
     scope = request.app.state.owner_scope
     scope_token = scope.set_owner_scope(user.user_id)
     try:

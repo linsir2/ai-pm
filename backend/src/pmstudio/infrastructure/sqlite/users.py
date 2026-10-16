@@ -191,8 +191,16 @@ class SqliteSessionRepository:
             },
         )
 
+    def revoke_by_token_hash(self, token_hash: str) -> None:
+        """按单条会话吊销（登出 / 绝对上限命中）。已吊销的不再动，其余会话不受影响。"""
+
+        self._connection.execute(
+            "UPDATE sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
+            (_iso(_now()), token_hash),
+        )
+
     def revoke_user(self, user_id: UserId) -> None:
-        """吊销这个用户的全部活会话（登出 / 封禁）。已吊销的不再动。"""
+        """吊销这个用户的全部活会话（封禁 = 踢全部）。已吊销的不再动。"""
 
         self._connection.execute(
             "UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",

@@ -106,3 +106,22 @@ def test_revoked_session_is_not_found(tmp_path):
 
     assert sessions.get_by_token_hash(token_hash) is None
     connection.close()
+
+
+def test_revoke_by_token_hash_leaves_other_sessions_alone(tmp_path):
+    """按单条会话吊销（Ruling 18）：只踢命中的那条，同一用户的另一条照旧能用。"""
+
+    connection = database.connect(tmp_path / "pm.db")
+    users = SqliteUserRepository(connection)
+    sessions = SqliteSessionRepository(connection)
+    user_id = users.register(username="alice", password_hash="$argon2id$fake")
+    first = _sha256("token-one")
+    second = _sha256("token-two")
+    sessions.create(user_id=user_id, token_hash=first, expires_at=NOW, now=NOW)
+    sessions.create(user_id=user_id, token_hash=second, expires_at=NOW, now=NOW)
+
+    sessions.revoke_by_token_hash(first)
+
+    assert sessions.get_by_token_hash(first) is None
+    assert sessions.get_by_token_hash(second) is not None
+    connection.close()

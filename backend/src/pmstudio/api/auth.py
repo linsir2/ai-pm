@@ -81,6 +81,22 @@ def _is_secure(request: Request) -> bool:
     return scheme == "https"
 
 
+def _set_session_cookie(
+    response: Response, request: Request, token: str, *, max_age: int
+) -> None:
+    """登录与滑动续期共用一处 cookie 属性：名/HttpOnly/Secure/SameSite/Max-Age 只此一份。"""
+
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,
+        # 条件化理由见 `_is_secure`：http 测试传输/本地 dev 不带 Secure，生产 https 才带
+        secure=_is_secure(request),
+        samesite="lax",
+        max_age=max_age,
+    )
+
+
 class CredentialsRequest(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
@@ -109,14 +125,8 @@ async def login(
         ip=client.host if client else "",
         user_agent=request.headers.get("user-agent", ""),
     )
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        # 条件化理由见 `_is_secure`：http 测试传输/本地 dev 不带 Secure，生产 https 才带
-        secure=_is_secure(request),
-        samesite="lax",
-        max_age=_auth(request).cookie_max_age,
+    _set_session_cookie(
+        response, request, token, max_age=_auth(request).cookie_max_age
     )
     return _user_json(view)
 
@@ -129,7 +139,20 @@ async def logout(request: Request, response: Response) -> dict[str, str]:
 
 
 @router.get("/auth/me")
-async def me(user: Annotated[UserView, Depends(require_user)]) -> dict[str, str]:
+async def me(
+    request: Request,
+    response: Response,
+    user: Annotated[UserView, Depends(require_user)],
+) -> dict[str, str]:
+    # `require_user` 里若做了滑动续期，这里重发 cookie（新 Max-Age）——否则浏览器侧
+    # 的 Max-Age 仍停在下发那一刻，滑动不生效（Ruling 19）。
+    if getattr(request.state, "session_renewed", False):
+        _set_session_cookie(
+            response,
+            request,
+            request.cookies.get(SESSION_COOKIE, ""),
+            max_age=_auth(request).cookie_max_age,
+        )
     return _user_json(user)
 
 
