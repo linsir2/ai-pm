@@ -93,6 +93,9 @@ def test_write_waits_for_lock_then_succeeds(tmp_path):
 
     直接钉住"等锁"语义：`timeout=10` 会落成 `busy_timeout=10000`；若为 0，
     被占锁时立刻抛错，`elapsed` 会趋近 0——这里要求实测等待 ≥ 0.8s。
+
+    （`holder` 的 `BEGIN IMMEDIATE` 与释放线程的 `COMMIT` 跨线程用同一连接：**合法**是
+    因为 `database.connect` 固定 `check_same_thread=False`，不是靠"两操作时序不重叠"。）
     """
 
     db_path = tmp_path / "lock.db"
