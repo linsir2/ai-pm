@@ -5,6 +5,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { AuthUser } from "../api/client";
 import type { ProjectSummaryView } from "../api/types";
 import { TopBar } from "./TopBar";
 
@@ -138,6 +139,57 @@ describe("TopBar", () => {
     expect(screen.getByRole("button", { name: "模板" }).getAttribute("aria-current")).toBe(
       "page",
     );
+  });
+
+  it("admin 用户可见「管理后台」入口，点了调 onAdmin", () => {
+    const onAdmin = vi.fn();
+    const adminUser: AuthUser = {
+      user_id: "u-root",
+      username: "root",
+      role: "admin",
+      status: "active",
+    };
+    render(
+      <TopBar
+        projects={[project]}
+        project={project}
+        connection="open"
+        theme="light"
+        onSelectProject={vi.fn()}
+        onExport={vi.fn()}
+        onToggleTheme={vi.fn()}
+        user={adminUser}
+        onAdmin={onAdmin}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "管理后台" }));
+
+    expect(onAdmin).toHaveBeenCalledTimes(1);
+  });
+
+  it("非 admin 不显示「管理后台」入口", () => {
+    const member: AuthUser = {
+      user_id: "u-bob",
+      username: "bob",
+      role: "user",
+      status: "active",
+    };
+    render(
+      <TopBar
+        projects={[project]}
+        project={project}
+        connection="open"
+        theme="light"
+        onSelectProject={vi.fn()}
+        onExport={vi.fn()}
+        onToggleTheme={vi.fn()}
+        user={member}
+        onAdmin={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "管理后台" })).toBeNull();
   });
 
   it("非模板库视图里模板按钮不标当前位置（缺省/false 都无 aria-current 与 active 类）", () => {

@@ -39,6 +39,7 @@ export function TopBar({
   search = null,
   user,
   onLogout,
+  onAdmin,
 }: {
   projects: ProjectSummaryView[];
   project: ProjectSummaryView | null;
@@ -73,6 +74,9 @@ export function TopBar({
   user?: AuthUser;
   /** 登出：用户菜单里的按钮。 */
   onLogout?: () => void;
+  /** 管理后台入口（Task 8）：**只有** `user.role === "admin"` 且传了回调才画——
+      非 admin 一个入口都不出，权限判定不靠这里（后端 403 / AdminView 自会拦）。 */
+  onAdmin?: () => void;
 }) {
   const connectionText =
     connection === "open"
@@ -185,6 +189,17 @@ export function TopBar({
       >
         {theme === "dark" ? "亮色" : "暗色"}
       </button>
+
+      {onAdmin !== undefined && user?.role === "admin" && (
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          onClick={onAdmin}
+          title="审批、用户与用量"
+        >
+          管理后台
+        </button>
+      )}
 
       {user !== undefined && (
         <span className="topbar__user">

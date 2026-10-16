@@ -356,6 +356,7 @@ function Workspace() {
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
           user={user ?? undefined}
           onLogout={() => void logout()}
+          onAdmin={() => setView("admin")}
         />
         <main className="doc" aria-label="项目列表">
           <ProjectList
@@ -397,6 +398,7 @@ function Workspace() {
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
           user={user ?? undefined}
           onLogout={() => void logout()}
+          onAdmin={() => setView("admin")}
         />
         <main className="doc" aria-label="模板库">
           <TemplateLibraryScreen
@@ -429,6 +431,7 @@ function Workspace() {
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
           user={user ?? undefined}
           onLogout={() => void logout()}
+          onAdmin={() => setView("admin")}
         />
         <AdminView />
       </div>
@@ -449,6 +452,7 @@ function Workspace() {
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
           user={user ?? undefined}
           onLogout={() => void logout()}
+          onAdmin={() => setView("admin")}
         />
         <main className="doc" aria-label="产品文档">
           <div className="doc__inner">
@@ -489,6 +493,7 @@ function Workspace() {
             onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
             user={user ?? undefined}
             onLogout={() => void logout()}
+            onAdmin={() => setView("admin")}
             search={
               project === null
                 ? null
