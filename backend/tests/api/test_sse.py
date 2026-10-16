@@ -1,9 +1,14 @@
 import asyncio
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
+from pmstudio.api import routes
 from pmstudio.api.sse import event_stream
 from pmstudio.application.events import PACKET_EMITTED
+from pmstudio.application.use_cases import UserView
+from pmstudio.domain.shared.ids import UserId
 from pmstudio.harness.events import Event
+from pmstudio.infrastructure.sqlite import owner_scope
 
 NOW = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
 
@@ -82,3 +87,45 @@ async def test_event_stream_sends_heartbeat_when_idle():
         ": ready\n\n",
         ": ping\n\n",
     ]
+
+
+class _OwnedProjects:
+    """`services.list_projects` 的最小替身：只认一个 owner 的项目 id。"""
+
+    def __init__(self, project_ids: set[str]) -> None:
+        self._project_ids = project_ids
+
+    async def __call__(self):  # type: ignore[no-untyped-def]
+        return tuple(
+            SimpleNamespace(project_id=project_id) for project_id in self._project_ids
+        )
+
+
+async def test_events_route_wires_owner_visibility_into_the_stream():
+    """`routes.events` 必须把 `visible` 传给裁剪逻辑——删掉 `visible=visible` 这条会红。
+
+    直接调处理函数（不经 HTTP）：拿回 `StreamingResponse`，喂两条事件（一条自己的、
+    一条别人的），断言**别人的那条没被投出去**。这钉的是"接线"，不是"判据"——
+    判据本身由 `test_isolation_matrix.py::test_sse_only_delivers_my_events` 覆盖。
+    """
+
+    bus = StubStream(
+        [
+            Event(name=PACKET_EMITTED, project_id="p-mine", occurred_at=NOW, seq=1),
+            Event(name=PACKET_EMITTED, project_id="p-other", occurred_at=NOW, seq=2),
+        ]
+    )
+    services = SimpleNamespace(stream=bus, list_projects=_OwnedProjects({"p-mine"}))
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(services=services, owner_scope=owner_scope)
+        )
+    )
+    user = UserView(user_id=UserId("u-me"), username="me", role="admin", status="active")
+
+    response = await routes.events(request, user)
+    frames = [chunk async for chunk in response.body_iterator]
+
+    business = [frame for frame in frames if frame.startswith("event:")]
+    assert len(business) == 1, f"别人的事件漏进来了：{business}"
+    assert '"p-mine"' in business[0]

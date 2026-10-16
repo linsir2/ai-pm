@@ -40,6 +40,14 @@ CLAIMS_REPLY = json.dumps(
 
 ROUND_INPUT = "想做个订单导出"
 
+#: 一套合法自建模板：三锚点（feature / open_questions / version_history）缺一不可
+#: （`template.validate` 的硬要求，照 `tests/api/test_templates_api.py::triple_sections`）。
+TEMPLATE_SECTIONS = [
+    {"id": "s5", "title": "功能", "purpose": "摆设", "role": "feature"},
+    {"id": "s11", "title": "未决", "purpose": "摆设", "role": "open_questions"},
+    {"id": "s13", "title": "版本", "purpose": "摆设", "role": "version_history"},
+]
+
 
 def _seed_active_user(app, *, username: str, password: str, role: str = "user"):  # type: ignore[no-untyped-def]
     """测试侧直接种一个 active 用户（照 `test_auth_flow._seed_active_admin` 的体例）。"""
@@ -151,6 +159,163 @@ async def test_user_b_cannot_touch_user_a_project(make_app):
         assert (
             await client.get(f"/api/projects/{project_id}/workspace")
         ).status_code == 404
+
+
+async def _expect(client, method: str, path: str, *, status: int, **kwargs):  # type: ignore[no-untyped-def]
+    resp = await getattr(client, method)(path, **kwargs)
+    assert resp.status_code == status, (
+        f"{method.upper()} {path} → {resp.status_code}（期望 {status}）: {resp.text}"
+    )
+    return resp
+
+
+async def test_user_b_cannot_touch_user_a_side_resources(make_app):
+    """隔离口径扩到讨论 / 调研 / 轮次 / 模板 / 材料：B 对 A 的资源全 404 或不可见。
+
+    `abort-run` 不在这里：它不读库（只查进程内任务表），对外来 thread 是幂等 no-op，
+    隔离缺口另见报告（Task 6 fix round 疑虑）。
+    """
+
+    app, _ = make_app(replies={"claims": CLAIMS_REPLY}, autologin=False)
+    async with async_client(app) as client:
+        _seed_active_user(app, username="root", password=ADMIN_PW, role="admin")
+        _seed_active_user(app, username="alice", password=PW)
+        _seed_active_user(app, username="bob", password=PW)
+        await _login(client, username="root", password=ADMIN_PW)
+        alice = await _login(client, username="alice", password=PW)
+        bob = await _login(client, username="bob", password=PW)
+
+        # —— A 备齐各类资源 ——
+        client.cookies = alice
+        pid = (
+            await client.post("/api/projects", json={"title": "A 的项目"})
+        ).json()["project_id"]
+        # 手加一条内容：调研的接地检查要求文档非空（不走模型）
+        await _expect(
+            client,
+            "post",
+            f"/api/projects/{pid}/edits",
+            status=200,
+            json={
+                "op": "add",
+                "target": {"zone": "body", "section_id": "s2"},
+                "text": "整理成文档",
+            },
+        )
+        rid = (
+            await client.post(f"/api/projects/{pid}/rounds", json={"input": ROUND_INPUT})
+        ).json()["round_id"]
+        tpl = (
+            await client.post(
+                "/api/templates",
+                json={"title": "A 的模板", "sections": TEMPLATE_SECTIONS},
+            )
+        ).json()["template_id"]
+        did = (
+            await client.post(
+                f"/api/projects/{pid}/discussions",
+                json={"topic": "怎么让灵感不丢", "role_ids": ["dlg.challenger"]},
+            )
+        ).json()["thread_id"]
+        xid = (
+            await client.post(
+                f"/api/projects/{pid}/explorations",
+                json={"kind": "inquiry", "scope": {"kind": "document"}},
+            )
+        ).json()["exploration_id"]
+        await _expect(
+            client,
+            "post",
+            f"/api/projects/{pid}/attachments",
+            status=201,
+            files={"file": ("需求.md", "# 目标".encode(), "text/markdown")},
+        )
+
+        # —— B 对 A 的每类资源 ——
+        client.cookies = bob
+        # 轮次
+        await _expect(client, "get", f"/api/rounds/{rid}", status=404)
+        for action in ("retry", "dig", "abandon"):
+            await _expect(client, "post", f"/api/rounds/{rid}/{action}", status=404)
+        await _expect(
+            client,
+            "post",
+            f"/api/rounds/{rid}/answers",
+            status=404,
+            json={"form_id": "f1", "answers": [], "skipped": []},
+        )
+        # 讨论（读线程即 404）
+        await _expect(
+            client, "post", f"/api/discussions/{did}/say", status=404, json={"text": "x"}
+        )
+        await _expect(client, "post", f"/api/discussions/{did}/cards", status=404)
+        await _expect(
+            client,
+            "post",
+            f"/api/discussions/{did}/cards/c1/keep",
+            status=404,
+            json={"as": "seed"},
+        )
+        await _expect(client, "post", f"/api/discussions/{did}/cards/c1/dismiss", status=404)
+        await _expect(client, "post", f"/api/discussions/{did}/run-round", status=404)
+        await _expect(
+            client,
+            "post",
+            f"/api/discussions/{did}/join",
+            status=404,
+            json={"role_id": "dlg.challenger"},
+        )
+        await _expect(client, "post", f"/api/discussions/{did}/close", status=404)
+        # 调研
+        await _expect(client, "post", f"/api/explorations/{xid}/retry", status=404)
+        await _expect(client, "post", f"/api/explorations/{xid}/abandon", status=404)
+        await _expect(
+            client,
+            "post",
+            f"/api/explorations/{xid}/candidates/c1/keep",
+            status=404,
+            json={"as": "seed"},
+        )
+        await _expect(
+            client, "post", f"/api/explorations/{xid}/candidates/c1/dismiss", status=404
+        )
+        # 模板
+        await _expect(client, "get", f"/api/templates/{tpl}", status=404)
+        await _expect(
+            client,
+            "put",
+            f"/api/templates/{tpl}",
+            status=404,
+            json={"title": "改", "sections": TEMPLATE_SECTIONS},
+        )
+        await _expect(client, "delete", f"/api/templates/{tpl}", status=404)
+        # 材料：往他人项目上传直接 404（定位不到项目）
+        await _expect(
+            client,
+            "post",
+            f"/api/projects/{pid}/attachments",
+            status=404,
+            files={"file": ("x.md", b"x", "text/markdown")},
+        )
+        # 列表类：回空（不可见，不是报错）
+        assert (await client.get(f"/api/projects/{pid}/rounds")).json() == []
+        assert (await client.get(f"/api/projects/{pid}/discussions")).json() == []
+        assert (await client.get(f"/api/projects/{pid}/explorations")).json() == []
+        assert (await client.get(f"/api/projects/{pid}/attachments")).json() == []
+        assert tpl not in {
+            item["template_id"] for item in (await client.get("/api/templates")).json()
+        }
+
+        # —— A 看自己的照常 ——
+        client.cookies = alice
+        await _expect(client, "get", f"/api/rounds/{rid}", status=200)
+        await _expect(client, "get", f"/api/templates/{tpl}", status=200)
+        assert (await client.get(f"/api/projects/{pid}/rounds")).json() != []
+        assert (await client.get(f"/api/projects/{pid}/discussions")).json() != []
+        assert (await client.get(f"/api/projects/{pid}/explorations")).json() != []
+        assert tpl in {
+            item["template_id"] for item in (await client.get("/api/templates")).json()
+        }
 
 
 async def test_business_endpoint_requires_login(make_app):
