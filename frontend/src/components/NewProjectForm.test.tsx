@@ -104,7 +104,9 @@ it("每张模板卡有名 + about 行", () => {
     <NewProjectForm templates={[light]} onCreate={onCreate} pending={false} error={null} />,
   );
 
-  const about = screen.getByText("2 章 · 骨架章/功能需求");
+  // 需求变更：旧格式把 role 斜杠连排（标准版会渲染成六个"骨架章"重复六遍）。
+  // 现在骨架计数、其余去重——见 templates/about.ts。
+  const about = screen.getByText("2 章 · 1 骨架 · 功能需求");
   expect(about).toBeTruthy();
-  expect(about.textContent ?? "").toContain("2 章 · 骨架章/功能需求");
+  expect(about.textContent ?? "").toContain("2 章 · 1 骨架 · 功能需求");
 });

@@ -206,12 +206,16 @@ describe("ProjectList", () => {
     expect(props.onManageTemplates).toHaveBeenCalledTimes(1);
   });
 
-  it("slim_meta_line_shows_count_model_and_limits_without_claiming_13_chapters", () => {
-    renderList({ model: "openai/qwen3.8-flash" });
+  // **需求变更（2026-10-16 文档库重做）**：页头原本把模型名与席位轮上限也摆出来，
+  // 本次**删掉**——那是运行信息（属于设置与调试），写在"你的项目"页头会让人以为
+  // 该在这里换模型。断言跟着改，不是为了让测试变绿。
+  it("meta_行只摆项目数与最近更新，不再摆模型名与席位轮上限", () => {
+    renderList({});  // `model` prop 已随本次改动一并移除（页头不再显示运行信息）
 
-    // 四格条压成一行小字；"一份 13 章"这种断言在模板时代是错的，不许出现
-    expect(screen.queryByText(/一份 13 章/)).toBeNull();
     expect(screen.getByText(/3 个项目/)).toBeTruthy();
-    expect(screen.getByText(/openai\/qwen3\.8-flash/)).toBeTruthy();
+    expect(screen.queryByText(/openai\/qwen3\.8-flash/)).toBeNull();
+    expect(screen.queryByText(/席位轮上限/)).toBeNull();
+    // "一份 13 章"这种断言在模板时代就是错的，仍然不许出现
+    expect(screen.queryByText(/一份 13 章/)).toBeNull();
   });
 });

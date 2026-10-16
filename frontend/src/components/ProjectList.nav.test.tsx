@@ -5,7 +5,8 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
-import type { LimitsView, ProjectSummaryView, TemplateView } from "../api/types";
+import type { TemplateView } from "../api/types";
+import type { ProjectSummaryView } from "../api/types";
 import { ProjectList } from "./ProjectList";
 
 let observerCallback: IntersectionObserverCallback | null = null;
@@ -25,15 +26,6 @@ class FakeObserver {
   disconnect() {}
 }
 vi.stubGlobal("IntersectionObserver", FakeObserver);
-
-const LIMITS: LimitsView = {
-  max_seat_rounds: 3,
-  max_questionnaires: 2,
-  max_open_items_per_batch: 3,
-  max_sim_review_personas: 3,
-  max_sim_review_features: 2,
-  max_discussion_turns: 12,
-};
 
 const TEMPLATES: TemplateView[] = [
   {
@@ -77,7 +69,6 @@ it("左导航只有两个真锚点，模板库是按钮", () => {
       pending={false}
       error={null}
       booting={false}
-      limits={LIMITS}
       templates={TEMPLATES}
       onManageTemplates={fn}
     />,
@@ -102,7 +93,6 @@ it("左导航当前段标 aria-current=location（页内锚点不用 TopBar 的 
       pending={false}
       error={null}
       booting={false}
-      limits={LIMITS}
       templates={TEMPLATES}
       onManageTemplates={vi.fn()}
     />,
@@ -130,7 +120,6 @@ it("模板库是跨视图按钮：从不标 aria-current（page 是 TopBar 那�
       pending={false}
       error={null}
       booting={false}
-      limits={LIMITS}
       templates={TEMPLATES}
       onManageTemplates={vi.fn()}
     />,
@@ -148,7 +137,6 @@ it("scrollspy：home-recent 相交后对应导航项带 active 类、另一项�
       pending={false}
       error={null}
       booting={false}
-      limits={LIMITS}
       templates={TEMPLATES}
       onManageTemplates={vi.fn()}
     />,

@@ -210,6 +210,16 @@ a {
 /* 门户主界面：**不是阅读面**，是导航面。文档区限宽 60em 是给"每行 60–80 个汉字"
    定的（DESIGN.md 阅读参数），列表页没有那段正文，所以单独放宽到 68em——
    否则"标题 + 版本 + 日期"三列挤在 60em 里显得空。 */
+/* 门户这两屏（项目库 / 模板库）不是文档区：纸按内容高度收，不铺满一屏。
+   真实 `.doc__inner` 有 `min-height: 100%`（工作台里文档要铺满），门户照搬会让
+   两行内容底下留半屏白纸，看着像没做完。 */
+/* `min-height: 0` 必须比 `.doc__inner` 的 `min-height: 100%` 更具体：
+   两者在同一个元素上（`doc__inner home`），同特异度时**后者胜**，
+   于是纸照样铺满一屏。 */
+.doc__inner.home {
+  min-height: 0;
+}
+
 .home {
   max-width: 68em;
 }
@@ -238,7 +248,9 @@ a {
 .home__title {
   margin: 0;
   font-family: var(--font-doc);
-  font-size: var(--step-7);
+  /* 原来 step-7（34px）是全站**最大**的号——一屏里最大的字是页面标签，不是文档内容。
+     收到 step-6（26px），和文档标题同一档。 */
+  font-size: var(--step-6);
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.2;
@@ -315,6 +327,23 @@ a {
   }
 }
 
+/* 模板画廊与新建表单窄屏：两栏卡片在手机上每栏只有 ~120px；表单那一行
+   （输入 + 按钮）在 320px 下也不换行，按钮会顶出容器 30px、逼出一条横向滚动条。 */
+
+@media (max-width: 860px) {
+  .tpl-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .field-inline {
+    flex-wrap: wrap;
+  }
+
+  .field-inline .text-input {
+    flex: 1 1 100%;
+  }
+}
+
 .projects {
   list-style: none;
   margin: 0;
@@ -364,8 +393,14 @@ a {
 }
 
 .projects__title {
-  font-size: var(--step-5);
+  /* 密行就该是密行：原来 step-5（20px）比正文还大，长项目名折成两行，一屏放不下几行。
+     收到 step-3（14px）并单行截断——完整标题留给 title 与详情。 */
+  font-size: var(--step-3);
   font-weight: 500;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .projects__meta {
@@ -2339,6 +2374,96 @@ details.drawer__history[open] > summary::before {
   .auth__proof { display: none; }
 }
 
+/* ── 模板库（`06` §2.3）──────────────────────────────────────────────
+   之前这一屏只有两条细行 + 一屏空白：内容撑不满纸，行与行之间也没有分隔，
+   看上去像没做完。现在每份模板是一条真行（描边 + 圆角 + 内边距），可展开看章节。
+   仍然不做卡片墙/分类/搜索——只有两个内置模板，那些控件的工作量全在处理空结果。 */
+.tlib__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.tlib__item {
+  border: var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--space-3) var(--space-4);
+}
+
+.tlib__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.tlib__name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-right: auto;
+}
+
+.tlib__acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* 内置为何不可改：不给理由的禁用只会让人以为是坏了 */
+.tlib__why {
+  margin: var(--space-2) 0 0;
+  font-size: var(--step-0);
+  line-height: 1.7;
+  color: var(--empty);
+}
+
+/* 章节预览：章节号走等宽（DESIGN.md 的"标识符一律等宽"），
+   右侧角色 tag 复用文档区的 `.tag`，不是新造一套 */
+.tlib__preview {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) 0 0;
+  border-top: 1px dashed var(--border);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(186px, 1fr));
+  gap: var(--space-2) var(--space-4);
+}
+
+.tlib__preview li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--step-2);
+}
+
+.tlib__sec-id {
+  flex: none;
+  color: var(--empty);
+  font-size: var(--step-0);
+}
+
+.tlib__sec-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tlib__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding-top: var(--space-2);
+}
+
 .input__box {
   width: 100%;
   min-height: 56px;
@@ -3224,6 +3349,17 @@ details.loop__group[open] > summary::before {
       "top"
       "nav"
       "loop";
+  }
+
+  /* 门户三屏（项目库 / 模板库 / 管理后台）只有顶栏 + 一块内容，不套工作台那套
+     四行堆叠——否则会白占一个空 `nav` 行和一个空 `loop` 行。实测 320px 下
+     `.doc` 被压到 226px，正文整段裁掉、底部一条横向滚动条。
+     上面那条 `.shell` 规则同特异度且更早，所以这里必须显式复位。 */
+  .shell--plain {
+    grid-template-rows: 48px minmax(0, 1fr);
+    grid-template-areas:
+      "top"
+      "doc";
   }
 
   /* 窄屏 loop 矮：composer 收紧，把高度让给线程 */

@@ -17,7 +17,6 @@ import type { ExplorationAnchor } from "./api/payload";
 import { discussionTopic } from "./state/discussions";
 import type { DiscussionAnchor } from "./state/discussions";
 import { loopBadgeCount, needsLoopAttention } from "./state/progress";
-import { limitsOf } from "./state/schema";
 import { DocumentPane } from "./components/DocumentPane";
 import { TemplateLibraryScreen } from "./templates/TemplateLibraryScreen";
 import { EditScope } from "./components/EditContext";
@@ -388,8 +387,6 @@ function Workspace() {
             pending={data.pending !== null}
             error={data.bootError}
             booting={data.booting}
-            limits={limitsOf(data.schema)}
-            model={data.model}
             templates={templates}
             initialTemplateId={pickedTemplateId}
             onManageTemplates={() => setView("templates")}
@@ -421,6 +418,8 @@ function Workspace() {
         <main className="doc" aria-label="模板库">
           <TemplateLibraryScreen
             active
+            onNavigate={() => setView("projects")}
+            onTemplates={() => setView("templates")}
             onUse={(templateId) => {
               // 回项目列表，并把这份模板预选上（"用这个建项目"不许让用户再选一遍）
               setPickedTemplateId(templateId);

@@ -15,7 +15,8 @@
 
 import { useEffect, useState } from "react";
 
-import type { LimitsView, ProjectSummaryView, TemplateView } from "../api/types";
+import type { ProjectSummaryView, TemplateView } from "../api/types";
+import { HomeNav } from "./HomeNav";
 import { Logo } from "./Logo";
 import { NewProjectForm } from "./NewProjectForm";
 import { Onboarding } from "./Onboarding";
@@ -28,8 +29,6 @@ export function ProjectList({
   pending,
   error,
   booting,
-  limits,
-  model = null,
   templates,
   initialTemplateId = null,
   onManageTemplates,
@@ -41,10 +40,6 @@ export function ProjectList({
   /** 建项目失败时的那一句：只有自己这一屏的 `NewProjectForm` 会渲染它。 */
   error: string | null;
   booting: boolean;
-  /** 现行上限（`/schema.limits`）：只用来在页眉小字里显示"席位轮上限"。 */
-  limits: LimitsView;
-  /** 模型名（`/health`）。查不到就是 null，那一格显示 —，不猜。 */
-  model?: string | null;
   /** 模板库（`/schema.templates`）：画廊的数据源；空表退化成纯表单。 */
   templates: TemplateView[];
   /** 从模板库「用这个建项目」带回来的预选项（`06` §2.3）；null = 用既有默认。 */
@@ -70,8 +65,6 @@ export function ProjectList({
     }
     return () => observer.disconnect();
   }, []);
-  const navCls = (id: string) =>
-    id === active ? "home__navlink home__navlink--active" : "home__navlink";
   if (booting) {
     return (
       <div className="doc__inner home">
@@ -97,25 +90,10 @@ export function ProjectList({
 
   return (
     <div className="doc__inner home home--split">
-      <nav className="home__nav" aria-label="项目页导航">
-        <a
-          className={navCls("home-new")}
-          href="#home-new"
-          aria-current={active === "home-new" ? "location" : undefined}
-        >
-          新建项目
-        </a>
-        <a
-          className={navCls("home-recent")}
-          href="#home-recent"
-          aria-current={active === "home-recent" ? "location" : undefined}
-        >
-          最近项目
-        </a>
-        <button type="button" className="home__navlink" onClick={onManageTemplates}>
-          模板库
-        </button>
-      </nav>
+      <HomeNav
+        active={active === "home-new" ? "new" : "recent"}
+        onTemplates={onManageTemplates}
+      />
       <div className="home__main">
         <header className="home__head">
           {/* 页面标识：40px primary 方块里放同一个 Logo。不用状态色——
@@ -129,9 +107,11 @@ export function ProjectList({
           </p>
         </header>
 
+        {/* **不摆模型名与席位轮上限**：那是运行信息，属于设置与调试。一个"资料库"
+            页头写着 openai/qwen3.7-flash 会让人以为该在这里换模型。
+            清单由后端 `/health` 与 `/schema.limits` 给出，不编。 */}
         <p className="home__meta">
-          {projects.length} 个项目 · 最近更新 {newestOf(projects) ?? "—"} ·{" "}
-          {model ?? "—"} · 席位轮上限 {limits.max_seat_rounds} 轮
+          {projects.length} 个项目 · 最近更新 {newestOf(projects) ?? "—"}
         </p>
 
         <section id="home-new" aria-label="新建项目">

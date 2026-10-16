@@ -10,6 +10,7 @@
 import { useCallback, useState } from "react";
 
 import type { TemplateSectionView } from "../api/types";
+import { HomeNav } from "../components/HomeNav";
 import { TemplateEditor } from "../components/TemplateEditor";
 import { TemplateListView } from "../components/TemplateListView";
 import { blankDraft, toPayload, validateDraft } from "./draft";
@@ -25,9 +26,15 @@ interface Draft {
 export function TemplateLibraryScreen({
   active,
   onUse,
+  onNavigate,
+  onTemplates,
 }: {
   active: boolean;
   onUse: (templateId: string) => void;
+  /** 左导航前两项：回到项目库（模板库里那屏没有可滚的区块）。 */
+  onNavigate?: (target: "new" | "recent") => void;
+  /** 左导航"模板库"自己：已在这一屏，点它不跳走。 */
+  onTemplates?: () => void;
 }) {
   const library = useTemplateLibrary(active);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -77,18 +84,25 @@ export function TemplateLibraryScreen({
 
   // 坐在同一张纸上：别的屏（文档区 / 项目列表）都是 `.doc__inner` 的纸，
   // 模板屏不另起一套容器。
+  //
+  // **左导航与文档库共用一份 `HomeNav`**：原先这三个锚点长在 `ProjectList` 里，
+  // 于是模板库这一屏左导航整个消失——两个页面看起来像两个产品。
+  // 编辑态不进导航：它是列表态里的一层，编辑时还点"模板库"会跳走、丢掉未存改动。
   if (draft === null) {
     return (
-      <div className="doc__inner">
-      <TemplateListView
-        templates={library.items}
-        onUse={onUse}
-        onEdit={startEditing}
-        onDelete={(templateId) => void library.remove(templateId)}
-        onNew={startBlank}
-        error={library.error}
-        pending={library.pending || library.loading}
-      />
+      <div className="doc__inner home home--split">
+        <HomeNav active="templates" plain onNavigate={onNavigate} onTemplates={onTemplates} />
+        <div className="home__main">
+          <TemplateListView
+            templates={library.items}
+            onUse={onUse}
+            onEdit={startEditing}
+            onDelete={(templateId) => void library.remove(templateId)}
+            onNew={startBlank}
+            error={library.error}
+            pending={library.pending || library.loading}
+          />
+        </div>
       </div>
     );
   }
