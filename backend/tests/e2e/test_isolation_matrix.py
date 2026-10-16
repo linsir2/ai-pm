@@ -8,8 +8,8 @@
   再在用例层按 owner 收窄——A 自己的照常 200。
 - **SSE 只推自己的**：订阅在 owner 上下文里做归属判断，别人的事件一个都不投。
 
-`admin 读 A 的`：见报告疑虑 #1——D2（单 owner 环境上下文）下没有跨租户旁路，
-`§0.12` 的"admin 可见全站"尚未实现，本任务范围外。这里如实钉住现状。
+`admin 读 A 的`：Ruling 16——首版 admin 不浏览他人内容（只管用户与用量），
+D2（单 owner 环境上下文）下没有跨租户旁路。这里如实钉住现状。
 """
 
 import asyncio
@@ -154,7 +154,7 @@ async def test_user_b_cannot_touch_user_a_project(make_app):
             await client.get(f"/api/projects/{project_id}/document")
         ).status_code == 200
 
-        # 现状：admin 无跨租户旁路（§0.12 未实现）——见模块 docstring 与报告疑虑 #1
+        # Ruling 16：首版 admin 不浏览他人内容（无跨租户旁路）——见模块 docstring
         client.cookies = admin
         assert (
             await client.get(f"/api/projects/{project_id}/workspace")
