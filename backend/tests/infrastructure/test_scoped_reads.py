@@ -30,6 +30,9 @@ from pmstudio.domain.exploration.exploration import (
     ExplorationScope,
     ScopeKind,
 )
+from pmstudio.domain.memory.digest import RoundDigest
+from pmstudio.domain.memory.inspiration import InspirationItem, InspirationOrigin
+from pmstudio.domain.memory.observations import ObservationType, RoundObservation
 from pmstudio.domain.shared.ids import (
     DiscussionId,
     ExplorationId,
@@ -39,7 +42,10 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.template import template_from_dict
 from pmstudio.harness.errors import ApplicationError
 from pmstudio.infrastructure.sqlite import database, owner_scope
+from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
+from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
 from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
+from pmstudio.infrastructure.sqlite.observations_repo import SqliteObservationRepository
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDiscussionRepository,
     SqliteDocumentRepository,
@@ -61,7 +67,7 @@ def connection(tmp_path):  # type: ignore[no-untyped-def]
     conn.close()
 
 
-def _material() -> ParsedMaterial:
+def _material(text: str = "一条需求") -> ParsedMaterial:
     return ParsedMaterial(
         origin="upload",
         title="需求.md",
@@ -72,7 +78,7 @@ def _material() -> ParsedMaterial:
             MaterialChunk(
                 chunk_id="local-text#c00",
                 ordinal=0,
-                text="一条需求",
+                text=text,
                 heading_path=(),
                 anchor="第 1 行",
             ),
@@ -234,7 +240,11 @@ def test_writes_stamp_the_owner(connection):
 
 
 def test_write_stamp_does_not_change_on_later_owner(connection):
-    """owner 写入后不可改（§0.7）：同一行再存一次换个 owner，归属不动。"""
+    """越权 `save` 是**空操作**：owner 与内容都动不了（fix round Important-1）。
+
+    owner 写入后不可改（§0.7）；再补一层物理边界——Bob 用同一个 `project_id` 覆盖
+    Alice 的行时，`ON CONFLICT ... DO UPDATE ... WHERE owner_id = ?` 让整条 UPDATE 不生效。
+    """
 
     docs = SqliteDocumentRepository(connection)
     docs.save(make_document(title="第一版"), owner=ALICE)
@@ -244,4 +254,135 @@ def test_write_stamp_does_not_change_on_later_owner(connection):
         "SELECT owner_id, title FROM documents WHERE project_id = ?", (str(PROJECT),)
     ).fetchone()
     assert row["owner_id"] == str(ALICE)
-    assert row["title"] == "第二版"
+    assert row["title"] == "第一版"
+
+
+def test_rounds_save_cannot_overwrite_another_owners_row(connection):
+    rounds = SqliteRoundRepository(connection)
+    rounds.save(make_round(), owner=ALICE)
+    rounds.save(make_round(), owner=BOB)  # 越权 save：不改他人行
+
+    row = connection.execute(
+        "SELECT owner_id FROM rounds WHERE round_id = ?", (str(RoundId("r1")),)
+    ).fetchone()
+    assert row["owner_id"] == str(ALICE)
+    with pytest.raises(UnknownRound):
+        rounds.get(RoundId("r1"), owner=BOB)
+
+
+def test_materials_delete_is_scoped_to_the_owner(connection):
+    store = SqliteMaterialStore(connection, ids=SeqIds())
+    saved = store.put(
+        project_id=PROJECT, parsed=_material(), sha256="d" * 64,
+        content=b"bytes", now=NOW, owner=ALICE,
+    )
+
+    store.delete(saved.material_id, owner=BOB)  # 别人删不掉
+    assert store.get(saved.material_id, owner=ALICE) is not None
+
+    store.delete(saved.material_id, owner=ALICE)  # 自己能删
+    assert store.get(saved.material_id, owner=ALICE) is None
+
+
+def test_materials_in_place_edits_ignore_other_owners(connection):
+    """`replace_chunks` / `refresh` 都按 owner 收窄 WHERE：别人的行改不动。"""
+
+    store = SqliteMaterialStore(connection, ids=SeqIds())
+    saved = store.put(
+        project_id=PROJECT, parsed=_material(), sha256="e" * 64,
+        content=b"orig", now=NOW, owner=ALICE,
+    )
+
+    owner_scope.set_owner_scope(BOB)
+    with pytest.raises(KeyError):  # 改不到 = 找不到该 owner 的行
+        store.replace_chunks(saved.material_id, _material("换过的正文"))
+    with pytest.raises(KeyError):
+        store.refresh(saved.material_id, parsed=_material("刷新正文"), content=b"new")
+
+    owner_scope.set_owner_scope(ALICE)
+    after = store.get(saved.material_id, owner=ALICE)
+    assert after is not None
+    assert after.parsed.chunks[0].text == "一条需求"
+    assert store.raw_bytes(saved.material_id, owner=ALICE) == b"orig"
+
+
+def test_templates_delete_is_scoped_and_never_removes_builtin(connection):
+    from pmstudio.domain.shared.template import standard_template
+
+    templates = SqliteTemplateRepository(connection)
+    templates.save(standard_template(), builtin=True)
+    templates.save(_custom_template(), builtin=False, owner=ALICE)
+
+    with pytest.raises(UnknownTemplate):
+        templates.delete("tpl-alice", owner=BOB)  # 别人的删不掉
+    assert templates.get("tpl-alice", owner=ALICE) is not None
+
+    with pytest.raises(UnknownTemplate):
+        templates.delete("standard", owner=ALICE)  # builtin 不由此路删
+    assert templates.get("standard", owner=ALICE).builtin is True
+
+    templates.delete("tpl-alice", owner=ALICE)  # 自己的能删
+    with pytest.raises(UnknownTemplate):
+        templates.get("tpl-alice", owner=ALICE)
+
+
+# ── 记忆三仓储跨 owner 读（fix round Important-2）────────────────────────────
+
+
+def test_digest_reads_are_scoped_to_the_owner(connection):
+    digests = SqliteDigestRepository(connection)
+    digests.save(
+        RoundDigest(
+            round_id="r-a",
+            project_id=str(PROJECT),
+            summary="A摘要",
+            sections_touched=(),
+            features_addressed=(),
+            key_outcomes=(),
+        ),
+        owner=ALICE,
+    )
+
+    assert digests.get("r-a", owner=ALICE).summary == "A摘要"
+    assert digests.get("r-a", owner=BOB) is None
+    assert digests.recent(str(PROJECT), owner=ALICE) != ()
+    assert digests.recent(str(PROJECT), owner=BOB) == ()
+
+
+def test_observations_reads_are_scoped_to_the_owner(connection):
+    observations = SqliteObservationRepository(connection)
+    observations.save(
+        RoundObservation(
+            obs_id="obs-a",
+            round_id="r1",
+            project_id=str(PROJECT),
+            obs_type=ObservationType.SEAT_INSIGHT,
+            title="保证金",
+            detail="",
+            source_ref="seat.x:O1",
+        ),
+        owner=ALICE,
+    )
+
+    assert observations.get("obs-a", owner=ALICE) is not None
+    assert observations.get("obs-a", owner=BOB) is None
+    assert observations.recent(str(PROJECT), owner=BOB) == ()
+    assert observations.search(str(PROJECT), "保证金", owner=BOB) == ()
+
+
+def test_inspirations_reads_are_scoped_to_the_owner(connection):
+    inspirations = SqliteInspirationRepository(connection)
+    inspirations.save(
+        InspirationItem(
+            item_id="ins-a",
+            project_id=str(PROJECT),
+            origin=InspirationOrigin.DISCUSSION,
+            statement="灵感",
+        ),
+        owner=ALICE,
+    )
+
+    assert inspirations.get("ins-a", owner=ALICE) is not None
+    assert inspirations.get("ins-a", owner=BOB) is None
+    assert inspirations.recent(str(PROJECT), owner=BOB) == ()
+    assert inspirations.search(str(PROJECT), "灵感", owner=BOB) == ()

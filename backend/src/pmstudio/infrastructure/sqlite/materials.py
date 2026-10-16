@@ -103,11 +103,16 @@ class SqliteMaterialStore:
             schema_version=MATERIAL_SCHEMA_VERSION,
         )
 
-    def delete(self, material_id: str) -> None:
+    def delete(self, material_id: str, *, owner: UserId | None = None) -> None:
+        resolved = require_owner(owner)
         self._connection.execute(
-            "DELETE FROM material_chunks WHERE material_id = ?", (material_id,)
+            "DELETE FROM material_chunks WHERE material_id = ? AND owner_id = ?",
+            (material_id, str(resolved)),
         )
-        self._connection.execute("DELETE FROM materials WHERE material_id = ?", (material_id,))
+        self._connection.execute(
+            "DELETE FROM materials WHERE material_id = ? AND owner_id = ?",
+            (material_id, str(resolved)),
+        )
 
     def replace_chunks(self, material_id: str, parsed: ParsedMaterial) -> MaterialPacket:
         """就地换块（重解析）：**id / 去重键 / 原始字节 / 标题都不动**，只换读法与解析器身份。
@@ -116,16 +121,20 @@ class SqliteMaterialStore:
         """
 
         owner = require_owner(None)
+        if not self._owned(material_id, owner):
+            # 不属于本 owner（或不存在）：一个字都不动，与"找不到"同形。
+            raise KeyError(material_id)
         stamped = _restamp(parsed, material_id)
         self._connection.execute(
-            "DELETE FROM material_chunks WHERE material_id = ?", (material_id,)
+            "DELETE FROM material_chunks WHERE material_id = ? AND owner_id = ?",
+            (material_id, str(owner)),
         )
         self._connection.execute(
             """
             UPDATE materials
             SET parser_id = ?, parser_version = ?, schema_version = ?,
                 truncated = ?, warnings = ?
-            WHERE material_id = ?
+            WHERE material_id = ? AND owner_id = ?
             """,
             (
                 stamped.parser_id,
@@ -134,6 +143,7 @@ class SqliteMaterialStore:
                 int(stamped.truncated),
                 json.dumps(list(stamped.warnings), ensure_ascii=False),
                 material_id,
+                str(owner),
             ),
         )
         self._write_chunks(material_id, stamped, owner=str(owner))
@@ -152,9 +162,13 @@ class SqliteMaterialStore:
         """
 
         owner = require_owner(None)
+        if not self._owned(material_id, owner):
+            # 不属于本 owner（或不存在）：一个字都不动，与"找不到"同形。
+            raise KeyError(material_id)
         stamped = _restamp(parsed, material_id)
         self._connection.execute(
-            "DELETE FROM material_chunks WHERE material_id = ?", (material_id,)
+            "DELETE FROM material_chunks WHERE material_id = ? AND owner_id = ?",
+            (material_id, str(owner)),
         )
         self._connection.execute(
             """
@@ -162,7 +176,7 @@ class SqliteMaterialStore:
             SET origin = ?, title = ?, source_ref = ?, media_type = ?, bytes_len = ?,
                 parser_id = ?, parser_version = ?, schema_version = ?, truncated = ?,
                 warnings = ?, content = ?
-            WHERE material_id = ?
+            WHERE material_id = ? AND owner_id = ?
             """,
             (
                 stamped.origin,
@@ -177,6 +191,7 @@ class SqliteMaterialStore:
                 json.dumps(list(stamped.warnings), ensure_ascii=False),
                 content,
                 material_id,
+                str(owner),
             ),
         )
         self._write_chunks(material_id, stamped, owner=str(owner))
@@ -289,6 +304,17 @@ class SqliteMaterialStore:
             (str(project_id), sha256, str(resolved)),
         ).fetchone()
         return None if row is None else self._packet(row)
+
+    def _owned(self, material_id: str, owner: UserId) -> bool:
+        """这份材料属不属于 `owner`——就地改/删前先问，避免"改了别人的块"这种越权。"""
+
+        return (
+            self._connection.execute(
+                "SELECT 1 FROM materials WHERE material_id = ? AND owner_id = ?",
+                (material_id, str(owner)),
+            ).fetchone()
+            is not None
+        )
 
     def _packet(self, row, *, chunks: tuple[MaterialChunk, ...] | None = None):  # type: ignore[no-untyped-def]
         if chunks is None:

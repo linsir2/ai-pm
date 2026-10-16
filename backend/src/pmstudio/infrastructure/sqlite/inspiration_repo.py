@@ -26,7 +26,7 @@ class SqliteInspirationRepository:
             " (id, project_id, owner_id, origin, statement, created_at)"
             " VALUES (?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(id) DO UPDATE SET"
-            " statement = excluded.statement",
+            " statement = excluded.statement WHERE owner_id = ?",
             (
                 item.item_id,
                 item.project_id,
@@ -34,6 +34,7 @@ class SqliteInspirationRepository:
                 item.origin.value,
                 item.statement,
                 _now(),
+                str(resolved),
             ),
         )
 

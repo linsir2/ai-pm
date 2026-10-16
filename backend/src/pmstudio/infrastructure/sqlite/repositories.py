@@ -102,6 +102,7 @@ class SqliteDocumentRepository:
                 preference_entries = excluded.preference_entries,
                 tombstones = excluded.tombstones,
                 updated_at = excluded.updated_at
+            WHERE owner_id = :owner_id
             """,
             {
                 **row,
@@ -114,6 +115,14 @@ class SqliteDocumentRepository:
                 "tombstones": json.dumps(row["tombstones"], ensure_ascii=False),
             },
         )
+        # 越权 save 是空操作：不属于本 owner 的行既不更新、也不落版本
+        # （`document_versions` 的 INSERT OR IGNORE 若照跑，会往别人项目塞版本行）。
+        owned = self._connection.execute(
+            "SELECT 1 FROM documents WHERE project_id = ? AND owner_id = ?",
+            (str(document.project_id), str(resolved)),
+        ).fetchone()
+        if owned is None:
+            return
         for version in document.versions:
             payload = ser.version_to_row(document.project_id, version)
             self._connection.execute(
@@ -190,6 +199,7 @@ class SqliteRoundRepository:
                 waiting_on = excluded.waiting_on,
                 payload = excluded.payload,
                 updated_at = excluded.updated_at
+            WHERE owner_id = ?
             """,
             (
                 str(round_.round_id),
@@ -200,6 +210,7 @@ class SqliteRoundRepository:
                 payload,
                 round_.created_at.isoformat(),
                 _now(),
+                str(resolved),
             ),
         )
 
@@ -252,6 +263,7 @@ class SqliteExplorationRepository:
                 status = excluded.status,
                 payload = excluded.payload,
                 updated_at = excluded.updated_at
+            WHERE owner_id = ?
             """,
             (
                 str(exploration.exploration_id),
@@ -262,6 +274,7 @@ class SqliteExplorationRepository:
                 payload,
                 exploration.created_at.isoformat(),
                 _now(),
+                str(resolved),
             ),
         )
 
@@ -327,6 +340,7 @@ class SqliteDiscussionRepository:
                 status = excluded.status,
                 payload = excluded.payload,
                 updated_at = excluded.updated_at
+            WHERE owner_id = ?
             """,
             (
                 str(discussion.discussion_id),
@@ -336,6 +350,7 @@ class SqliteDiscussionRepository:
                 payload,
                 discussion.created_at.isoformat(),
                 _now(),
+                str(resolved),
             ),
         )
 
@@ -389,12 +404,14 @@ class SqliteEvidenceRepository:
             ON CONFLICT(project_id) DO UPDATE SET
                 payload = excluded.payload,
                 updated_at = excluded.updated_at
+            WHERE owner_id = ?
             """,
             (
                 str(ledger.project_id),
                 str(resolved),
                 json.dumps(ser.ledger_to_json(ledger), ensure_ascii=False),
                 _now(),
+                str(resolved),
             ),
         )
 
@@ -684,12 +701,13 @@ class SqliteMemoryRepository:
             "INSERT INTO project_memory (project_id, owner_id, payload, updated_at)"
             " VALUES (?, ?, ?, ?)"
             " ON CONFLICT(project_id) DO UPDATE SET payload = excluded.payload,"
-            " updated_at = excluded.updated_at",
+            " updated_at = excluded.updated_at WHERE owner_id = ?",
             (
                 str(memory.project_id),
                 str(resolved),
                 json.dumps(ser.memory_to_payload(memory), ensure_ascii=False),
                 _now(),
+                str(resolved),
             ),
         )
 
@@ -711,7 +729,7 @@ class SqliteTemplateRepository:
             " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(template_id) DO UPDATE SET title = excluded.title,"
             " spec = excluded.spec, builtin = excluded.builtin,"
-            " updated_at = excluded.updated_at",
+            " updated_at = excluded.updated_at WHERE owner_id IS ?",
             (
                 template.template_id,
                 owner_id,
@@ -720,6 +738,7 @@ class SqliteTemplateRepository:
                 1 if builtin else 0,
                 _now(),
                 _now(),
+                owner_id,
             ),
         )
 
@@ -755,16 +774,22 @@ class SqliteTemplateRepository:
             builtin=bool(row["builtin"]),
         )
 
-    def delete(self, template_id: str) -> None:
+    def delete(self, template_id: str, *, owner: UserId | None = None) -> None:
         """删一行。删不掉就是"这个 id 不在库里"——抛出去，不静默成功。
 
         不碰 `documents`：项目行里存的是模板的**全文 JSON 快照**（`template_to_json`），
         不是 id 引用，两张表没有外键，所以这里不需要级联、也不需要引用检查
         （`02` §11.0.70）。
+
+        **按 owner 收窄 + `builtin = 0`**（多用户改造 fix round）：builtin 行
+        （owner NULL、人人可见）不由此路删——`builtin = 0` 与 `owner_id = ?` 各挡一道；
+        用例层 `BuiltinTemplateProtected` 是主防线，这里是物理边界。
         """
 
+        resolved = require_owner(owner)
         cursor = self._connection.execute(
-            "DELETE FROM templates WHERE template_id = ?", (template_id,)
+            "DELETE FROM templates WHERE template_id = ? AND owner_id = ? AND builtin = 0",
+            (template_id, str(resolved)),
         )
         if cursor.rowcount == 0:
             raise UnknownTemplate(template_id)

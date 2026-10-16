@@ -26,7 +26,7 @@ class SqliteObservationRepository:
             " (id, project_id, owner_id, round_id, obs_type, title, detail, source_ref)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(id) DO UPDATE SET"
-            " title = excluded.title, detail = excluded.detail",
+            " title = excluded.title, detail = excluded.detail WHERE owner_id = ?",
             (
                 observation.obs_id,
                 observation.project_id,
@@ -36,6 +36,7 @@ class SqliteObservationRepository:
                 observation.title,
                 observation.detail,
                 observation.source_ref,
+                str(resolved),
             ),
         )
 
