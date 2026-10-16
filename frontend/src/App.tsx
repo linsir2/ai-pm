@@ -51,9 +51,27 @@ const THEME_KEY = "pmstudio-theme";
 export default function App() {
   return (
     <AuthProvider>
+      <ThemeGate />
       <AppRoot />
     </AuthProvider>
   );
+}
+
+/**
+ * 主题在**登录之前**就要落到 `<html>` 上。
+ *
+ * 主题 state 住在 `Workspace`，而 `Workspace` 登录后才渲染——所以原本只有登录之后
+ * `data-theme` 才被写下去：设了暗色的人登出（或者压根还没登进去）看到的是一片亮屏。
+ * 这里只读一次 localStorage 把存量主题先铺上；真正的切换开关仍在 `Workspace` 里
+ * （登录屏不放开关：主题只有一个来源，别造第二个真相源）。
+ */
+function ThemeGate() {
+  useEffect(() => {
+    if (window.localStorage.getItem(THEME_KEY) === "dark") {
+      document.documentElement.dataset.theme = "dark";
+    }
+  }, []);
+  return null;
 }
 
 function AppRoot() {

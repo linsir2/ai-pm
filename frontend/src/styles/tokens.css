@@ -15,7 +15,9 @@
   --on-primary: #ffffff;
 
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
-  --font-doc: "Noto Serif SC", "Instrument Serif", "Songti SC", serif;
+  /* Instrument Serif 只在拉丁字符上生效（latin 子集），中文交给紧随其后的 Noto Serif SC */
+  --font-doc: "Instrument Serif", "Noto Serif SC", "Songti SC", serif;
+  /* JetBrains Mono 自托管（@fontsource latin-400/500）——证据编号靠它才等宽得准 */
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 
   --step-0: 11px;
@@ -47,6 +49,10 @@
   --dur-short: 160ms;
   --dur-mid: 240ms;
 
+  /* 登录屏左栏（真实产出那块纸的底）：比 --app-bg 深一档，同色就分不出栏。
+     刻意是无彩色底——纯品牌色墙是登录屏最响的 AI 味信号（DESIGN.md 同样禁渐变）。 */
+  --proof-bg: #e3e6ee;
+
   --hairline: 1px solid var(--border);
   --tint-primary: color-mix(in srgb, var(--primary) 8%, transparent);
   --tint-warn: color-mix(in srgb, var(--gap) 10%, transparent);
@@ -70,4 +76,6 @@
   --success: #34d399;
   --on-primary: #17161a;
   --shadow-drawer: -10px 0 28px rgb(0 0 0 / 40%);
+  /* 暗色下反过来：左栏比 app-bg 亮一档，靠"抬起来"而不是"压下去"分栏 */
+  --proof-bg: #161d2b;
 }

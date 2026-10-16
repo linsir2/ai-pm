@@ -1638,6 +1638,9 @@ details.drawer__history[open] > summary::before {
 
 .chip {
   font-family: var(--font-mono);
+  /* `E12` / `E204` 是编号不是数量，但 DESIGN.md 承诺编号一律等宽数字——
+     此前只有 `.mono` 带了 tabular-nums，胶囊漏了，两串编号并排时宽度会跳。 */
+  font-variant-numeric: tabular-nums;
   font-size: var(--step-0);
   line-height: 1.7;
   padding: 0 4px;
@@ -2114,32 +2117,250 @@ details.drawer__history[open] > summary::before {
   color: var(--empty);
 }
 
-/* 登录 / 注册屏：**不复用** `.doc__inner`——它 `min-height: 100%`，会把卡片拉成满屏高、
-   表单贴顶、下面一大片空白。这里另起一个居中容器，卡片按内容高度。
-   表面处理（纸白 + 描边 + 圆角 + 内边距）仍与阅读屏同一套令牌。 */
+/* ── 登录 / 注册屏 ─────────────────────────────────────────────────────────
+   三个参考揉成的一个：UI Craft 的 auth recipe（表单列 360–400px、label 在上、
+   错误紧贴字段、主色只出现在提交按钮）+ DesignMD 的圆角纪律（6–8px 才"严肃"，
+   16px 显得消费级，所以这里用 --radius-md 而不是 --radius-lg）+
+   "selective truth"（左栏摊开产品真实产出的一块，不做宣传图）。
+
+   三条硬约束（DESIGN.md 明令）：无渐变、无阴影堆叠、无"居中大标题+三列图标卡"。
+   所以左栏是**中性灰底**（纯品牌色墙是 AI 味最响的信号），卡片**不带阴影**。
+   ---------------------------------------------------------------------- */
+
 .auth {
   display: grid;
-  place-items: center;
-  min-height: 100%;
-  padding: var(--space-6) var(--space-4);
+  grid-template-columns: minmax(0, 1fr) 420px;
+  min-height: 100vh;
 }
 
-.auth__card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+/* 左栏：中性灰底上一块纸。表单列 420px 是 UI Craft 那个 360–400 区间的上限。 */
+.auth__proof {
+  background: var(--proof-bg);
+  border-inline-end: 1px solid var(--border);
+  padding: var(--space-7) var(--space-6);
+  display: grid;
+  place-items: center;
+}
+
+.proof {
   width: 100%;
-  max-width: 360px;
-  padding: var(--space-6);
+  max-width: 620px;
   background: var(--paper);
   border: var(--hairline);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
+  padding: var(--space-7);
+}
+
+.proof__crumb {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--step-0);
+  color: var(--empty);
+}
+
+.proof__ver {
+  margin-inline-start: auto;
+}
+
+.proof__title {
+  font-family: var(--font-doc);
+  font-size: var(--step-6);
+  font-weight: 600;
+  margin: var(--space-2) 0 0;
+}
+
+.proof__section {
+  font-family: var(--font-doc);
+  font-size: var(--step-4);
+  font-weight: 600;
+  margin: var(--space-5) 0 var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: var(--hairline);
+}
+
+.proof__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.proof__item {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  font-size: var(--step-2);
+  line-height: 1.75;
+}
+
+.proof__text { flex: 1; }
+
+/* 未决项：斜杠感的左边线 + 破折号 chip 语气，和"已确认内容"一眼能分开 */
+.proof__item--open .proof__text { color: var(--open); }
+
+.proof__where {
+  display: inline-block;
+  margin-inline-start: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
+  color: var(--empty);
+}
+
+.proof__refs {
+  display: inline-flex;
+  gap: 3px;
+  flex: none;
+  margin-top: 3px;
+}
+
+.proof__note {
+  margin: var(--space-5) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--border);
+  font-size: var(--step-0);
+  line-height: 1.7;
+  color: var(--empty);
+}
+
+/* 右栏：表单。不用 `.shell--plain`——它预留 48px 的 topbar 行，登录屏没有 topbar。 */
+.auth__entry {
+  display: grid;
+  place-items: center;
+  padding: var(--space-6) var(--space-5);
+  background: var(--app-bg);
+}
+
+.auth__card {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: var(--hairline);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+}
+
+.auth__mark {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.auth__name {
+  font-family: var(--font-doc);
+  font-size: var(--step-4);
+  font-weight: 600;
+}
+
+.auth__title {
+  font-family: var(--font-doc);
+  font-size: var(--step-5);
+  font-weight: 600;
+  margin: var(--space-5) 0 var(--space-1);
+}
+
+.auth__sub {
+  margin: 0 0 var(--space-5);
+  font-size: var(--step-1);
+  line-height: 1.7;
+  color: var(--open);
+}
+
+.auth__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .auth__label {
+  margin-top: var(--space-3);
   font-size: var(--step-1);
   color: var(--open);
+}
+
+.auth__form > .banner { margin-top: var(--space-3); }
+
+/* 审批账本：提前讲清"注册之后会发生什么"，别让人注册完才撞墙 */
+.ledger {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: var(--hairline);
+}
+
+.ledger__cap {
+  margin: 0 0 var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
+  letter-spacing: .06em;
+  color: var(--empty);
+}
+
+.ledger__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ledger__step {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.ledger__no {
+  flex: none;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--step-0);
+  line-height: 1.7;
+  padding: 0 5px;
+  border: var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--open);
+}
+
+.ledger__step--now .ledger__no {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--tint-primary);
+}
+
+.ledger__d {
+  font-size: var(--step-1);
+  line-height: 1.7;
+}
+
+.ledger__step--now .ledger__d { font-weight: 600; }
+
+/* 说明用 em，不另起一个 class —— 斜体在这里就是"括注"的语气 */
+.ledger__d em {
+  font-style: normal;
+  margin-inline-start: var(--space-2);
+  color: var(--open);
+}
+
+.ledger__step--now .ledger__d em { font-weight: 400; }
+
+.auth__foot {
+  margin: var(--space-5) 0 0;
+  font-size: var(--step-0);
+  line-height: 1.7;
+  color: var(--empty);
+}
+
+/* 320px：左栏整个撤掉，表单自己活着（UI Craft 的那条硬要求） */
+@media (max-width: 1040px) {
+  .auth { grid-template-columns: minmax(0, 1fr); }
+  .auth__proof { display: none; }
 }
 
 .input__box {
@@ -2206,6 +2427,22 @@ details.drawer__history[open] > summary::before {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* 提交按钮：登录屏唯一该出现强调色的地方（UI Craft 的"眯眼测试"）。
+   **必须排在 `.btn` 之后**——同优先级靠后者赢，放前面会被 `.btn` 的 surface 底色覆盖。 */
+.auth__submit {
+  margin-top: var(--space-4);
+  padding: 10px;
+  font-weight: 600;
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+
+.auth__submit:hover:not(:disabled) { background: var(--primary-dark); }
+
+.auth__submit:disabled { opacity: .55; cursor: default; }
+
 
 .btn--primary {
   background: var(--primary);
