@@ -226,7 +226,7 @@ tests/                architecture / contracts / domain / application / infrastr
 与 12+ 个真实模块）：
 
 ```
-harness/model/        contracts.py envelope.py structured.py normalize.py failure.py jsonio.py prompt_log.py
+harness/model/        contracts.py envelope.py structured.py normalize.py failure.py jsonio.py prompt_log.py resilience.py
 harness/agents/       agent.py
 harness/events/       schemas.py bus.py
 harness/prompts/      analyzer.md inquiry.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md discussion_say.md discussion_cards.md

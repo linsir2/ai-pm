@@ -17,6 +17,7 @@ dependencies = [
     "python-multipart>=0.0.20",
     "uvicorn>=0.47",
     "argon2-cffi>=25.1.0",
+    "pybreaker>=1.4,<2",
 ]
 
 [dependency-groups]

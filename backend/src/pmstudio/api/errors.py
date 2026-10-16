@@ -45,6 +45,9 @@ CODE_STATUS = {
     "forbidden": 403,
     "username_taken": 409,
     "unknown_user": 404,
+    # 过载保护主动卸载（熔断开闸 / 隔离舱满 / 重试预算耗尽）= 503，不是 502：
+    # 上游可能好着，是我们没让它发出去。客户端该"过会儿再来"，不是重试上游。
+    "model_shed": 503,
     # 仓储拿不到 owner 上下文 = 程序员错误（漏设 scope），刻意 500 级，绝不退成 404
     "missing_owner_scope": 500,
 }

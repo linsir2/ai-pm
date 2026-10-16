@@ -114,6 +114,12 @@ def create_app(services: ApiServices) -> FastAPI:
     @app.exception_handler(ApplicationError)
     async def _handle(request: Request, error: Exception) -> JSONResponse:
         assert isinstance(error, (DomainError, ApplicationError))
-        return JSONResponse(status_code=status_for(error), content=body_for(error))
+        headers = {}
+        retry_after = getattr(error, "retry_after", None)
+        if status_for(error) == 503 and retry_after is not None:
+            headers["Retry-After"] = str(retry_after)
+        return JSONResponse(
+            status_code=status_for(error), content=body_for(error), headers=headers
+        )
 
     return app

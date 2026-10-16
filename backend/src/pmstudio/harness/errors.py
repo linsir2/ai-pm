@@ -56,6 +56,8 @@ class FetchRefused(ApplicationError):
         super().__init__(message, code="fetch_refused", tool_id=tool_id, **details)
 
 
+
+
 class ModelCallFailed(ApplicationError):
     """网关调用本身失败（超时 / 鉴权 / 供应商错误）。
 
@@ -69,3 +71,21 @@ class ModelCallFailed(ApplicationError):
         super().__init__(message, code="model_call_failed", purpose=purpose, **details)
         self.purpose = purpose
         self.hint = hint
+class ModelShed(ModelCallFailed):
+    """**过载保护主动拒绝了这次调用**（熔断开闸 / 隔离舱满 / 重试预算耗尽）。
+
+    和 `ModelCallFailed` 分开是有意的：那个说"上游真的失败了"（502），
+    这个说"**我们没让它发出去**"——上游可能完全健康，是我们自己判断现在接不了。
+    语义上属于 503 而不是 502：客户端应该**过一会儿再来**，不是重试上游。
+    """
+
+    def __init__(
+        self, message: str, *, purpose: str, retry_after: int = 30, **details: object
+    ) -> None:
+        super().__init__(message, purpose=purpose, **details)
+        self.code = "model_shed"
+        #: 告诉客户端**多久之后再试**（秒）。给一个数而不是让人猜：
+        #: 熔断的恢复窗口是配置值，客户端不知道就该硬重试，把我们刚卸掉的负载又打回来。
+        self.retry_after = retry_after
+
+

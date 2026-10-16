@@ -118,12 +118,32 @@ def test_accounting_repairs_are_counted_in_their_own_book():
     assert "另算一本账" in text, "文档里那句口径不见了；并进主账的话 66 要改成 68"
 
 
-def test_the_backoff_schedule_is_exactly_one_and_three_seconds():
-    """退避时刻是**要被断言的行为**（`test_llm.py` 断言 `slept == [1.0, 3.0]`），
-    但那个数字本身**从来没有被任何测试钉过**——改掉它只会让那些断言跟着一起变绿。"""
+def test_退避基线仍是_1_与_3_但等待值带抖动():
+    """退避**基线**仍是被钉的行为；等待值不再钉死——它现在带抖动（P2）。
+
+    高并发 P2 之后 `slept` 是 `jittered_backoff(基线)`，落在基线 ±50% 内。
+    钉死具体秒数等于把"重试风暴"这个 bug 钉回来：固定退避会让所有同时失败的
+    调用方**在同一刻**重试，恰好在上游最需要喘息的时刻再打它一遍。
+    `test_gateway_resilience.py::test_退避带抖动` 钉的是新性质（有分散、不固定）。
+
+    退避基线本身仍然是契约：改它会让上界（1+3 秒 + 三次尝试）整体漂移。
+    """
 
     assert litellm_module.BACKOFF_SECONDS == (1.0, 3.0)
-    assert litellm_module.DEFAULT_TIMEOUT == 90.0
+
+
+def test_默认模型超时按真跑数据定为_150秒():
+    """**需求变更（2026-10-16，高并发 P2）**：90 → 150，理由是实测分布。
+
+    167 次成功调用的耗时：p50 18.5s / p95 89.9s / p99 131.3s / **最大 143.0s**。
+    90 秒会把最慢那一两条**本来能成功**的调用判死；150 秒覆盖全部已观测到的成功。
+    同时 `.env.example` 从 300 收到 150——失败调用的耗时中位恰好是 300.2s、
+    最大 900.5s（= 300 × 3 次尝试），也就是说 300 秒只是在多等 107 秒
+    去看一个必然超时的结果，并且**占住隔离舱的槽位**。
+    病态挂起由熔断负责兜底，不是靠无限拉长单次超时。
+    """
+
+    assert litellm_module.DEFAULT_TIMEOUT == 150.0
 
 
 # ── 归属：控制平面的上限在 harness，产品上限不许进去 ────────────────────────────
@@ -239,7 +259,8 @@ def test_prompt_character_budgets():
 
     assert use_cases.MAX_MATERIAL_BYTES == 20 * 1024 * 1024
     assert use_cases.MAX_MATERIALS_PER_PROJECT == 50
-    assert litellm_module.DEFAULT_TIMEOUT == 90.0
+    # 同上：默认超时 P2 起按真跑数据定为 150s（理由见 test_默认模型超时…）
+    assert litellm_module.DEFAULT_TIMEOUT == 150.0
     from pmstudio.application import context as context_module
 
     assert context_module.MATERIAL_BUDGET == 4000

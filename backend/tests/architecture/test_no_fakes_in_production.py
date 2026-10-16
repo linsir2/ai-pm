@@ -54,6 +54,16 @@ ALLOWED_TEST_FAKES: dict[str, str] = {
         "注入的 sleeper：退避时刻（1s / 3s）是**要被断言的行为**，真睡会让测试慢到"
         "不可用。生产侧的 `asyncio.sleep` 从不被它替换（M4b 起那是构造参数）。"
     ),
+    "fake": (
+        "`test_gateway_resilience.py` 里替换 `acompletion` 的桩：韧性这几条断言的是"
+        "**网关有没有真的走熔断/隔离舱/预算**（比如\"闸门开了之后一个上游包都不发\"），"
+        "要数请求次数就不能不发真请求——真打上游既慢又不确定。"
+        "被验的代码路径（`LiteLLMGateway._call`）是**真的**。"
+    ),
+    "_fake_response": (
+        "上行那个桩 `fake` 的回包形状：litellm 只需要 `choices[0].message.content`，"
+        "而完整响应对象有一堆与断言无关的字段。"
+    ),
     "use_fake_model": (
         "`test_container.py` 在断言**守卫本身**：生产容器**没有**这个开关。"
         "这条断言必须提到这个名字，提到它才是那条断言。"

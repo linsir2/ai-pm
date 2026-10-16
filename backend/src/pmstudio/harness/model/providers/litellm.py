@@ -12,10 +12,21 @@ from datetime import UTC, datetime
 
 from litellm import acompletion  # noqa: E402
 
-from pmstudio.harness.errors import ModelCallFailed
+from pmstudio.harness.errors import ModelCallFailed, ModelShed
 from pmstudio.harness.model import failure
 from pmstudio.harness.model.contracts import ModelCallRecorder, ModelReply, ModelRequest
 from pmstudio.harness.model.jsonio import is_json, strip_fence
+from pmstudio.harness.model.resilience import (  # noqa: E402
+    BreakerConfig,
+    Bulkhead,
+    BulkheadConfig,
+    BulkheadFullError,
+    CircuitBreaker,
+    CircuitOpenError,
+    RetryBudget,
+    RetryBudgetConfig,
+    jittered_backoff,
+)
 
 #: 结构化输出的两种写法。`json_schema`（默认）能帮模型守规；供应商不吃它时退到 `json_object`。
 JSON_SCHEMA = "json_schema"
@@ -45,9 +56,17 @@ def response_format_for(mode: str, *, schema_name: str, schema: Mapping[str, obj
 #: 这四个数与它们的文档依据，由 `tests/contracts/test_limits.py` 钉住。
 
 MAX_ATTEMPTS = 3
+
+#: **退避带抖动**（高并发 P2）。原先是固定 `(1.0, 3.0)`：所有同时失败的调用方
+#: 在同一时刻一起重试——重试风暴恰好在最需要上游喘息的时刻把它再打一遍。
+#: 这里只给基线，实际等待由 `jittered_backoff()` 在 ±50% 内散开。
 BACKOFF_SECONDS = (1.0, 3.0)
 #: 默认每次调用的墙钟上限（秒）。真值由 `Settings.model_timeout` 传进来（默认 90）。
-DEFAULT_TIMEOUT = 90.0
+#: 单次上游调用的墙钟上限。**从真跑数据定的**：167 次成功调用的耗时是
+#: p50 18.5s / p95 89.9s / p99 131.3s / **最大 143.0s**。所以 150s 能覆盖全部
+#: 已观测到的成功，而 `.env` 里配的 300s 只是在多等 107 秒去看一个必然超时的结果
+#: （失败调用的耗时中位恰好是 300.2s、最大 900.5s = 300 × 3 次尝试）。
+DEFAULT_TIMEOUT = 150.0
 
 
 class LiteLLMGateway:
@@ -63,6 +82,12 @@ class LiteLLMGateway:
         recorder: ModelCallRecorder | None = None,
         model_params: Mapping[str, object] | None = None,
         sleeper: Callable[[float], Awaitable[None]] | None = None,
+        bulkhead: Bulkhead | None = None,
+        breaker: CircuitBreaker | None = None,
+        retry_budget: RetryBudget | None = None,
+        breaker_config: BreakerConfig | None = None,
+        bulkhead_config: BulkheadConfig | None = None,
+        retry_budget_config: RetryBudgetConfig | None = None,
     ) -> None:
         self._model = model
         self._api_key = api_key
@@ -70,6 +95,13 @@ class LiteLLMGateway:
         self._timeout = timeout
         self._max_attempts = max_attempts
         self._backoff = backoff
+        # 韧性层（高并发 P2）。都可注入：测试传替身，生产用默认参数。
+        # **三者都只包住上游调用这一层**，不进 domain。
+        self._bulkhead_config = bulkhead_config or BulkheadConfig()
+        self._breaker_config = breaker_config or BreakerConfig()
+        self._bulkhead = bulkhead or Bulkhead(self._bulkhead_config)
+        self._breaker = breaker or CircuitBreaker(self._breaker_config)
+        self._retry_budget = retry_budget or RetryBudget(retry_budget_config or RetryBudgetConfig())
         # 留样（`02` §5.3）：默认不接——没给 recorder 就什么都不记
         self._recorder = recorder
         # 供应商特有参数（如 DashScope 关思考）：当**基底**用，我们自己的键永远覆盖它
@@ -109,11 +141,52 @@ class LiteLLMGateway:
         if self._api_base:
             kwargs["api_base"] = self._api_base
         response = None
+        self._retry_budget.record_original()
         for attempt in range(1, self._max_attempts + 1):
             attempt_started = time.monotonic()
+            # **熔断先判**：已经开闸就别占隔离舱的槽位、别发网络请求。
             try:
-                response = await acompletion(**kwargs)
+                self._breaker.allow()
+            except CircuitOpenError as open_error:
+                raise ModelShed(
+                    "模型调用已熔断：上游正在恢复中，稍后再试",
+                    purpose=request.purpose,
+                    # 重试窗口就是熔断的恢复窗口——客户端照这个数等，别硬重试。
+                    retry_after=int(self._breaker_config.recovery_timeout),
+                    cause=str(open_error),
+                    model=self._model,
+                    attempts=attempt - 1,
+                ) from open_error
+            try:
+                # **隔离舱**：同时在飞的上游调用数有上限，超出排队，排队超预算就快速失败。
+                # 熔断包在**舱内侧**：`call_upstream` 里含熔断判定与记账，
+                # 探针必须是那次真实调用（见 `CircuitBreaker.call_upstream` 的注释）。
+                response = await self._bulkhead.run(
+                    lambda: self._breaker.call_upstream(lambda: acompletion(**kwargs))
+                )
                 break
+            except BulkheadFullError as full_error:
+                # **舱满**：我们主动不接。**这不是上游失败**——把它混进下面的
+                # 统一转译会变成 502，客户端以为该重试上游，而问题在我们这边。
+                raise ModelShed(
+                    f"模型并发已满，请 {int(self._bulkhead_config.queue_wait_seconds)} 秒后重试",
+                    purpose=request.purpose,
+                    retry_after=int(self._bulkhead_config.queue_wait_seconds) or 1,
+                    cause=str(full_error),
+                    model=self._model,
+                    capacity=self._bulkhead_config.capacity,
+                    in_flight=self._bulkhead.in_flight,
+                ) from full_error
+            except CircuitOpenError as open_error:
+                # 舱**内侧**的熔断（`allow()` 那一道只挡住"还没进舱"的）：
+                # 这一路上游可能刚刚连续失败够数，开闸就发生在两次调用之间。
+                raise ModelShed(
+                    "模型调用已熔断：上游正在恢复中，稍后再试",
+                    purpose=request.purpose,
+                    retry_after=int(self._breaker_config.recovery_timeout),
+                    cause=str(open_error),
+                    model=self._model,
+                ) from open_error
             except Exception as error:  # noqa: BLE001 —— 供应商异常类型太多，统一转译
                 # **每一次尝试都留样**（含"重试后成功"的那几次失败）：查"为什么超时/为什么重试"
                 # 要看每一次尝试，只有最后一次失败被记下来的话，那次 120 秒会看起来像一次慢成功。
@@ -156,8 +229,14 @@ class LiteLLMGateway:
                             error=f"{type(second).__name__}: {second}",
                         )
                         error = second
-                if failure.classify(error).retryable and attempt < self._max_attempts:
-                    await self._sleep(self._backoff[attempt - 1])
+                if (
+                    failure.classify(error).retryable
+                    and attempt < self._max_attempts
+                    # **重试预算**：没令牌就不重试。直接失败比放大上游好。
+                    and self._retry_budget.take()
+                ):
+                    # 退避**带抖动**（P2）：固定退避会让所有调用方同一刻重试 = 重试风暴
+                    await self._sleep(jittered_backoff(self._backoff[attempt - 1]))
                     continue
                 raise ModelCallFailed(
                     f"模型调用失败：{type(error).__name__}"

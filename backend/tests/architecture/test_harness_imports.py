@@ -18,14 +18,21 @@ from tests.architecture.guards import (
 
 HARNESS = SRC / PACKAGE / "harness"
 
-#: 允许出现在 harness 里的第三方。两个，理由：
+#: 允许出现在 harness 里的第三方。三个，理由：
 #: - `pydantic`：输出归一化引擎的对象就是 pydantic 模型（model_fields / annotation /
 #:   model_validate / errors()），把它抽象掉是为不存在的需求建抽象。
 #: - `litellm`：**供应商调用本身就是模型层的职责**（`model/providers/litellm.py`）。
 #:   不把它搬进来，`ModelGateway` 就只是个协议，实现仍在仓外——"模型层可独立抽出"
 #:   这个目标等于没达成。换 provider 要改 harness 是真的，但控制平面知道
 #:   "调谁"跟知道"产品有哪些章节"完全是两回事。
-ALLOWED_THIRD_PARTY = frozenset({"pydantic", "litellm"})
+#: - `pybreaker`：熔断的状态机（高并发 P2，2026-10-16）。熔断的**判据自己写只有
+#:   二十行，但那是"半开 / 恢复超时 / 计数清零"的计时状态机**——自己写就要自己
+#:   调试它，而这部分出错的表现是"偶发地把请求多放行或误拒"，极难定位。
+#:   熔断包在**模型调用这一层**（`model/resilience.py`），和 litellm 同一层理由：
+#:   它是"怎么安全地调外部依赖"的控制平面，不是产品知识。
+#:   注意它的判据是**累计失败计数、成功即清零**，没有滑动窗口失败率——
+#:   这一点是实测确认的，写在 `CircuitBreaker` 的文档串里。
+ALLOWED_THIRD_PARTY = frozenset({"pydantic", "litellm", "pybreaker"})
 
 #: 标准库全集由解释器给出，不手抄一份（手抄必然漏，然后漏的那条就成了免检通道）。
 _STDLIB = frozenset(sys.stdlib_module_names)

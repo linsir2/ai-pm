@@ -484,7 +484,11 @@ async def test_gateway_backs_off_when_the_refusal_keeps_coming(monkeypatch):
 
     # 第 1 次 json_schema → 回落那次 json_object → 第 2、3 次都是 json_object
     assert calls["count"] == 4
-    assert slept == [1.0, 3.0]
+    # **需求变更（P2）**：等待值带抖动，不再是死的 [1.0, 3.0]——钉死它等于把
+    # 重试风暴钉回来（所有调用方同一刻重试）。这里钉的是"落在基线 ±50% 且有分散"，
+    # 性质由 test_gateway_resilience.py 覆盖，这里只确认确实退避过两次。
+    assert len(slept) == 2
+    assert all(abs(got - base) <= base * 0.5 for got, base in zip(slept, (1.0, 3.0), strict=True))
 
 
 async def test_gateway_falls_back_to_json_object_when_json_schema_is_refused(monkeypatch):
@@ -660,7 +664,10 @@ async def test_gateway_retries_transient_errors_then_succeeds(monkeypatch):
 
     assert reply.text == '{"ok": true}'
     assert calls["count"] == 2
-    assert slept == [1.0]
+    # P2 起等待值带抖动，不再是死的 1.0（同一文件上面那条用例已经因为同样的理由
+    # 改过一次断言——那是在钉机制不是钉行为）。这里钉"确实退避过一次"。
+    assert len(slept) == 1
+    assert abs(slept[0] - 1.0) <= 0.5
 
 
 async def test_gateway_records_every_attempt_including_the_failed_one(monkeypatch):
