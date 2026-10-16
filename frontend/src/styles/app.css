@@ -2090,6 +2090,58 @@ details.drawer__history[open] > summary::before {
   line-height: 1.6;
 }
 
+/* 单行输入框。与下面的 `.input__box`（多行 composer）同一套语言——同边框、同聚焦环，
+   只把高度和圆角收到单行。**这一条曾经根本不存在**：登录/注册与功能块"新增字段"
+   三处都在用它，于是全是浏览器原生外观（多用户改造 fix wave 补上）。 */
+.input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--app-bg);
+  font-size: var(--step-3);
+  line-height: 1.5;
+}
+
+.input:focus-visible {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--empty);
+}
+
+/* 登录 / 注册屏：**不复用** `.doc__inner`——它 `min-height: 100%`，会把卡片拉成满屏高、
+   表单贴顶、下面一大片空白。这里另起一个居中容器，卡片按内容高度。
+   表面处理（纸白 + 描边 + 圆角 + 内边距）仍与阅读屏同一套令牌。 */
+.auth {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: var(--space-6) var(--space-4);
+}
+
+.auth__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: 360px;
+  padding: var(--space-6);
+  background: var(--paper);
+  border: var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.auth__label {
+  font-size: var(--step-1);
+  color: var(--open);
+}
+
 .input__box {
   width: 100%;
   min-height: 56px;

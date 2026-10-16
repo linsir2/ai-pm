@@ -49,14 +49,15 @@ export function LoginView() {
   return (
     <div className="shell shell--plain">
       <main className="doc" aria-label={mode === "login" ? "登录" : "注册"}>
-        <form className="stack" style={{ gap: "var(--space-3)", maxWidth: 340 }} onSubmit={submit}>
+        <div className="auth">
+        <form className="auth__card stack" onSubmit={submit}>
           <span className="wordmark">
             <Logo />
             <span className="wordmark__name">PM Studio</span>
           </span>
           <h1 className="muted small">{mode === "login" ? "登录" : "注册"}</h1>
 
-          <label htmlFor="auth-username">用户名</label>
+          <label className="auth__label" htmlFor="auth-username">用户名</label>
           <input
             id="auth-username"
             className="input"
@@ -65,7 +66,7 @@ export function LoginView() {
             onChange={(event) => setUsername(event.target.value)}
           />
 
-          <label htmlFor="auth-password">密码</label>
+          <label className="auth__label" htmlFor="auth-password">密码</label>
           <input
             id="auth-password"
             className="input"
@@ -85,6 +86,7 @@ export function LoginView() {
             {mode === "login" ? "没有账号？注册" : "已有账号？登录"}
           </button>
         </form>
+        </div>
       </main>
     </div>
   );
