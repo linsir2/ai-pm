@@ -14,6 +14,8 @@ import sqlite3
 
 import pytest
 
+from pmstudio.bootstrap.container import build_container
+from pmstudio.bootstrap.settings import Settings
 from pmstudio.infrastructure.sqlite import database
 from tests.support.builders import NOW
 
@@ -168,8 +170,12 @@ CREATE TABLE users (
 """
 
 
-def _old_v12_db(path, *, content: bool) -> None:
-    """手建一个 v12 形状的库：可选塞 1 项目 + 1 轮次 + 内置/自建模板。"""
+def _old_v12_db(path, *, content: bool, templates: bool = True) -> None:
+    """手建一个 v12 形状的库：可选塞 1 项目 + 1 轮次 + 内置/自建模板。
+
+    `templates=False` 供真调 `build_container` 的用例用——那边的模板加载器要真 spec，
+    这里塞的 `'{}'` 占位行会把它噎住（模板本身不是本任务的关注点）。
+    """
 
     old = sqlite3.connect(path)
     old.executescript(OLD_V12_DDL)
@@ -185,6 +191,7 @@ def _old_v12_db(path, *, content: bool) -> None:
             " created_at, updated_at) VALUES ('r1', 'p1', 'done', 'none', '{}', ?, ?)",
             (NOW.isoformat(), NOW.isoformat()),
         )
+    if templates:
         old.execute(
             "INSERT INTO templates (template_id, title, spec, builtin, created_at,"
             " updated_at) VALUES ('t-builtin', '内置', '{}', 1, ?, ?)",
@@ -323,5 +330,65 @@ def test_migration_is_idempotent(tmp_path):
             "SELECT owner_id FROM documents WHERE project_id = 'p1'"
         ).fetchone()[0]
         == ADMIN_ID
+    )
+    connection.close()
+
+
+def test_build_container_fuses_when_orphans_cannot_be_backfilled(tmp_path):
+    """真调组装点，不本地复刻次序：孤儿行 + 没配 FIRST_ADMIN → 起不来、点名表。
+
+    这条钉住 `build_container` 里"backfill → assert"那两行——删掉它，本用例就红
+    （connect 已不熔断，没有它没人拦得住无归属的存量内容）。
+    """
+
+    path = tmp_path / "old.db"
+    _old_v12_db(path, content=True, templates=False)
+    settings = Settings(
+        db_path=path, model="m", api_key="k", api_base=None
+    )  # 不配 FIRST_ADMIN_*
+
+    with pytest.raises(RuntimeError, match="documents"):
+        build_container(settings)
+
+
+def test_build_container_backfills_orphans_to_first_admin(tmp_path):
+    """同一形状库 + 配好 FIRST_ADMIN_*：起得来，孤儿行归属回填成该 admin。"""
+
+    path = tmp_path / "old.db"
+    _old_v12_db(path, content=True, templates=False)
+    settings = Settings(
+        db_path=path,
+        model="m",
+        api_key="k",
+        api_base=None,
+        first_admin_username="admin",
+        first_admin_password="admin-s3cret",
+    )
+
+    build_container(settings)  # 不抛
+
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    admin_id = connection.execute(
+        "SELECT user_id FROM users WHERE role = 'admin' LIMIT 1"
+    ).fetchone()["user_id"]
+    assert (
+        connection.execute(
+            "SELECT owner_id FROM documents WHERE project_id = 'p1'"
+        ).fetchone()["owner_id"]
+        == admin_id
+    )
+    assert (
+        connection.execute(
+            "SELECT owner_id FROM rounds WHERE round_id = 'r1'"
+        ).fetchone()["owner_id"]
+        == admin_id
+    )
+    # 加载器种下的出厂模板都是 builtin，owner 留 NULL（人人可见）
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM templates WHERE builtin = 1 AND owner_id IS NOT NULL"
+        ).fetchone()[0]
+        == 0
     )
     connection.close()
