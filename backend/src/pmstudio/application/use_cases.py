@@ -5962,6 +5962,22 @@ def _require_admin(actor: UserView) -> None:
         raise _forbidden()
 
 
+def _admin_is_protected(target: UserView) -> None:
+    """**不许把动作落在 admin 头上**（含自己）。
+
+    为什么是硬拦截而不是只拦"自己"：唯一的 admin 封了自己 → 会话当场吊销 →
+    永远进不来，唯一出路是直接改库。两个 admin 互相封一下，系统就没人能进了。
+    真要动 admin，得先在库里把它的 `role` 改回去——那是运维动作，不是管理后台的一个按钮。
+    """
+
+    if target.role == "admin":
+        raise ApplicationError(
+            "管理员账号不能被封禁或拒绝；先在库里把它的角色改掉，再来操作",
+            code="admin_protected",
+            user_id=str(target.user_id),
+        )
+
+
 class LoginThrottle:
     """内存滑动窗口：按 `ip|用户名` 记失败，窗口内连败到阈值即锁（`§0.10`）。
 
@@ -6167,8 +6183,10 @@ class RejectUser:
 
     async def __call__(self, *, actor: UserView, user_id: UserId) -> UserView:
         _require_admin(actor)
-        if self._users.get_by_id(user_id) is None:
+        target = self._users.get_by_id(user_id)
+        if target is None:
             raise _unknown_user(user_id)
+        _admin_is_protected(_user_view(target))
         self._users.set_status(user_id, "rejected")
         updated = self._users.get_by_id(user_id)
         if updated is None:
@@ -6185,14 +6203,87 @@ class BanUser:
 
     async def __call__(self, *, actor: UserView, user_id: UserId) -> UserView:
         _require_admin(actor)
-        if self._users.get_by_id(user_id) is None:
+        target = self._users.get_by_id(user_id)
+        if target is None:
             raise _unknown_user(user_id)
+        _admin_is_protected(_user_view(target))
         self._users.set_status(user_id, "banned")
         self._sessions.revoke_user(user_id)
         updated = self._users.get_by_id(user_id)
         if updated is None:
             raise _unknown_user(user_id)
         return _user_view(updated)
+
+
+class StatsView:
+    """一个用户的统计投影（`/api/auth/stats` 的一行）。"""
+
+    __slots__ = (
+        "user_id",
+        "username",
+        "role",
+        "status",
+        "projects",
+        "rounds",
+        "calls",
+        "failed",
+        "avg_duration_ms",
+        "total_tokens",
+        "active_sessions",
+        "last_seen_at",
+        "created_at",
+        "approved_at",
+        "approved_by",
+    )
+
+    def __init__(self, **kwargs: object) -> None:
+        for name in self.__slots__:
+            setattr(self, name, kwargs.get(name))
+
+
+class GetStats:
+    """管理员看每人的活动。**只读**：不返回 `user_id` 之外的身份凭据，也**不给**删除入口。
+
+    左是**全部用户**（按注册先后）——用量/项目/会话只补数不裁人，否则"某人没数据"
+    会被误读成"这个人不存在"。数据本身来自读模型仓储，用例只做身份校验与拼装。
+    """
+
+    def __init__(self, *, users: UserStore, stats: object, clock: Clock) -> None:
+        self._users = users
+        self._stats = stats
+        self._clock = clock
+
+    async def __call__(self, *, actor: UserView) -> tuple[StatsView, ...]:
+        _require_admin(actor)
+        now = self._clock.now().isoformat()
+        rows = self._stats.rows(now=now)  # type: ignore[attr-defined]
+        out: list[StatsView] = []
+        for row in rows:
+            # 用户名从 users 表取（那是唯一有名字的地方）；读模型里没有的账号跳过——
+            # 两者同库同事务，正常不会发生，但不许为一个理论缺口编出空行。
+            record = self._users.get_by_id(UserId(row.user_id))  # type: ignore[attr-defined]
+            if record is None:
+                continue
+            out.append(
+                StatsView(
+                    user_id=str(row.user_id),  # type: ignore[attr-defined]
+                    username=record.username,
+                    role=row.role,  # type: ignore[attr-defined]
+                    status=row.status,  # type: ignore[attr-defined]
+                    projects=row.projects,  # type: ignore[attr-defined]
+                    rounds=row.rounds,  # type: ignore[attr-defined]
+                    calls=row.calls,  # type: ignore[attr-defined]
+                    failed=row.failed,  # type: ignore[attr-defined]
+                    avg_duration_ms=row.avg_duration_ms,  # type: ignore[attr-defined]
+                    total_tokens=row.total_tokens,  # type: ignore[attr-defined]
+                    active_sessions=row.active_sessions,  # type: ignore[attr-defined]
+                    last_seen_at=row.last_seen_at,  # type: ignore[attr-defined]
+                    created_at=row.created_at,  # type: ignore[attr-defined]
+                    approved_at=row.approved_at,  # type: ignore[attr-defined]
+                    approved_by=row.approved_by,  # type: ignore[attr-defined]
+                )
+            )
+        return tuple(out)
 
 
 class ListUsers:

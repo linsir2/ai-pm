@@ -11,6 +11,9 @@ EXPECTED_PATHS = {
     "/api/auth/users",
     # 管理端用量（Ruling 7）：按 owner 聚合其轮次的 model_calls 行数
     "/api/auth/usage",
+    # 2026-10-16 管理后台重做：每用户一行的活动读模型（`06` §2.4）。
+    # 与 /auth/users、/auth/usage 并存不替代——那两个是既有窄口径契约。
+    "/api/auth/stats",
     "/api/auth/approve",
     "/api/auth/reject",
     "/api/auth/ban",

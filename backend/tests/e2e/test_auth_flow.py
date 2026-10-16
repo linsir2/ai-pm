@@ -459,3 +459,211 @@ async def test_nonexistent_login_runs_verify_once(make_app, monkeypatch):
         )
         assert resp.status_code == 401
     assert len(calls) == 1
+
+
+async def test_admin_cannot_ban_itself(make_app):
+    """管理员不能把自己封掉——那会当场吊销自己的会话并把自己永久锁在门外。
+
+    这条此前**没有任何拦截**（`BanUser` 只校验"操作者是 admin"和"目标存在"）。
+    自封之后唯一能救的手段是直接改库，属于"一个按钮就能把系统锁死"。
+    """
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        admin_id = _seed_active_admin(app)
+        admin = await _admin_cookie(client)
+
+        resp = await client.post("/api/auth/ban", json={"user_id": admin_id}, cookies=admin)
+
+        assert resp.status_code == 409, resp.text
+        # 自己没被封、会话也还在
+        assert (await client.get("/api/auth/me", cookies=admin)).status_code == 200
+        assert app.state.auth.users.get_by_id(admin_id).status == "active"
+
+
+async def test_admin_cannot_ban_another_admin(make_app):
+    """也不能封另一个 admin——否则两个管理员互相点一下，系统就没人能进了。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        other = _seed_active_user(app, username="root2", password="x-s3cret", role="admin")
+        admin = await _admin_cookie(client)
+
+        resp = await client.post("/api/auth/ban", json={"user_id": other}, cookies=admin)
+
+        assert resp.status_code == 409, resp.text
+        assert app.state.auth.users.get_by_id(other).status == "active"
+
+
+async def test_admin_cannot_reject_another_admin(make_app):
+    """拒绝（reject）同样不许落在 admin 头上：它会把人从 active 打到 rejected。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        other = _seed_active_user(app, username="root3", password="y-s3cret", role="admin")
+        admin = await _admin_cookie(client)
+
+        resp = await client.post("/api/auth/reject", json={"user_id": other}, cookies=admin)
+
+        assert resp.status_code == 409, resp.text
+        assert app.state.auth.users.get_by_id(other).status == "active"
+
+
+async def test_ban_still_works_on_a_normal_user(make_app):
+    """反面：普通用户照旧可封——上一条不是把功能整体关掉。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        alice = _seed_active_user(app, username="alice", password="z-s3cret")
+        admin = await _admin_cookie(client)
+
+        resp = await client.post("/api/auth/ban", json={"user_id": alice}, cookies=admin)
+
+        assert resp.status_code == 200, resp.text
+        assert app.state.auth.users.get_by_id(alice).status == "banned"
+
+
+async def test_stats_reports_per_user_activity(make_app):
+    """`/api/auth/stats`：每个用户一行的活动读模型。
+
+    **口径要点（最容易错的地方）**：轮次、模型调用、会话三张表挂在同一个 owner 上，
+    朴素 join 会**扇出**（183 行 `model_calls` 配 19 个 round 就是 3477 行），
+    "调用数"直接放大十几倍。测试钉死这个：多轮次多调用时计数必须等于真实行数。
+    """
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        admin_id = _seed_active_admin(app)
+        admin = await _admin_cookie(client)
+        bob = _seed_active_user(app, username="bob", password="b-s3cret")
+
+        conn = app.state.auth.users._connection
+        # 两个用户各 2 轮；只有 bob 有调用。故意让 bob 的两轮都挂上同一条 round_id 的调用，
+        # 如果实现里去 join 而不是相关子查询，这里会数出 4 而不是 2。
+        for owner, tag in ((admin_id, "adm"), (bob, "bob")):
+            for index in range(2):
+                conn.execute(
+                    "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,"
+                    " created_at, updated_at, owner_id) VALUES"
+                    f" ('r-{tag}-{index}','p-x','done','none','{{}}','2026-10-16T00:00:00+00:00',"
+                    " '2026-10-16T00:00:00+00:00', ?)",
+                    (str(owner),),
+                )
+        conn.execute(
+            "INSERT INTO documents (project_id, document_id, title, template, blocks,"
+            " preference_entries, tombstones, created_at, updated_at, owner_id) VALUES"
+            " ('p-adm','d1','存量','{}','[]','[]','[]','2026-10-16T00:00:00+00:00',"
+            " '2026-10-16T00:00:00+00:00', ?)",
+            (str(admin_id),),
+        )
+        for round_id in ("r-bob-0", "r-bob-1"):
+            conn.execute(
+                "INSERT INTO model_calls (round_id, purpose, model, prompt_sha, prompt_text,"
+                " reply_text, usage_json, duration_ms, ok, created_at) VALUES"
+                f" ('{round_id}','integration','m','sha','p','r','{{}}',500,1,"
+                "'2026-10-16T00:00:00+00:00')"
+            )
+
+        resp = await client.get("/api/auth/stats", cookies=admin)
+        assert resp.status_code == 200, resp.text
+        rows = {row["user_id"]: row for row in resp.json()["stats"]}
+
+        bob_row = rows[str(bob)]
+        assert bob_row["rounds"] == 2
+        assert bob_row["calls"] == 2      # 真实行数，不是扇出来的 4
+        assert bob_row["projects"] == 0   # 文档是 admin 的，不该算到 bob
+        assert bob_row["username"] == "bob"
+        assert bob_row["created_at"] is not None
+
+        adm_row = rows[str(admin_id)]
+        assert adm_row["projects"] == 1
+        assert adm_row["role"] == "admin"
+        assert adm_row["status"] == "active"
+        assert adm_row["calls"] == 0
+
+
+async def test_stats_counts_failures_and_tokens(make_app):
+    """失败数 / 平均耗时 / token 都按**真实行**算。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        admin = await _admin_cookie(client)
+        bob = _seed_active_user(app, username="bob", password="b-s3cret")
+
+        conn = app.state.auth.users._connection
+        conn.execute(
+            "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,"
+            " created_at, updated_at, owner_id) VALUES"
+            " ('r1','p-x','done','none','{}','2026-10-16T00:00:00+00:00',"
+            " '2026-10-16T00:00:00+00:00', ?)",
+            (str(bob),),
+        )
+        for duration, ok, tokens in ((1000, 1, 100), (3000, 0, 50)):
+            conn.execute(
+                "INSERT INTO model_calls (round_id, purpose, model, prompt_sha, prompt_text,"
+                " reply_text, duration_ms, usage_json, ok, error, created_at) VALUES"
+                " ('r1','integration','m','sha','p','r',?,?,?,?,'2026-10-16T00:00:00+00:00')",
+                (
+                    duration,
+                    f'{{"total_tokens": {tokens}}}',
+                    ok,
+                    None if ok == 1 else "Timeout: boom",
+                ),
+            )
+        # 一条没挂到 rounds 上的调用：不该算进任何用户
+        conn.execute(
+            "INSERT INTO model_calls (round_id, purpose, model, prompt_sha, prompt_text,"
+            " reply_text, usage_json, duration_ms, ok, created_at) VALUES"
+            " ('x-orphan','exploration','m','sha','p','r','{}',10,1,"
+            "'2026-10-16T00:00:00+00:00')"
+        )
+
+        resp = await client.get("/api/auth/stats", cookies=admin)
+        row = {r["user_id"]: r for r in resp.json()["stats"]}[str(bob)]
+
+        assert row["calls"] == 2
+        assert row["failed"] == 1
+        assert row["avg_duration_ms"] == 2000
+        assert row["total_tokens"] == 150
+
+
+async def test_stats_reports_last_seen_and_active_sessions(make_app):
+    """最近活跃 / 活跃会话：管理员真正会问的"这人还在用吗"。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        bob = _seed_active_user(app, username="bob", password="b-s3cret")
+        admin = await _admin_cookie(client)
+
+        login = await client.post(
+            "/api/auth/login", json={"username": "bob", "password": "b-s3cret"}
+        )
+        assert login.status_code == 200
+
+        resp = await client.get("/api/auth/stats", cookies=admin)
+        row = {r["user_id"]: r for r in resp.json()["stats"]}[str(bob)]
+
+        assert row["active_sessions"] == 1
+        assert row["last_seen_at"] is not None
+
+
+async def test_stats_requires_admin(make_app):
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        carol = _seed_active_user(app, username="carol", password="c-s3cret")
+        admin = await _admin_cookie(client)
+        await client.post("/api/auth/approve", json={"user_id": str(carol)}, cookies=admin)
+        login = await client.post(
+            "/api/auth/login", json={"username": "carol", "password": "c-s3cret"}
+        )
+        assert login.status_code == 200
+
+        resp = await client.get("/api/auth/stats", cookies=login.cookies)
+
+        assert resp.status_code == 403, resp.text

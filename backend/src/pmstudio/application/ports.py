@@ -13,7 +13,7 @@ TOML 实现搬进 `pmstudio.harness.tools.registry`——"一个工具有哪些�
 留在这里的都是**产品侧**能力：席位编制、材料库、全局检索投影、项目工厂、轮的编排与取消。
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -365,6 +365,17 @@ class SessionRecord:
 
 
 @runtime_checkable
+class AdminStatsStore(Protocol):
+    """管理端那一屏的数据源：每个用户一行的活动读模型（`/api/auth/stats`）。
+
+    **只读、且必须是"每用户一行"**：这一层存在的意义就是让界面拿到管理员真正会问的
+    几件事——谁在用、用了多少、失败多不多、最近还来不来。扇出的 join 会把计数放大，
+    实现里一律用相关子查询（见 `SqliteAdminStatsRepository` 的注释）。
+    """
+
+    def rows(self, *, now: str) -> Sequence[object]: ...
+
+
 class UserStore(Protocol):
     """用户表：注册只造 pending；审批 / 封禁走 `set_status`。不碰密码（Task 1 负责）。"""
 

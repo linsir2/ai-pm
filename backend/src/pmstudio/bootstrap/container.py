@@ -41,6 +41,7 @@ from pmstudio.application.use_cases import (
     GetMe,
     GetRound,
     GetSchema,
+    GetStats,
     GetTemplate,
     GetUsage,
     GetVersionDiff,
@@ -117,7 +118,10 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
-from pmstudio.infrastructure.sqlite.usage import SqliteUsageRepository
+from pmstudio.infrastructure.sqlite.usage import (
+    SqliteAdminStatsRepository,
+    SqliteUsageRepository,
+)
 from pmstudio.infrastructure.sqlite.users import (
     SqliteSessionRepository,
     SqliteUserRepository,
@@ -188,6 +192,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     sessions = SqliteSessionRepository(connection)
     # 管理端用量读模型（Task 8 / Ruling 7）：只读 join，无写能力
     usage = SqliteUsageRepository(connection)
+    # 管理后台那一屏的读模型（`06` §2.4）：每用户一行，只读，同样无写能力
+    admin_stats = SqliteAdminStatsRepository(connection)
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
     explorations = SqliteExplorationRepository(connection)
@@ -659,6 +665,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         ban_user=BanUser(users=users, sessions=sessions),
         list_users=ListUsers(users=users),
         get_usage=GetUsage(users=users, usage=usage),
+        get_stats=GetStats(users=users, stats=admin_stats, clock=clock),
         users=users,
         sessions=sessions,
         cookie_max_age=settings.session_ttl_days * 86400,

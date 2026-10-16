@@ -39,6 +39,34 @@ export interface UsageRow {
   calls: number;
 }
 
+/**
+ * 管理后台那一屏的一行（`GET /auth/stats`）。
+ *
+ * **为什么不在 `/auth/usage` 上加字段**：那个名字装不下"最近活跃"和"审批时间"，
+ * 而它是既有窄口径契约（测试与别的调用方都钉着）。于是新端点，旧的照旧。
+ *
+ * `failed` / `avg_duration_ms` 才是管理员真正先看的：调用数好看但 8.8% 超时、
+ * 平均一条 67 秒，光看"183 次调用"这两件事都看不见。
+ */
+export interface AdminStatsRow {
+  user_id: string;
+  username: string;
+  role: string;
+  status: string;
+  projects: number;
+  rounds: number;
+  calls: number;
+  failed: number;
+  avg_duration_ms: number | null;
+  total_tokens: number;
+  active_sessions: number;
+  /** 后端给的是 ISO 串；这里**不**转 Date——表格里要显示原始时区那一行。 */
+  last_seen_at: string | null;
+  created_at: string | null;
+  approved_at: string | null;
+  approved_by: string | null;
+}
+
 /** 会话失效（任一端点回 401）时的**一处**通知口：AuthProvider 注册它清身份，
    界面据此回到登录页——省的每个调用各写一遍 401 处理。 */
 let notifyUnauthorized: (() => void) | null = null;
@@ -254,6 +282,9 @@ export const api = {
 
   /** 管理员：每个用户的用量（其项目下轮次的模型调用行数，join 聚合）。 */
   usage: () => request<{ usage: UsageRow[] }>("/auth/usage"),
+
+  /** 管理员：每用户一行的活动读模型（项目/轮次/失败/耗时/token/会话/最近活跃）。 */
+  stats: () => request<{ stats: AdminStatsRow[] }>("/auth/stats"),
 
   /** 管理员：审批通过（pending → active）。 */
   approve: (userId: string) =>

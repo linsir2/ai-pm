@@ -17,6 +17,7 @@ from pmstudio.application.use_cases import (
     AuthenticateUser,
     BanUser,
     GetMe,
+    GetStats,
     GetUsage,
     ListUsers,
     LogoutUser,
@@ -43,6 +44,7 @@ class AuthServices:
     ban_user: BanUser
     list_users: ListUsers
     get_usage: GetUsage
+    get_stats: GetStats
     users: UserStore
     sessions: SessionStore
     cookie_max_age: int
@@ -172,6 +174,41 @@ async def usage(
 
     listing = await _auth(request).get_usage(actor=actor)
     return {"usage": [_usage_json(view) for view in listing]}
+
+
+@router.get("/auth/stats")
+async def stats(
+    request: Request, actor: Annotated[UserView, Depends(require_admin)]
+) -> dict[str, list[dict[str, object]]]:
+    """管理员：每个用户一行的活动读模型（`06` §2.4）。
+
+    与 `/auth/users`、`/auth/usage` 并存不替代：那两个是窄口径的既有契约（测试与
+    前端都钉着），这一条是给管理后台那一屏用的完整视图。新端点而不是把 `/auth/usage`
+    撑成什么都往里塞——`usage` 这个名字装不下"最近活跃"和"审批时间"。
+    """
+
+    listing = await _auth(request).get_stats(actor=actor)
+    return {"stats": [_stats_json(view) for view in listing]}
+
+
+def _stats_json(view) -> dict[str, object]:
+    return {
+        "user_id": view.user_id,
+        "username": view.username,
+        "role": view.role,
+        "status": view.status,
+        "projects": view.projects,
+        "rounds": view.rounds,
+        "calls": view.calls,
+        "failed": view.failed,
+        "avg_duration_ms": view.avg_duration_ms,
+        "total_tokens": view.total_tokens,
+        "active_sessions": view.active_sessions,
+        "last_seen_at": view.last_seen_at,
+        "created_at": view.created_at,
+        "approved_at": view.approved_at,
+        "approved_by": view.approved_by,
+    }
 
 
 @router.post("/auth/approve")
