@@ -54,6 +54,10 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("ok", "INTEGER NOT NULL DEFAULT 1"),
         ("error", "TEXT"),
     ),
+    # 90 天绝对上限的锚点，是加会话表**之后**才补的列（`schema.sql` 的
+    # `CREATE TABLE IF NOT EXISTS` 补不了已有表）。跑过早期版本的库缺它 → 登录第一条
+    # INSERT 就炸 → 登录必 500。老行在下面 `migrate()` 里回填，不留 NULL。
+    "sessions": (("created_at", "TEXT"),),
 }
 
 
@@ -107,6 +111,21 @@ def migrate(connection: sqlite3.Connection) -> None:
             if name in existing:
                 connection.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
 
+    # 补完列再填值：`sessions.created_at` 是绝对上限的锚点，NULL 会让 `GetMe` 的
+    # datetime 减法炸成 500。老行拿 `last_seen_at` 顶——那时能拿到的最接近建会话的时刻。
+    # 幂等：只碰 NULL，新会话由 INSERT 自己写。老库可能压根还没建会话表（`schema.sql`
+    # 会按新形状建，那时新表自带 NOT NULL 的 created_at），所以先问表在不在。
+    if any(
+        row["name"] == "sessions"
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    ):
+        connection.execute(
+            "UPDATE sessions SET created_at = last_seen_at"
+            " WHERE created_at IS NULL AND last_seen_at IS NOT NULL"
+        )
+
 
 def backfill_owners(connection: sqlite3.Connection) -> None:
     """存量行补归属：只填 NULL（幂等），owner = 首个 admin。
@@ -142,8 +161,14 @@ def assert_owners_backfilled(connection: sqlite3.Connection) -> None:
     由组装点（`build_container`）在"建 users → 种首 admin → `backfill_owners`"之后调用，
     **不在 `connect()` 里**——否则存量库会在 admin 种子落库之前先熔断，永远升不上来。
     `templates` 只查自建行——builtin 行留 NULL 是规矩，不是漏网。
+
+    熔断时**必须给出可执行的下一步**（多用户改造 fix wave）：真正的原因是
+    "存量内容需要归属，但库里没有管理员账号可归属"，而 `backfill_owners` 找不到 admin
+    就静默不动。曾经这里写的是"先回填再启动"——可本仓根本没有手动回填命令，
+    照着做的人只会卡死。现在点名要配的两个变量，配好重启即由组装点自动回填。
     """
 
+    orphans_by_table: dict[str, int] = {}
     for table in OWNER_TABLES:
         where = (
             "owner_id IS NULL AND builtin = 0"
@@ -154,6 +179,19 @@ def assert_owners_backfilled(connection: sqlite3.Connection) -> None:
             f"SELECT COUNT(*) FROM {table} WHERE {where}"
         ).fetchone()[0]
         if orphans:
-            raise RuntimeError(
-                f"{table} 表残留 {orphans} 行 NULL owner，先回填再启动"
-            )
+            orphans_by_table[table] = orphans
+    if not orphans_by_table:
+        return
+
+    detail = "、".join(f"{table} {n} 行" for table, n in orphans_by_table.items())
+    has_admin = (
+        connection.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone()
+        is not None
+    )
+    if not has_admin:
+        raise RuntimeError(
+            f"存量内容没有归属（{detail} NULL owner），而库里还没有管理员账号可归属。"
+            "请在 backend/.env 里配 PMSTUDIO_FIRST_ADMIN_USER 与 "
+            "PMSTUDIO_FIRST_ADMIN_PASSWORD，重启后会自动把这些存量归到该管理员名下。"
+        )
+    raise RuntimeError(f"{detail} NULL owner，先回填再启动")

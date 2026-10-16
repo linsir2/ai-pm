@@ -392,3 +392,96 @@ def test_build_container_backfills_orphans_to_first_admin(tmp_path):
         == 0
     )
     connection.close()
+
+
+def test_build_container_starts_with_no_owner_scope(tmp_path):
+    """回归：组装期**没有身份**，应用也得起得来。
+
+    `build_container` 要读一次模板（builtin 出厂模板 `owner_id` 恒 NULL、人人可见），
+    那次读发生在任何请求之前——`require_user` 还没机会设 scope。此前那条读硬要求 owner，
+    于是**测试全绿、生产一起就崩**：`tests/conftest.py` 的 autouse fixture 给每个用例
+    装了默认 scope，正好把这个条件遮住了。所以这里必须显式清掉。
+    """
+
+    from pmstudio.infrastructure.sqlite import owner_scope
+
+    path = tmp_path / "old.db"
+    _old_v12_db(path, content=False, templates=False)
+    settings = Settings(db_path=path, model="m", api_key="k", api_base=None)
+
+    owner_scope.clear_owner_scope()
+    assert owner_scope.current_owner_scope() is None
+    container = build_container(settings)  # 之前在这里抛 missing_owner_scope
+
+    # builtin 模板照样加载进来了（证明那次无主读真的跑到了 SQL，而不是被吞掉）
+    connection = sqlite3.connect(path)
+    loaded = connection.execute(
+        "SELECT COUNT(*) FROM templates WHERE builtin = 1 AND owner_id IS NULL"
+    ).fetchone()[0]
+    assert loaded > 0
+    connection.close()
+    assert container.settings.db_path == path
+
+
+def test_build_container_error_names_the_env_vars_when_no_admin_can_own_orphans(tmp_path):
+    """存量有内容、库里却没有 admin 时，**报错必须可执行**：点名要配哪两个变量。
+
+    之前的文案是"先回填再启动"，但本仓根本没有手动回填命令——用户按它做不动。
+    真解法只有一个：配 `PMSTUDIO_FIRST_ADMIN_*`，重启后组装点自动回填。
+    """
+
+    path = tmp_path / "old.db"
+    _old_v12_db(path, content=True, templates=False)
+    settings = Settings(db_path=path, model="m", api_key="k", api_base=None)
+
+    with pytest.raises(RuntimeError) as caught:
+        build_container(settings)
+
+    message = str(caught.value)
+    assert "PMSTUDIO_FIRST_ADMIN_USER" in message
+    assert "PMSTUDIO_FIRST_ADMIN_PASSWORD" in message
+    assert "documents" in message
+
+
+#: 回归：`sessions.created_at`（90 天绝对上限的锚点）是**后加**的列。
+#: `CREATE TABLE IF NOT EXISTS` 补不了已有表的列，所以跑过早期版本的库会永远缺这一列——
+#: 而登录路径第一条 INSERT 就写它，于是**登录必然 500**。
+#: 手动回填取 `last_seen_at`（那时能拿到的最接近建会话时刻的值）；宁可从迁移时刻起算，
+#: 也不能让上限失去锚点。
+LEGACY_SESSIONS_DDL = """
+CREATE TABLE users (
+  user_id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+  role TEXT NOT NULL DEFAULT 'user', approved_by TEXT, approved_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE sessions (
+  session_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL,
+  expires_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+  ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '',
+  revoked_at TEXT
+);
+"""
+
+
+def test_migrate_adds_created_at_to_an_existing_sessions_table(tmp_path):
+    path = tmp_path / "legacy.db"
+    old = sqlite3.connect(path)
+    old.executescript(LEGACY_SESSIONS_DDL)
+    old.execute(
+        "INSERT INTO sessions (session_id, user_id, token_hash, expires_at,"
+        " last_seen_at) VALUES ('s1', 'u1', 'h', '2999-01-01T00:00:00+00:00',"
+        " '2026-01-01T00:00:00+00:00')"
+    )
+    old.commit()
+    old.close()
+
+    connection = database.connect(path)
+
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(sessions)")}
+    assert "created_at" in columns
+    # 老行不留 NULL：绝对上限的锚点不能是空的（`GetMe` 拿它做 datetime 减法）
+    assert connection.execute(
+        "SELECT created_at FROM sessions WHERE session_id = 's1'"
+    ).fetchone()["created_at"] == "2026-01-01T00:00:00+00:00"
+    connection.close()

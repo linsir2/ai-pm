@@ -50,3 +50,15 @@ def require_owner(owner: UserId | None) -> UserId:
             code="missing_owner_scope",
         )
     return resolved
+
+
+def optional_owner(owner: UserId | None) -> UserId | None:
+    """同 `require_owner`，但**允许没有**：拿不到就返回 `None` 而不是抛。
+
+    只给"查询本身就要包含全局（无主）行"的读用——目前只有 `templates.list()`：
+    builtin 模板的 `owner_id` 恒为 NULL、出厂即人人可见，而 `build_container`
+    在组装期就要读它一次，那会儿还没有任何身份（`require_user` 只在请求里设 scope）。
+    调用方**必须**按 `None` 与非 `None` 分两条 SQL，别拿 `None` 去拼 `owner_id = ?`。
+    """
+
+    return owner if owner else current_owner_scope()

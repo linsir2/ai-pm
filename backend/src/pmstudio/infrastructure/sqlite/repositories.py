@@ -44,7 +44,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.template import DocumentTemplate, standard_template
 from pmstudio.infrastructure.sqlite import serialization as ser
-from pmstudio.infrastructure.sqlite.owner_scope import require_owner
+from pmstudio.infrastructure.sqlite.owner_scope import optional_owner, require_owner
 
 
 def _now() -> str:
@@ -743,15 +743,24 @@ class SqliteTemplateRepository:
         )
 
     def list(self, *, owner: UserId | None = None) -> tuple[TemplateEntry, ...]:
-        resolved = require_owner(owner)
-        rows = self._connection.execute(
-            # 内置在前（画廊默认选 standard，它得排第一）；同组按标题排，不按 id
-            # （按 id 的话 light 永在 standard 前面，默认高亮落在第二张卡上）。
-            # builtin 行 owner 为 NULL——人人可见（`owner_id IS NULL`）。
-            "SELECT spec, builtin FROM templates"
-            " WHERE owner_id IS NULL OR owner_id = ? ORDER BY builtin DESC, title",
-            (str(resolved),),
-        ).fetchall()
+        # **不用 `require_owner`**：这条读的契约本来就含"无主也可见"的行——builtin 模板
+        # `owner_id` 恒 NULL。而 `build_container` 在组装期就要读它，那会儿还没有身份
+        # （`require_user` 只在请求里设 scope），硬要求 owner 会让应用起不来。
+        # 有身份 → builtin + 自己的；没身份 → 只回 builtin（绝不回别人的自建模板）。
+        resolved = optional_owner(owner)
+        if resolved is None:
+            rows = self._connection.execute(
+                "SELECT spec, builtin FROM templates"
+                " WHERE owner_id IS NULL ORDER BY builtin DESC, title"
+            ).fetchall()
+        else:
+            rows = self._connection.execute(
+                # 内置在前（画廊默认选 standard，它得排第一）；同组按标题排，不按 id
+                # （按 id 的话 light 永在 standard 前面，默认高亮落在第二张卡上）。
+                "SELECT spec, builtin FROM templates"
+                " WHERE owner_id IS NULL OR owner_id = ? ORDER BY builtin DESC, title",
+                (str(resolved),),
+            ).fetchall()
         return tuple(
             TemplateEntry(
                 template=ser.template_from_json(json.loads(row["spec"])),

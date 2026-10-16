@@ -259,3 +259,35 @@ def test_template_json_from_legacy_snapshot_falls_back_to_no_declaration():
     )
     assert "min_entries" not in legacy["sections"][0]
     assert "coverage" not in legacy["sections"][0]
+
+
+#: 回归：启动路径没有身份上下文（`build_container` 在组装期读模板），
+#: 那条读必须仍然可用——builtin 行（owner_id IS NULL）本来就人人可见。
+#: 这条用例必须显式清掉 conftest 的 autouse 默认 scope，否则测不到"启动时"这个条件
+#: （2327 条全绿却启动崩溃就是这么漏的：D2 的全局 fixture 把它遮住了）。
+def test_list_works_without_an_owner_scope_returning_only_builtin(tmp_path):
+    from pmstudio.infrastructure.sqlite import owner_scope
+    from pmstudio.infrastructure.templates.loader import TEMPLATES_DIR, load_template_file
+
+    connection = database.connect(tmp_path / "pm.db")
+    repo = SqliteTemplateRepository(connection)
+    repo.save(standard_template(), builtin=True)
+    repo.save(load_template_file(TEMPLATES_DIR / "light.toml"), builtin=True)
+    repo.save(template_from_dict(
+        {
+            "template_id": "tpl-someone-else",
+            "title": "别人的",
+            "sections": [
+                {"id": "s1", "title": "背景", "purpose": "摆设", "role": "plain"},
+                {"id": "s5", "title": "功能", "purpose": "摆设", "role": "feature"},
+                {"id": "s11", "title": "未决", "purpose": "摆设", "role": "open_questions"},
+                {"id": "s13", "title": "版本", "purpose": "摆设", "role": "version_history"},
+            ],
+        }
+    ), builtin=False, owner="u-someone-else")
+
+    owner_scope.clear_owner_scope()
+    assert owner_scope.current_owner_scope() is None
+    # 没有身份 → 只回出厂模板；不抛 `missing_owner_scope`（启动路径要的就是这个）
+    assert [item.template.template_id for item in repo.list()] == ["standard", "light"]
+    connection.close()
