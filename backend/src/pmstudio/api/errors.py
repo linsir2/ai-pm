@@ -42,6 +42,8 @@ CODE_STATUS = {
     "forbidden": 403,
     "username_taken": 409,
     "unknown_user": 404,
+    # 仓储拿不到 owner 上下文 = 程序员错误（漏设 scope），刻意 500 级，绝不退成 404
+    "missing_owner_scope": 500,
 }
 
 
