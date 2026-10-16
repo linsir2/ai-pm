@@ -543,6 +543,7 @@ class Harness:
         if not hasattr(self, "_discussion_runner"):
             self._discussion_runner = DiscussionRunner(
                 run_panel_round=self.run_panel_round(),
+                discussions=self.discussions,
             )
         return self._discussion_runner
 

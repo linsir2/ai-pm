@@ -485,7 +485,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         catalog=catalog,
         discussion_roles=discussion_roles,
     )
-    discussion_runner = DiscussionRunner(run_panel_round=run_panel_round)
+    discussion_runner = DiscussionRunner(
+        run_panel_round=run_panel_round, discussions=discussions
+    )
     services = ApiServices(
         runner=runner,
         dig_round=dig_round,

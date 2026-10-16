@@ -3341,6 +3341,10 @@ class FetchMaterial:
         self._uow = uow
 
     async def __call__(self, *, project_id: ProjectId, url: str) -> MaterialSummaryView:
+        # **归属先于副作用**（Task 6 fix round 2）：先按 owner 读项目，读不到即 `UnknownProject`
+        # （404）——绝不先出网。否则指过来的别人的项目 id 也会先发一次抓取请求再去鉴权
+        # （无数据泄漏、不落库，但有出网副作用，不该发生）。
+        self._documents.get(project_id)
         # 抓取在**事务外**（网络可能很慢，别占着写事务）；抓不到就照实报，不写垃圾
         page = await self._fetcher.fetch(url=url)
         # 解析同样在事务外，而且**走 MaterialParser 那一条真实分派**——于是抓 PDF / Word /
@@ -3370,7 +3374,6 @@ class FetchMaterial:
         )
         digest = _fetch_key(url)
         with self._uow:
-            self._documents.get(project_id)      # 项目不存在就地失败
             existing = self._materials.find_by_sha(project_id, digest)
             if existing is None:
                 if self._materials.count_for_project(

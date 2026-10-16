@@ -318,6 +318,84 @@ async def test_user_b_cannot_touch_user_a_side_resources(make_app):
         }
 
 
+async def test_b_fetch_on_a_foreign_project_never_hits_the_network(make_app):
+    """B 指 A 的项目抓网页：归属校验必须**先于出网**（404 且一次都没抓）。"""
+
+    from pmstudio.application.ports import FetchedPage
+    from tests.support.doubles import RecordingWebFetch
+
+    app, _ = make_app(replies={}, autologin=False)
+    async with async_client(app) as client:
+        _seed_active_user(app, username="alice", password=PW)
+        _seed_active_user(app, username="bob", password=PW)
+        alice = await _login(client, username="alice", password=PW)
+        bob = await _login(client, username="bob", password=PW)
+
+        client.cookies = alice
+        pid = (
+            await client.post("/api/projects", json={"title": "A 的项目"})
+        ).json()["project_id"]
+
+        # 注入 spy fetcher 观测"有没有出网"（生产是 HttpxWebFetcher）。给一份页面，
+        # 好让"先出网"的旧实现也能走到后面的 404——单单暴露 calls 不为空。
+        spy = RecordingWebFetch(
+            returns=(
+                FetchedPage(
+                    content=b"<html><body>x</body></html>",
+                    media_type="text/html",
+                    final_url="https://example.com/x",
+                    title="x",
+                ),
+            )
+        )
+        app.state.services.fetch_material._fetcher = spy
+
+        client.cookies = bob
+        resp = await client.post(
+            f"/api/projects/{pid}/attachments/fetch", json={"url": "https://example.com/x"}
+        )
+
+        assert resp.status_code == 404
+        assert spy.calls == [], "归属没过就出网了（副作用先于鉴权）"
+
+
+async def test_b_aborting_a_foreign_discussion_is_404_and_never_cancels(make_app):
+    """B 对 A 的讨论调 abort-run：404，且绝不取消 A 正在跑的那一轮。"""
+
+    import asyncio
+
+    app, _ = make_app(replies={}, autologin=False)
+    async with async_client(app) as client:
+        _seed_active_user(app, username="alice", password=PW)
+        _seed_active_user(app, username="bob", password=PW)
+        alice = await _login(client, username="alice", password=PW)
+        bob = await _login(client, username="bob", password=PW)
+
+        client.cookies = alice
+        pid = (
+            await client.post("/api/projects", json={"title": "A 的项目"})
+        ).json()["project_id"]
+        did = (
+            await client.post(
+                f"/api/projects/{pid}/discussions",
+                json={"topic": "怎么让灵感不丢", "role_ids": ["dlg.challenger"]},
+            )
+        ).json()["thread_id"]
+
+        # 模拟"A 的那一轮正在跑"：把活任务放进 runner 的任务表（私有，但正是被观测的副作用）。
+        runner = app.state.services.discussion_runner
+        task = asyncio.create_task(asyncio.sleep(3600))
+        runner._tasks[str(did)] = task
+        try:
+            client.cookies = bob
+            resp = await client.post(f"/api/discussions/{did}/abort-run")
+
+            assert resp.status_code == 404
+            assert not task.done(), "跨 owner 的 abort 取消了别人的在途调用"
+        finally:
+            task.cancel()
+
+
 async def test_business_endpoint_requires_login(make_app):
     """业务端点未登录 = 401（不是 404/500）：身份不通过就不谈资源。"""
 
