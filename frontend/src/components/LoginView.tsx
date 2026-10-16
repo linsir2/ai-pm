@@ -107,70 +107,124 @@ export function LoginView() {
 }
 
 /**
- * 左栏：产品真实产出的一块，不是宣传图（`selective truth`——形容词会撒谎，截图不会）。
+ * 左栏：**工作台的一块真裁切**，不是宣传图。
  *
- * **内容是静态文案，不是活数据**：多用户之后所有端点都要身份，未登录拿不到任何东西，
- * 而为一个展示屏开公开端点不划算（它会把未认证面变大）。代价是这份摘要是**当时的快照**，
- * 不会随项目更新；需要更新时改这里。摘录取自真实项目「真跑验证-20261005-A-订单导出」，
- * 编号（E94/E97/…）是真出处，顺着能回溯。
+ * 所以它直接复用 App 自己的类名（`topbar` / `doc__inner` / `doc__crumb` /
+ * `chapter__title` / `entries > entry` / `chip`），而不是另画一套像文档的东西——
+ * 那样它迟早会和真实渲染走样，而这块东西的全部说服力就来自"它是真的"。
+ * 新增的 `.proof__*` 只有窗框和几处必要的覆盖。
+ *
+ * **内容是静态快照，不是活数据**：多用户之后所有端点都要身份，未登录拿不到任何东西，
+ * 而为一个展示屏开公开端点会把未认证面变大。代价是这份摘要是**当时的快照**，不会随项目
+ * 更新；需要更新时改这里。摘自真实项目「真跑验证-20261005-A-订单导出」，编号是真的。
  */
 function ProofPanel() {
   return (
     <aside className="auth__proof">
-      <article className="proof">
-        <p className="proof__crumb">
-          真跑验证-20261005-A-订单导出<span className="proof__ver">v0.4</span>
-        </p>
-        <h2 className="proof__title">订单导出</h2>
+      <div className="proof">
+        <header className="topbar proof__bar">
+          <span className="wordmark">
+            <Logo />
+            <span className="wordmark__name">PM Studio</span>
+          </span>
+          <span className="topbar__spacer" />
+          <span className="proof__conn">
+            <span className="conn__dot" aria-hidden="true" />
+            就绪
+          </span>
+          <span className="muted small">pm</span>
+        </header>
 
-        <h3 className="proof__section">非功能要求</h3>
-        <ul className="proof__list">
-          <ProofItem refs={["E94", "E102"]}>
-            导出文件编码强制为 UTF-8 with BOM，确保主流电子表格软件（如 Excel）兼容。
-          </ProofItem>
-          <ProofItem refs={["E97", "E104"]}>
-            系统必须记录完整的导出操作审计日志，包含：操作人 ID、时间戳、筛选条件摘要、导出字段列表、数据行数及文件哈希。
-          </ProofItem>
-          <ProofItem refs={["E98"]}>
-            后端必须采用流式写入生成 CSV，严禁全量加载到内存，以确保内存占用恒定。
-          </ProofItem>
-        </ul>
+        <main className="doc proof__doc" aria-label="产品文档（真实产出的一块）">
+          <div className="doc__inner">
+            <div className="doc__crumb">
+              <span className="doc__crumb-path">
+                <span className="muted">真跑验证-20261005-A-订单导出</span>
+                <span className="doc__crumb-sep">/</span>
+                <span className="muted">产品文档</span>
+                <span className="doc__crumb-sep">/</span>
+                <span className="mono">s8</span>
+                <span>非功能要求</span>
+              </span>
+              <span className="topbar__spacer" />
+              <span className="vbar">
+                <span className="vbar__version mono">v0.4</span>
+              </span>
+            </div>
 
-        <h3 className="proof__section">未决</h3>
-        <ul className="proof__list">
-          <ProofItem refs={["E169"]} open>
-            当前生产环境的订单表总数据量级及日均新增数是多少？
-            <span className="proof__where">去处：s10</span>
-          </ProofItem>
-        </ul>
+            <div className="chapter__title-row">
+              <h2 className="chapter__title">非功能要求</h2>
+              <span className="dot dot--filled" aria-hidden="true" />
+              <span className="muted small">有内容</span>
+            </div>
+            <div className="chapter__body">
+              <div className="block">
+                <div className="entries-wrap">
+                  <ul className="entries">
+                    <ProofEntry refs={["E94", "E102"]}>
+                      导出文件编码强制为 UTF-8 with BOM，确保主流电子表格软件（如 Excel）兼容。
+                    </ProofEntry>
+                    <ProofEntry refs={["E97", "E104"]}>
+                      系统必须记录完整的导出操作审计日志，包含：操作人ID、时间戳、筛选条件摘要、导出字段列表、数据行数及文件哈希/链接。
+                    </ProofEntry>
+                    <ProofEntry refs={["E98"]}>
+                      后端必须采用流式写入生成 CSV，严禁全量加载到内存，以确保内存占用恒定。
+                    </ProofEntry>
+                    <ProofEntry refs={["E99"]}>
+                      网关层需显式配置较长的 read_timeout（建议至少 60–120 秒），以覆盖最大允许行数下的查询耗时。
+                    </ProofEntry>
+                  </ul>
+                </div>
+              </div>
+            </div>
 
-        <p className="proof__note">
-          这不是宣传图，是产品真实产出的一块：白底、衬线标题，每句话旁边挂着它的出处。
-          点编号能回溯到哪一轮、是谁说的、依据是什么——这是这个产品唯一的信任机制。
-        </p>
-      </article>
+            <div className="chapter__title-row">
+              <h2 className="chapter__title">未决</h2>
+              <span className="dot dot--open" aria-hidden="true" />
+              <span className="muted small">有开放问题</span>
+            </div>
+            <div className="chapter__body">
+              <div className="block">
+                <div className="entries-wrap">
+                  <ul className="entries">
+                    <ProofEntry refs={["E169"]}>
+                      当前生产环境的订单表总数据量级及日均新增数是多少？（未决定，待决人：PM）〔去处：s10〕
+                    </ProofEntry>
+                    <ProofEntry refs={["E170"]}>
+                      网关或 Web 服务器的 HTTP 请求最大超时时间是多少？（未决定，待决人：PM）〔去处：s8〕
+                    </ProofEntry>
+                    <ProofEntry refs={["E172"]}>
+                      审计日志里的「操作人ID」具体指什么唯一标识符（员工工号、SSO User ID 还是 OpenID）？
+                    </ProofEntry>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <p className="proof__note">
+              每条内容旁边挂着它的出处编号，点它能回溯到哪一轮、是谁说的、依据是什么——
+              这是这个产品唯一的信任机制。
+            </p>
+          </div>
+        </main>
+      </div>
     </aside>
   );
 }
 
-function ProofItem({
-  refs,
-  open = false,
-  children,
-}: {
-  refs: string[];
-  open?: boolean;
-  children: React.ReactNode;
-}) {
+/** 一条内容。结构照抄 `EntryList` 的 `.entry`（正文 + 右列出处），不另发明。 */
+function ProofEntry({ refs, children }: { refs: string[]; children: React.ReactNode }) {
   return (
-    <li className={open ? "proof__item proof__item--open" : "proof__item"}>
-      <span className="proof__text">{children}</span>
-      <span className="proof__refs">
-        {refs.map((ref) => (
-          <span className="chip" key={ref}>
-            {ref}
-          </span>
-        ))}
+    <li className="entry">
+      <span className="entry__text">{children}</span>
+      <span className="entry__refs">
+        <span className="chips">
+          {refs.map((ref) => (
+            <span className="chip" key={ref}>
+              {ref}
+            </span>
+          ))}
+        </span>
       </span>
     </li>
   );
