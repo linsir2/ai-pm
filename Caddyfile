@@ -1,0 +1,10 @@
+{$DOMAIN} {
+    encode gzip
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8100
+    }
+    handle {
+        root * ./frontend/dist
+        file_server
+    }
+}
