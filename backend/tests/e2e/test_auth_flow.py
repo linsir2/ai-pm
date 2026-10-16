@@ -10,6 +10,8 @@
 import hashlib
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from pmstudio.bootstrap.container import build_container
 from pmstudio.bootstrap.settings import Settings
 from pmstudio.domain.shared.ids import UserId
@@ -187,17 +189,36 @@ def test_seed_first_admin_builds_once(tmp_path):
     assert [record.username for record in second.app.state.auth.users.list_all()] == ["root"]
 
 
-async def test_admin_endpoints_require_login(make_app):
-    """未登录调管理端点 → 401（不是 403：先身份后角色）。"""
+#: 全部管理端点（`require_admin` 必须逐条挂上——漏一条这里就红）。
+ADMIN_ENDPOINTS = [
+    ("post", "/api/auth/approve"),
+    ("post", "/api/auth/reject"),
+    ("post", "/api/auth/ban"),
+    ("get", "/api/auth/users"),
+]
+
+
+async def _call_admin_endpoint(client, method, path, *, cookies=None):
+    """对管理端点发一次请求；POST 发**空 body**——鉴权在依赖里先于业务校验，403/401 应先生效。"""
+
+    if method == "get":
+        return await client.get(path, cookies=cookies)
+    return await client.post(path, json={}, cookies=cookies)
+
+
+@pytest.mark.parametrize("method, path", ADMIN_ENDPOINTS)
+async def test_admin_endpoints_require_login(make_app, method, path):
+    """未登录调任一管理端点 → 401（不是 403：先身份后角色）。"""
 
     app, _ = make_app(replies={})
     async with async_client(app) as client:
-        resp = await client.post("/api/auth/approve", json={"user_id": "u-x"})
+        resp = await _call_admin_endpoint(client, method, path)
         assert resp.status_code == 401
 
 
-async def test_non_admin_gets_403_on_admin_endpoint(make_app):
-    """有身份但非 admin → 403。"""
+@pytest.mark.parametrize("method, path", ADMIN_ENDPOINTS)
+async def test_non_admin_gets_403_on_admin_endpoint(make_app, method, path):
+    """有身份但非 admin → 403，且先生效于 body 校验（空 body 也不该是 422）。"""
 
     app, _ = make_app(replies={})
     async with async_client(app) as client:
@@ -212,9 +233,7 @@ async def test_non_admin_gets_403_on_admin_endpoint(make_app):
             "/api/auth/login", json={"username": "dave", "password": "dave-s3cret"}
         )
         assert login.status_code == 200
-        resp = await client.post(
-            "/api/auth/approve", json={"user_id": dave_id}, cookies=login.cookies
-        )
+        resp = await _call_admin_endpoint(client, method, path, cookies=login.cookies)
         assert resp.status_code == 403
 
 
