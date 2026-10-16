@@ -168,6 +168,33 @@ CREATE TABLE IF NOT EXISTS round_digests (
 );
 CREATE INDEX IF NOT EXISTS idx_round_digests_project ON round_digests(project_id, id);
 
+-- 用户（多用户改造）：待审批 → active / banned。`password_hash` 由 Task 1 的
+-- argon2 模块产出，仓储只存字符串、不碰密码学。
+CREATE TABLE IF NOT EXISTS users (
+  user_id     TEXT PRIMARY KEY,
+  username    TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'pending',
+  role        TEXT NOT NULL DEFAULT 'user',
+  approved_by TEXT,
+  approved_at TEXT,
+  created_at  TEXT NOT NULL
+);
+
+-- 登录会话：**明文 token 永不入库**，只存 `hashlib.sha256` 的十六进制摘要。
+-- 过期由调用方判（`expires_at` 是列，方便"这个用户的活会话"这类查询）。
+CREATE TABLE IF NOT EXISTS sessions (
+  session_id  TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  token_hash  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  ip          TEXT NOT NULL DEFAULT '',
+  user_agent  TEXT NOT NULL DEFAULT '',
+  revoked_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, expires_at);
+
 -- L3 灵感档案（记忆层）：讨论卡/探索假设/模拟发现的可搜索存档。
 CREATE TABLE IF NOT EXISTS inspirations (
   id         TEXT PRIMARY KEY,

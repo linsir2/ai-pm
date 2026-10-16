@@ -3,6 +3,7 @@
 from typing import NewType
 
 ProjectId = NewType("ProjectId", str)
+UserId = NewType("UserId", str)
 DocumentId = NewType("DocumentId", str)
 SectionId = NewType("SectionId", str)
 BlockId = NewType("BlockId", str)

@@ -24,6 +24,7 @@ from pmstudio.domain.shared.ids import (
     ExplorationId,
     ProjectId,
     RoundId,
+    UserId,
 )
 from pmstudio.domain.shared.template import DocumentTemplate
 
@@ -328,3 +329,79 @@ class DiscussionRunner(Protocol):
     async def run_round(self, *, discussion_id: DiscussionId) -> "ThreadView": ...
 
     async def abort(self, *, discussion_id: DiscussionId) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class UserRecord:
+    """一行用户（仓储的读投影，不是领域聚合）。
+
+    `status` 是字符串（`pending` / `active` / `banned`），审批与封禁只改它——
+    身份进引擎只以 `UserId` 值对象，所以没有对应的 domain 类型。
+    """
+
+    user_id: UserId
+    username: str
+    password_hash: str
+    status: str
+    role: str
+    approved_by: str | None
+    approved_at: datetime | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRecord:
+    """一行登录会话。`token_hash` 是 `hashlib.sha256` 摘要——明文永不在这里。"""
+
+    session_id: str
+    user_id: UserId
+    token_hash: str
+    expires_at: datetime
+    last_seen_at: datetime
+    ip: str
+    user_agent: str
+    revoked_at: datetime | None
+
+
+@runtime_checkable
+class UserStore(Protocol):
+    """用户表：注册只造 pending；审批 / 封禁走 `set_status`。不碰密码（Task 1 负责）。"""
+
+    def register(
+        self, *, username: str, password_hash: str, role: str = "user"
+    ) -> UserId: ...
+    def get_by_name(self, username: str) -> UserRecord | None: ...
+    def set_status(
+        self,
+        user_id: UserId,
+        status: str,
+        *,
+        approved_by: str | None = None,
+        approved_at: datetime | None = None,
+    ) -> None: ...
+    def list_pending(self) -> tuple[UserRecord, ...]: ...
+
+
+@runtime_checkable
+class SessionStore(Protocol):
+    """会话表：**只认 token 的 sha256 摘要**，明文由调用方在算好 cookie 值时算掉。
+
+    这样"明文永不入库"是结构保证：仓储根本没有收明文的入口。
+    `get_by_token_hash` 不判过期（过期由调用方按 `expires_at` 判），只把已吊销的挡掉。
+    """
+
+    def create(
+        self,
+        *,
+        user_id: UserId,
+        token_hash: str,
+        expires_at: datetime,
+        now: datetime,
+        ip: str = "",
+        user_agent: str = "",
+    ) -> SessionRecord: ...
+    def get_by_token_hash(self, token_hash: str) -> SessionRecord | None: ...
+    def touch(
+        self, token_hash: str, *, now: datetime, expires_at: datetime
+    ) -> None: ...
+    def revoke_user(self, user_id: UserId) -> None: ...
