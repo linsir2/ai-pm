@@ -20,10 +20,18 @@ def build_app(
     *,
     replies: dict[str, str | Sequence[str]],
     seat_replies: dict[str, str | Sequence[str]] | None = None,
+    first_admin: bool = False,
 ) -> tuple[FastAPI, ScriptedModelGateway]:
     gateway = ScriptedModelGateway(replies=replies, seat_replies=seat_replies or {})
     settings = Settings(
-        db_path=tmp_path / "pmstudio.db", model="scripted", api_key="test-key", api_base=None
+        db_path=tmp_path / "pmstudio.db",
+        model="scripted",
+        api_key="test-key",
+        api_base=None,
+        # v13 起存量内容必须有归属：换进程重启的用例得有个 admin 让回填接得上。
+        # 默认不种——auth 用例要的是"干净的用户表"。
+        first_admin_username="admin" if first_admin else None,
+        first_admin_password="test-admin-password" if first_admin else None,
     )
     container = build_container(settings, gateway=gateway)
     return container.app, gateway

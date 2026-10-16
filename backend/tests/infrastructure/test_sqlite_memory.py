@@ -20,7 +20,8 @@ NOW = datetime(2026, 10, 3, 20, 0, 0, tzinfo=UTC)
 PROJECT = ProjectId("p-memory")
 KNOWN = frozenset({"E1", "E2"})
 
-#: 加 `project_memory` 之前的建表语句（用来验"老库自动补表"）
+#: 加 `project_memory` 之前的建表语句（用来验"老库自动补表"）。
+#: v13 起存量内容必须有归属：老库得有 admin，回填才填得上（否则启动熔断）。
 OLD_ROUNDS_DDL = """
 CREATE TABLE rounds (
   round_id   TEXT PRIMARY KEY,
@@ -30,6 +31,16 @@ CREATE TABLE rounds (
   payload    TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+CREATE TABLE users (
+  user_id       TEXT PRIMARY KEY,
+  username      TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'pending',
+  role          TEXT NOT NULL DEFAULT 'user',
+  approved_by   TEXT,
+  approved_at   TEXT,
+  created_at    TEXT NOT NULL
 );
 """
 
@@ -146,6 +157,11 @@ def test_an_old_database_gets_the_table_and_keeps_its_rows(tmp_path):
     path = tmp_path / "old.db"
     old = sqlite3.connect(path)
     old.executescript(OLD_ROUNDS_DDL)
+    old.execute(
+        "INSERT INTO users (user_id, username, password_hash, status, role, created_at)"
+        " VALUES ('u-admin', 'admin', 'x', 'active', 'admin', ?)",
+        (NOW.isoformat(),),
+    )
     old.execute(
         "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload, created_at,"
         " updated_at) VALUES ('r-old', 'p-memory', 'done', 'none', '{}', ?, ?)",

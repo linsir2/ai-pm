@@ -61,7 +61,7 @@ async def test_reboot_keeps_customs_and_snapshots(make_app, tmp_path):
 
     from tests.e2e.conftest import build_app
 
-    app, _ = build_app(tmp_path, replies={})
+    app, _ = build_app(tmp_path, replies={}, first_admin=True)
     async with async_client(app) as client:
         custom_id = (
             await client.post("/api/templates", json={"title": "自建", "sections": TRIPLE})
@@ -72,7 +72,7 @@ async def test_reboot_keeps_customs_and_snapshots(make_app, tmp_path):
             )
         ).json()["project_id"]
 
-    app2, _ = build_app(tmp_path, replies={})
+    app2, _ = build_app(tmp_path, replies={}, first_admin=True)
     async with async_client(app2) as client:
         ids = [item["template_id"] for item in (await client.get("/api/templates")).json()]
         assert custom_id in ids and "standard" in ids and "light" in ids

@@ -259,9 +259,9 @@ def test_unknown_thread_raises_unknown_discussion(store) -> None:  # type: ignor
         repo.get(DiscussionId("d-9"))
 
 
-def test_user_version_is_12_and_discussions_table_exists(store) -> None:  # type: ignore[no-untyped-def]
+def test_user_version_is_13_and_discussions_table_exists(store) -> None:  # type: ignore[no-untyped-def]
     _, connection = store
-    assert database.USER_VERSION == 12
+    assert database.USER_VERSION == 13
     assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
     tables = {
         row["name"]

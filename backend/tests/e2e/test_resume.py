@@ -43,6 +43,7 @@ async def test_resume_after_process_restart_without_redoing_finished_seats(tmp_p
         tmp_path,
         replies={"claims": CLAIMS_REPLY, "integration": DRAFT_REPLY},
         seat_replies={FIRST_SEAT: SEAT_REPLY},  # 只给 A 配脚本 → B 会失败
+        first_admin=True,
     )
     async with async_client(first_app) as client:
         project_id = await _create_project(client)
@@ -66,6 +67,7 @@ async def test_resume_after_process_restart_without_redoing_finished_seats(tmp_p
         tmp_path,
         replies={"claims": CLAIMS_REPLY, "integration": DRAFT_REPLY},
         seat_replies={FIRST_SEAT: SEAT_REPLY, SECOND_SEAT: SEAT_REPLY},
+        first_admin=True,
     )
     async with async_client(second_app) as client:
         resumed = await client.post(f"/api/rounds/{round_id}/retry")
@@ -112,6 +114,7 @@ async def test_resume_after_a_crash_between_join_and_reporting(tmp_path):
         tmp_path,
         replies={"claims": CLAIMS_REPLY},  # 故意不给 integration 脚本
         seat_replies={FIRST_SEAT: SEAT_REPLY, SECOND_SEAT: SEAT_REPLY},
+        first_admin=True,
     )
     async with async_client(first_app) as client:
         project_id = await _create_project(client)
@@ -134,6 +137,7 @@ async def test_resume_after_a_crash_between_join_and_reporting(tmp_path):
         tmp_path,
         replies={"claims": CLAIMS_REPLY, "integration": DRAFT_REPLY},
         seat_replies={FIRST_SEAT: SEAT_REPLY, SECOND_SEAT: SEAT_REPLY},
+        first_admin=True,
     )
     async with async_client(second_app) as client:
         resumed = await client.post(f"/api/rounds/{round_id}/retry")

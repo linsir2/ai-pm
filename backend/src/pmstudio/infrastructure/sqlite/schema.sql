@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS documents (
   project_id         TEXT PRIMARY KEY,
+  owner_id           TEXT,
   document_id        TEXT NOT NULL,
   title              TEXT NOT NULL,
   template           TEXT NOT NULL DEFAULT '{}',
@@ -12,6 +13,7 @@ CREATE TABLE IF NOT EXISTS documents (
 
 CREATE TABLE IF NOT EXISTS document_versions (
   project_id        TEXT NOT NULL REFERENCES documents(project_id) ON DELETE CASCADE,
+  owner_id          TEXT,
   version_no        INTEGER NOT NULL,
   trigger           TEXT NOT NULL,
   summary           TEXT NOT NULL,
@@ -24,6 +26,7 @@ CREATE TABLE IF NOT EXISTS document_versions (
 CREATE TABLE IF NOT EXISTS rounds (
   round_id   TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
+  owner_id   TEXT,
   step       TEXT NOT NULL,
   waiting_on TEXT NOT NULL,
   payload    TEXT NOT NULL,
@@ -36,6 +39,7 @@ CREATE INDEX IF NOT EXISTS idx_rounds_project ON rounds(project_id, created_at);
 -- 所以这里允许 seed 反复覆盖 builtin 行，老项目不受影响。
 CREATE TABLE IF NOT EXISTS templates (
   template_id TEXT PRIMARY KEY,
+  owner_id    TEXT,
   title       TEXT NOT NULL,
   spec        TEXT NOT NULL,
   builtin     INTEGER NOT NULL DEFAULT 0,
@@ -45,6 +49,7 @@ CREATE TABLE IF NOT EXISTS templates (
 
 CREATE TABLE IF NOT EXISTS evidence_ledgers (
   project_id TEXT PRIMARY KEY REFERENCES documents(project_id) ON DELETE CASCADE,
+  owner_id   TEXT,
   payload    TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -55,6 +60,7 @@ CREATE TABLE IF NOT EXISTS evidence_ledgers (
 CREATE TABLE IF NOT EXISTS materials (
   material_id     TEXT PRIMARY KEY,
   project_id      TEXT NOT NULL,
+  owner_id        TEXT,
   origin          TEXT NOT NULL,
   title           TEXT NOT NULL,
   source_ref      TEXT NOT NULL,
@@ -76,6 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_materials_project ON materials(project_id, create
 CREATE TABLE IF NOT EXISTS material_chunks (
   chunk_id     TEXT PRIMARY KEY,
   material_id  TEXT NOT NULL REFERENCES materials(material_id) ON DELETE CASCADE,
+  owner_id     TEXT,
   ordinal      INTEGER NOT NULL,
   text         TEXT NOT NULL,
   heading_path TEXT NOT NULL,
@@ -88,6 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_material_chunks_material ON material_chunks(mater
 CREATE TABLE IF NOT EXISTS explorations (
   exploration_id TEXT PRIMARY KEY,
   project_id     TEXT NOT NULL,
+  owner_id       TEXT,
   kind           TEXT NOT NULL,
   status         TEXT NOT NULL,
   payload        TEXT NOT NULL,
@@ -101,6 +109,7 @@ CREATE INDEX IF NOT EXISTS idx_explorations_project ON explorations(project_id, 
 CREATE TABLE IF NOT EXISTS discussions (
   discussion_id TEXT PRIMARY KEY,
   project_id     TEXT NOT NULL,
+  owner_id       TEXT,
   status         TEXT NOT NULL,
   payload        TEXT NOT NULL,
   created_at     TEXT NOT NULL,
@@ -116,6 +125,7 @@ CREATE INDEX IF NOT EXISTS idx_discussions_project ON discussions(project_id, cr
 -- 条目与版本只增不改：一次确认 = 一条 revision，删掉的条目**不出现在 entries 里但留在 revisions 里**。
 CREATE TABLE IF NOT EXISTS project_memory (
   project_id TEXT PRIMARY KEY,
+  owner_id   TEXT,
   payload    TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -146,6 +156,7 @@ CREATE INDEX IF NOT EXISTS idx_model_calls_round ON model_calls(round_id, id);
 CREATE TABLE IF NOT EXISTS observations (
   id         TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
+  owner_id   TEXT,
   round_id   TEXT NOT NULL,
   obs_type   TEXT NOT NULL,
   title      TEXT NOT NULL,
@@ -159,6 +170,7 @@ CREATE INDEX IF NOT EXISTS idx_observations_round ON observations(round_id);
 CREATE TABLE IF NOT EXISTS round_digests (
   id          TEXT PRIMARY KEY,
   project_id  TEXT NOT NULL,
+  owner_id    TEXT,
   round_id    TEXT NOT NULL,
   summary     TEXT NOT NULL,
   sections    TEXT NOT NULL DEFAULT '[]',
@@ -201,6 +213,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, expires_at);
 CREATE TABLE IF NOT EXISTS inspirations (
   id         TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
+  owner_id   TEXT,
   origin     TEXT NOT NULL,
   statement  TEXT NOT NULL,
   created_at TEXT NOT NULL
