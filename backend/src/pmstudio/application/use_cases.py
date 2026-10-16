@@ -5966,16 +5966,23 @@ class LoginThrottle:
     """内存滑动窗口：按 `ip|用户名` 记失败，窗口内连败到阈值即锁（`§0.10`）。
 
     不建表：重启清零可接受。单进程单事件循环，普通 dict 够用。
+    **键数有上界**（`max_keys`）：海量不同用户名（攻击者灌内存）不能把 `_failures` 撑爆，
+    超容量时按最早入表（最旧）淘汰。dict 保插入序，`next(iter(...))` 即最旧键。
     """
 
-    def __init__(self, *, max_fails: int, lock_minutes: int) -> None:
+    def __init__(
+        self, *, max_fails: int, lock_minutes: int, max_keys: int = 1024
+    ) -> None:
         self._max_fails = max_fails
         self._window = timedelta(minutes=lock_minutes)
+        self._max_keys = max_keys
         self._failures: dict[str, list[datetime]] = {}
 
     def _recent(self, now: datetime, key: str) -> list[datetime]:
         cutoff = now - self._window
         kept = [moment for moment in self._failures.get(key, []) if moment > cutoff]
+        if key not in self._failures and len(self._failures) >= self._max_keys:
+            self._failures.pop(next(iter(self._failures)), None)
         self._failures[key] = kept
         return kept
 
