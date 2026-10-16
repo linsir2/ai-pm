@@ -185,3 +185,93 @@ def test_seed_first_admin_builds_once(tmp_path):
 
     second = build_container(settings)
     assert [record.username for record in second.app.state.auth.users.list_all()] == ["root"]
+
+
+async def test_admin_endpoints_require_login(make_app):
+    """未登录调管理端点 → 401（不是 403：先身份后角色）。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        resp = await client.post("/api/auth/approve", json={"user_id": "u-x"})
+        assert resp.status_code == 401
+
+
+async def test_non_admin_gets_403_on_admin_endpoint(make_app):
+    """有身份但非 admin → 403。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        admin = await _admin_cookie(client)
+        reg = await client.post(
+            "/api/auth/register", json={"username": "dave", "password": "dave-s3cret"}
+        )
+        dave_id = reg.json()["user_id"]
+        await client.post("/api/auth/approve", json={"user_id": dave_id}, cookies=admin)
+        login = await client.post(
+            "/api/auth/login", json={"username": "dave", "password": "dave-s3cret"}
+        )
+        assert login.status_code == 200
+        resp = await client.post(
+            "/api/auth/approve", json={"user_id": dave_id}, cookies=login.cookies
+        )
+        assert resp.status_code == 403
+
+
+async def test_reject_user_blocks_login(make_app):
+    """admin 拒绝 pending 用户 → 该用户登录 401。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        admin = await _admin_cookie(client)
+        reg = await client.post(
+            "/api/auth/register", json={"username": "erin", "password": "erin-s3cret"}
+        )
+        erin_id = reg.json()["user_id"]
+        rejected = await client.post(
+            "/api/auth/reject", json={"user_id": erin_id}, cookies=admin
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["status"] == "rejected"
+        login = await client.post(
+            "/api/auth/login", json={"username": "erin", "password": "erin-s3cret"}
+        )
+        assert login.status_code == 401
+
+
+async def test_admin_lists_users_with_base_fields(make_app):
+    """admin 列用户 → 200，每条含基础字段（无用量占位键）。"""
+
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        _seed_active_admin(app)
+        admin = await _admin_cookie(client)
+        await client.post(
+            "/api/auth/register", json={"username": "frank", "password": "frank-s3cret"}
+        )
+        resp = await client.get("/api/auth/users", cookies=admin)
+        assert resp.status_code == 200
+        users = resp.json()["users"]
+        assert {item["username"] for item in users} == {"root", "frank"}
+        for item in users:
+            assert set(item) == {"user_id", "username", "role", "status"}
+
+
+async def test_nonexistent_login_runs_verify_once(make_app, monkeypatch):
+    """恒定耗时锚点：登录一个不存在的用户名，也要对 decoy 哈希跑一次 verify_password。"""
+
+    calls: list[tuple[str, str]] = []
+
+    def counting_verify(password_hash: str, password: str) -> bool:
+        calls.append((password_hash, password))
+        return False
+
+    monkeypatch.setattr("pmstudio.bootstrap.container.verify_password", counting_verify)
+    app, _ = make_app(replies={})
+    async with async_client(app) as client:
+        resp = await client.post(
+            "/api/auth/login", json={"username": "ghost", "password": "ghost-s3cret"}
+        )
+        assert resp.status_code == 401
+    assert len(calls) == 1
