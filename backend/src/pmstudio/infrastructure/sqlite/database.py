@@ -63,8 +63,12 @@ def connect(db_path: Path) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA foreign_keys = ON")
-    connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    # **先补列、再建 schema**（多用户改造 Task 5）：`schema.sql` 里有
+    # `CREATE INDEX ... ON <表>(owner_id)`，老库那一刻还没这列——`CREATE TABLE IF NOT
+    # EXISTS` 补不了已有表的列，只有 `migrate()` 的 `ALTER TABLE` 能。放在 schema 之后
+    # 建索引就会在老库上炸「no such column: owner_id」。新库两边都幂等，不受影响。
     migrate(connection)
+    connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     connection.execute(f"PRAGMA user_version = {USER_VERSION}")
     return connection
 

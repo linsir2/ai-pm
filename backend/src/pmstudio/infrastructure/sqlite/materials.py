@@ -24,7 +24,8 @@ from pmstudio.application.dto import (
     material_summary_view,
 )
 from pmstudio.application.ports import IdGenerator
-from pmstudio.domain.shared.ids import ProjectId
+from pmstudio.domain.shared.ids import ProjectId, UserId
+from pmstudio.infrastructure.sqlite.owner_scope import require_owner
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,22 +60,25 @@ class SqliteMaterialStore:
         sha256: str,
         content: bytes,
         now: datetime,
+        owner: UserId | None = None,
     ) -> MaterialPacket:
-        existing = self._find_by_sha(project_id, sha256)
+        resolved = require_owner(owner)
+        existing = self._find_by_sha(project_id, sha256, owner=resolved)
         if existing is not None:
             return existing
         material_id = self._ids.new("m")
         stamped = _restamp(parsed, material_id)
         self._connection.execute(
             """
-            INSERT INTO materials (material_id, project_id, origin, title, source_ref,
+            INSERT INTO materials (material_id, project_id, owner_id, origin, title, source_ref,
                 media_type, bytes_len, sha256, parser_id, parser_version, schema_version,
                 truncated, warnings, content, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 material_id,
                 str(project_id),
+                str(resolved),
                 stamped.origin,
                 stamped.title,
                 stamped.source_ref,
@@ -90,22 +94,7 @@ class SqliteMaterialStore:
                 now.isoformat(),
             ),
         )
-        for chunk in stamped.chunks:
-            self._connection.execute(
-                """
-                INSERT INTO material_chunks
-                    (chunk_id, material_id, ordinal, text, heading_path, anchor)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    chunk.chunk_id,
-                    material_id,
-                    chunk.ordinal,
-                    chunk.text,
-                    json.dumps(list(chunk.heading_path), ensure_ascii=False),
-                    chunk.anchor,
-                ),
-            )
+        self._write_chunks(material_id, stamped, owner=str(resolved))
         return MaterialPacket(
             material_id=material_id,
             project_id=str(project_id),
@@ -126,6 +115,7 @@ class SqliteMaterialStore:
         只给"没被任何一轮引用过"的材料用（用例那边判）——被引用的材料改块 = 改指编号。
         """
 
+        owner = require_owner(None)
         stamped = _restamp(parsed, material_id)
         self._connection.execute(
             "DELETE FROM material_chunks WHERE material_id = ?", (material_id,)
@@ -146,8 +136,8 @@ class SqliteMaterialStore:
                 material_id,
             ),
         )
-        self._write_chunks(material_id, stamped)
-        updated = self.get(material_id)
+        self._write_chunks(material_id, stamped, owner=str(owner))
+        updated = self.get(material_id, owner=owner)
         if updated is None:  # pragma: no cover - 上面刚 UPDATE 过，只有并发删才会到这里
             raise KeyError(material_id)
         return updated
@@ -161,6 +151,7 @@ class SqliteMaterialStore:
         用途是"同一个网址再抓一次"。`material_id`、去重键、`created_at` 都不动。
         """
 
+        owner = require_owner(None)
         stamped = _restamp(parsed, material_id)
         self._connection.execute(
             "DELETE FROM material_chunks WHERE material_id = ?", (material_id,)
@@ -188,23 +179,26 @@ class SqliteMaterialStore:
                 material_id,
             ),
         )
-        self._write_chunks(material_id, stamped)
-        updated = self.get(material_id)
+        self._write_chunks(material_id, stamped, owner=str(owner))
+        updated = self.get(material_id, owner=owner)
         if updated is None:  # pragma: no cover - 上面刚 UPDATE 过，只有并发删才会到这里
             raise KeyError(material_id)
         return updated
 
-    def _write_chunks(self, material_id: str, stamped: ParsedMaterial) -> None:
+    def _write_chunks(
+        self, material_id: str, stamped: ParsedMaterial, *, owner: str
+    ) -> None:
         for chunk in stamped.chunks:
             self._connection.execute(
                 """
                 INSERT INTO material_chunks
-                    (chunk_id, material_id, ordinal, text, heading_path, anchor)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (chunk_id, material_id, owner_id, ordinal, text, heading_path, anchor)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk.chunk_id,
                     material_id,
+                    owner,
                     chunk.ordinal,
                     chunk.text,
                     json.dumps(list(chunk.heading_path), ensure_ascii=False),
@@ -214,27 +208,39 @@ class SqliteMaterialStore:
 
     # ── 读 ────────────────────────────────────────────────────────────────
 
-    def get(self, material_id: str) -> MaterialPacket | None:
+    def get(self, material_id: str, *, owner: UserId | None = None) -> MaterialPacket | None:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT * FROM materials WHERE material_id = ?", (material_id,)
+            "SELECT * FROM materials WHERE material_id = ? AND owner_id = ?",
+            (material_id, str(resolved)),
         ).fetchone()
         return None if row is None else self._packet(row)
 
-    def raw_bytes(self, material_id: str) -> bytes | None:
+    def raw_bytes(self, material_id: str, *, owner: UserId | None = None) -> bytes | None:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT content FROM materials WHERE material_id = ?", (material_id,)
+            "SELECT content FROM materials WHERE material_id = ? AND owner_id = ?",
+            (material_id, str(resolved)),
         ).fetchone()
         return None if row is None else bytes(row["content"])
 
-    def chunk_count(self, material_id: str) -> int:
+    def chunk_count(self, material_id: str, *, owner: UserId | None = None) -> int:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT COUNT(*) AS total FROM material_chunks WHERE material_id = ?", (material_id,)
+            "SELECT COUNT(*) AS total FROM material_chunks WHERE material_id = ?"
+            " AND owner_id = ?",
+            (material_id, str(resolved)),
         ).fetchone()
         return int(row["total"])
 
     def list_for_project(
-        self, project_id: ProjectId, *, current: frozenset[tuple[str, str]]
+        self,
+        project_id: ProjectId,
+        *,
+        current: frozenset[tuple[str, str]],
+        owner: UserId | None = None,
     ) -> tuple[MaterialSummaryView, ...]:
+        resolved = require_owner(owner)
         rows = self._connection.execute(
             """
             SELECT m.*, (SELECT COUNT(*) FROM material_chunks c WHERE c.material_id = m.material_id)
@@ -242,10 +248,10 @@ class SqliteMaterialStore:
                    (SELECT COALESCE(SUM(LENGTH(c.text)), 0) FROM material_chunks c
                     WHERE c.material_id = m.material_id) AS chars
             FROM materials m
-            WHERE m.project_id = ?
+            WHERE m.project_id = ? AND m.owner_id = ?
             ORDER BY m.created_at DESC, m.material_id DESC
             """,
-            (str(project_id),),
+            (str(project_id), str(resolved)),
         ).fetchall()
         return tuple(
             material_summary_view(
@@ -257,21 +263,30 @@ class SqliteMaterialStore:
             for row in rows
         )
 
-    def count_for_project(self, project_id: ProjectId) -> int:
+    def count_for_project(
+        self, project_id: ProjectId, *, owner: UserId | None = None
+    ) -> int:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT COUNT(*) AS total FROM materials WHERE project_id = ?", (str(project_id),)
+            "SELECT COUNT(*) AS total FROM materials WHERE project_id = ? AND owner_id = ?",
+            (str(project_id), str(resolved)),
         ).fetchone()
         return int(row["total"])
 
-    def find_by_sha(self, project_id: ProjectId, sha256: str) -> MaterialPacket | None:
-        return self._find_by_sha(project_id, sha256)
+    def find_by_sha(
+        self, project_id: ProjectId, sha256: str, *, owner: UserId | None = None
+    ) -> MaterialPacket | None:
+        return self._find_by_sha(project_id, sha256, owner=owner)
 
     # ── 内部 ──────────────────────────────────────────────────────────────
 
-    def _find_by_sha(self, project_id: ProjectId, sha256: str) -> MaterialPacket | None:
+    def _find_by_sha(
+        self, project_id: ProjectId, sha256: str, *, owner: UserId | None = None
+    ) -> MaterialPacket | None:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT * FROM materials WHERE project_id = ? AND sha256 = ?",
-            (str(project_id), sha256),
+            "SELECT * FROM materials WHERE project_id = ? AND sha256 = ? AND owner_id = ?",
+            (str(project_id), sha256, str(resolved)),
         ).fetchone()
         return None if row is None else self._packet(row)
 
@@ -347,7 +362,7 @@ class SqliteLikeRetriever:
                m.title, m.source_ref
         FROM material_chunks c
         JOIN materials m ON m.material_id = c.material_id
-        WHERE m.project_id = ? AND c.text LIKE ? ESCAPE '\\'
+        WHERE m.project_id = ? AND m.owner_id = ? AND c.text LIKE ? ESCAPE '\\'
         ORDER BY c.material_id, c.ordinal
     """
 
@@ -355,13 +370,20 @@ class SqliteLikeRetriever:
         self._connection = connection
 
     def search(
-        self, *, project_id: ProjectId, query: str, limit: int = 5
+        self,
+        *,
+        project_id: ProjectId,
+        query: str,
+        limit: int = 5,
+        owner: UserId | None = None,
     ) -> tuple[MaterialHit, ...]:
+        resolved = require_owner(owner)
         needle = query.strip()
         if needle == "" or limit <= 0:
             return ()
         rows = self._connection.execute(
-            self._SQL, (str(project_id), f"%{_like_literal(needle)}%")
+            self._SQL,
+            (str(project_id), str(resolved), f"%{_like_literal(needle)}%"),
         ).fetchall()
         scored = sorted(
             (_score(row, needle) for row in rows),

@@ -31,7 +31,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from pmstudio.infrastructure.sqlite import database, serialization
+from pmstudio.infrastructure.sqlite import database, owner_scope, serialization
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
@@ -299,10 +299,15 @@ def test_list_rounds_returns_newest_first_and_skips_broken_rows(tmp_path):
                 )
             )
         connection.execute(
-            "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,"
-            " created_at, updated_at) VALUES ('r-bad', ?, 'started', 'none',"
+            "INSERT INTO rounds (round_id, project_id, owner_id, step, waiting_on, payload,"
+            " created_at, updated_at) VALUES ('r-bad', ?, ?, 'started', 'none',"
             " '{不是 JSON', ?, ?)",
-            (str(PROJECT), NOW.isoformat(), NOW.isoformat()),
+            (
+                str(PROJECT),
+                owner_scope.current_owner_scope(),
+                NOW.isoformat(),
+                NOW.isoformat(),
+            ),
         )
 
         heads = index.list_rounds(PROJECT, limit=10)
@@ -377,10 +382,15 @@ def test_material_references_tells_which_numbers_came_from_which_material(tmp_pa
             rounds.save(first)
             rounds.save(second)
         connection.execute(
-            "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,"
-            " created_at, updated_at) VALUES ('r-bad', ?, 'started', 'none',"
+            "INSERT INTO rounds (round_id, project_id, owner_id, step, waiting_on, payload,"
+            " created_at, updated_at) VALUES ('r-bad', ?, ?, 'started', 'none',"
             " '{不是 JSON', ?, ?)",
-            (str(PROJECT), NOW.isoformat(), NOW.isoformat()),
+            (
+                str(PROJECT),
+                owner_scope.current_owner_scope(),
+                NOW.isoformat(),
+                NOW.isoformat(),
+            ),
         )
 
         references = index.material_references(PROJECT)

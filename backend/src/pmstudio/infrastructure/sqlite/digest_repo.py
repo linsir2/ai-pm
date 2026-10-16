@@ -9,6 +9,8 @@ import sqlite3
 
 from pmstudio.application.errors import DigestAlreadyWritten
 from pmstudio.domain.memory.digest import RoundDigest
+from pmstudio.domain.shared.ids import UserId
+from pmstudio.infrastructure.sqlite.owner_scope import require_owner
 
 
 def _now() -> str:
@@ -22,21 +24,24 @@ class SqliteDigestRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def save(self, digest: RoundDigest) -> None:
+    def save(self, digest: RoundDigest, *, owner: UserId | None = None) -> None:
         """写入一条轮次摘要。**只追加**：同一个 round 写第二次会明确报错。
 
         不用 `INSERT OR IGNORE`：静默忽略会让"我以为写进去了"和"其实没写"长得一样，
         而这正是本项目不许的那类假装成功。
         """
 
+        resolved = require_owner(owner)
         try:
             self._connection.execute(
                 "INSERT INTO round_digests"
-                " (id, project_id, round_id, summary, sections, features, outcomes, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " (id, project_id, owner_id, round_id, summary, sections, features,"
+                " outcomes, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     f"digest-{digest.round_id}",
                     digest.project_id,
+                    str(resolved),
                     digest.round_id,
                     digest.summary,
                     json.dumps(digest.sections_touched, ensure_ascii=False),
@@ -48,19 +53,24 @@ class SqliteDigestRepository:
         except sqlite3.IntegrityError as error:
             raise DigestAlreadyWritten(digest.round_id) from error
 
-    def get(self, round_id: str) -> RoundDigest | None:
+    def get(self, round_id: str, *, owner: UserId | None = None) -> RoundDigest | None:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT * FROM round_digests WHERE id = ?", (f"digest-{round_id}",)
+            "SELECT * FROM round_digests WHERE id = ? AND owner_id = ?",
+            (f"digest-{round_id}", str(resolved)),
         ).fetchone()
         if row is None:
             return None
         return self._row_to_digest(row)
 
-    def recent(self, project_id: str, limit: int = 3) -> tuple[RoundDigest, ...]:
+    def recent(
+        self, project_id: str, limit: int = 3, *, owner: UserId | None = None
+    ) -> tuple[RoundDigest, ...]:
+        resolved = require_owner(owner)
         rows = self._connection.execute(
-            "SELECT * FROM round_digests WHERE project_id = ?"
+            "SELECT * FROM round_digests WHERE project_id = ? AND owner_id = ?"
             " ORDER BY id DESC LIMIT ?",
-            (str(project_id), limit),
+            (str(project_id), str(resolved), limit),
         ).fetchall()
         return tuple(self._row_to_digest(row) for row in rows)
 

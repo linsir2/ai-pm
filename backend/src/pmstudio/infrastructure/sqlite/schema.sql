@@ -219,3 +219,20 @@ CREATE TABLE IF NOT EXISTS inspirations (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_inspirations_project ON inspirations(project_id, id);
+
+-- 多用户改造（Task 5）：owner 列的索引。读过滤一律 `AND owner_id = ?`，写盖章 `owner_id`。
+-- 复合索引把 owner 放前导列（查询总是先按 owner 收窄），后跟该表的主查询维度。
+-- 主键 / 唯一约束**一字不动**（`materials` 去重键仍是 `(project_id, sha256)`）。
+CREATE INDEX IF NOT EXISTS idx_documents_owner ON documents(owner_id);
+CREATE INDEX IF NOT EXISTS idx_document_versions_owner ON document_versions(owner_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_rounds_owner ON rounds(owner_id, project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_ledgers_owner ON evidence_ledgers(owner_id);
+CREATE INDEX IF NOT EXISTS idx_materials_owner ON materials(owner_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_material_chunks_owner ON material_chunks(owner_id, material_id);
+CREATE INDEX IF NOT EXISTS idx_explorations_owner ON explorations(owner_id, project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_discussions_owner ON discussions(owner_id, project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_project_memory_owner ON project_memory(owner_id);
+CREATE INDEX IF NOT EXISTS idx_observations_owner ON observations(owner_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_round_digests_owner ON round_digests(owner_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_inspirations_owner ON inspirations(owner_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_templates_owner ON templates(owner_id);

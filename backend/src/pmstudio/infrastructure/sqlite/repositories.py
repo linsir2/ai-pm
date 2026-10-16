@@ -35,9 +35,16 @@ from pmstudio.domain.memory.memory import ProjectMemory
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
-from pmstudio.domain.shared.ids import DiscussionId, ExplorationId, ProjectId, RoundId
+from pmstudio.domain.shared.ids import (
+    DiscussionId,
+    ExplorationId,
+    ProjectId,
+    RoundId,
+    UserId,
+)
 from pmstudio.domain.shared.template import DocumentTemplate, standard_template
 from pmstudio.infrastructure.sqlite import serialization as ser
+from pmstudio.infrastructure.sqlite.owner_scope import require_owner
 
 
 def _now() -> str:
@@ -48,8 +55,9 @@ class SqliteDocumentRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def get(self, project_id: ProjectId) -> Document:
-        row = self._row(project_id)
+    def get(self, project_id: ProjectId, *, owner: UserId | None = None) -> Document:
+        resolved = require_owner(owner)
+        row = self._row(project_id, owner=resolved)
         versions = tuple(
             ser.version_from_row(
                 {
@@ -58,7 +66,7 @@ class SqliteDocumentRepository:
                     "snapshot": json.loads(item["snapshot"]),
                 }
             )
-            for item in self.version_rows(project_id)
+            for item in self.version_rows(project_id, owner=resolved)
         )
         return ser.document_from_row(
             {
@@ -78,14 +86,15 @@ class SqliteDocumentRepository:
             versions,
         )
 
-    def save(self, document: Document) -> None:
+    def save(self, document: Document, *, owner: UserId | None = None) -> None:
+        resolved = require_owner(owner)
         row = ser.document_to_row(document, now=datetime.now(UTC))
         self._connection.execute(
             """
-            INSERT INTO documents (project_id, document_id, title, template, blocks,
+            INSERT INTO documents (project_id, owner_id, document_id, title, template, blocks,
                                    preference_entries, tombstones, created_at, updated_at)
-            VALUES (:project_id, :document_id, :title, :template, :blocks, :preference_entries,
-                    :tombstones, :created_at, :updated_at)
+            VALUES (:project_id, :owner_id, :document_id, :title, :template, :blocks,
+                    :preference_entries, :tombstones, :created_at, :updated_at)
             ON CONFLICT(project_id) DO UPDATE SET
                 title = excluded.title,
                 template = excluded.template,
@@ -96,6 +105,7 @@ class SqliteDocumentRepository:
             """,
             {
                 **row,
+                "owner_id": str(resolved),
                 "template": json.dumps(row["template"], ensure_ascii=False),
                 "blocks": json.dumps(row["blocks"], ensure_ascii=False),
                 "preference_entries": json.dumps(
@@ -109,13 +119,14 @@ class SqliteDocumentRepository:
             self._connection.execute(
                 """
                 INSERT OR IGNORE INTO document_versions
-                    (project_id, version_no, trigger, summary, changed_block_ids,
+                    (project_id, owner_id, version_no, trigger, summary, changed_block_ids,
                      snapshot, created_at)
-                VALUES (:project_id, :version_no, :trigger, :summary, :changed_block_ids,
-                        :snapshot, :created_at)
+                VALUES (:project_id, :owner_id, :version_no, :trigger, :summary,
+                        :changed_block_ids, :snapshot, :created_at)
                 """,
                 {
                     **payload,
+                    "owner_id": str(resolved),
                     "changed_block_ids": json.dumps(
                         payload["changed_block_ids"], ensure_ascii=False
                     ),
@@ -123,17 +134,22 @@ class SqliteDocumentRepository:
                 },
             )
 
-    def version_rows(self, project_id: ProjectId) -> list[sqlite3.Row]:
+    def version_rows(
+        self, project_id: ProjectId, *, owner: UserId | None = None
+    ) -> list[sqlite3.Row]:
+        resolved = require_owner(owner)
         return list(
             self._connection.execute(
-                "SELECT * FROM document_versions WHERE project_id = ? ORDER BY version_no",
-                (str(project_id),),
+                "SELECT * FROM document_versions WHERE project_id = ? AND owner_id = ?"
+                " ORDER BY version_no",
+                (str(project_id), str(resolved)),
             )
         )
 
-    def _row(self, project_id: ProjectId) -> sqlite3.Row:
+    def _row(self, project_id: ProjectId, *, owner: UserId) -> sqlite3.Row:
         row = self._connection.execute(
-            "SELECT * FROM documents WHERE project_id = ?", (str(project_id),)
+            "SELECT * FROM documents WHERE project_id = ? AND owner_id = ?",
+            (str(project_id), str(owner)),
         ).fetchone()
         if row is None:
             raise UnknownProject(project_id)
@@ -144,9 +160,11 @@ class SqliteRoundRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def get(self, round_id: RoundId) -> Round:
+    def get(self, round_id: RoundId, *, owner: UserId | None = None) -> Round:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT * FROM rounds WHERE round_id = ?", (str(round_id),)
+            "SELECT * FROM rounds WHERE round_id = ? AND owner_id = ?",
+            (str(round_id), str(resolved)),
         ).fetchone()
         if row is None:
             raise UnknownRound(round_id)
@@ -159,13 +177,14 @@ class SqliteRoundRepository:
             waiting_on=WaitingOn(row["waiting_on"]),
         )
 
-    def save(self, round_: Round) -> None:
+    def save(self, round_: Round, *, owner: UserId | None = None) -> None:
+        resolved = require_owner(owner)
         payload = json.dumps(ser.round_to_payload(round_), ensure_ascii=False)
         self._connection.execute(
             """
-            INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,
+            INSERT INTO rounds (round_id, project_id, owner_id, step, waiting_on, payload,
                                 created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(round_id) DO UPDATE SET
                 step = excluded.step,
                 waiting_on = excluded.waiting_on,
@@ -175,6 +194,7 @@ class SqliteRoundRepository:
             (
                 str(round_.round_id),
                 str(round_.project_id),
+                str(resolved),
                 str(round_.step),
                 str(round_.waiting_on),
                 payload,
@@ -183,11 +203,14 @@ class SqliteRoundRepository:
             ),
         )
 
-    def latest_round_id(self, project_id: ProjectId) -> RoundId | None:
+    def latest_round_id(
+        self, project_id: ProjectId, *, owner: UserId | None = None
+    ) -> RoundId | None:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT round_id FROM rounds WHERE project_id = ? "
+            "SELECT round_id FROM rounds WHERE project_id = ? AND owner_id = ? "
             "ORDER BY created_at DESC, rowid DESC LIMIT 1",
-            (str(project_id),),
+            (str(project_id), str(resolved)),
         ).fetchone()
         return None if row is None else RoundId(row["round_id"])
 
@@ -202,23 +225,28 @@ class SqliteExplorationRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def get(self, exploration_id: ExplorationId) -> Exploration:
+    def get(
+        self, exploration_id: ExplorationId, *, owner: UserId | None = None
+    ) -> Exploration:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT * FROM explorations WHERE exploration_id = ?", (str(exploration_id),)
+            "SELECT * FROM explorations WHERE exploration_id = ? AND owner_id = ?",
+            (str(exploration_id), str(resolved)),
         ).fetchone()
         if row is None:
             raise UnknownExploration(exploration_id)
         return self._from_row(row)
 
-    def save(self, exploration: Exploration) -> None:
+    def save(self, exploration: Exploration, *, owner: UserId | None = None) -> None:
+        resolved = require_owner(owner)
         payload = json.dumps(
             ser.exploration_to_payload(exploration), ensure_ascii=False
         )
         self._connection.execute(
             """
-            INSERT INTO explorations (exploration_id, project_id, kind, status, payload,
-                                      created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO explorations (exploration_id, project_id, owner_id, kind, status,
+                                      payload, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(exploration_id) DO UPDATE SET
                 kind = excluded.kind,
                 status = excluded.status,
@@ -228,6 +256,7 @@ class SqliteExplorationRepository:
             (
                 str(exploration.exploration_id),
                 str(exploration.project_id),
+                str(resolved),
                 str(exploration.kind),
                 str(exploration.status),
                 payload,
@@ -237,12 +266,13 @@ class SqliteExplorationRepository:
         )
 
     def list_for_project(
-        self, project_id: ProjectId, *, limit: int = 20
+        self, project_id: ProjectId, *, owner: UserId | None = None, limit: int = 20
     ) -> tuple[Exploration, ...]:
+        resolved = require_owner(owner)
         rows = self._connection.execute(
-            "SELECT * FROM explorations WHERE project_id = ? "
+            "SELECT * FROM explorations WHERE project_id = ? AND owner_id = ? "
             "ORDER BY created_at DESC, rowid DESC LIMIT ?",
-            (str(project_id), limit),
+            (str(project_id), str(resolved), limit),
         ).fetchall()
         found: list[Exploration] = []
         for row in rows:
@@ -273,21 +303,26 @@ class SqliteDiscussionRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def get(self, discussion_id: DiscussionId) -> Discussion:
+    def get(
+        self, discussion_id: DiscussionId, *, owner: UserId | None = None
+    ) -> Discussion:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT * FROM discussions WHERE discussion_id = ?", (str(discussion_id),)
+            "SELECT * FROM discussions WHERE discussion_id = ? AND owner_id = ?",
+            (str(discussion_id), str(resolved)),
         ).fetchone()
         if row is None:
             raise UnknownDiscussion(discussion_id)
         return self._from_row(row)
 
-    def save(self, discussion: Discussion) -> None:
+    def save(self, discussion: Discussion, *, owner: UserId | None = None) -> None:
+        resolved = require_owner(owner)
         payload = json.dumps(ser.discussion_to_payload(discussion), ensure_ascii=False)
         self._connection.execute(
             """
-            INSERT INTO discussions (discussion_id, project_id, status, payload,
+            INSERT INTO discussions (discussion_id, project_id, owner_id, status, payload,
                                      created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(discussion_id) DO UPDATE SET
                 status = excluded.status,
                 payload = excluded.payload,
@@ -296,6 +331,7 @@ class SqliteDiscussionRepository:
             (
                 str(discussion.discussion_id),
                 str(discussion.project_id),
+                str(resolved),
                 str(discussion.status),
                 payload,
                 discussion.created_at.isoformat(),
@@ -304,12 +340,13 @@ class SqliteDiscussionRepository:
         )
 
     def list_for_project(
-        self, project_id: ProjectId, *, limit: int = 20
+        self, project_id: ProjectId, *, owner: UserId | None = None, limit: int = 20
     ) -> tuple[Discussion, ...]:
+        resolved = require_owner(owner)
         rows = self._connection.execute(
-            "SELECT * FROM discussions WHERE project_id = ? "
+            "SELECT * FROM discussions WHERE project_id = ? AND owner_id = ? "
             "ORDER BY created_at DESC, rowid DESC LIMIT ?",
-            (str(project_id), limit),
+            (str(project_id), str(resolved), limit),
         ).fetchall()
         found: list[Discussion] = []
         for row in rows:
@@ -333,25 +370,29 @@ class SqliteEvidenceRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def get(self, project_id: ProjectId) -> EvidenceLedger:
+    def get(self, project_id: ProjectId, *, owner: UserId | None = None) -> EvidenceLedger:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT payload FROM evidence_ledgers WHERE project_id = ?", (str(project_id),)
+            "SELECT payload FROM evidence_ledgers WHERE project_id = ? AND owner_id = ?",
+            (str(project_id), str(resolved)),
         ).fetchone()
         if row is None:
             raise UnknownProject(project_id)
         return ser.ledger_from_json(project_id, json.loads(row["payload"]))
 
-    def save(self, ledger: EvidenceLedger) -> None:
+    def save(self, ledger: EvidenceLedger, *, owner: UserId | None = None) -> None:
+        resolved = require_owner(owner)
         self._connection.execute(
             """
-            INSERT INTO evidence_ledgers (project_id, payload, updated_at)
-            VALUES (?, ?, ?)
+            INSERT INTO evidence_ledgers (project_id, owner_id, payload, updated_at)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(project_id) DO UPDATE SET
                 payload = excluded.payload,
                 updated_at = excluded.updated_at
             """,
             (
                 str(ledger.project_id),
+                str(resolved),
                 json.dumps(ser.ledger_to_json(ledger), ensure_ascii=False),
                 _now(),
             ),
@@ -383,7 +424,10 @@ class SqliteWorkspaceIndex:
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
-    def summary(self, project_id: ProjectId) -> ProjectSummaryView:
+    def summary(
+        self, project_id: ProjectId, *, owner: UserId | None = None
+    ) -> ProjectSummaryView:
+        resolved = require_owner(owner)
         row = self._connection.execute(
             """
             SELECT d.project_id AS project_id, d.title AS title,
@@ -391,10 +435,10 @@ class SqliteWorkspaceIndex:
                    d.template AS template
             FROM documents d
             LEFT JOIN document_versions v ON v.project_id = d.project_id
-            WHERE d.project_id = ?
+            WHERE d.project_id = ? AND d.owner_id = ?
             GROUP BY d.project_id, d.title, d.updated_at, d.template
             """,
-            (str(project_id),),
+            (str(project_id), str(resolved)),
         ).fetchone()
         if row is None:
             raise UnknownProject(project_id)
@@ -408,7 +452,8 @@ class SqliteWorkspaceIndex:
             template_title=template_title,
         )
 
-    def list_summaries(self) -> tuple[ProjectSummaryView, ...]:
+    def list_summaries(self, *, owner: UserId | None = None) -> tuple[ProjectSummaryView, ...]:
+        resolved = require_owner(owner)
         rows = self._connection.execute(
             """
             SELECT d.project_id AS project_id, d.title AS title,
@@ -416,9 +461,11 @@ class SqliteWorkspaceIndex:
                    d.template AS template
             FROM documents d
             LEFT JOIN document_versions v ON v.project_id = d.project_id
+            WHERE d.owner_id = ?
             GROUP BY d.project_id, d.title, d.updated_at, d.template
             ORDER BY d.updated_at DESC
-            """
+            """,
+            (str(resolved),),
         ).fetchall()
         summaries: list[ProjectSummaryView] = []
         for row in rows:
@@ -435,11 +482,15 @@ class SqliteWorkspaceIndex:
             )
         return tuple(summaries)
 
-    def latest_round_id(self, project_id: ProjectId) -> RoundId | None:
-        return SqliteRoundRepository(self._connection).latest_round_id(project_id)
+    def latest_round_id(
+        self, project_id: ProjectId, *, owner: UserId | None = None
+    ) -> RoundId | None:
+        return SqliteRoundRepository(self._connection).latest_round_id(
+            project_id, owner=owner
+        )
 
     def recent_rounds(
-        self, project_id: ProjectId, *, limit: int = 5
+        self, project_id: ProjectId, *, owner: UserId | None = None, limit: int = 5
     ) -> tuple[RoundOutcomeView, ...]:
         """最近几轮的**结果投影**（C4：连续几轮没采用席位提议）。
 
@@ -447,15 +498,16 @@ class SqliteWorkspaceIndex:
         同刻的按 `round_id` 倒序（测试里两轮常在同一时刻）。
         """
 
+        resolved = require_owner(owner)
         rows = self._connection.execute(
             """
             SELECT round_id, step, payload
             FROM rounds
-            WHERE project_id = ?
+            WHERE project_id = ? AND owner_id = ?
             ORDER BY created_at DESC, round_id DESC
             LIMIT ?
             """,
-            (str(project_id), limit),
+            (str(project_id), str(resolved), limit),
         ).fetchall()
         outcomes: list[RoundOutcomeView] = []
         for row in rows:
@@ -471,7 +523,7 @@ class SqliteWorkspaceIndex:
         return tuple(outcomes)
 
     def list_rounds(
-        self, project_id: ProjectId, *, limit: int = 20
+        self, project_id: ProjectId, *, owner: UserId | None = None, limit: int = 20
     ) -> tuple[RoundHeadView, ...]:
         """这个项目走过的轮次，**最新在前**。与 `recent_rounds` 同一个形状，但给人看。
 
@@ -480,15 +532,16 @@ class SqliteWorkspaceIndex:
         ② **坏行跳过，不抛**——老库或手工改坏的 payload 不该让整个项目打不开。
         """
 
+        resolved = require_owner(owner)
         rows = self._connection.execute(
             """
             SELECT round_id, step, payload, created_at
             FROM rounds
-            WHERE project_id = ?
+            WHERE project_id = ? AND owner_id = ?
             ORDER BY created_at DESC, round_id DESC
             LIMIT ?
             """,
-            (str(project_id), limit),
+            (str(project_id), str(resolved), limit),
         ).fetchall()
         heads: list[RoundHeadView] = []
         for row in rows:
@@ -507,22 +560,23 @@ class SqliteWorkspaceIndex:
         return tuple(heads)
 
     def recent_opinions(
-        self, project_id: ProjectId, *, limit_rounds: int = 10
+        self, project_id: ProjectId, *, owner: UserId | None = None, limit_rounds: int = 10
     ) -> tuple[OpinionSourceView, ...]:
         """最近几轮的席位发言（F6 的搜索源之一）。**每一趟都收**（`seat_reviews` 里全在）。
 
         与 `list_rounds` 同一条只读口径：不建表、不缓存；坏行跳过不抛。
         """
 
+        resolved = require_owner(owner)
         rows = self._connection.execute(
             """
             SELECT round_id, payload
             FROM rounds
-            WHERE project_id = ?
+            WHERE project_id = ? AND owner_id = ?
             ORDER BY created_at DESC, round_id DESC
             LIMIT ?
             """,
-            (str(project_id), limit_rounds),
+            (str(project_id), str(resolved), limit_rounds),
         ).fetchall()
         found: list[OpinionSourceView] = []
         for row in rows:
@@ -552,7 +606,9 @@ class SqliteWorkspaceIndex:
                         )
         return tuple(found)
 
-    def material_references(self, project_id: ProjectId) -> dict[str, tuple[str, ...]]:
+    def material_references(
+        self, project_id: ProjectId, *, owner: UserId | None = None
+    ) -> dict[str, tuple[str, ...]]:
         """这份材料被哪些编号引用过：`{material_id: (E4, E9)}`（`P19` 的冻结判据）。
 
         三件事说清楚：
@@ -564,9 +620,11 @@ class SqliteWorkspaceIndex:
         ③ **不限轮数**（不是"最近 N 轮"）：冻结判据必须看到全部历史，漏一轮就会误删。
         """
 
+        resolved = require_owner(owner)
         rows = self._connection.execute(
-            "SELECT payload FROM rounds WHERE project_id = ? ORDER BY created_at, round_id",
-            (str(project_id),),
+            "SELECT payload FROM rounds WHERE project_id = ? AND owner_id = ?"
+            " ORDER BY created_at, round_id",
+            (str(project_id), str(resolved)),
         ).fetchall()
         found: dict[str, list[str]] = {}
         for row in rows:
@@ -604,9 +662,13 @@ class SqliteMemoryRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def get(self, project_id: ProjectId) -> ProjectMemory:
+    def get(
+        self, project_id: ProjectId, *, owner: UserId | None = None
+    ) -> ProjectMemory:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT payload FROM project_memory WHERE project_id = ?", (str(project_id),)
+            "SELECT payload FROM project_memory WHERE project_id = ? AND owner_id = ?",
+            (str(project_id), str(resolved)),
         ).fetchone()
         if row is None:
             return ProjectMemory.empty(project_id)
@@ -616,13 +678,16 @@ class SqliteMemoryRepository:
             return ProjectMemory.empty(project_id)
         return ser.memory_from_payload(payload, project_id=project_id)
 
-    def save(self, memory: ProjectMemory) -> None:
+    def save(self, memory: ProjectMemory, *, owner: UserId | None = None) -> None:
+        resolved = require_owner(owner)
         self._connection.execute(
-            "INSERT INTO project_memory (project_id, payload, updated_at) VALUES (?, ?, ?)"
+            "INSERT INTO project_memory (project_id, owner_id, payload, updated_at)"
+            " VALUES (?, ?, ?, ?)"
             " ON CONFLICT(project_id) DO UPDATE SET payload = excluded.payload,"
             " updated_at = excluded.updated_at",
             (
                 str(memory.project_id),
+                str(resolved),
                 json.dumps(ser.memory_to_payload(memory), ensure_ascii=False),
                 _now(),
             ),
@@ -636,15 +701,20 @@ class SqliteTemplateRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def save(self, template: DocumentTemplate, *, builtin: bool) -> None:
+    def save(
+        self, template: DocumentTemplate, *, builtin: bool, owner: UserId | None = None
+    ) -> None:
+        # builtin 行是出厂模板：owner 留 NULL（人人可见）；自建模板必须盖章。
+        owner_id = None if builtin else str(require_owner(owner))
         self._connection.execute(
-            "INSERT INTO templates (template_id, title, spec, builtin, created_at,"
-            " updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+            "INSERT INTO templates (template_id, owner_id, title, spec, builtin, created_at,"
+            " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(template_id) DO UPDATE SET title = excluded.title,"
             " spec = excluded.spec, builtin = excluded.builtin,"
             " updated_at = excluded.updated_at",
             (
                 template.template_id,
+                owner_id,
                 template.title,
                 json.dumps(ser.template_to_json(template), ensure_ascii=False),
                 1 if builtin else 0,
@@ -653,11 +723,15 @@ class SqliteTemplateRepository:
             ),
         )
 
-    def list(self) -> tuple[TemplateEntry, ...]:
+    def list(self, *, owner: UserId | None = None) -> tuple[TemplateEntry, ...]:
+        resolved = require_owner(owner)
         rows = self._connection.execute(
             # 内置在前（画廊默认选 standard，它得排第一）；同组按标题排，不按 id
             # （按 id 的话 light 永在 standard 前面，默认高亮落在第二张卡上）。
-            "SELECT spec, builtin FROM templates ORDER BY builtin DESC, title"
+            # builtin 行 owner 为 NULL——人人可见（`owner_id IS NULL`）。
+            "SELECT spec, builtin FROM templates"
+            " WHERE owner_id IS NULL OR owner_id = ? ORDER BY builtin DESC, title",
+            (str(resolved),),
         ).fetchall()
         return tuple(
             TemplateEntry(
@@ -667,9 +741,12 @@ class SqliteTemplateRepository:
             for row in rows
         )
 
-    def get(self, template_id: str) -> TemplateEntry:
+    def get(self, template_id: str, *, owner: UserId | None = None) -> TemplateEntry:
+        resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT spec, builtin FROM templates WHERE template_id = ?", (template_id,)
+            "SELECT spec, builtin FROM templates"
+            " WHERE template_id = ? AND (owner_id IS NULL OR owner_id = ?)",
+            (template_id, str(resolved)),
         ).fetchone()
         if row is None:
             raise UnknownTemplate(template_id)

@@ -12,7 +12,7 @@ import pytest
 from pmstudio.domain.shared.errors import UnknownMemoryEntry
 from pmstudio.domain.shared.ids import ProjectId
 from pmstudio.domain.shared.memory import MemoryChange, MemoryKind, MemoryOp
-from pmstudio.infrastructure.sqlite import database, serialization
+from pmstudio.infrastructure.sqlite import database, owner_scope, serialization
 from pmstudio.infrastructure.sqlite.repositories import SqliteMemoryRepository
 from tests.support.doubles import SeqIds
 
@@ -97,9 +97,11 @@ def test_deleting_an_unknown_entry_is_refused():
 def test_a_broken_payload_is_skipped_not_raised(tmp_path):
     connection = database.connect(tmp_path / "pm.db")
     connection.execute(
-        "INSERT INTO project_memory (project_id, payload, updated_at) VALUES (?, ?, ?)",
+        "INSERT INTO project_memory (project_id, owner_id, payload, updated_at)"
+        " VALUES (?, ?, ?, ?)",
         (
             str(PROJECT),
+            owner_scope.current_owner_scope(),
             json.dumps(
                 {
                     "entries": [
@@ -132,8 +134,9 @@ def test_a_broken_payload_is_skipped_not_raised(tmp_path):
 def test_a_payload_that_is_not_json_reads_back_empty(tmp_path):
     connection = database.connect(tmp_path / "pm.db")
     connection.execute(
-        "INSERT INTO project_memory (project_id, payload, updated_at) VALUES (?, ?, ?)",
-        (str(PROJECT), "{不是 JSON", NOW.isoformat()),
+        "INSERT INTO project_memory (project_id, owner_id, payload, updated_at)"
+        " VALUES (?, ?, ?, ?)",
+        (str(PROJECT), owner_scope.current_owner_scope(), "{不是 JSON", NOW.isoformat()),
     )
 
     memory = SqliteMemoryRepository(connection).get(PROJECT)

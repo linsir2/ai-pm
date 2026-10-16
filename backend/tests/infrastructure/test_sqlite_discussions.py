@@ -20,7 +20,7 @@ from pmstudio.domain.discussion.thread import (
     ThreadStatus,
 )
 from pmstudio.domain.shared.ids import DiscussionId, EvidenceId, ProjectId
-from pmstudio.infrastructure.sqlite import database
+from pmstudio.infrastructure.sqlite import database, owner_scope
 from pmstudio.infrastructure.sqlite.repositories import SqliteDiscussionRepository
 from pmstudio.infrastructure.sqlite.serialization import (
     discussion_from_payload,
@@ -242,9 +242,10 @@ def test_list_returns_newest_first_and_skips_bad_rows(store) -> None:  # type: i
     repo.save(first)
     repo.save(second)
     connection.execute(
-        "INSERT INTO discussions (discussion_id, project_id, status, payload,"
-        " created_at, updated_at) VALUES ('d-bad','p1','open','{oops',"
-        "'2026-10-06T12:00:00+00:00','2026-10-06T12:00:00+00:00')"
+        "INSERT INTO discussions (discussion_id, project_id, owner_id, status, payload,"
+        " created_at, updated_at) VALUES ('d-bad','p1',?,'open','{oops',"
+        "'2026-10-06T12:00:00+00:00','2026-10-06T12:00:00+00:00')",
+        (owner_scope.current_owner_scope(),),
     )
 
     assert [str(item.discussion_id) for item in repo.list_for_project(ProjectId("p1"))] == [

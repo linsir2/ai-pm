@@ -13,7 +13,7 @@ from pmstudio.domain.exploration.exploration import (
 )
 from pmstudio.domain.exploration.item import BlindSpot, Grounding, Hypothesis
 from pmstudio.domain.shared.ids import EvidenceId, ExplorationId, ProjectId
-from pmstudio.infrastructure.sqlite import database
+from pmstudio.infrastructure.sqlite import database, owner_scope
 from pmstudio.infrastructure.sqlite.repositories import SqliteExplorationRepository
 
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
@@ -112,8 +112,9 @@ def test_list_is_newest_first_and_limited(store) -> None:  # type: ignore[no-unt
 def test_a_corrupted_row_is_skipped_not_raised(store) -> None:  # type: ignore[no-untyped-def]
     repo, connection = store
     connection.execute(
-        "INSERT INTO explorations (exploration_id, project_id, kind, status, payload,"
-        " created_at, updated_at) VALUES ('x-bad','p1','inquiry','done','{oops',"
-        "'2026-10-06T12:00:00+00:00','2026-10-06T12:00:00+00:00')"
+        "INSERT INTO explorations (exploration_id, project_id, owner_id, kind, status, payload,"
+        " created_at, updated_at) VALUES ('x-bad','p1',?,'inquiry','done','{oops',"
+        "'2026-10-06T12:00:00+00:00','2026-10-06T12:00:00+00:00')",
+        (owner_scope.current_owner_scope(),),
     )
     assert repo.list_for_project(ProjectId("p1")) == ()
