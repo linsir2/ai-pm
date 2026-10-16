@@ -26,6 +26,13 @@ LOGIN_LOCK_ENV = "PMSTUDIO_LOGIN_LOCK_MINUTES"
 SESSION_TTL_DAYS = 30
 SESSION_ABSOLUTE_DAYS = 90
 LOGIN_MAX_FAILS = 5
+
+#: 登录哈希隔离舱容量。默认 `min(4, CPU)`——4 个并发 argon2 约占 256MB，
+#: 再多对单事件循环里的登录吞吐没有额外收益，只挤占内存与 CPU。
+#: 与 `@fontsource` 无关、与密码强度无关：**它是内存与延迟的旋钮，不是安全参数**，
+#: 调小不会让密码更好猜，调大也不会（argon2 的 cost 参数才是那个旋钮）。
+LOGIN_HASH_CONCURRENCY_ENV = "PMSTUDIO_LOGIN_HASH_CONCURRENCY"
+LOGIN_HASH_CONCURRENCY = max(1, min(4, os.cpu_count() or 1))
 LOGIN_LOCK_MINUTES = 15
 
 #: 每次模型调用的墙钟上限（秒）。**按次算**，不是按一次业务动作算：
@@ -76,6 +83,8 @@ class Settings:
     session_ttl_days: int = SESSION_TTL_DAYS
     session_absolute_days: int = SESSION_ABSOLUTE_DAYS
     login_max_fails: int = LOGIN_MAX_FAILS
+    #: 登录哈希隔离舱容量（高并发 P1）。argon2 每次约 64MB，这个数同时是内存上限。
+    login_hash_concurrency: int = LOGIN_HASH_CONCURRENCY
     login_lock_minutes: int = LOGIN_LOCK_MINUTES
 
     def available_tool_keys(self) -> frozenset[str]:
@@ -140,6 +149,9 @@ class Settings:
                 source, SESSION_ABSOLUTE_ENV, SESSION_ABSOLUTE_DAYS
             ),
             login_max_fails=_positive_int(source, LOGIN_MAX_FAILS_ENV, LOGIN_MAX_FAILS),
+            login_hash_concurrency=_positive_int(
+                source, LOGIN_HASH_CONCURRENCY_ENV, LOGIN_HASH_CONCURRENCY
+            ),
             login_lock_minutes=_positive_int(
                 source, LOGIN_LOCK_ENV, LOGIN_LOCK_MINUTES
             ),

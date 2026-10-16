@@ -99,7 +99,11 @@ from pmstudio.infrastructure.graph.exploration_runner import ExplorationRunner
 from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.personas.catalog import load_personas
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
-from pmstudio.infrastructure.security import hash_password, verify_password
+from pmstudio.infrastructure.security import (
+    configure_gate,
+    hash_password,
+    verify_password_async,
+)
 from pmstudio.infrastructure.sqlite import database, owner_scope
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
@@ -179,6 +183,10 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     这一点由 `tests/architecture/test_no_fakes_in_production.py` 与
     `tests/bootstrap/test_container.py::test_container_has_no_fake_model_switch` 守着。
     """
+    # 登录哈希隔离舱（高并发 P1）：容量来自 settings，**必须在事件循环跑起来之前**设。
+    # argon2 每次约 64MB，这个数同时是内存上限——登录风暴排队，而不是把机器打死。
+    configure_gate(settings.login_hash_concurrency)
+
     connection = database.connect(settings.db_path)
     clock = SystemClock()
     ids = UuidIdGenerator()
@@ -645,7 +653,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             sessions=sessions,
             clock=clock,
             hash_password=hash_password,
-            verify_password=verify_password,
+            verify_password=verify_password_async,
             throttle=LoginThrottle(
                 max_fails=settings.login_max_fails,
                 lock_minutes=settings.login_lock_minutes,

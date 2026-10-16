@@ -447,11 +447,15 @@ async def test_nonexistent_login_runs_verify_once(make_app, monkeypatch):
 
     calls: list[tuple[str, str]] = []
 
-    def counting_verify(password_hash: str, password: str) -> bool:
+    # 高并发 P1 之后注入的落点换成了异步版（`verify_password_async`），
+    # **断言一字不改**：恒定耗时这件事没变，变的是它跑在哪个落点上。
+    async def counting_verify(password_hash: str, password: str) -> bool:
         calls.append((password_hash, password))
         return False
 
-    monkeypatch.setattr("pmstudio.bootstrap.container.verify_password", counting_verify)
+    monkeypatch.setattr(
+        "pmstudio.bootstrap.container.verify_password_async", counting_verify
+    )
     app, _ = make_app(replies={})
     async with async_client(app) as client:
         resp = await client.post(

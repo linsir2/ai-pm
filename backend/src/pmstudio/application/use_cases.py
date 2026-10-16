@@ -8,7 +8,7 @@ import asyncio
 import hashlib
 import secrets
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -6051,7 +6051,7 @@ class AuthenticateUser:
         sessions: SessionStore,
         clock: Clock,
         hash_password: Callable[[str], str],
-        verify_password: Callable[[str, str], bool],
+        verify_password: Callable[[str, str], Awaitable[bool]],
         throttle: LoginThrottle,
         ttl_days: int,
     ) -> None:
@@ -6069,11 +6069,11 @@ class AuthenticateUser:
         now = self._clock.now()
         key = f"{ip}|{username.strip()}"
         if self._throttle.locked(now=now, key=key):
-            self._verify(self._decoy_hash, password)  # 恒定耗时
+            await self._verify(self._decoy_hash, password)  # 恒定耗时
             raise _unauthenticated()
         record = self._users.get_by_name(username.strip())
         password_hash = record.password_hash if record is not None else self._decoy_hash
-        ok = self._verify(password_hash, password)
+        ok = await self._verify(password_hash, password)
         if not ok or record is None or record.status != "active":
             self._throttle.record(now=now, key=key)
             raise _unauthenticated()
