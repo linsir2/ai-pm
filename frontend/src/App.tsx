@@ -26,6 +26,7 @@ import { DiscussionScope } from "./components/DiscussionContext";
 import { ExplorationScope } from "./components/ExplorationContext";
 import { jumpToChunk, jumpToEntry, jumpToEvidence } from "./components/jump";
 import { featureFieldTarget, featureHome, resolveTarget, sectionOfEntry } from "./document/structure";
+import { AdminView } from "./components/AdminView";
 import { LoopColumn } from "./components/LoopColumn";
 import type { LoopTab } from "./components/LoopColumn";
 import { MaterialLibrary } from "./components/MaterialLibrary";
@@ -407,6 +408,29 @@ function Workspace() {
             }}
           />
         </main>
+      </div>
+    );
+  }
+
+  // 管理后台（Task 8）：权限判定在 `AdminView` 里做（非 admin 渲染"无权限"），
+  // 这里只按 view 摆位——与项目列表 / 模板库同一层，不挂工作区。
+  if (view === "admin") {
+    return (
+      <div className="shell shell--plain">
+        <TopBar
+          projects={projects}
+          project={null}
+          connection={state.connection}
+          onSelectProject={data.selectProject}
+          onExport={() => void data.exportMarkdown()}
+          onHome={() => setView("projects")}
+          onTemplates={() => setView("templates")}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+          user={user ?? undefined}
+          onLogout={() => void logout()}
+        />
+        <AdminView />
       </div>
     );
   }

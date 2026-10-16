@@ -42,6 +42,7 @@ from pmstudio.application.use_cases import (
     GetRound,
     GetSchema,
     GetTemplate,
+    GetUsage,
     GetVersionDiff,
     GetVersions,
     GetWorkspace,
@@ -116,6 +117,7 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
+from pmstudio.infrastructure.sqlite.usage import SqliteUsageRepository
 from pmstudio.infrastructure.sqlite.users import (
     SqliteSessionRepository,
     SqliteUserRepository,
@@ -184,6 +186,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     database.backfill_owners(connection)
     database.assert_owners_backfilled(connection)
     sessions = SqliteSessionRepository(connection)
+    # 管理端用量读模型（Task 8 / Ruling 7）：只读 join，无写能力
+    usage = SqliteUsageRepository(connection)
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
     explorations = SqliteExplorationRepository(connection)
@@ -654,6 +658,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         reject_user=RejectUser(users=users),
         ban_user=BanUser(users=users, sessions=sessions),
         list_users=ListUsers(users=users),
+        get_usage=GetUsage(users=users, usage=usage),
         users=users,
         sessions=sessions,
         cookie_max_age=settings.session_ttl_days * 86400,

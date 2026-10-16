@@ -17,10 +17,12 @@ from pmstudio.application.use_cases import (
     AuthenticateUser,
     BanUser,
     GetMe,
+    GetUsage,
     ListUsers,
     LogoutUser,
     RegisterUser,
     RejectUser,
+    UsageView,
     UserView,
 )
 from pmstudio.domain.shared.ids import UserId
@@ -40,6 +42,7 @@ class AuthServices:
     reject_user: RejectUser
     ban_user: BanUser
     list_users: ListUsers
+    get_usage: GetUsage
     users: UserStore
     sessions: SessionStore
     cookie_max_age: int
@@ -55,6 +58,14 @@ def _user_json(view: UserView) -> dict[str, str]:
         "username": view.username,
         "role": view.role,
         "status": view.status,
+    }
+
+
+def _usage_json(view: UsageView) -> dict[str, object]:
+    return {
+        "user_id": str(view.user_id),
+        "username": view.username,
+        "calls": view.calls,
     }
 
 
@@ -128,6 +139,16 @@ async def list_users(
 ) -> dict[str, list[dict[str, str]]]:
     listing = await _auth(request).list_users(actor=actor)
     return {"users": [_user_json(view) for view in listing]}
+
+
+@router.get("/auth/usage")
+async def usage(
+    request: Request, actor: Annotated[UserView, Depends(require_admin)]
+) -> dict[str, list[dict[str, object]]]:
+    """管理员：每个用户的用量（其项目下轮次的模型调用行数）。仅 admin。"""
+
+    listing = await _auth(request).get_usage(actor=actor)
+    return {"usage": [_usage_json(view) for view in listing]}
 
 
 @router.post("/auth/approve")

@@ -9,6 +9,8 @@ EXPECTED_PATHS = {
     "/api/auth/logout",
     "/api/auth/me",
     "/api/auth/users",
+    # 管理端用量（Ruling 7）：按 owner 聚合其轮次的 model_calls 行数
+    "/api/auth/usage",
     "/api/auth/approve",
     "/api/auth/reject",
     "/api/auth/ban",

@@ -32,6 +32,13 @@ export interface AuthUser {
   status: string;
 }
 
+/** 一个用户的用量投影（`GET /auth/usage`）：其项目下轮次的模型调用行数。 */
+export interface UsageRow {
+  user_id: string;
+  username: string;
+  calls: number;
+}
+
 /** 会话失效（任一端点回 401）时的**一处**通知口：AuthProvider 注册它清身份，
    界面据此回到登录页——省的每个调用各写一遍 401 处理。 */
 let notifyUnauthorized: (() => void) | null = null;
@@ -244,6 +251,9 @@ export const api = {
 
   /** 管理员：全部用户（基础字段）。 */
   users: () => request<{ users: AuthUser[] }>("/auth/users"),
+
+  /** 管理员：每个用户的用量（其项目下轮次的模型调用行数，join 聚合）。 */
+  usage: () => request<{ usage: UsageRow[] }>("/auth/usage"),
 
   /** 管理员：审批通过（pending → active）。 */
   approve: (userId: string) =>

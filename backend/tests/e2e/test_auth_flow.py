@@ -8,6 +8,7 @@
 """
 
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -19,6 +20,26 @@ from pmstudio.infrastructure.security import hash_password
 from tests.support.api_client import async_client
 
 ADMIN_PW = "admin-s3cret"
+ROUND_INPUT = "想做个订单导出"
+
+#: 起一轮够用的一份 analyzer 回包（照 `test_isolation_matrix.py` 的体例）。
+CLAIMS_REPLY = json.dumps(
+    {
+        "basis": "读了空文档",
+        "claims": [
+            {
+                "text": "要做一个订单导出功能",
+                "raw_span": "想做个订单导出",
+                "label": "need",
+                "zone": "body",
+                "section_id": "s5",
+                "feature_slug": "order-export",
+            }
+        ],
+        "seats": [{"seat_id": "seat.data_scale", "why": "导出要评估数据量"}],
+    },
+    ensure_ascii=False,
+)
 
 
 def _seed_active_admin(app):
@@ -30,6 +51,17 @@ def _seed_active_admin(app):
     )
     users.set_status(admin_id, "active")
     return admin_id
+
+
+def _seed_active_user(app, *, username: str, password: str, role: str = "user"):
+    """建一个 active 的普通用户，返回它的 user_id（测试侧，不演变接口）。"""
+
+    users = app.state.auth.users
+    user_id = users.register(
+        username=username, password_hash=hash_password(password), role=role
+    )
+    users.set_status(user_id, "active")
+    return user_id
 
 
 async def _admin_cookie(client):
@@ -195,6 +227,7 @@ ADMIN_ENDPOINTS = [
     ("post", "/api/auth/reject"),
     ("post", "/api/auth/ban"),
     ("get", "/api/auth/users"),
+    ("get", "/api/auth/usage"),
 ]
 
 
@@ -275,6 +308,58 @@ async def test_admin_lists_users_with_base_fields(make_app):
         assert {item["username"] for item in users} == {"root", "frank"}
         for item in users:
             assert set(item) == {"user_id", "username", "role", "status"}
+
+
+async def test_admin_usage_aggregates_model_calls_by_owner(make_app):
+    """用量端点（Ruling 7）：按 owner 聚合其项目下轮次的 `model_calls` 行数（join，不加列）。
+
+    真表真 join：起一轮拿到 `round_id`，经留样器写两行 `model_calls`，再读 `/auth/usage`。
+    没有轮次 / 没有调用的用户计 0——用量是行数，不是"有没有这个人"。
+    """
+
+    from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
+
+    app, _ = make_app(replies={"claims": CLAIMS_REPLY}, autologin=False)
+    async with async_client(app) as client:
+        admin_id = _seed_active_admin(app)
+        alice_id = _seed_active_user(app, username="alice", password="alice-s3cret")
+        admin = await _admin_cookie(client)
+
+        alice = await client.post(
+            "/api/auth/login", json={"username": "alice", "password": "alice-s3cret"}
+        )
+        assert alice.status_code == 200, alice.text
+        client.cookies = alice.cookies
+        project_id = (
+            await client.post("/api/projects", json={"title": "A 的项目"})
+        ).json()["project_id"]
+        started = await client.post(
+            f"/api/projects/{project_id}/rounds", json={"input": ROUND_INPUT}
+        )
+        assert started.status_code == 200, started.text
+        round_id = started.json()["round_id"]
+
+        # 留样器写两行（生产由网关旁路写；这里只借它的写路径，真表真列）
+        recorder = SqliteModelCallRecorder(app.state.auth.users._connection)
+        for _ in range(2):
+            recorder.record(
+                trace_id=round_id,
+                purpose="analyze",
+                model="scripted",
+                prompt_sha="sha",
+                prompt_text="p",
+                reply_text="r",
+                usage={},
+                duration_ms=1,
+                created_at=datetime.now(UTC),
+            )
+
+        client.cookies = admin
+        resp = await client.get("/api/auth/usage")
+        assert resp.status_code == 200, resp.text
+        counts = {row["user_id"]: row["calls"] for row in resp.json()["usage"]}
+        assert counts[str(alice_id)] == 2
+        assert counts[str(admin_id)] == 0
 
 
 async def test_nonexistent_login_runs_verify_once(make_app, monkeypatch):

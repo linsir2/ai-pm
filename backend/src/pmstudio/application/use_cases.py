@@ -185,6 +185,7 @@ from pmstudio.application.ports import (
     SeatDefinition,
     SessionStore,
     TemplateRepository,
+    UsageStore,
     UserRecord,
     UserStore,
     WebFetcher,
@@ -6186,7 +6187,7 @@ class BanUser:
 
 
 class ListUsers:
-    """管理员看全部用户（基础字段）。仅 admin；用量留给后续任务（owner 列就绪后）。"""
+    """管理员看全部用户（基础字段）。仅 admin。"""
 
     def __init__(self, *, users: UserStore) -> None:
         self._users = users
@@ -6194,3 +6195,36 @@ class ListUsers:
     async def __call__(self, *, actor: UserView) -> tuple[UserView, ...]:
         _require_admin(actor)
         return tuple(_user_view(record) for record in self._users.list_all())
+
+
+@dataclass(frozen=True, slots=True)
+class UsageView:
+    """一个用户的用量投影：用户名 + 其项目下轮次的模型调用行数（Task 8 / Ruling 7）。"""
+
+    user_id: UserId
+    username: str
+    calls: int
+
+
+class GetUsage:
+    """管理员看每个用户的模型调用数。仅 admin。
+
+    口径：按 owner 聚合其轮次的 `model_calls` 行数（join 取，`model_calls` 不加列）。
+    没有调用的用户计 0——左侧是**全部用户**（`users.list_all`），用量只补数不裁人。
+    """
+
+    def __init__(self, *, users: UserStore, usage: UsageStore) -> None:
+        self._users = users
+        self._usage = usage
+
+    async def __call__(self, *, actor: UserView) -> tuple[UsageView, ...]:
+        _require_admin(actor)
+        counts = self._usage.count_model_calls_by_owner()
+        return tuple(
+            UsageView(
+                user_id=record.user_id,
+                username=record.username,
+                calls=counts.get(record.user_id, 0),
+            )
+            for record in self._users.list_all()
+        )

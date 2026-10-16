@@ -386,6 +386,17 @@ class UserStore(Protocol):
 
 
 @runtime_checkable
+class UsageStore(Protocol):
+    """管理端的用量读模型（Task 8 / Ruling 7）：按 owner 聚合其轮次的 `model_calls` 行数。
+
+    `model_calls` 不加 owner 列（`§0.3`），实现以 join 取（`round_id → rounds.owner_id`）。
+    只保证"有调用的 owner"在键里；没有调用的用户由用例侧补 0。
+    """
+
+    def count_model_calls_by_owner(self) -> dict[UserId, int]: ...
+
+
+@runtime_checkable
 class SessionStore(Protocol):
     """会话表：**只认 token 的 sha256 摘要**，明文由调用方在算好 cookie 值时算掉。
 
