@@ -202,6 +202,8 @@ backend/src/pmstudio/
 ├── api/
 │   ├── app.py
 │   ├── routes.py
+│   ├── auth.py
+│   ├── deps.py
 │   ├── schemas.py
 │   ├── sse.py
 │   └── errors.py

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from pmstudio.api import routes
+from pmstudio.api import auth, routes
 from pmstudio.api.errors import body_for, status_for
 from pmstudio.application.ports import DiscussionRunner, ExplorationOrchestrator, RoundOrchestrator
 from pmstudio.application.use_cases import (
@@ -108,6 +108,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app = FastAPI(title="PM Studio", version="0.2.0")
     app.state.services = services
     app.include_router(routes.router, prefix="/api")
+    app.include_router(auth.router, prefix="/api")
 
     @app.exception_handler(DomainError)
     @app.exception_handler(ApplicationError)

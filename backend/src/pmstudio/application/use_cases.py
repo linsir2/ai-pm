@@ -6,11 +6,12 @@
 
 import asyncio
 import hashlib
+import secrets
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.discusser import Discusser, SayOutcome
@@ -182,7 +183,10 @@ from pmstudio.application.ports import (
     RoundCanceller,
     SeatCatalog,
     SeatDefinition,
+    SessionStore,
     TemplateRepository,
+    UserRecord,
+    UserStore,
     WebFetcher,
     WebSearchGateway,
     WorkspaceIndex,
@@ -306,6 +310,7 @@ from pmstudio.domain.shared.ids import (
     ProposalId,
     QuestionId,
     RoundId,
+    UserId,
 )
 from pmstudio.domain.shared.label import ClaimLabel, Zone
 from pmstudio.domain.shared.target import Target
@@ -5900,3 +5905,275 @@ def _review_personas(personas: tuple, persona_ids: tuple[str, ...]) -> tuple:
 
 def _review_failure_note(failure: BaseException) -> str:
     return getattr(failure, "message", None) or str(failure)
+
+
+# ── 认证与账号（多用户改造 Task 3）───────────────────────────────────────────
+#
+# 一个用例一个入口，全部 `async def __call__`。密码学（argon2）**不在这里**：
+# `hash_password` / `verify_password` 由装配点注入——application 不 import
+# infrastructure（分层守卫），注入的函数就是那层唯一的密码学落点。
+
+
+@dataclass(frozen=True, slots=True)
+class UserView:
+    """HTTP 层看到的用户投影。`require_user` 返它（Task 6 复用）。"""
+
+    user_id: UserId
+    username: str
+    role: str
+    status: str
+
+
+def _user_view(record: UserRecord) -> UserView:
+    return UserView(
+        user_id=record.user_id,
+        username=record.username,
+        role=record.role,
+        status=record.status,
+    )
+
+
+def _sha256(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _unauthenticated() -> ApplicationError:
+    """登录/会话失败只此一句、只此一码——不泄露"用户不存在"还是"密码错"。"""
+
+    return ApplicationError("用户名或密码不正确", code="unauthenticated")
+
+
+def _forbidden() -> ApplicationError:
+    return ApplicationError("需要管理员权限", code="forbidden")
+
+
+def _unknown_user(user_id: object) -> ApplicationError:
+    return ApplicationError(
+        f"找不到这个用户：{user_id}", code="unknown_user", user_id=str(user_id)
+    )
+
+
+def _require_admin(actor: UserView) -> None:
+    if actor.role != "admin":
+        raise _forbidden()
+
+
+class LoginThrottle:
+    """内存滑动窗口：按 `ip|用户名` 记失败，窗口内连败到阈值即锁（`§0.10`）。
+
+    不建表：重启清零可接受。单进程单事件循环，普通 dict 够用。
+    """
+
+    def __init__(self, *, max_fails: int, lock_minutes: int) -> None:
+        self._max_fails = max_fails
+        self._window = timedelta(minutes=lock_minutes)
+        self._failures: dict[str, list[datetime]] = {}
+
+    def _recent(self, now: datetime, key: str) -> list[datetime]:
+        cutoff = now - self._window
+        kept = [moment for moment in self._failures.get(key, []) if moment > cutoff]
+        self._failures[key] = kept
+        return kept
+
+    def locked(self, *, now: datetime, key: str) -> bool:
+        return len(self._recent(now, key)) >= self._max_fails
+
+    def record(self, *, now: datetime, key: str) -> None:
+        self._recent(now, key).append(now)
+
+    def clear(self, key: str) -> None:
+        self._failures.pop(key, None)
+
+
+class RegisterUser:
+    """开放注册，落一个 pending 用户；重名 409。密码在这里哈希（函数由装配点注入）。"""
+
+    def __init__(
+        self, *, users: UserStore, hash_password: Callable[[str], str]
+    ) -> None:
+        self._users = users
+        self._hash = hash_password
+
+    async def __call__(self, *, username: str, password: str) -> UserView:
+        name = username.strip()
+        if not name:
+            raise ShapeError("用户名不能为空")
+        if not password:
+            raise ShapeError("密码不能为空")
+        if self._users.get_by_name(name) is not None:
+            raise ApplicationError(
+                f"用户名已被占用：{name}", code="username_taken", username=name
+            )
+        user_id = self._users.register(
+            username=name, password_hash=self._hash(password)
+        )
+        return UserView(user_id=user_id, username=name, role="user", status="pending")
+
+
+class AuthenticateUser:
+    """登录：查人 → 核对密码 → 状态 active 才发会话。
+
+    失败（查无此人 / 密码错 / 非 active）**同一文案、同一耗时**：不存在的人也对
+    构造时备好的哨兵哈希跑一次 `verify_password`，堵住用户名枚举侧信道。
+    """
+
+    def __init__(
+        self,
+        *,
+        users: UserStore,
+        sessions: SessionStore,
+        clock: Clock,
+        hash_password: Callable[[str], str],
+        verify_password: Callable[[str, str], bool],
+        throttle: LoginThrottle,
+        ttl_days: int,
+    ) -> None:
+        self._users = users
+        self._sessions = sessions
+        self._clock = clock
+        self._verify = verify_password
+        self._throttle = throttle
+        self._ttl_days = ttl_days
+        self._decoy_hash = hash_password("pmstudio-not-a-real-password")
+
+    async def __call__(
+        self, *, username: str, password: str, ip: str = "", user_agent: str = ""
+    ) -> tuple[UserView, str]:
+        now = self._clock.now()
+        key = f"{ip}|{username.strip()}"
+        if self._throttle.locked(now=now, key=key):
+            self._verify(self._decoy_hash, password)  # 恒定耗时
+            raise _unauthenticated()
+        record = self._users.get_by_name(username.strip())
+        password_hash = record.password_hash if record is not None else self._decoy_hash
+        ok = self._verify(password_hash, password)
+        if not ok or record is None or record.status != "active":
+            self._throttle.record(now=now, key=key)
+            raise _unauthenticated()
+        self._throttle.clear(key)
+        token = secrets.token_urlsafe(32)
+        self._sessions.create(
+            user_id=record.user_id,
+            token_hash=_sha256(token),
+            expires_at=now + timedelta(days=self._ttl_days),
+            now=now,
+            ip=ip,
+            user_agent=user_agent,
+        )
+        return _user_view(record), token
+
+
+class GetMe:
+    """cookie 明文 token → 当前用户。过期 / 吊销 / 用户非 active → 401。
+
+    过期判断在这里（仓储不判）：先比 `expires_at`，再按半窗做滑动续期（`§0.11`）。
+    """
+
+    def __init__(
+        self, *, users: UserStore, sessions: SessionStore, clock: Clock, ttl_days: int
+    ) -> None:
+        self._users = users
+        self._sessions = sessions
+        self._clock = clock
+        self._ttl_days = ttl_days
+
+    async def __call__(self, *, token: str) -> UserView:
+        if not token:
+            raise _unauthenticated()
+        now = self._clock.now()
+        token_hash = _sha256(token)
+        session = self._sessions.get_by_token_hash(token_hash)
+        if session is None or session.expires_at <= now:
+            raise _unauthenticated()
+        record = self._users.get_by_id(session.user_id)
+        if record is None or record.status != "active":
+            raise _unauthenticated()
+        if now - session.last_seen_at > timedelta(days=self._ttl_days) / 2:
+            self._sessions.touch(
+                token_hash, now=now, expires_at=now + timedelta(days=self._ttl_days)
+            )
+        return _user_view(record)
+
+
+class LogoutUser:
+    """登出即吊销该用户全部活会话（仓储只有这一种吊销入口）。幂等。"""
+
+    def __init__(self, *, sessions: SessionStore) -> None:
+        self._sessions = sessions
+
+    async def __call__(self, *, token: str) -> None:
+        if not token:
+            return
+        session = self._sessions.get_by_token_hash(_sha256(token))
+        if session is not None:
+            self._sessions.revoke_user(session.user_id)
+
+
+class ApproveUser:
+    """管理员审批：pending → active。仅 admin。"""
+
+    def __init__(self, *, users: UserStore, clock: Clock) -> None:
+        self._users = users
+        self._clock = clock
+
+    async def __call__(self, *, actor: UserView, user_id: UserId) -> UserView:
+        _require_admin(actor)
+        if self._users.get_by_id(user_id) is None:
+            raise _unknown_user(user_id)
+        self._users.set_status(
+            user_id,
+            "active",
+            approved_by=str(actor.user_id),
+            approved_at=self._clock.now(),
+        )
+        updated = self._users.get_by_id(user_id)
+        if updated is None:
+            raise _unknown_user(user_id)
+        return _user_view(updated)
+
+
+class RejectUser:
+    """管理员拒绝：pending → rejected（此后登录一律 401）。仅 admin。"""
+
+    def __init__(self, *, users: UserStore) -> None:
+        self._users = users
+
+    async def __call__(self, *, actor: UserView, user_id: UserId) -> UserView:
+        _require_admin(actor)
+        if self._users.get_by_id(user_id) is None:
+            raise _unknown_user(user_id)
+        self._users.set_status(user_id, "rejected")
+        updated = self._users.get_by_id(user_id)
+        if updated is None:
+            raise _unknown_user(user_id)
+        return _user_view(updated)
+
+
+class BanUser:
+    """管理员封禁：置 banned 并**当场吊销全部会话**——下一次请求即 401。仅 admin。"""
+
+    def __init__(self, *, users: UserStore, sessions: SessionStore) -> None:
+        self._users = users
+        self._sessions = sessions
+
+    async def __call__(self, *, actor: UserView, user_id: UserId) -> UserView:
+        _require_admin(actor)
+        if self._users.get_by_id(user_id) is None:
+            raise _unknown_user(user_id)
+        self._users.set_status(user_id, "banned")
+        self._sessions.revoke_user(user_id)
+        updated = self._users.get_by_id(user_id)
+        if updated is None:
+            raise _unknown_user(user_id)
+        return _user_view(updated)
+
+
+class ListUsers:
+    """管理员看全部用户（基础字段）。仅 admin；用量留给后续任务（owner 列就绪后）。"""
+
+    def __init__(self, *, users: UserStore) -> None:
+        self._users = users
+
+    async def __call__(self, *, actor: UserView) -> tuple[UserView, ...]:
+        _require_admin(actor)
+        return tuple(_user_view(record) for record in self._users.list_all())

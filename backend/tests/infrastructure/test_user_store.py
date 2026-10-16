@@ -7,6 +7,7 @@
 import hashlib
 from datetime import UTC, datetime
 
+from pmstudio.domain.shared.ids import UserId
 from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.users import (
     SqliteSessionRepository,
@@ -67,6 +68,29 @@ def test_touch_renews_session(tmp_path):
     renewed = sessions.get_by_token_hash(token_hash)
     assert renewed.expires_at == later
     assert renewed.last_seen_at == later
+    connection.close()
+
+
+def test_get_by_id_round_trips(tmp_path):
+    connection = database.connect(tmp_path / "pm.db")
+    repo = SqliteUserRepository(connection)
+    user_id = repo.register(username="alice", password_hash="$argon2id$fake")
+
+    found = repo.get_by_id(user_id)
+    assert found is not None
+    assert found.user_id == user_id
+    assert found.username == "alice"
+    assert repo.get_by_id(UserId("u-nope")) is None
+    connection.close()
+
+
+def test_list_all_returns_every_user(tmp_path):
+    connection = database.connect(tmp_path / "pm.db")
+    repo = SqliteUserRepository(connection)
+    repo.register(username="alice", password_hash="$argon2id$fake")
+    repo.register(username="bob", password_hash="$argon2id$fake", role="admin")
+
+    assert {record.username for record in repo.list_all()} == {"alice", "bob"}
     connection.close()
 
 

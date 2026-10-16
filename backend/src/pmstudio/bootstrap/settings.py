@@ -14,6 +14,19 @@ TIMEOUT_ENV = "PMSTUDIO_MODEL_TIMEOUT"
 TRACE_ENV = "PMSTUDIO_TRACE_MODEL"
 PARAMS_ENV = "PMSTUDIO_MODEL_PARAMS"
 TAVILY_ENV = "PMSTUDIO_TAVILY_API_KEY"
+SECRET_ENV = "PMSTUDIO_SECRET_KEY"
+FIRST_ADMIN_USER_ENV = "PMSTUDIO_FIRST_ADMIN_USER"
+FIRST_ADMIN_PASSWORD_ENV = "PMSTUDIO_FIRST_ADMIN_PASSWORD"
+SESSION_TTL_ENV = "PMSTUDIO_SESSION_TTL_DAYS"
+SESSION_ABSOLUTE_ENV = "PMSTUDIO_SESSION_ABSOLUTE_DAYS"
+LOGIN_MAX_FAILS_ENV = "PMSTUDIO_LOGIN_MAX_FAILS"
+LOGIN_LOCK_ENV = "PMSTUDIO_LOGIN_LOCK_MINUTES"
+
+#: 会话滑动 / 绝对上限（天）与登录防爆阈值。多用户改造 §0.10/§0.11。
+SESSION_TTL_DAYS = 30
+SESSION_ABSOLUTE_DAYS = 90
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_MINUTES = 15
 
 #: 每次模型调用的墙钟上限（秒）。**按次算**，不是按一次业务动作算：
 #: 一次业务调用最多 3 次尝试 ⇒ 最坏 3 × 90 + 退避(1+3) ≈ 4.6 分钟。
@@ -24,6 +37,19 @@ DEFAULT_MODEL_TIMEOUT = 90.0
 
 class ConfigError(RuntimeError):
     pass
+
+
+def _positive_int(source: Mapping[str, str], name: str, default: int) -> int:
+    raw = source.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ConfigError(f"{name} 要是整数，现在是 {raw!r}") from error
+    if value <= 0:
+        raise ConfigError(f"{name} 必须大于 0，现在是 {value}")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +68,15 @@ class Settings:
     #: 联网检索（工具层 C-2）：Tavily 的 key。**可缺省**——缺了 `tool.web_search` 不可用
     #: （复述卡不出现那一栏），而不是"假成功"。
     tavily_api_key: str | None = None
+    #: 认证（多用户改造）：只从 env 读，真值不进库。`secret_key` 留给后续签名/CSRF 用。
+    secret_key: str = ""
+    #: 首管理员种子：两个都给且 users 表为空时建一个 active admin；否则不建（幂等）。
+    first_admin_username: str | None = None
+    first_admin_password: str | None = None
+    session_ttl_days: int = SESSION_TTL_DAYS
+    session_absolute_days: int = SESSION_ABSOLUTE_DAYS
+    login_max_fails: int = LOGIN_MAX_FAILS
+    login_lock_minutes: int = LOGIN_LOCK_MINUTES
 
     def available_tool_keys(self) -> frozenset[str]:
         """当前环境**配好**了哪些工具的依赖（工具目录按它过滤）。"""
@@ -97,4 +132,15 @@ class Settings:
             trace_model=trace_model,
             model_params=model_params,
             tavily_api_key=source.get(TAVILY_ENV, "").strip() or None,
+            secret_key=source.get(SECRET_ENV, "").strip(),
+            first_admin_username=source.get(FIRST_ADMIN_USER_ENV, "").strip() or None,
+            first_admin_password=source.get(FIRST_ADMIN_PASSWORD_ENV, "").strip() or None,
+            session_ttl_days=_positive_int(source, SESSION_TTL_ENV, SESSION_TTL_DAYS),
+            session_absolute_days=_positive_int(
+                source, SESSION_ABSOLUTE_ENV, SESSION_ABSOLUTE_DAYS
+            ),
+            login_max_fails=_positive_int(source, LOGIN_MAX_FAILS_ENV, LOGIN_MAX_FAILS),
+            login_lock_minutes=_positive_int(
+                source, LOGIN_LOCK_ENV, LOGIN_LOCK_MINUTES
+            ),
         )

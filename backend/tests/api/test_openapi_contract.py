@@ -3,6 +3,15 @@ from tests.support.harness import Harness
 
 EXPECTED_PATHS = {
     "/api/health",
+    # 多用户认证（Task 3）：注册/登录/登出/me + 管理端（审批/拒绝/封禁/用户列表）
+    "/api/auth/register",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/me",
+    "/api/auth/users",
+    "/api/auth/approve",
+    "/api/auth/reject",
+    "/api/auth/ban",
     "/api/events",
     "/api/schema",
     "/api/projects",

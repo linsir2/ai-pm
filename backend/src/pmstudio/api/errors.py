@@ -37,6 +37,11 @@ CODE_STATUS = {
     "tool_call_failed": 502,
     # "这个地址不能用"（不是网页 / 内网 / 没协议）= 422：是你给的东西不行，不是服务器故障
     "fetch_refused": 422,
+    # 认证与账号（多用户改造）：没登录 / 没权限 / 重名 / 指不到用户
+    "unauthenticated": 401,
+    "forbidden": 403,
+    "username_taken": 409,
+    "unknown_user": 404,
 }
 
 

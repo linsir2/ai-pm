@@ -67,6 +67,18 @@ class SqliteUserRepository:
         ).fetchone()
         return None if row is None else self._from_row(row)
 
+    def get_by_id(self, user_id: UserId) -> UserRecord | None:
+        row = self._connection.execute(
+            "SELECT * FROM users WHERE user_id = ?", (str(user_id),)
+        ).fetchone()
+        return None if row is None else self._from_row(row)
+
+    def list_all(self) -> tuple[UserRecord, ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM users ORDER BY created_at, rowid"
+        ).fetchall()
+        return tuple(self._from_row(row) for row in rows)
+
     def set_status(
         self,
         user_id: UserId,

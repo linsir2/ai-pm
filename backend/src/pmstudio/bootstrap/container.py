@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from pmstudio.api.app import ApiServices, create_app
+from pmstudio.api.auth import AuthServices
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.discusser import Discusser
 from pmstudio.application.agents.inquirer import Inquirer
@@ -18,7 +19,10 @@ from pmstudio.application.ports import WebFetcher
 from pmstudio.application.use_cases import (
     AbandonExploration,
     AbandonRound,
+    ApproveUser,
     AssembleCards,
+    AuthenticateUser,
+    BanUser,
     CloseDiscussion,
     ConfirmDraft,
     CreateProject,
@@ -34,6 +38,7 @@ from pmstudio.application.use_cases import (
     ForgetMemory,
     GetDocument,
     GetEvidence,
+    GetMe,
     GetRound,
     GetSchema,
     GetTemplate,
@@ -51,6 +56,11 @@ from pmstudio.application.use_cases import (
     ListProjects,
     ListRounds,
     ListTemplates,
+    ListUsers,
+    LoginThrottle,
+    LogoutUser,
+    RegisterUser,
+    RejectUser,
     ReparseMaterial,
     RetryExploration,
     RetryRound,
@@ -87,6 +97,7 @@ from pmstudio.infrastructure.graph.exploration_runner import ExplorationRunner
 from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.personas.catalog import load_personas
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
+from pmstudio.infrastructure.security import hash_password, verify_password
 from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
@@ -105,6 +116,10 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
+from pmstudio.infrastructure.sqlite.users import (
+    SqliteSessionRepository,
+    SqliteUserRepository,
+)
 from pmstudio.infrastructure.templates.loader import seed_builtin_templates
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
@@ -136,6 +151,21 @@ def _web_search_gateway(
     if web_search_tool(tools, keys=keys) is None or settings.tavily_api_key is None:
         return None
     return TavilySearchGateway(api_key=settings.tavily_api_key)
+def _seed_first_admin(users: SqliteUserRepository, settings: Settings) -> None:
+    """首管理员种子：**users 表为空**且 env 给了用户名+密码才建（幂等，非空直接跳过）。
+
+    存量库（已有用户）不动；没配 env 就不建——不写"默认口令"那种假降级。
+    """
+    if users.list_all():
+        return
+    if not (settings.first_admin_username and settings.first_admin_password):
+        return
+    admin_id = users.register(
+        username=settings.first_admin_username,
+        password_hash=hash_password(settings.first_admin_password),
+        role="admin",
+    )
+    users.set_status(admin_id, "active")
 def build_container(settings: Settings, *, gateway: ModelGateway | None = None) -> Container:
     """唯一组装点。
     `gateway` 是**唯一**给测试用的注入口（端到端测试注入脚本化网关）。
@@ -147,6 +177,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     clock = SystemClock()
     ids = UuidIdGenerator()
     bus = InProcessEventBus()
+    users = SqliteUserRepository(connection)
+    sessions = SqliteSessionRepository(connection)
+    _seed_first_admin(users, settings)
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
     explorations = SqliteExplorationRepository(connection)
@@ -589,7 +622,35 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         stream=bus,
         model_name=settings.model,
     )
-    return Container(settings=settings, app=create_app(services))
+    auth_services = AuthServices(
+        register_user=RegisterUser(users=users, hash_password=hash_password),
+        authenticate_user=AuthenticateUser(
+            users=users,
+            sessions=sessions,
+            clock=clock,
+            hash_password=hash_password,
+            verify_password=verify_password,
+            throttle=LoginThrottle(
+                max_fails=settings.login_max_fails,
+                lock_minutes=settings.login_lock_minutes,
+            ),
+            ttl_days=settings.session_ttl_days,
+        ),
+        get_me=GetMe(
+            users=users, sessions=sessions, clock=clock, ttl_days=settings.session_ttl_days
+        ),
+        logout=LogoutUser(sessions=sessions),
+        approve_user=ApproveUser(users=users, clock=clock),
+        reject_user=RejectUser(users=users),
+        ban_user=BanUser(users=users, sessions=sessions),
+        list_users=ListUsers(users=users),
+        users=users,
+        sessions=sessions,
+        cookie_max_age=settings.session_ttl_days * 86400,
+    )
+    app = create_app(services)
+    app.state.auth = auth_services
+    return Container(settings=settings, app=app)
 def build_app() -> FastAPI:
     """`uvicorn pmstudio.bootstrap.container:build_app --factory` 的入口。"""
     return build_container(Settings.from_env()).app
