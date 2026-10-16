@@ -48,7 +48,7 @@ export function LoginView() {
 
   return (
     <div className="auth">
-      <ProofPanel />
+      <ProofPanel mode={mode} />
 
       <main className="auth__entry" aria-label={mode === "login" ? "登录" : "注册"}>
         <div className="auth__card">
@@ -118,7 +118,7 @@ export function LoginView() {
  * 而为一个展示屏开公开端点会把未认证面变大。代价是这份摘要是**当时的快照**，不会随项目
  * 更新；需要更新时改这里。摘自真实项目「真跑验证-20261005-A-订单导出」，编号是真的。
  */
-function ProofPanel() {
+function ProofPanel({ mode }: { mode: "login" | "register" }) {
   return (
     <aside className="auth__proof">
       <div className="proof">
@@ -161,16 +161,44 @@ function ProofPanel() {
               <div className="block">
                 <div className="entries-wrap">
                   <ul className="entries">
-                    <ProofEntry refs={["E94", "E102"]}>
+                    <ProofEntry refs={[
+                      {
+                        eid: "E94",
+                        tip: "出处 E94：导出文件格式与编码规范 → 仅支持CSV，且必须带UTF-8 BOM头\n来自问卷题（q10）",
+                      },
+                      {
+                        eid: "E102",
+                        tip: "出处 E102：导出文件编码强制为 CSV，且必须包含 UTF-8 BOM 头以确保 Excel 打开时中文不乱码。",
+                      },
+                    ]}>
                       导出文件编码强制为 UTF-8 with BOM，确保主流电子表格软件（如 Excel）兼容。
                     </ProofEntry>
-                    <ProofEntry refs={["E97", "E104"]}>
+                    <ProofEntry refs={[
+                      {
+                        eid: "E97",
+                        tip: "出处 E97：每次导出操作必须在日志中记录：操作人ID、筛选条件摘要、返回行数、耗时及文件哈希值（或下载链接）。\n导出与导入 的判断",
+                      },
+                      {
+                        eid: "E104",
+                        tip: "出处 E104：系统必须记录完整的导出操作审计日志…留痕也是事后追责的唯一依据。\n导出与导入 的判断",
+                      },
+                    ]}>
                       系统必须记录完整的导出操作审计日志，包含：操作人ID、时间戳、筛选条件摘要、导出字段列表、数据行数及文件哈希/链接。
                     </ProofEntry>
-                    <ProofEntry refs={["E98"]}>
+                    <ProofEntry refs={[
+                      {
+                        eid: "E98",
+                        tip: "出处 E98：后端必须采用流式写入（Streaming Write）生成 CSV，严禁将所有匹配记录加载到内存再一次性写盘。\n数据规模与性能 的判断",
+                      },
+                    ]}>
                       后端必须采用流式写入生成 CSV，严禁全量加载到内存，以确保内存占用恒定。
                     </ProofEntry>
-                    <ProofEntry refs={["E99"]}>
+                    <ProofEntry refs={[
+                      {
+                        eid: "E99",
+                        tip: "出处 E99：鉴于选择同步实现（E78/E79），必须在网关层显式配置较长的 read_timeout（建议至少 60–120 秒）。\n数据规模与性能 的判断",
+                      },
+                    ]}>
                       网关层需显式配置较长的 read_timeout（建议至少 60–120 秒），以覆盖最大允许行数下的查询耗时。
                     </ProofEntry>
                   </ul>
@@ -187,13 +215,31 @@ function ProofPanel() {
               <div className="block">
                 <div className="entries-wrap">
                   <ul className="entries">
-                    <ProofEntry refs={["E169"]}>
+                    <ProofEntry refs={[
+                      {
+                        eid: "E169",
+                        remote: true,
+                        tip: "出处 E169（来自另一轮 r-14d70eb4 · 系统默认清单项）",
+                      },
+                    ]}>
                       当前生产环境的订单表总数据量级及日均新增数是多少？（未决定，待决人：PM）〔去处：s10〕
                     </ProofEntry>
-                    <ProofEntry refs={["E170"]}>
+                    <ProofEntry refs={[
+                      {
+                        eid: "E170",
+                        remote: true,
+                        tip: "出处 E170（来自另一轮 r-14d70eb4 · 系统默认清单项）",
+                      },
+                    ]}>
                       网关或 Web 服务器的 HTTP 请求最大超时时间是多少？（未决定，待决人：PM）〔去处：s8〕
                     </ProofEntry>
-                    <ProofEntry refs={["E172"]}>
+                    <ProofEntry refs={[
+                      {
+                        eid: "E172",
+                        remote: true,
+                        tip: "出处 E172（来自另一轮 r-14d70eb4 · 系统默认清单项）",
+                      },
+                    ]}>
                       审计日志里的「操作人ID」具体指什么唯一标识符（员工工号、SSO User ID 还是 OpenID）？
                     </ProofEntry>
                   </ul>
@@ -202,26 +248,47 @@ function ProofPanel() {
             </div>
 
             <p className="proof__note">
-              每条内容旁边挂着它的出处编号，点它能回溯到哪一轮、是谁说的、依据是什么——
-              这是这个产品唯一的信任机制。
+              每条内容旁边挂着它的出处编号，鼠标停上去能看到它出自哪一轮、是谁说的。
+              在应用里点编号能顺着回溯到原话——这是这个产品唯一的信任机制。
             </p>
           </div>
         </main>
       </div>
+
+      {/* 注册态才补这一句：新用户真正想知道的是"它会不会自己往文档里写"。
+          放**窗外**而不是窗内——窗里必须是产品原样，注解是我们的话。 */}
+      {mode === "register" && (
+        <p className="proof__aside">
+          上面这一章是它会问你的问题。问出来先落在草案里，你勾了才写进文档。
+        </p>
+      )}
     </aside>
   );
 }
 
-/** 一条内容。结构照抄 `EntryList` 的 `.entry`（正文 + 右列出处），不另发明。 */
-function ProofEntry({ refs, children }: { refs: string[]; children: React.ReactNode }) {
+/**
+ * 一条内容。结构照抄 `EntryList` 的 `.entry`（正文 + 右列出处），不另发明。
+ *
+ * 胶囊用 `<span>` 而不是 `<button>`：真实 App 里的胶囊是可点的（跳去原话），
+ * 而这里是登录屏上的静态裁切，**点不了**——做成一个按下去没反应的按钮，
+ * 那是拿假交互换真实感。悬停摘要照旧（沿用 `EvidenceChip` 的 `title` 约定），
+ * 跨轮来源另给 `.chip--remote` 的虚线边，跟真实 App 一个道理。
+ */
+function ProofEntry({
+  refs,
+  children,
+}: {
+  refs: { eid: string; tip: string; remote?: boolean }[];
+  children: React.ReactNode;
+}) {
   return (
     <li className="entry">
       <span className="entry__text">{children}</span>
       <span className="entry__refs">
         <span className="chips">
           {refs.map((ref) => (
-            <span className="chip" key={ref}>
-              {ref}
+            <span className={ref.remote ? "chip chip--remote" : "chip"} key={ref.eid} title={ref.tip}>
+              {ref.eid}
             </span>
           ))}
         </span>
