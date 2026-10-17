@@ -6,6 +6,7 @@
 
 import asyncio
 import hashlib
+import math
 import secrets
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -176,6 +177,8 @@ from pmstudio.application.ports import (
     Clock,
     ExplorationCanceller,
     IdGenerator,
+    LoginGuard,
+    LoginVerdict,
     MaterialParser,
     MaterialRetriever,
     MaterialStore,
@@ -322,6 +325,7 @@ from pmstudio.harness.errors import (
     ApplicationError,
     ModelCallFailed,
     PacketParseError,
+    RateLimited,
     ToolCallFailed,
 )
 from pmstudio.harness.events import Event, EventPublisher
@@ -5947,6 +5951,16 @@ def _unauthenticated() -> ApplicationError:
     return ApplicationError("用户名或密码不正确", code="unauthenticated")
 
 
+def _rate_limited(retry_after: int) -> ApplicationError:
+    """尝试速率超限（429）。和 `_unauthenticated` 分开：那个是凭证问题、
+    要对 ghost 与错密码逐字节一致；这个是速率问题，客户端该知道等多久。"""
+
+    return RateLimited(
+        f"登录尝试过于频繁，请 {retry_after} 秒后重试",
+        retry_after=retry_after,
+    )
+
+
 def _forbidden() -> ApplicationError:
     return ApplicationError("需要管理员权限", code="forbidden")
 
@@ -5979,37 +5993,134 @@ def _admin_is_protected(target: UserView) -> None:
 
 
 class LoginThrottle:
-    """内存滑动窗口：按 `ip|用户名` 记失败，窗口内连败到阈值即锁（`§0.10`）。
+    """内存限流闸。**同时是 Redis 版的降级目标**——Redis 连不上时就落回这里。
 
-    不建表：重启清零可接受。单进程单事件循环，普通 dict 够用。
-    **键数有上界**（`max_keys`）：海量不同用户名（攻击者灌内存）不能把 `_failures` 撑爆，
-    超容量时按最早入表（最旧）淘汰。dict 保插入序，`next(iter(...))` 即最旧键。
+    三个维度（见 `ports.LoginGuard`）：
+
+    - `_failures`：`{(ip, username): [失败时刻...]}`，失败锁。只记失败，登录成功清掉。
+    - `_ip_attempts` / `_user_attempts`：`{(维度值): [尝试时刻...]}`，速率闸。
+      每次尝试都记（不论成败），**只靠时间过期恢复**——否则攻击者偶尔猜对一次
+      就能把计数洗白。
+
+    **为什么键用元组而不是 `f"{ip}|{username}"`**：拼字符串有歧义，
+    `(ip="a|b", user="c")` 与 `(ip="a", user="b|c")` 会变成同一个键，
+    攻击者能用用户名里的 `|` 撞掉别人的限额。
+
+    **内存上界**：三个表都限 `max_keys`，按最早入表淘汰（dict 保插入序）。
+    海量不同用户名不能把内存撑爆。
+
+    **不接受 `now` 形参**：时间来源是构造时注入的 `Clock`。Redis 版用服务端
+    时钟，调用方不该在两处各对一次表。
     """
 
     def __init__(
-        self, *, max_fails: int, lock_minutes: int, max_keys: int = 1024
+        self,
+        *,
+        max_fails: int,
+        lock_minutes: int,
+        attempt_window_seconds: int,
+        ip_max_attempts: int,
+        username_max_attempts: int,
+        clock: Clock,
+        max_keys: int = 1024,
     ) -> None:
+        # 配了 0 会让"超限"判断永远不成立——限流器静默失效是最坏的失效方式。
+        for name, value in (
+            ("max_fails", max_fails),
+            ("lock_minutes", lock_minutes),
+            ("attempt_window_seconds", attempt_window_seconds),
+            ("ip_max_attempts", ip_max_attempts),
+            ("username_max_attempts", username_max_attempts),
+        ):
+            if value <= 0:
+                raise ValueError(f"{name} 必须大于 0，现在是 {value}")
         self._max_fails = max_fails
-        self._window = timedelta(minutes=lock_minutes)
+        self._lock_window = timedelta(minutes=lock_minutes)
+        self._attempt_window = timedelta(seconds=attempt_window_seconds)
+        self._ip_max = ip_max_attempts
+        self._user_max = username_max_attempts
+        self._clock = clock
         self._max_keys = max_keys
-        self._failures: dict[str, list[datetime]] = {}
+        self._failures: dict[tuple[str, str], list[datetime]] = {}
+        self._ip_attempts: dict[str, list[datetime]] = {}
+        self._user_attempts: dict[str, list[datetime]] = {}
 
-    def _recent(self, now: datetime, key: str) -> list[datetime]:
-        cutoff = now - self._window
-        kept = [moment for moment in self._failures.get(key, []) if moment > cutoff]
-        if key not in self._failures and len(self._failures) >= self._max_keys:
-            self._failures.pop(next(iter(self._failures)), None)
-        self._failures[key] = kept
+    @property
+    def max_keys(self) -> int:
+        return self._max_keys
+
+    @property
+    def entry_count(self) -> int:
+        """三个表合起来的条目数（测试用来钉"灌不爆内存"）。"""
+
+        return len(self._failures) + len(self._ip_attempts) + len(self._user_attempts)
+
+    @staticmethod
+    def _key(ip: str, username: str) -> tuple[str, str]:
+        return (ip.strip(), username.strip())
+
+    def _prune(
+        self, table: dict[object, list[datetime]], key: object, window: timedelta
+    ) -> list[datetime]:
+        """切掉窗口外的条目，并顺带做容量淘汰。"""
+
+        now = self._clock.now()
+        cutoff = now - window
+        kept = [moment for moment in table.get(key, ()) if moment > cutoff]
+        if key not in table and len(table) >= self._max_keys:
+            table.pop(next(iter(table)), None)  # dict 保插入序 → 最旧
+        table[key] = kept
         return kept
 
-    def locked(self, *, now: datetime, key: str) -> bool:
-        return len(self._recent(now, key)) >= self._max_fails
+    def _retry_after(self, moments: list[datetime], window: timedelta) -> int:
+        """最早一个条目的时刻 + 窗口 = 什么时候能再试。向上取整到秒，且至少 1。"""
 
-    def record(self, *, now: datetime, key: str) -> None:
-        self._recent(now, key).append(now)
+        now = self._clock.now()
+        oldest = min(moments)
+        seconds = (oldest + window - now).total_seconds()
+        return max(1, math.ceil(seconds))
 
-    def clear(self, key: str) -> None:
-        self._failures.pop(key, None)
+    def _hit(
+        self, table: dict[object, list[datetime]], key: object, limit: int, window: timedelta
+    ) -> LoginVerdict:
+        moments = self._prune(table, key, window)
+        if len(moments) >= limit:
+            return LoginVerdict(True, self._retry_after(moments, window))
+        moments.append(self._clock.now())
+        return LoginVerdict(False, 0)
+
+    async def locked(self, *, ip: str, username: str) -> LoginVerdict:
+        """失败锁是否已命中。**命中时不跑 argon2**——限流了就别白烧 CPU。"""
+
+        moments = self._prune(self._failures, self._key(ip, username), self._lock_window)
+        if len(moments) >= self._max_fails:
+            return LoginVerdict(True, self._retry_after(moments, self._lock_window))
+        return LoginVerdict(False, 0)
+
+    async def record_failure(self, *, ip: str, username: str) -> None:
+        self._prune(self._failures, self._key(ip, username), self._lock_window).append(
+            self._clock.now()
+        )
+
+    async def clear(self, *, ip: str, username: str) -> None:
+        """登录成功：**只清失败锁**。尝试闸靠时间过期恢复，见类文档。"""
+
+        self._failures.pop(self._key(ip, username), None)
+
+    async def consume_attempt(self, *, ip: str, username: str) -> LoginVerdict:
+        """记一次尝试（不论成败），两个速率维度各扣一个令牌。"""
+
+        window = self._attempt_window
+        by_ip = self._hit(self._ip_attempts, ip.strip(), self._ip_max, window)
+        # 空 IP 时按用户名退化成单维度（拿不到来源 IP 也得有闸门）
+        by_user = self._hit(
+            self._user_attempts, username.strip(), self._user_max, window
+        )
+        if by_ip.limited:
+            return by_ip
+        if by_user.limited:
+            return by_user
+        return LoginVerdict(False, 0)
 
 
 class RegisterUser:
@@ -6038,10 +6149,24 @@ class RegisterUser:
 
 
 class AuthenticateUser:
-    """登录：查人 → 核对密码 → 状态 active 才发会话。
+    """登录：**先过限流闸** → 查人 → 核对密码 → 状态 active 才发会话。
 
     失败（查无此人 / 密码错 / 非 active）**同一文案、同一耗时**：不存在的人也对
     构造时备好的哨兵哈希跑一次 `verify_password`，堵住用户名枚举侧信道。
+
+    **限流与凭证是两回事，状态码也分开**：
+
+    - **密码错 / 查无此人 / 失败锁命中** → 401。保持不可枚举——加了限流
+      也不能把这个改掉。
+    - **尝试超限**（per-IP / per-username）→ 429 + `Retry-After`。这是速率闸
+      不是凭证闸，客户端要知道等多久。
+
+    **加了 per-username 尝试闸会不会重新引入用户名枚举**——不会，因为计数打在
+    **调用方给的那个字符串**上：查都不查库就知道该不该记，`ghost` 与 `alice`
+    被同样对待，429 的行为逐字节一致。
+
+    **限流命中时不跑 argon2**：被限流的请求不该继续烧 CPU（更不该让攻击者
+    免费用我们的算力）。
     """
 
     def __init__(
@@ -6052,32 +6177,43 @@ class AuthenticateUser:
         clock: Clock,
         hash_password: Callable[[str], str],
         verify_password: Callable[[str, str], Awaitable[bool]],
-        throttle: LoginThrottle,
+        guard: LoginGuard,
         ttl_days: int,
     ) -> None:
         self._users = users
         self._sessions = sessions
         self._clock = clock
         self._verify = verify_password
-        self._throttle = throttle
+        self._guard = guard
         self._ttl_days = ttl_days
         self._decoy_hash = hash_password("pmstudio-not-a-real-password")
 
     async def __call__(
         self, *, username: str, password: str, ip: str = "", user_agent: str = ""
     ) -> tuple[UserView, str]:
-        now = self._clock.now()
-        key = f"{ip}|{username.strip()}"
-        if self._throttle.locked(now=now, key=key):
-            await self._verify(self._decoy_hash, password)  # 恒定耗时
+        name = username.strip()
+        # ① 失败锁：**回 401，与密码错完全同码同文案**——锁住这件事本身
+        # 不能变成一个可观测的信号。代价是撞库者要多试几轮才停，
+        # 但 401 分不出去正是我们要的。不跑 argon2（省 CPU，也省掉一个
+        # 免费爆破的口子）。
+        locked = await self._guard.locked(ip=ip, username=name)
+        if locked.limited:
             raise _unauthenticated()
-        record = self._users.get_by_name(username.strip())
+        # ② 尝试速率闸：**回 429 + Retry-After**。这是速率问题不是凭证问题，
+        # 客户端该知道等多久。``consume_attempt`` 必须在 ① 之后——
+        # 已经失败锁定的请求不该再去扣速率闸的令牌。
+        attempted = await self._guard.consume_attempt(ip=ip, username=name)
+        if attempted.limited:
+            raise _rate_limited(attempted.retry_after)
+
+        now = self._clock.now()
+        record = self._users.get_by_name(name)
         password_hash = record.password_hash if record is not None else self._decoy_hash
         ok = await self._verify(password_hash, password)
         if not ok or record is None or record.status != "active":
-            self._throttle.record(now=now, key=key)
+            await self._guard.record_failure(ip=ip, username=name)
             raise _unauthenticated()
-        self._throttle.clear(key)
+        await self._guard.clear(ip=ip, username=name)
         token = secrets.token_urlsafe(32)
         self._sessions.create(
             user_id=record.user_id,

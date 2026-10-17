@@ -306,3 +306,93 @@ def test_sim_inquiry_budget_is_its_own_account_and_pinned():
     text = LIMITS_DOC.read_text(encoding="utf-8")
     assert "另算第五本账" in text, "文档里那节口径不见了？"
     assert "切片 3 /" in text and "假设 6 / 盲区 3" in text
+
+
+# ── 限流上限（高并发 P3）─────────────────────────────────────────────────────
+
+
+def test_login_rate_limits_are_pinned_to_the_configured_defaults():
+    """登录限流的默认值**钉在这里**，理由写在 `settings.py` 的常量处。
+
+    这三条不是一个数：`per-IP` 与 `per-username` 挡的是**两种不同形状的攻击**
+    （单 IP 喷多账号 / 多 IP 撞单账号），窗口是另一个维度。合成一个数就等于
+    放弃了其中一种攻击。
+    """
+
+    from pmstudio.bootstrap import settings as settings_module
+
+    assert settings_module.LOGIN_IP_MAX_ATTEMPTS == 20
+    assert settings_module.LOGIN_USERNAME_MAX_ATTEMPTS == 10
+    assert settings_module.LOGIN_ATTEMPT_WINDOW_SECONDS == 60
+    assert settings_module.LOGIN_MAX_FAILS == 5
+    assert settings_module.LOGIN_LOCK_MINUTES == 15
+
+
+def test_每分钟二十次_意味着攻击者每分钟最多试二十次():
+    """把"20/分"翻译成人话钉住——数字变了要有人知道变了。"""
+
+    from pmstudio.bootstrap import settings as settings_module
+
+    per_hour = settings_module.LOGIN_IP_MAX_ATTEMPTS * 60
+
+    assert per_hour == 1200, f"单 IP 每小时上限变成了 {per_hour} 次"
+
+
+def test_尝试闸_的上限_不许小于失败锁_否则两层互相盖住():
+    """**两层闸的次序是有讲究的**：失败锁先判（回 401），再判尝试闸（回 429）。
+
+    如果 per-IP 尝试上限比 `max_fails` 还低，失败锁就永远轮不到触发——
+    撞库者拿到的是 429 而不是不可枚举的 401，等于把"我被限了"直接说出去，
+    而不可枚举性是 `test_login_failure_is_uniform_for_ghost_and_wrong_password`
+    在守的东西。
+    """
+
+    from pmstudio.bootstrap import settings as settings_module
+
+    assert settings_module.LOGIN_IP_MAX_ATTEMPTS > settings_module.LOGIN_MAX_FAILS
+    assert (
+        settings_module.LOGIN_USERNAME_MAX_ATTEMPTS > settings_module.LOGIN_MAX_FAILS
+    ), "per-username 尝试闸比失败锁还紧，会盖掉不可枚举的 401"
+
+
+def test_redis_连接池上界_不许小于并发目标():
+    """**默认 100 会炸**：redis-py 的 asyncio 池默认就是 100，实测 200 并发直接
+    `MaxConnectionsError`。并发目标是 200，所以这个数必须显式大于它。"""
+
+    from pmstudio.bootstrap import settings as settings_module
+
+    assert settings_module.REDIS_MAX_CONNECTIONS >= 200
+
+
+def test_redis_超时必须小到_能当降级路径用():
+    """不设 `socket_timeout` 时实测会卡 5 秒——降级分支根本走不到。
+    登录一次 argon2 约 90-200ms，Redis 这段不该比它还长一个量级。"""
+
+    from pmstudio.bootstrap import settings as settings_module
+
+    assert 0 < settings_module.REDIS_TIMEOUT <= 1.0
+
+
+def test_限流上限不许进_harness():
+    """限流是**控制平面**，归 bootstrap/settings；`harness` 只该知道"怎么安全地
+    调外部依赖"，不该知道产品的防爆阈值。"""
+
+    from tests.architecture.guards import code_identifiers
+
+    harness = REPO / "backend" / "src" / "pmstudio" / "harness"
+    names = (
+        "LOGIN_IP_MAX_ATTEMPTS",
+        "LOGIN_USERNAME_MAX_ATTEMPTS",
+        "LOGIN_ATTEMPT_WINDOW_SECONDS",
+        "LOGIN_MAX_FAILS",
+        "LOGIN_LOCK_MINUTES",
+        "REDIS_MAX_CONNECTIONS",
+        "REDIS_TIMEOUT",
+    )
+    offenders: dict[str, list[str]] = {}
+    for path in sorted(harness.rglob("*.py")):
+        found = code_identifiers(path.read_text(encoding="utf-8"))
+        hits = sorted(name for name in names if name in found)
+        if hits:
+            offenders[path.relative_to(harness).as_posix()] = hits
+    assert offenders == {}, f"这些限流上限出现在 harness 里：{offenders}"

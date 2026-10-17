@@ -16,7 +16,7 @@ TOML 实现搬进 `pmstudio.harness.tools.registry`——"一个工具有哪些�
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, NamedTuple, Protocol, runtime_checkable
 
 from pmstudio.domain.shared.ids import (
     DiscussionId,
@@ -431,3 +431,30 @@ class SessionStore(Protocol):
     ) -> None: ...
     def revoke_by_token_hash(self, token_hash: str) -> None: ...
     def revoke_user(self, user_id: UserId) -> None: ...
+
+
+class LoginVerdict(NamedTuple):
+    """限流判定结果。`retry_after` 是**客户端该等多久**（秒），不是"建议值"。"""
+
+    limited: bool
+    retry_after: int
+
+
+@runtime_checkable
+class LoginGuard(Protocol):
+    """登录限流闸。**三个维度共用一个接口**，因为它们要回答的是同一个问题。
+
+    - **失败锁** `(ip, username)`：`locked` / `record_failure` / `clear`。
+      窗口内失败到阈值即锁；登录成功要 `clear`（否则手滑三次就永久锁死）。
+    - **尝试维度** `(ip)` 与 `(username)`：`consume_attempt`。
+      每次尝试都扣一个令牌（**不论成败**），挡的是"单 IP 喷很多账号"
+      与"很多 IP 撞一个账号"——这两种攻击在失败锁上永远不触发。
+
+    **方法一律 async、且不接受 `now`**：Redis 那边用服务端时钟，
+    内存那边用自己的时钟，把时间来源藏进实现，才不会让调用方时刻对表。
+    """
+
+    async def locked(self, *, ip: str, username: str) -> LoginVerdict: ...
+    async def record_failure(self, *, ip: str, username: str) -> None: ...
+    async def clear(self, *, ip: str, username: str) -> None: ...
+    async def consume_attempt(self, *, ip: str, username: str) -> LoginVerdict: ...

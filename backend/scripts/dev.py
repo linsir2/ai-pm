@@ -92,6 +92,12 @@ def main() -> int:
     timeout = os.environ.get("PMSTUDIO_MODEL_TIMEOUT", "").strip() or "90"
     print(f"超时：{timeout} 秒/次（一次业务调用最多重试 3 次）")
     print(f"库：{db_path}{'（已存在）' if db_path.exists() else '（还没有，首次写入时建）'}")
+    redis_url = os.environ.get("PMSTUDIO_REDIS_URL", "").strip()
+    if redis_url:
+        print(f"登录限流：Redis 共享计数（{redis_url}）——多 worker 合起来算一份")
+    else:
+        print("登录限流：**进程内计数**（没配 PMSTUDIO_REDIS_URL）")
+        print("  ⚠ 多 worker 下每个进程各有一份，等于锁不住；上多 worker 前先配 Redis")
     print(f"起在 http://{args.host}:{port} · 健康检查 /api/health")
 
     sys.path.insert(0, str(SRC))
@@ -100,8 +106,8 @@ def main() -> int:
     # **单 worker 是正确性约束，不是性能取舍**（多用户改造 §0.9）：owner 是每个请求现装的
     # contextvar（不跨请求），多 worker 本身不会因此串味。真风险有两个：**进程内 SSE 总线**
     # 各自为政——某项目的事件只推给"连在这个 worker 上的"浏览器，连在另一个 worker 上就丢；
-    # 内存登录限流的状态也不共享，等于锁不住。SQLite 单文件写同样按单进程设计。
-    # **不要加 `--workers`。**
+    # **内存登录限流的状态也不共享，等于锁不住**（P3 起可配 Redis 解决，见下）。
+    # SQLite 单文件写同样按单进程设计。**不要加 `--workers`。**
     uvicorn.run(
         "pmstudio.bootstrap.container:build_app",
         factory=True,
@@ -109,6 +115,14 @@ def main() -> int:
         port=port,
         reload=not args.no_reload,
         reload_dirs=[str(SRC)] if not args.no_reload else None,
+        # **登录限流按源 IP 计数，源 IP 来自 `X-Forwarded-For` 才拿得到真 IP**
+        #（`api/auth.py` 用 `request.client.host`）。Caddy 后面不开这个，
+        #所有请求的源 IP 都是 Caddy 的 →「每 IP 限流」退化成「全站限流」，
+        # 正常用户会互相锁死。
+        # `forwarded_allow_ips` 只信本机反代（默认 `127.0.0.1`）：**无条件信任
+        # 转发头等于让任何人伪造源 IP**，那限流就形同虚设。
+        proxy_headers=True,
+        forwarded_allow_ips=os.environ.get("PMSTUDIO_FORWARDED_ALLOW_IPS", "127.0.0.1"),
     )
     return 0
 

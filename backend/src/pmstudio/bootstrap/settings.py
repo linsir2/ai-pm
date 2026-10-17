@@ -21,6 +21,12 @@ SESSION_TTL_ENV = "PMSTUDIO_SESSION_TTL_DAYS"
 SESSION_ABSOLUTE_ENV = "PMSTUDIO_SESSION_ABSOLUTE_DAYS"
 LOGIN_MAX_FAILS_ENV = "PMSTUDIO_LOGIN_MAX_FAILS"
 LOGIN_LOCK_ENV = "PMSTUDIO_LOGIN_LOCK_MINUTES"
+REDIS_URL_ENV = "PMSTUDIO_REDIS_URL"
+REDIS_TIMEOUT_ENV = "PMSTUDIO_REDIS_TIMEOUT"
+REDIS_MAX_CONNECTIONS_ENV = "PMSTUDIO_REDIS_MAX_CONNECTIONS"
+LOGIN_IP_MAX_ENV = "PMSTUDIO_LOGIN_IP_MAX_ATTEMPTS"
+LOGIN_USER_MAX_ENV = "PMSTUDIO_LOGIN_USER_MAX_ATTEMPTS"
+LOGIN_ATTEMPT_WINDOW_ENV = "PMSTUDIO_LOGIN_ATTEMPT_WINDOW_SECONDS"
 
 #: 会话滑动 / 绝对上限（天）与登录防爆阈值。多用户改造 §0.10/§0.11。
 SESSION_TTL_DAYS = 30
@@ -35,15 +41,48 @@ LOGIN_HASH_CONCURRENCY_ENV = "PMSTUDIO_LOGIN_HASH_CONCURRENCY"
 LOGIN_HASH_CONCURRENCY = max(1, min(4, os.cpu_count() or 1))
 LOGIN_LOCK_MINUTES = 15
 
+#: 登录**尝试**速率闸（per-IP / per-username），与上面的失败锁是两个维度：
+#: 失败锁只记失败，所以"单 IP 喷 10000 个用户名"（每个只错 1 次）和
+#: "1000 个 IP 撞一个账号"（每个只错 1 次）都能绕过它。
+LOGIN_IP_MAX_ATTEMPTS = 20
+LOGIN_USERNAME_MAX_ATTEMPTS = 10
+LOGIN_ATTEMPT_WINDOW_SECONDS = 60
+
+#: Redis（登录限流的跨 worker 共享计数）。**留空 = 用进程内计数**：
+#: 单 worker 开发够用，但多 worker 下锁不住——`dev.py` 会就此打警告。
+REDIS_TIMEOUT = 0.3
+#: 连接池上界。redis-py 的 asyncio 池**默认 100**，而我们的并发目标就是 200+，
+#: 实测 200 并发会直接 `MaxConnectionsError`。每次 Redis 调用约 1.3ms，
+#: 所以 256 足够 200 并发同时各占一条连接。
+REDIS_MAX_CONNECTIONS = 256
+
 #: 每次模型调用的墙钟上限（秒）。**按次算**，不是按一次业务动作算：
-#: 一次业务调用最多 3 次尝试 ⇒ 最坏 3 × 90 + 退避(1+3) ≈ 4.6 分钟。
-#: 为什么不是 120：P5c 实测（`docs/plans/2026-09-28-P5c-*.md` §0.1）只传 `timeout` 会被
-#: SDK 的内部重试放大到约 4 倍；网关同时传 `num_retries=0` 之后，墙钟才等于这个数。
-DEFAULT_MODEL_TIMEOUT = 90.0
+#: 一次业务调用最多 3 次尝试 ⇒ 最坏 3 × 150 + 退避(1+3) ≈ 7.6 分钟。
+#: 为什么是 150：**按 167 次真实调用的耗时定的**——p50 18.5s / p95 89.9s /
+#: p99 131.3s / 最大 143.0s。90 秒会把最慢那几条**本来能成功**的调用判死；
+#: 300 秒则只是在多等 150 秒去看一个必然超时的结果（失败调用的耗时中位恰好
+#: 300.2s、最大 900.5s = 300 × 3 次尝试），而且占住隔离舱的槽位。
+#: 病态挂起由熔断兜底，不靠拉长单次超时。
+DEFAULT_MODEL_TIMEOUT = 150.0
 
 
 class ConfigError(RuntimeError):
     pass
+
+
+def _positive_float(
+    source: Mapping[str, str], name: str, default: float, *, minimum: float = 0.0
+) -> float:
+    raw = source.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise ConfigError(f"{name} 要是秒数，现在是 {raw!r}") from error
+    if value <= minimum:
+        raise ConfigError(f"{name} 必须大于 {minimum}，现在是 {value}")
+    return value
 
 
 def _positive_int(source: Mapping[str, str], name: str, default: int) -> int:
@@ -86,6 +125,14 @@ class Settings:
     #: 登录哈希隔离舱容量（高并发 P1）。argon2 每次约 64MB，这个数同时是内存上限。
     login_hash_concurrency: int = LOGIN_HASH_CONCURRENCY
     login_lock_minutes: int = LOGIN_LOCK_MINUTES
+    #: 登录尝试速率闸（高并发 P3）。见模块常量处的"两个维度"说明。
+    login_ip_max_attempts: int = LOGIN_IP_MAX_ATTEMPTS
+    login_username_max_attempts: int = LOGIN_USERNAME_MAX_ATTEMPTS
+    login_attempt_window_seconds: int = LOGIN_ATTEMPT_WINDOW_SECONDS
+    #: 登录限流的跨 worker 共享计数（Redis）。**空串 = 只用进程内计数**。
+    redis_url: str = ""
+    redis_timeout: float = REDIS_TIMEOUT
+    redis_max_connections: int = REDIS_MAX_CONNECTIONS
 
     def available_tool_keys(self) -> frozenset[str]:
         """当前环境**配好**了哪些工具的依赖（工具目录按它过滤）。"""
@@ -154,5 +201,21 @@ class Settings:
             ),
             login_lock_minutes=_positive_int(
                 source, LOGIN_LOCK_ENV, LOGIN_LOCK_MINUTES
+            ),
+            login_ip_max_attempts=_positive_int(
+                source, LOGIN_IP_MAX_ENV, LOGIN_IP_MAX_ATTEMPTS
+            ),
+            login_username_max_attempts=_positive_int(
+                source, LOGIN_USER_MAX_ENV, LOGIN_USERNAME_MAX_ATTEMPTS
+            ),
+            login_attempt_window_seconds=_positive_int(
+                source, LOGIN_ATTEMPT_WINDOW_ENV, LOGIN_ATTEMPT_WINDOW_SECONDS
+            ),
+            redis_url=source.get(REDIS_URL_ENV, "").strip(),
+            redis_max_connections=_positive_int(
+                source, REDIS_MAX_CONNECTIONS_ENV, REDIS_MAX_CONNECTIONS
+            ),
+            redis_timeout=_positive_float(
+                source, REDIS_TIMEOUT_ENV, REDIS_TIMEOUT, minimum=0.001
             ),
         )

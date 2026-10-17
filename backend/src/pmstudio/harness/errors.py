@@ -71,6 +71,8 @@ class ModelCallFailed(ApplicationError):
         super().__init__(message, code="model_call_failed", purpose=purpose, **details)
         self.purpose = purpose
         self.hint = hint
+
+
 class ModelShed(ModelCallFailed):
     """**过载保护主动拒绝了这次调用**（熔断开闸 / 隔离舱满 / 重试预算耗尽）。
 
@@ -89,3 +91,18 @@ class ModelShed(ModelCallFailed):
         self.retry_after = retry_after
 
 
+class RateLimited(ApplicationError):
+    """**请求太快被闸门挡下**（429）。
+
+    与 `ModelShed`（503）同一个形状：都在"我们主动拒绝"这一侧，都带
+    `retry_after` 让客户端知道等多久。区别是那个说的是模型通道，
+    这个说的是整条 API 的入口速率。
+
+    **刻意不复用 401**：登录失败锁返回的是 401（要挡用户名枚举，不能改），
+    而尝试超限说的是速率、不是凭证——用 429 才不会把两件事混成一个码。
+    """
+
+    def __init__(self, message: str, *, retry_after: int, **details: object) -> None:
+        super().__init__(message, code="rate_limited", **details)
+        #: 秒。`0` 或负数等于没告诉客户端任何事，它只会硬重试。
+        self.retry_after = retry_after

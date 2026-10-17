@@ -242,7 +242,7 @@ domain/memory/        memory.py context.py observations.py digest.py inspiration
 domain/               null_repos.py
 domain/shared/        ids.py errors.py invariants.py target.py label.py sections.py writing.py evidence_kind.py memory.py template.py template_adapter.py
 application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py discusser.py sim_inquirer.py persona_simulator.py definitions.py
-infrastructure/        security.py
+infrastructure/        security.py redis_limiter.py
 infrastructure/templates/ loader.py standard.toml light.toml
 infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py model_calls.py project_factory.py observations_repo.py digest_repo.py inspiration_repo.py users.py owner_scope.py usage.py
 infrastructure/seats/ catalog.py definitions/*.toml

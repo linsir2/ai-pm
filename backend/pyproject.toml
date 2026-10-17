@@ -18,6 +18,16 @@ dependencies = [
     "uvicorn>=0.47",
     "argon2-cffi>=25.1.0",
     "pybreaker>=1.4,<2",
+    # 登录限流的跨 worker 共享计数（高并发 P3）。`limits` 的原子 Lua 脚本已经
+    # 写好并测过，自己写就是重造一遍 NOSCRIPT 回退与集群 hash tag。
+    # 上界 <6：5.x 换策略 API 时不要被自动带上。
+    "limits>=5,<6",
+    # redis-py 的 asyncio 客户端。两个实测值必须显式给，不能用默认：
+    #   · 连接池默认 100，200 并发直接 `MaxConnectionsError`（目标就是 200+）
+    #   · 不设 `socket_timeout` 时 Redis"连上但不回包"会让登录卡 5 秒
+    # 注：`limits` 的 `[redis]` extra 声明 `redis<8`，我们实测 8.1.0 全通过
+    # （原子性 / 连接池 / 超时），所以上界放到 <9 而非跟着 extra 降级。
+    "redis>=6,<9",
 ]
 
 [dependency-groups]

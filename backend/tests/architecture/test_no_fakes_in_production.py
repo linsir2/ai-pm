@@ -64,6 +64,11 @@ ALLOWED_TEST_FAKES: dict[str, str] = {
         "上行那个桩 `fake` 的回包形状：litellm 只需要 `choices[0].message.content`，"
         "而完整响应对象有一堆与断言无关的字段。"
     ),
+    "AsyncMock": (
+        "test_redis_limiter.py::test_降级_但非连接类异常照抛：**刻意证明降级**"
+        "**只对『连不上 Redis』生效**——把 ValueError 也吞掉就等于藏 bug。"
+        "被 patch 的只有底层的 hit，Redis 那侧其余路径都是真的。"
+    ),
     "use_fake_model": (
         "`test_container.py` 在断言**守卫本身**：生产容器**没有**这个开关。"
         "这条断言必须提到这个名字，提到它才是那条断言。"

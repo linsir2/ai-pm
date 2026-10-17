@@ -15,7 +15,7 @@ from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.persona_simulator import PersonaSimulatorAgent
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
-from pmstudio.application.ports import WebFetcher
+from pmstudio.application.ports import Clock, LoginGuard, WebFetcher
 from pmstudio.application.use_cases import (
     AbandonExploration,
     AbandonRound,
@@ -176,6 +176,44 @@ def _seed_first_admin(users: SqliteUserRepository, settings: Settings) -> None:
         role="admin",
     )
     users.set_status(admin_id, "active")
+def _build_login_guard(settings: Settings, clock: Clock) -> LoginGuard:
+    """按配置选登录限流闸：Redis 共享计数，或进程内计数。
+
+    **不做"Redis 配错就起不来"**：限流器不可用与限流器不存在是两回事，
+    后者更糟。Redis 连接失败时 `RedisLoginGuard` 自己会降级到进程内计数，
+    所以这里只在**配都没配**时退回内存闸。
+    """
+    limits = {
+        "max_fails": settings.login_max_fails,
+        "lock_minutes": settings.login_lock_minutes,
+        "attempt_window_seconds": settings.login_attempt_window_seconds,
+        "ip_max_attempts": settings.login_ip_max_attempts,
+        "username_max_attempts": settings.login_username_max_attempts,
+    }
+    if not settings.redis_url:
+        return LoginThrottle(clock=clock, **limits)
+
+    from limits.aio.storage import RedisStorage
+    from limits.aio.strategies import MovingWindowRateLimiter
+
+    from pmstudio.infrastructure.redis_limiter import RedisLoginGuard
+
+    storage = RedisStorage(
+        # `async+` 前缀 = 用 redis-py 的 asyncio 客户端；不写会默认走 coredis
+        #（另一个库，行为和超时配置都不在我们手里）。
+        f"async+{settings.redis_url}",
+        implementation="redispy",
+        socket_timeout=settings.redis_timeout,
+        socket_connect_timeout=settings.redis_timeout,
+        max_connections=settings.redis_max_connections,
+    )
+    return RedisLoginGuard(
+        limiter=MovingWindowRateLimiter(storage),
+        fallback=LoginThrottle(clock=clock, **limits),
+        **limits,
+    )
+
+
 def build_container(settings: Settings, *, gateway: ModelGateway | None = None) -> Container:
     """唯一组装点。
     `gateway` 是**唯一**给测试用的注入口（端到端测试注入脚本化网关）。
@@ -646,6 +684,11 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         stream=bus,
         model_name=settings.model,
     )
+    # 登录限流闸（高并发 P3）。**配了 Redis 就跨 worker 共享一份计数**：
+    # 进程内计数在多 worker 下等于"除以 N"——4 个 worker 各给 5 次就是 20 次，
+    # 而且重启清零。没配 Redis 就用进程内的（单 worker 开发够用，dev.py 会警告）。
+    login_guard = _build_login_guard(settings, clock)
+
     auth_services = AuthServices(
         register_user=RegisterUser(users=users, hash_password=hash_password),
         authenticate_user=AuthenticateUser(
@@ -654,10 +697,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             clock=clock,
             hash_password=hash_password,
             verify_password=verify_password_async,
-            throttle=LoginThrottle(
-                max_fails=settings.login_max_fails,
-                lock_minutes=settings.login_lock_minutes,
-            ),
+            guard=login_guard,
             ttl_days=settings.session_ttl_days,
         ),
         get_me=GetMe(

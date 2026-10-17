@@ -116,7 +116,9 @@ def create_app(services: ApiServices) -> FastAPI:
         assert isinstance(error, (DomainError, ApplicationError))
         headers = {}
         retry_after = getattr(error, "retry_after", None)
-        if status_for(error) == 503 and retry_after is not None:
+        # **凡是"我们主动拒绝、过一会儿再来"的都带 Retry-After**（503 卸载、
+        # 429 速率闸）。只给一半的话，客户端在另一种上只能硬重试。
+        if status_for(error) in (429, 503) and retry_after is not None:
             headers["Retry-After"] = str(retry_after)
         return JSONResponse(
             status_code=status_for(error), content=body_for(error), headers=headers

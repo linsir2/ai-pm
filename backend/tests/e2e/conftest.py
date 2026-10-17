@@ -66,6 +66,8 @@ def build_app(
     seat_replies: dict[str, str | Sequence[str]] | None = None,
     first_admin: bool = False,
     autologin: bool = True,
+    login_ip_max_attempts: int = 10_000,
+    login_username_max_attempts: int = 10_000,
 ) -> tuple[FastAPI, ScriptedModelGateway]:
     owner_scope.set_owner_scope(E2E_OWNER)
     gateway = ScriptedModelGateway(replies=replies, seat_replies=seat_replies or {})
@@ -78,6 +80,12 @@ def build_app(
         # 默认不种——auth 用例要的是"干净的用户表"。
         first_admin_username="admin" if first_admin else None,
         first_admin_password="test-admin-password" if first_admin else None,
+        # **e2e 默认把尝试闸放大到不可能触发**：否则多个用例从同一个
+        # "testclient" IP 连打登录时会互相限流——测试被自己的防护卡死，
+        # 而且这种失败看起来像产品坏了，不像像测试没配好。
+        # 要验限流的用例自己传一个小的进去。
+        login_ip_max_attempts=login_ip_max_attempts,
+        login_username_max_attempts=login_username_max_attempts,
     )
     container = build_container(settings, gateway=gateway)
     if autologin:
@@ -92,9 +100,16 @@ def make_app(tmp_path):
         replies: dict[str, str | Sequence[str]],
         seat_replies: dict[str, str | Sequence[str]] | None = None,
         autologin: bool = True,
+        login_ip_max_attempts: int = 10_000,
+        login_username_max_attempts: int = 10_000,
     ) -> tuple[FastAPI, ScriptedModelGateway]:
         return build_app(
-            tmp_path, replies=replies, seat_replies=seat_replies, autologin=autologin
+            tmp_path,
+            replies=replies,
+            seat_replies=seat_replies,
+            autologin=autologin,
+            login_ip_max_attempts=login_ip_max_attempts,
+            login_username_max_attempts=login_username_max_attempts,
         )
 
     return _make
