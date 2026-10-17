@@ -146,6 +146,7 @@ from pmstudio.application.errors import (
     BuiltinTemplateProtected,
     MaterialFrozen,
     MaterialTooLarge,
+    SeatAlreadyReviewed,
     UnknownEntryId,
     UnknownEvidenceId,
     UnknownExploration,
@@ -1045,6 +1046,11 @@ class RunSeatRound:
             with self._uow:
                 round_ = self._rounds.get(round_id)
                 for seat, error in failures:
+                    if seat.seat_id in round_.skipped_seats:
+                        # 用户先跳过、在飞任务后失败：`skip_seat` 幂等无操作，
+                        # 但下面的留痕是追加语义——不 guard 会多记一条谎言
+                        # （"两次尝试都未能交回"，实际是用户跳的）。
+                        continue
                     round_.skip_seat(seat.seat_id)
                     round_.note_dropped(
                         (
@@ -1220,6 +1226,26 @@ class RunSeatRound:
         review = outcome.review
         with self._uow:
             round_ = self._rounds.get(round_id)
+            if review.seat_id in round_.skipped_seats:
+                # 用户跳过后迟交：整包丢弃，记一条（与跳过同一桶 USER_SKIPPED）。
+                # 不 attest——不变式"跳过的席位零意见进整合"靠这一行构造性成立；
+                # 不记截断/摘除细项——整包都没了，细项无意义；
+                # 不发 PACKET_EMITTED——没交回的东西谎报"交回了"，前端会 show
+                # 一个不存在的包。直接 return（成功形状，gather 只分异常/非异常）。
+                round_.note_dropped(
+                    (
+                        DroppedItem(
+                            handle=review.seat_id,
+                            reason="跳过之后才交回，已丢弃",
+                            source=DropSource.USER_SKIPPED,
+                            seat_id=review.seat_id,
+                            pass_index=round_.seat_round_count,
+                            packet_id=outcome.envelope.packet_id,
+                        ),
+                    )
+                )
+                self._round_writer.save(round_)
+                return
             round_.attest(review, packet_id=outcome.envelope.packet_id)
             # 被截断掉的意见要留痕（"一条都不许默默丢掉"）——它没进卡片，但要说清为什么。
             round_.note_dropped(
@@ -3895,6 +3921,73 @@ class GetRound:
         )
 
 
+class SkipSeat:
+    """用户手动跳过一个还没交回的席位（`02` §11.0.67 用户手动跳过）。
+
+    abandon 式直调，**不走 `runner.run()`**——走 runner 会被 `RoundBusy` 拦下，
+    而"跑中点跳过"撞上"跑中锁"正是这个用例本身，409 等于功能不存在。
+
+    并发正确性（证明写在 `tests/application/test_skip_seat.py` 模块文档串）：
+    读验写在同一 uow 内做 fresh-read，SQLite `BEGIN IMMEDIATE` 写串行保证
+    后提交者看到先提交者的状态——交回先提交则这里拒（`SeatAlreadyReviewed`），
+    跳过先提交则迟交在 `_review_one` 汇合处被丢弃。两序都闭合，无 TOCTOU。
+
+    回包是**全量 view**（经组合的 `GetRound`，与 graph runner 同款）：
+    前端直接拿动作回包渲染（`useWorkspaceData.abandon` 体例，无二次重读），
+    裸 view 的包标题会退化成 raw id——那正是这次要显示"已跳过"的那一行。
+    """
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        uow: UnitOfWork,
+        events: EventPublisher,
+        clock: Clock,
+        viewer: GetRound,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._uow = uow
+        self._events = events
+        self._clock = clock
+        self._viewer = viewer
+
+    async def __call__(self, *, round_id: RoundId, seat_id: str) -> RoundView:
+        with self._uow:
+            round_ = self._rounds.get(round_id)
+            if seat_id in round_.skipped_seats:
+                # 幂等：已经跳过，直接返回 view——`note_dropped` 是追加语义，
+                # 不 guard 会多记一条留痕。
+                pass
+            else:
+                if any(
+                    review.seat_id == seat_id
+                    for review in round_.current_reviews
+                ):
+                    # 本趟已交回：拒。不是 UX 选项，是正确性必需（见类文档串）。
+                    raise SeatAlreadyReviewed(
+                        f"席位 {seat_id} 本趟已经交回，跳过没有意义",
+                        seat_id=seat_id,
+                    )
+                # 非成员 → UnknownSeat；非跑中 → IllegalStepTransition——都复用，一字不动。
+                round_.skip_seat(seat_id)
+                round_.note_dropped(
+                    (
+                        DroppedItem(
+                            handle=seat_id,
+                            reason=f"用户跳过了席位 {seat_id}，本轮不再请它",
+                            source=DropSource.USER_SKIPPED,
+                            seat_id=seat_id,
+                            pass_index=round_.seat_round_count,
+                            packet_id=None,
+                        ),
+                    )
+                )
+                self._round_writer.save(round_)
+        _publish(self._events, self._clock, round_)
+        return await self._viewer(round_id=round_id)
 class GetDocument:
     def __init__(self, *, documents: DocumentReader) -> None:
         self._documents = documents

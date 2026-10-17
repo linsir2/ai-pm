@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { answerBatchSummary } from "../api/payload";
 import type { LimitsView, RoundView } from "../api/types";
 import { dropsFor, toolDrops, unplacedDrops } from "../document/dropped";
+import { canSkipSeat } from "../document/status";
 import { claimLabelText, compactTarget } from "../labels";
 import { labelCounts, rewritesOf } from "../state/progress";
 import { limitsOf } from "../state/schema";
@@ -24,6 +25,7 @@ export function LoopPane({
   historyNav,
   onRetry,
   onAbandon,
+  onSkipSeat,
   onOpenQuestionnaire,
   onOpenDraft,
 }: {
@@ -39,6 +41,8 @@ export function LoopPane({
   historyNav?: ReactNode;
   onRetry: () => void;
   onAbandon: () => void;
+  /** 跳过一个席位（LoopColumn 从 App 接过来；卡片只负责点，判能不能点在下面）。 */
+  onSkipSeat: (seatId: string) => void;
   onOpenQuestionnaire: () => void;
   onOpenDraft: () => void;
 }) {
@@ -147,6 +151,8 @@ export function LoopPane({
                   order={order + 1}
                   running={running}
                   drops={dropsFor(packet, round.dropped)}
+                  skippable={canSkipSeat(packet, running, round.active_seats)}
+                  onSkip={onSkipSeat}
                   key={`${packet.seat_id}-${packet.pass_index}`}
                 />
               ))}

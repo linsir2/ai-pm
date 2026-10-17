@@ -74,6 +74,12 @@ class KeepRequest(BaseModel):
     as_: Literal["seed", "material"] = Field(alias="as")
 
 
+class SkipSeatRequest(BaseModel):
+    """用户手动跳过一个还没交回的席位。只带 seat_id——轮次在路径里。"""
+
+    seat_id: str
+
+
 class KeepSimInquiryRequest(BaseModel):
     """收下模拟的勾选：假设/盲区 id 列表（切片是分组，不能单收，由用例层拦）。"""
 

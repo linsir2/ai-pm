@@ -110,6 +110,11 @@ class DropSource(StrEnum):
     #: 与上面四个"条目级"不同，这是席位级的——`handle` 直接写 `seat_id`，
     #: `packet_id` 为 None（不来自模型回包，TOOL 同例）。
     SKIPPED = "skipped"
+    #: 用户手动跳过的席位：整包不进整合（含跳过后迟交的那一份）。
+    #: 与 SKIPPED 分开——"谁跳的"排障时很重要（编排层自动 vs 用户手动），
+    #: 混成一个来源等于把两类事故写进同一行留痕。缺口行点名读 `skipped_seats`
+    #: 不分来源，所以那一行无感；留痕折叠行按 source 显示，这里分得开。
+    USER_SKIPPED = "user_skipped"
 
 
 def widened(target: Target) -> Target:

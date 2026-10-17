@@ -668,6 +668,9 @@ function Workspace() {
             onAbandon={() => {
               if (shownRound !== null) void data.abandon(shownRound.round_id);
             }}
+            onSkipSeat={(seatId) => {
+              if (shownRound !== null) void data.skipSeat(shownRound.round_id, seatId);
+            }}
             composerProjectId={project.project_id}
             composerMode={mode}
             composerPending={data.pending}

@@ -25,6 +25,33 @@ export interface RoundSlice {
   draft?: { proposals: readonly { target_label: string }[] } | null;
 }
 
+/** 席位包的一小片：`canSkipSeat` 只认这三样，不认识整个 DTO。 */
+export interface SeatPacketSlice {
+  seat_id: string;
+  status: string;
+}
+
+/** 用户能不能对这个席位点"跳过"。
+
+三条全满足才亮按钮，少一条都不亮（按钮只做展示，真正的守门在后端）：
+1. 轮在跑（`running`：闭环区有在途动作）——停着的轮点跳过没有意义；
+2. 包还没交回（`status === "pending"`）——交回了跳不动（后端 409）；
+   已跳过的也不再亮（`status === "skipped"`，幂等由后端保证，这里只是不展示）。
+3. 在本趟编制里（`activeSeats` 含它）——narrowed 掉的席位本来就不跑，
+   对它点跳过只会撞 `UnknownSeat`。
+ */
+export function canSkipSeat(
+  packet: SeatPacketSlice,
+  running: boolean,
+  activeSeats: readonly string[],
+): boolean {
+  return (
+    running === true &&
+    packet.status === "pending" &&
+    activeSeats.includes(packet.seat_id)
+  );
+}
+
 export function sectionStatus(
   section: SectionSlice,
   round: RoundSlice | null,

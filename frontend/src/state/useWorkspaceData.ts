@@ -811,6 +811,20 @@ export function useWorkspaceData() {
     }
   }, []);
 
+  /** 跳过一个还没交回的席位：回包直接进 reducer（与 abandon 同款，不二次重读）。 */
+  const skipSeat = useCallback(async (roundId: string, seatId: string) => {
+    dispatch({ type: "error", message: null });
+    try {
+      dispatch({
+        type: "round",
+        round: await api.skipSeat(roundId, seatId),
+        expectRoundId: roundId,
+      });
+    } catch (error) {
+      dispatch({ type: "error", message: describe(error) });
+    }
+  }, []);
+
   /** 手改文档：很快的一次写，但也给"正在写"的反馈，失败要看得见。 */
   const editEntry = useCallback(async (body: EditBody): Promise<EditResult | null> => {
     const projectId = selected.current;
@@ -947,6 +961,7 @@ export function useWorkspaceData() {
     runSimReview,
     keepSimInquiry,
     abandon,
+    skipSeat,
     editEntry,
     rollback,
     viewRound,

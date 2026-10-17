@@ -75,6 +75,7 @@ from pmstudio.application.use_cases import (
     RunSimReview,
     SayToThread,
     SearchProject,
+    SkipSeat,
     StartDiscussion,
     StartRound,
     SubmitAnswers,
@@ -586,6 +587,14 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             clock=clock,
             events=bus,
             canceller=runner,
+        ),
+        skip_seat=SkipSeat(
+            rounds=rounds,
+            round_writer=rounds,
+            uow=uow,
+            events=bus,
+            clock=clock,
+            viewer=get_round,
         ),
         exploration_runner=exploration_runner,
         abandon_exploration=AbandonExploration(

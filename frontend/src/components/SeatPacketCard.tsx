@@ -10,15 +10,29 @@ export function SeatPacketCard({
   order,
   running,
   drops = [],
+  skippable = false,
+  onSkip,
 }: {
   packet: SeatPacketView;
   order: number;
   running: boolean;
   /** 这个席位这一趟"没进卡片"的意见（原因由后端留痕，界面只摆出来）。 */
   drops?: DroppedView[];
+  /** 能不能点"跳过"（LoopPane 用 `canSkipSeat` 算好传进来，卡片自己不判断）。 */
+  skippable?: boolean;
+  /** 点跳过（只在 `skippable` 为真时渲染按钮；不传就不出）。 */
+  onSkip?: (seatId: string) => void;
 }) {
-  const pending = packet.status !== "completed";
-  const stateText = pending ? (running ? "正在交回…" : "待启动") : "已完成";
+  const completed = packet.status === "completed";
+  const skipped = packet.status === "skipped";
+  const pending = !completed && !skipped;
+  const stateText = completed
+    ? "已完成"
+    : skipped
+      ? "已跳过"
+      : running
+        ? "正在交回…"
+        : "待启动";
 
   return (
     <article
@@ -31,9 +45,19 @@ export function SeatPacketCard({
         <span className={pending && running ? "packet__state packet__state--running" : "packet__state"}>
           {stateText}
         </span>
+        {skippable && onSkip !== undefined && (
+          <button
+            type="button"
+            className="packet__skip"
+            aria-label={`跳过席位 ${packet.title}`}
+            onClick={() => onSkip(packet.seat_id)}
+          >
+            跳过
+          </button>
+        )}
       </div>
 
-      {!pending && (
+      {completed && (
         <>
           {/* 它是真的有话说，还是交了个空——这一行要说清楚，别只丢两个 0 出来 */}
           <p className="packet__basis">
@@ -82,26 +106,29 @@ export function SeatPacketCard({
             </details>
           )}
 
-          {drops.length > 0 && (
-            <details className="q__whybox drops-fold">
-              <summary className="muted small">留痕 {drops.length} 条</summary>
-              <div className="packet__drops">
-                <p className="packet__counts packet__counts--drops">
-                  {dropHeadline(packet, drops)}
-                </p>
-                <ul className="drops">
-                  {drops.map((item) => (
-                    <li className="drop" key={`${item.handle}-${item.reason}`}>
-                      <span className="mono small">{item.handle}</span>
-                      <span className="drop__reason">{item.reason}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </details>
-          )}
-
         </>
+      )}
+
+      {drops.length > 0 && (
+        <details className="q__whybox drops-fold">
+          <summary className="muted small">留痕 {drops.length} 条</summary>
+          <div className="packet__drops">
+            <p className="packet__counts packet__counts--drops">
+              {/* 跳过包没有"它说的 N 条"（opinions 为空），`dropHeadline` 的
+                  "它说的 0 条里…"是谎言——headline 由卡片按状态自己写，
+                  不碰共享函数。 */}
+              {skipped ? "整包已跳过，原因如下" : dropHeadline(packet, drops)}
+            </p>
+            <ul className="drops">
+              {drops.map((item) => (
+                <li className="drop" key={`${item.handle}-${item.reason}`}>
+                  <span className="mono small">{item.handle}</span>
+                  <span className="drop__reason">{item.reason}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </details>
       )}
     </article>
   );

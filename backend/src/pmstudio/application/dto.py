@@ -53,6 +53,11 @@ from pmstudio.domain.shared.writing import BlockKind
 
 SEAT_COMPLETED = "completed"
 SEAT_PENDING = "pending"
+#: 用户跳过的席位（`02` §11.0.67 用户手动跳过）：前端第三态的数据源。
+#: **分支顺序不能反**：交回优先——已交回的席位跳不动（`SeatAlreadyReviewed`），
+#: 所以"有 review 且被标跳过"在正确实现里不会出现；万一出现（老数据/竞态残留），
+#: 显示 completed（意见真进了整合）比显示 skipped 诚实。
+SEAT_SKIPPED = "skipped"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1847,7 +1852,11 @@ def _seat_packets(
             SeatPacketView(
                 seat_id=seat_id,
                 title=seat_titles.get(seat_id, seat_id),
-                status=SEAT_COMPLETED if review is not None else SEAT_PENDING,
+                status=(
+                    SEAT_COMPLETED
+                    if review is not None
+                    else (SEAT_SKIPPED if seat_id in round_.skipped_seats else SEAT_PENDING)
+                ),
                 pass_index=review.pass_index if review is not None else round_.seat_round_count,
                 basis=review.basis if review is not None else "",
                 opinions=opinions,

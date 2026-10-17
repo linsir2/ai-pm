@@ -55,6 +55,7 @@ from pmstudio.application.use_cases import (
     RollbackVersion,
     SayToThread,
     SearchProject,
+    SkipSeat,
     StartDiscussion,
     UpdateTemplate,
     UploadMaterial,
@@ -99,6 +100,7 @@ class ApiServices:
     runner: RoundOrchestrator
     dig_round: DigRound
     abandon_round: AbandonRound
+    skip_seat: SkipSeat
     exploration_runner: ExplorationOrchestrator
     abandon_exploration: AbandonExploration
     keep_candidate: KeepCandidate

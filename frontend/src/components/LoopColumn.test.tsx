@@ -43,6 +43,7 @@ function drawColumn(over: Partial<Parameters<typeof LoopColumn>[0]> = {}) {
     onCloseReview: noop,
     onRetry: noop,
     onAbandon: noop,
+    onSkipSeat: noop,
     onViewRound: noop,
     onStartResearch: noop,
     onRetryExploration: noop,

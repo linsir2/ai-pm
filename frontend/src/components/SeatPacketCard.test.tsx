@@ -5,6 +5,7 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { SeatPacketView } from "../api/types";
 import { SeatPacketCard } from "./SeatPacketCard";
 
 afterEach(cleanup);
@@ -64,5 +65,91 @@ describe("SeatPacketCard 留痕", () => {
     );
 
     expect(container.querySelector("details.drops-fold")).toBeNull();
+  });
+});
+
+
+describe("SeatPacketCard 跳过", () => {
+  const base = {
+    seat_id: "seat.a",
+    title: "业务规则",
+    status: "pending",
+    pass_index: 1,
+    packet_id: null,
+    basis: "",
+    opinions: [],
+    judgment_count: 0,
+    question_count: 0,
+  } as SeatPacketView;
+
+  it("可跳过时出按钮，点了把 seat_id 交出去（卡片自己不判断，只透传）", () => {
+    const seen: string[] = [];
+    const { container } = render(
+      <SeatPacketCard
+        packet={{ ...base, status: "pending" }}
+        order={1}
+        running={true}
+        drops={[]}
+        skippable={true}
+        onSkip={(id) => seen.push(id)}
+      />,
+    );
+
+    const button = container.querySelector("button.packet__skip");
+    expect(button?.textContent).toContain("跳过");
+    button!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(seen).toEqual(["seat.a"]);
+  });
+
+  it("不可跳过就不出按钮（判断在 LoopPane 的 canSkipSeat，卡片只执行）", () => {
+    const { container } = render(
+      <SeatPacketCard
+        packet={{ ...base, status: "pending" }}
+        order={1}
+        running={true}
+        drops={[]}
+        skippable={false}
+        onSkip={() => {}}
+      />,
+    );
+
+    expect(container.querySelector("button.packet__skip")).toBeNull();
+  });
+
+  it("没给 onSkip 也不出按钮（老调用方零改动）", () => {
+    const { container } = render(
+      <SeatPacketCard
+        packet={{ ...base, status: "pending" }}
+        order={1}
+        running={true}
+        drops={[]}
+        skippable={true}
+      />,
+    );
+
+    expect(container.querySelector("button.packet__skip")).toBeNull();
+  });
+
+  it("跳过态：stateText 是已跳过，留痕照常展开（跳过原因不能藏起来）", () => {
+    const { container } = render(
+      <SeatPacketCard
+        packet={{ ...base, status: "skipped" }}
+        order={1}
+        running={true}
+        drops={[
+          {
+            handle: "seat.a",
+            reason: "用户跳过了席位 seat.a，本轮不再请它",
+            source: "user_skipped",
+            seat_id: "seat.a",
+            pass_index: 1,
+          },
+        ]}
+      />,
+    );
+
+    expect(container.querySelector(".packet__state")!.textContent).toContain("已跳过");
+    expect(container.querySelector("button.packet__skip")).toBeNull();
+    expect(container.querySelectorAll("ul.drops li.drop")).toHaveLength(1);
   });
 });

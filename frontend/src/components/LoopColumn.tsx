@@ -70,6 +70,7 @@ export function LoopColumn({
   onCloseReview,
   onRetry,
   onAbandon,
+  onSkipSeat,
   onViewRound,
   onStartResearch,
   onRetryExploration,
@@ -150,6 +151,7 @@ export function LoopColumn({
   onCloseReview: () => void;
   onRetry: () => void;
   onAbandon: () => void;
+  onSkipSeat: (seatId: string) => void;
   /** 切过去只读看某一轮（复用已有的 `viewRound`）。 */
   onViewRound: (roundId: string) => void;
   /** 发起调研（整份文档；讨论区顶部，M17 从灵感箱底部搬过来）。 */
@@ -364,6 +366,7 @@ export function LoopColumn({
               historyNav={historyNav}
               onRetry={onRetry}
               onAbandon={onAbandon}
+              onSkipSeat={onSkipSeat}
               onOpenQuestionnaire={() => drafts.setCollapsed(false)}
               onOpenDraft={() => drafts.setCollapsed(false)}
             />

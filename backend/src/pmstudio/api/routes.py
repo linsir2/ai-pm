@@ -19,6 +19,7 @@ from pmstudio.api.schemas import (
     OpeningRequest,
     RunSimReviewRequest,
     SayRequest,
+    SkipSeatRequest,
     StartDiscussionRequest,
     StartExplorationRequest,
     StartRoundRequest,
@@ -481,6 +482,18 @@ async def abandon_round(request: Request, round_id: str, user: CurrentUser):  # 
     """
 
     view = await services_of(request).abandon_round(round_id=RoundId(round_id))
+    return as_json(view)
+
+
+@router.post("/rounds/{round_id}/skip-seat")
+async def skip_seat(request: Request, round_id: str, body: SkipSeatRequest, user: CurrentUser):  # type: ignore[no-untyped-def]
+    """跳过一个还没交回的席位（`02` §11.0.67 用户手动跳过）。
+
+    abandon 式直调，不走 `runner.run()`：跑中点跳过撞上跑中锁正是这个用例本身，
+    走 runner 会被 `RoundBusy` 拦下。迟交的那个任务自然结束，交回即丢弃。
+    """
+
+    view = await services_of(request).skip_seat(round_id=RoundId(round_id), seat_id=body.seat_id)
     return as_json(view)
 
 

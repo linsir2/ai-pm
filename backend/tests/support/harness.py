@@ -993,6 +993,18 @@ class Harness:
             canceller=self.runner(),
         )
 
+    def skip_seat(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import SkipSeat
+
+        return SkipSeat(
+            rounds=self.rounds,
+            round_writer=self.rounds,
+            uow=self.uow,
+            events=self.events,
+            clock=self.clock,
+            viewer=self.get_round(),
+        )
+
     def api_services(self, *, model_name: str):  # type: ignore[no-untyped-def]
         from pmstudio.api.app import ApiServices
 
@@ -1000,6 +1012,7 @@ class Harness:
             runner=self.runner(),
             dig_round=self.dig_round(),
             abandon_round=self.abandon_round(),
+            skip_seat=self.skip_seat(),
             exploration_runner=self.exploration_runner(),
             abandon_exploration=self.abandon_exploration(
                 canceller=self.exploration_runner()

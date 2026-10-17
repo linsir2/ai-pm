@@ -70,6 +70,7 @@ function draw(
         elapsed={props.elapsed ?? null}
         onRetry={() => undefined}
         onAbandon={() => undefined}
+        onSkipSeat={() => undefined}
         onOpenQuestionnaire={() => undefined}
         onOpenDraft={() => undefined}
       />

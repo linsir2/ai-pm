@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { sectionIdOf } from "../labels";
-import { filledSectionCount, sectionBadge, sectionStatus } from "./status";
+import {
+  canSkipSeat,
+  filledSectionCount,
+  sectionBadge,
+  sectionStatus,
+} from "./status";
 import type { ReadinessItemView } from "../api/types";
 
 const filled = {
@@ -119,5 +124,41 @@ describe("filledSectionCount", () => {
 
   it("没有文档就是 0", () => {
     expect(filledSectionCount(null)).toBe(0);
+  });
+});
+
+
+describe("canSkipSeat", () => {
+  const pending = { seat_id: "seat.a", status: "pending" };
+  const active = ["seat.a", "seat.b"];
+
+  it("跑中 + 未交回 + 在编 → 亮", () => {
+    expect(canSkipSeat(pending, true, active)).toBe(true);
+  });
+
+  it("没在跑 → 不亮（停着的轮点跳过没有意义）", () => {
+    expect(canSkipSeat(pending, false, active)).toBe(false);
+  });
+
+  it("已交回 → 不亮（后端会 409，这里先藏起来）", () => {
+    expect(canSkipSeat({ seat_id: "seat.a", status: "completed" }, true, active)).toBe(
+      false,
+    );
+  });
+
+  it("已跳过 → 不亮（幂等由后端保证，这里只是不展示）", () => {
+    expect(canSkipSeat({ seat_id: "seat.a", status: "skipped" }, true, active)).toBe(
+      false,
+    );
+  });
+
+  it("不在本趟编制 → 不亮（点了也只会撞 UnknownSeat）", () => {
+    expect(canSkipSeat(pending, true, ["seat.b"])).toBe(false);
+  });
+
+  it("未知状态 → 不亮（白名单：只认 pending）", () => {
+    expect(canSkipSeat({ seat_id: "seat.a", status: "weird" }, true, active)).toBe(
+      false,
+    );
   });
 });

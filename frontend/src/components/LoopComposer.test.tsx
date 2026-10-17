@@ -125,6 +125,7 @@ describe("composer 页签隔离（T7，LoopColumn 层）", () => {
         onCloseReview={noop}
         onRetry={noop}
         onAbandon={noop}
+        onSkipSeat={noop}
         onViewRound={noop}
         onStartResearch={research}
         onRetryExploration={noop}

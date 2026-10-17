@@ -43,6 +43,7 @@ EXPECTED_PATHS = {
     "/api/rounds/{round_id}/retry",
     "/api/rounds/{round_id}/dig",
     "/api/rounds/{round_id}/abandon",
+    "/api/rounds/{round_id}/skip-seat",
     # M10 模拟调研：跑一趟（轮内动作）+ 收下勾选为材料
     "/api/rounds/{round_id}/sim-inquiry",
     "/api/rounds/{round_id}/sim-inquiry/keep",

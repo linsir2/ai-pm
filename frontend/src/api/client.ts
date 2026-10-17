@@ -595,6 +595,13 @@ export const api = {
   abandonRound: (roundId: string) =>
     request<RoundView>(`/rounds/${roundId}/abandon`, { method: "POST", body: "{}" }),
 
+  /** 跳过一个还没交回的席位：本轮不再请它，在飞的交回即丢弃。 */
+  skipSeat: (roundId: string, seatId: string) =>
+    request<RoundView>(`/rounds/${roundId}/skip-seat`, {
+      method: "POST",
+      body: JSON.stringify({ seat_id: seatId }),
+    }),
+
   /** 手改文档：改一条 / 加一条 / 删一条（一次改动一版）。 */
   editEntry: (projectId: string, body: EditBody) =>
     request<EditResult>(`/projects/${projectId}/edits`, {

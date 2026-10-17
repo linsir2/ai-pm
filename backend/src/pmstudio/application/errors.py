@@ -7,7 +7,8 @@
 
 留在这里的都是**有业务含义**的：`UnknownProject` / `UnknownRound` / `UnknownEvidenceId` /
 `UnknownMaterial` / `MaterialFrozen` / `RoundBusy` / `UnsupportedMaterial` /
-`MaterialTooLarge`，以及 `unknown_ref_message`（席位条目地址 vs 提案编号 vs E 编号）。
+`MaterialTooLarge` / `SeatAlreadyReviewed`，以及 `unknown_ref_message`
+（席位条目地址 vs 提案编号 vs E 编号）。
 
 `code` 字符串与搬移前逐字一致——`api/errors.py` 的 CODE_STATUS 表靠它映射 HTTP 状态码。
 """
@@ -170,6 +171,23 @@ class MaterialFrozen(ApplicationError):
             eids=list(eids),
             action=action,
         )
+
+
+class SeatAlreadyReviewed(ApplicationError):
+    """**这个席位本趟已经交回了，现在跳过没有意义**——409。
+
+    与 `admin_protected` / `material_frozen` 同一侧："请求本身合法、状态不允许"。
+    用 400 是"请求有问题"，用 404 是"找不到"——都不是这两件事。
+    而**静默 200 更坏**：等于告诉用户"跳过成功"，但那份意见还在整合里好好待着。
+
+    这个错只可能来自**竞态**（交回先提交、跳过后到）：按钮只对"未交回"亮，
+    点下去的那一刻还没交回，落库时才发现交回了。`SkipSeat` 在同一 uow 内
+    复查当趟 review——没有这个复查，交错的两序会写出"review 落库且席位被标跳过"，
+    不变式（跳过的席位零意见进整合）就破了。所以这不是 UX 选项，是正确性必需。
+    """
+
+    def __init__(self, message: str, *, seat_id: str, **details: object) -> None:
+        super().__init__(message, code="seat_already_reviewed", seat_id=seat_id, **details)
 
 
 class UnknownEntryId(ApplicationError):
