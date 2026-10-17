@@ -2,6 +2,7 @@
 
 
 from pmstudio.application.context import (
+    OBSERVATION_DETAIL_CHARS,
     render_observations_index,
     render_project_context,
 )
@@ -110,6 +111,70 @@ class TestRenderObservationsIndex:
         text = render_observations_index(obs)
         assert "SKU数量？" in text
         assert "seat.data_scale:O2" in text
+
+
+    def test_the_detail_rides_along_with_the_title(self):
+        """R：观察的实质内容（`detail`）要进索引。
+
+        改前只给 `title`——模型看得到"有这条观察"，看不到它的结论；
+        真库里 46 条观察的 detail 全是非空真内容（87–150 字），全部白存。
+        """
+
+        obs = (
+            RoundObservation(
+                obs_id="obs-1",
+                round_id="r1",
+                project_id="p1",
+                obs_type=ObservationType.SEAT_INSIGHT,
+                title="讨论区验收标准缺失",
+                detail="必须在 s12 补验收条目（依据：当前 s12 只覆盖调研）",
+                source_ref="seat.business_rules:O4",
+            ),
+        )
+        text = render_observations_index(obs)
+
+        assert "讨论区验收标准缺失" in text
+        assert "必须在 s12 补验收条目" in text
+
+    def test_a_long_detail_is_clipped(self):
+        """R：`opinion.claim/because` 在 schema 里**无长度上限**，防 detail 撑爆预算。"""
+
+        obs = (
+            RoundObservation(
+                obs_id="obs-1",
+                round_id="r1",
+                project_id="p1",
+                obs_type=ObservationType.SEAT_INSIGHT,
+                title="标题",
+                detail="长" * 500,
+                source_ref="seat:biz:O1",
+            ),
+        )
+        text = render_observations_index(obs)
+
+        assert "长" * OBSERVATION_DETAIL_CHARS in text
+        assert "长" * (OBSERVATION_DETAIL_CHARS + 1) not in text
+        assert "…" in text
+
+    def test_an_empty_detail_does_not_leave_a_dangling_colon(self):
+        """R：老行 `detail=''`（schema default）——不许渲染出一个空冒号尾巴。"""
+
+        obs = (
+            RoundObservation(
+                obs_id="obs-1",
+                round_id="r1",
+                project_id="p1",
+                obs_type=ObservationType.SEAT_INSIGHT,
+                title="只有标题",
+                detail="",
+                source_ref="seat:biz:O1",
+            ),
+        )
+        text = render_observations_index(obs)
+
+        line = next(item for item in text.splitlines() if "只有标题" in item)
+        assert not line.rstrip().endswith("：")
+        assert not line.rstrip().endswith(":")
 
     def test_question_mark_for_gap(self):
         obs = (

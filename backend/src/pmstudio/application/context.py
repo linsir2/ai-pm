@@ -1433,18 +1433,33 @@ def extract_observations_from_reviews(
 
 # ── L2 轮次观察渲染 ────────────────────────────────────────────────
 
+#: 观察 `detail` 进索引时的截断上限（字）。`opinion.claim/because` 在 schema 里**没有**
+#: 长度上限，模型偶发长文会撑预算；真库实测 detail 87–150 字，200 留余量。
+OBSERVATION_DETAIL_CHARS = 200
+
 
 def render_observations_index(
     observations: Sequence[RoundObservation], limit: int = 5
 ) -> str:
-    """L2 观察索引——只给标题（≤limit 条），模型按需拉详情。"""
+    """L2 观察索引——标题 + 详情（≤limit 条）。
+
+    详情**内联**（2026-10-17）：改前只给标题，模型看得到"有这条观察"却看不到它的结论，
+    而 `detail` 才是观察的实质内容（真库 46 条全部非空，87–150 字）。曾预留"按需拉详情"
+    （仓储的 `search`/`get`），但那要给 N 个席位各加一次 LLM 调用去省 ≤1KB，严格更贵。
+    """
     if not observations:
         return ""
     shown = observations[:limit]
     lines = ["<observations-index>"]
     for obs in shown:
         mark = "？" if obs.obs_type == "gap_identified" else "●"
-        lines.append(f"  {mark} [{obs.source_ref}] {obs.title}")
+        suffix = ""
+        detail = obs.detail.strip()
+        if detail:
+            clipped = detail[:OBSERVATION_DETAIL_CHARS]
+            ellipsis = "…" if len(detail) > OBSERVATION_DETAIL_CHARS else ""
+            suffix = f"：{clipped}{ellipsis}"
+        lines.append(f"  {mark} [{obs.source_ref}] {obs.title}{suffix}")
     omitted = len(observations) - len(shown)
     if omitted > 0:
         lines.append(f"  （共 {len(observations)} 条，只带了前 {len(shown)} 条）")

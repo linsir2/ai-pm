@@ -203,3 +203,24 @@ async def test_full_two_round_flow(harness):
     seat_slots = harness.prompts.last("seat_review")
     assert "project_context" in seat_slots
     assert "observations_index" in seat_slots
+
+
+@pytest.mark.asyncio
+async def test_l2_index_carries_the_detail_not_just_the_title(harness):
+    """R（真路径）：观察的 `detail` 要真的进席位提示词，不只是标题。
+
+    I：跑满 R1（席位交回 claim=200-500个SKU / because=过多增加损耗）；P：R2 的席位轮；
+    R：`$observations_index` 里既有标题词（SKU/周转）也有 **detail 的内容**（claim 与 because）。
+    """
+
+    pid = harness.seed_project(title="社区团购平台")
+    await _run_full_round(harness, pid, "社区团购平台，团长负责配送")
+    start2 = harness.start_round()
+    r2 = await start2.create(project_id=pid, user_input="社区团购预售模式，团长配送")
+    await start2.analyze(round_id=r2)
+    await harness.submit_opening()(round_id=r2, seats=(SEAT,))
+    await harness.run_seat_round()(round_id=r2)
+
+    obs_index = harness.prompts.last("seat_review").get("observations_index", "")
+    assert "200-500个SKU" in obs_index   # claim 进了（改前这里只有标题 "SKU"）
+    assert "过多增加损耗" in obs_index    # because 也进了
