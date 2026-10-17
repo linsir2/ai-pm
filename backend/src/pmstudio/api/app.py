@@ -1,5 +1,6 @@
 """FastAPI 应用：唯一职责是把 HTTP 变成用例调用，把错误变成状态码。"""
 
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from pmstudio.api import auth, routes
-from pmstudio.api.errors import body_for, status_for
+from pmstudio.api.errors import body_for, is_busy_error, status_for
 from pmstudio.application.ports import DiscussionRunner, ExplorationOrchestrator, RoundOrchestrator
 from pmstudio.application.use_cases import (
     AbandonExploration,
@@ -54,8 +55,27 @@ from pmstudio.application.use_cases import (
     UploadMaterial,
 )
 from pmstudio.domain.shared.errors import DomainError
-from pmstudio.harness.errors import ApplicationError
+from pmstudio.harness.errors import ApplicationError, DatabaseBusy
 from pmstudio.harness.events import EventStream
+
+#: 等锁超时告诉客户端等多久（秒）。**常量而非配置**：这是一句提示，而我们并不
+#: 真知道竞争写要多久；做成旋钮等于让人瞎调。理由见 `DatabaseBusy` 的文档串。
+DATABASE_BUSY_RETRY_SECONDS = 3
+
+
+def _error_response(error: DomainError | ApplicationError) -> JSONResponse:
+    """把领域/应用错误变成 HTTP 响应。**两个 handler 共用一份**，不复制
+    `Retry-After` 那段——复制了就多一处会漂移的地方。"""
+
+    headers = {}
+    retry_after = getattr(error, "retry_after", None)
+    # **凡是"我们主动拒绝、过一会儿再来"的都带 Retry-After**（429 速率闸、
+    # 503 卸载 / 503 数据库忙）。只给一半的话，客户端在另一种上只能硬重试。
+    if status_for(error) in (429, 503) and retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
+    return JSONResponse(
+        status_code=status_for(error), content=body_for(error), headers=headers
+    )
 
 
 class BackgroundResource(Protocol):
@@ -147,14 +167,29 @@ def create_app(
     @app.exception_handler(ApplicationError)
     async def _handle(request: Request, error: Exception) -> JSONResponse:
         assert isinstance(error, (DomainError, ApplicationError))
-        headers = {}
-        retry_after = getattr(error, "retry_after", None)
-        # **凡是"我们主动拒绝、过一会儿再来"的都带 Retry-After**（503 卸载、
-        # 429 速率闸）。只给一半的话，客户端在另一种上只能硬重试。
-        if status_for(error) in (429, 503) and retry_after is not None:
-            headers["Retry-After"] = str(retry_after)
+        return _error_response(error)
+
+    @app.exception_handler(sqlite3.OperationalError)
+    async def _handle_sqlite(request: Request, error: Exception) -> JSONResponse:
+        """**SQLite 等锁超时**（高并发 P5b）。
+
+        多 worker 把写并发提上来之后，`BEGIN IMMEDIATE` 等锁 10 秒拿不到就抛
+        `OperationalError`。改前它落到 FastAPI 默认处理，成一个**裸 500**——
+        而 500 传达的信息是错的（"你自己或数据坏了"），客户端只会重试到天荒地老。
+
+        只有**等锁超时**才转 503：`no such table`、`readonly database` 那些是代码
+        bug 或部署错，回 503 等于让客户端干等一个永远不会好的结果。
+        """
+
+        assert isinstance(error, sqlite3.OperationalError)
+        if is_busy_error(error):
+            return _error_response(
+                DatabaseBusy("数据库正忙，请稍后重试", retry_after=DATABASE_BUSY_RETRY_SECONDS)
+            )
+        # 非等锁类：是我们自己的问题，形状照常，内码 500。
         return JSONResponse(
-            status_code=status_for(error), content=body_for(error), headers=headers
+            status_code=500,
+            content={"code": "internal_error", "message": "数据库写入失败", "details": {}},
         )
 
     return app

@@ -4,6 +4,7 @@
 提示词存**原文**（截断）——只存 sha 复现不了，而复现是这张表唯一的目的。
 """
 
+import logging
 import sqlite3
 
 from pmstudio.harness.model.prompt_log import PROMPT_LIMIT
@@ -203,3 +204,147 @@ def test_an_old_db_gets_the_new_columns_without_losing_rows(tmp_path):
     connection.close()
 
     database.connect(path).close()  # 幂等：再连一次不许炸
+
+
+def _record_kwargs(**overrides: object) -> dict:  # noqa: ANN205
+    """`record()` 的全套参数，省得每条用例抄一遍。"""
+
+    base = {
+        "trace_id": "r1",
+        "purpose": "claims",
+        "model": "m",
+        "prompt_sha": "x",
+        "prompt_text": "p",
+        "reply_text": "{}",
+        "usage": {"total_tokens": 1},
+        "duration_ms": 1,
+        "created_at": NOW,
+    }
+    base.update(overrides)
+    return base
+
+
+# ── 失败要看得见（P5b）────────────────────────────────────────────────────────
+# 旁路（fail soft）是对的、**不改**：它是遥测不是审计，OpenBao/K8s 那种
+# "审计失败就让请求失败"的强度用在这里是反的。真正的问题是"静默"——
+# 现在 `except (sqlite3.Error, TypeError, ValueError): return` 把两类
+# **完全不同的事故**混成了一团，而从外面看都是"没记录"：
+
+
+def _recorder_on(tmp_path) -> SqliteModelCallRecorder:  # noqa: ANN205
+    return SqliteModelCallRecorder(database.connect(tmp_path / "live.db"))
+
+
+def _take_write_lock(tmp_path):  # noqa: ANN202
+    """第二条连接 `BEGIN EXCLUSIVE`，把库真锁住。
+
+    **关掉连接模拟不出"锁"**：那样抛的是 `ProgrammingError(Cannot operate on
+    a closed database)`，不是 `OperationalError`——那是另一类事故。"""
+
+    blocker = sqlite3.connect(tmp_path / "live.db", isolation_level=None, timeout=0.05)
+    blocker.execute("BEGIN EXCLUSIVE")
+    return blocker
+
+
+def test_留样被锁住时留痕且说清是容量问题(tmp_path, caplog):
+    """R：`database is locked` 是**容量问题**（多 worker 写争用），
+    和"序列化失败"必须能分开——前者要扩容/减并发，后者要改代码。
+
+    I：连接按掉 → `OperationalError`；P：`record()`；R：有 warning，
+    且文案说的是锁/容量。"""
+
+    recorder = _recorder_on(tmp_path)
+    blocker = _take_write_lock(tmp_path)
+    try:
+        with caplog.at_level(logging.WARNING):
+            recorder.record(**_record_kwargs())
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings, "留样被吞掉了，一句痕都没留"
+    assert any("争用" in r.getMessage() for r in warnings), (
+        f"文案没说清是写争用：{[r.getMessage() for r in warnings]}"
+    )
+
+
+def test_序列化失败时留痕且说清是代码问题(tmp_path, caplog):
+    """R：另一类事故也要有痕，且措辞要能让人一眼分出是**代码 bug**。"""
+
+    recorder = SqliteModelCallRecorder(database.connect(tmp_path / "m.db"))
+    with caplog.at_level(logging.WARNING):
+        recorder.record(**_record_kwargs(usage={"bad": object()}))
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings, "序列化失败也静默吞掉了——真模型踩过一次该 bug"
+    assert any("序列化" in r.getMessage() or "json" in r.getMessage().lower()
+               for r in warnings), [r.getMessage() for r in warnings]
+
+
+def test_留样失败仍然不抛_旁路语义不许变(tmp_path):
+    """R：**行为不变**——记不上不许把这一轮搞失败。这是仓库明写的规矩，
+    本轮只改"看不看得见"，不改"要不要抛"。"""
+
+    recorder = _recorder_on(tmp_path)
+    blocker = _take_write_lock(tmp_path)
+    try:
+        recorder.record(**_record_kwargs())  # 不抛
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+
+def test_一次故障只留一次痕(tmp_path, caplog):
+    """R：每次都留会把日志刷爆——争用期间是**持续**故障，不是几十次独立事件。
+    形状照抄 `redis_bus._mark_leg_down`（按状态转换打，不按发生次数打）。"""
+
+    recorder = _recorder_on(tmp_path)
+    blocker = _take_write_lock(tmp_path)
+    try:
+        with caplog.at_level(logging.WARNING):
+            for _ in range(20):
+                recorder.record(**_record_kwargs())
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1, f"留了 {len(warnings)} 条痕——会刷屏"
+
+
+def test_恢复正常之后_下次再犯能重新留痕(tmp_path, caplog):
+    """R：**恢复要清"已留痕"标志**，否则进程跑几天之后那次偶发丢失就再也看不见了。"""
+
+    # **必须是同一个 recorder**：标志是"这个 worker 里的这个留样器"。
+    # 换成另一个对象模拟"恢复"是不成立的——那只是另一个还没留过痕的新对象。
+    recorder = _recorder_on(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        blocker = _take_write_lock(tmp_path)
+        try:
+            recorder.record(**_record_kwargs())      # 坏 → 留痕
+        finally:
+            blocker.rollback()
+            blocker.close()
+        recorder.record(**_record_kwargs())          # 好了 → 清标志
+
+        blocker = _take_write_lock(tmp_path)
+        try:
+            recorder.record(**_record_kwargs())      # 又坏 → 再留痕
+        finally:
+            blocker.rollback()
+            blocker.close()
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 2, f"恢复后没清标志，第二次丢失没被看见（共 {len(warnings)} 条）"
+
+
+def test_没有计数器_多worker下每worker一个会主动误导(tmp_path):
+    """R：**刻意不加计数器**。计数住在 recorder 里，而 recorder 每 worker 一个——
+    `/api/auth/stats` 只会读到**那一个 worker** 的丢弃数，却被当成全站数字。
+    多 worker 下那是**主动误导**，比没有更坏。日志才是真的消费方。"""
+
+    recorder = SqliteModelCallRecorder(database.connect(tmp_path / "m.db"))
+
+    assert not hasattr(recorder, "dropped")
+    assert not hasattr(recorder, "dropped_count")

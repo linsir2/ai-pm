@@ -48,6 +48,9 @@ CODE_STATUS = {
     # 过载保护主动卸载（熔断开闸 / 隔离舱满 / 重试预算耗尽）= 503，不是 502：
     # 上游可能好着，是我们没让它发出去。客户端该"过会儿再来"，不是重试上游。
     "model_shed": 503,
+    # 数据库写锁等不到 = 503。**不是 500**：等锁超时是暂时性的（持锁者是个短事务），
+    # 500 会让客户端以为是自己或数据坏了，于是重试也重试。
+    "database_busy": 503,
     # 速率闸（登录尝试超限）= 429。**刻意不并进 401**：401 已��被登录失败锁占用，
     # 且并进去会让"凭证不对"和"你太快了"变成同一个码——客户端没法决定是该
     # 换密码还是该等 Retry-After。
@@ -55,6 +58,18 @@ CODE_STATUS = {
     # 仓储拿不到 owner 上下文 = 程序员错误（漏设 scope），刻意 500 级，绝不退成 404
     "missing_owner_scope": 500,
 }
+
+
+def is_busy_error(error: BaseException) -> bool:
+    """这条 sqlite 错误是「等锁超时」吗？
+
+    **只认 `locked` / `busy`**：`no such table`、`attempt to write a readonly
+    database` 那些是代码 bug 或部署错，回 503 等于让客户端干等一个永远不会好的
+    结果——那比回 500 更坏。
+    """
+
+    text = str(error).lower()
+    return "locked" in text or "busy" in text
 
 
 def status_for(error: DomainError | ApplicationError) -> int:

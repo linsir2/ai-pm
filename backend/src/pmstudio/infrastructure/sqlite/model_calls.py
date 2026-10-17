@@ -13,12 +13,15 @@
 """
 
 import json
+import logging
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
 from pmstudio.harness.model.prompt_log import keep_head_and_tail
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,9 +40,25 @@ class ModelCallRow:
     error: str | None = None
 
 
+def _mentions_lock(text: str) -> bool:
+    """这条 sqlite 错误是「等锁超时」吗。
+
+    **与 `api/errors.py::is_busy_error` 同一条规则，但在这一层重写了一遍**——
+    不是懒：层守卫 `ALLOWED_LAYER_IMPORTS` 规定 api 只能 import
+    api/application/domain/harness，**api 拿不到 infrastructure 的东西**，
+    反向 import 也不允许。两边各留一份小判据，好过为了共享它去动分层规则。
+    """
+
+    lowered = text.lower()
+    return "locked" in lowered or "busy" in lowered
+
+
 class SqliteModelCallRecorder:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
+        #: 已留过一次痕。**按状态转换留、不按发生次数留**——争用是**持续**故障，
+        #: 每次都留会把日志刷爆。形状照抄 `redis_bus._mark_leg_down`。
+        self._warned = False
 
     def record(
         self,
@@ -78,11 +97,49 @@ class SqliteModelCallRecorder:
                     error,
                 ),
             )
-        except (sqlite3.Error, TypeError, ValueError):
-            # 旁路：记不上就算了，不许把这一轮搞失败。
+        except sqlite3.OperationalError as error:
+            # **旁路语义不变**：记不上就算了，不许把这一轮搞失败。
+            # 它是遥测不是审计——OpenBao/K8s 那种"审计失败就让请求失败"的强度
+            # 用在这里是反的（留样只是给排查用的记录，不是业务事实）。
+            #
+            # 但**不许静默**：多 worker 把写并发提上来之后，等锁超时（`OperationalError`）
+            # 会**持续**发生，而序列化失败（下面那个分支）是**代码 bug**——
+            # 改前两者混成一个 `except`，从外面看都是"没记录"，处理方式完全不同。
+            # `OperationalError` 有两种常见成因，用消息分开说——运维要看这一行
+            # 就知道该扩容还是该查部署：锁/忙 = 写争用（多 worker 的常态），
+            # 别的（no such table / readonly）= 部署或 schema 问题。
+            if _mentions_lock(str(error)):
+                detail = (
+                    "写争用（等锁超时）——多 worker 下的常态，与留样本身无关，"
+                    "业务写也会遇到同样的争用"
+                )
+            else:
+                detail = f"不是写争用，是部署/schema 问题：{type(error).__name__}"
+            self._warn_once(f"模型留样写库失败：{detail}（{error}）")
+            return
+        except (sqlite3.Error, TypeError, ValueError) as error:
             # TypeError/ValueError 是防 `json.dumps` 撞上不可序列化的对象（真模型踩过一次：
             # litellm 的 usage 里有 pydantic 包装对象，那一次整个轮次被留样搞失败了）。
+            # 那是**代码 bug**，不是容量问题——措辞要与上一个分支分开。
+            self._warn_once(f"模型留样写库失败（多半是序列化）：{type(error).__name__}: {error}")
             return
+        else:
+            # **成功也要清标志**：否则进程跑几天之后那次偶发丢失就再也看不见了
+            # （`redis_bus._mark_leg_up` 立下的同一条规矩）。
+            self._warned = False
+
+    def _warn_once(self, message: str) -> None:
+        """按状态转换留痕，不按发生次数留。
+
+        **刻意不加计数器**：计数住在这个对象里，而它每 worker 一个——
+        `/api/auth/stats` 只会读到**那一个 worker** 的丢弃数却被当成全站数字，
+        多 worker 下那是**主动误导**。日志才是真的消费方。
+        """
+
+        if self._warned:
+            return
+        self._warned = True
+        logger.warning("%s（后续同类失败不再重复留痕）", message)
 
     def recent(
         self, *, round_id: str | None = None, limit: int = 50

@@ -106,3 +106,25 @@ class RateLimited(ApplicationError):
         super().__init__(message, code="rate_limited", **details)
         #: 秒。`0` 或负数等于没告诉客户端任何事，它只会硬重试。
         self.retry_after = retry_after
+
+
+class DatabaseBusy(ApplicationError):
+    """**数据库写锁等不到**（多 worker 下的常态之一）——503 + `Retry-After`。
+
+    与 `ModelShed` 同一形状：都是"我们主动拒绝、过一会儿再来"，都带
+    `retry_after`。区别只在位置：那个说的是模型通道，这个说的是存储。
+
+    **为什么不能是 500**：等锁超时是**暂时性**的——持锁者是个短事务，多半早就
+    结束了。500 传达的信息是"你自己或数据有问题"，于是客户端重试也重试
+    （还是 500）。`Retry-After` 才是这个场景的标准答案。
+
+    `retry_after` 取 3 秒：业务写已经等锁耗掉 10 秒（`database.py` 的
+    `timeout=10.0`），说明持锁者多半已经结束；再让客户端等 10 秒过于悲观，
+    而不给数等于让它硬重试——那会制造重试风暴。**刻意做成常量而不是配置**：
+    这是一个"客户端该等多久"的提示，而我们并不真知道竞争写要多久，
+    做成旋钮等于让人瞎调。
+    """
+
+    def __init__(self, message: str, *, retry_after: int = 3, **details: object) -> None:
+        super().__init__(message, code="database_busy", **details)
+        self.retry_after = retry_after

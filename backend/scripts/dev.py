@@ -56,6 +56,66 @@ def mask(value: str) -> str:
     return f"{value[:6]}…{value[-4:]}" if len(value) > 12 else "…"
 
 
+#: **每个 worker 的固定 fd 开销**（本机核验出来的清单，不是估的）：
+#: 3 标准流 + 3 asyncio（epoll + self-pipe 两端）+ 1 uvicorn 监听 socket
+#: + **3 SQLite**（库文件 + `-wal` + `-shm`，`PRAGMA journal_mode=WAL` 开着）
+#: + 1 事件扇出 reader + 1 事件扇出 publisher = 12。
+#:
+#: **SQLite 那 3 个最容易漏**——`ls /proc/<pid>/fd` 能直接看到三个。
+#: 改前这个提示只算 `workers × 200`（SSE 连接数），漏掉了这一整块。
+FIXED_FDS_PER_WORKER = 12
+
+
+def fd_budget_for(*, workers: int, redis_pool: int, connections_per_worker: int) -> int:
+    """多 worker 跑起来大约要占多少 fd（上限估算）。
+
+    `redis_pool` 是 `PMSTUDIO_REDIS_MAX_CONNECTIONS`——连接池是**懒增长**的，
+    最坏情况就是那个上界，而它是**主导项**（默认 256，远大于连接数）。
+    """
+
+    if workers <= 0:
+        return 0
+    return workers * (FIXED_FDS_PER_WORKER + redis_pool + connections_per_worker)
+
+
+def fd_pressure(*, soft_limit: int, workers: int, redis_pool: int) -> bool:
+    """软限够不够？
+
+    **只按"保证占用"判**（固定开销 + 连接池），**不含同时在飞连接**——
+    那个数只有运行时才知道，启动期猜它等于编一个假的阈值出来。
+
+    `workers <= 0` 一律判无压力：那是配置错误，会由 `_workers()` 自己拦下，
+    **不该用 fd 压力这个理由去报一个配置错误**。
+    """
+
+    if workers <= 0:
+        return False
+    return soft_limit < workers * (FIXED_FDS_PER_WORKER + redis_pool)
+
+
+def _raise_fd_limit() -> int:
+    """**自己把软限抬到硬限**——照 nginx 的做法（它 fork 之后对每个 worker
+    调 `setrlimit(RLIMIT_NOFILE, ...)`）。
+
+    不需要 root：只要不超过硬限就能抬。而"软限不够"这个失败模式在很多机器上
+    根本不存在（本机实测 soft == hard == 1048576），所以**不能靠它拦**——
+    nginx 的源码行为也是**警告不失败**，硬失败只会把问题提前、什么也没修好。
+
+    返回抬完之后的软限。
+    """
+
+    import resource
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < hard:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+            return hard
+        except (ValueError, OSError):
+            return soft  # 抬不动就用原来的，别因此起不来
+    return soft
+
+
 def _workers() -> int:
     """读 `PMSTUDIO_WORKERS`（高并发 P4）。配不了 0 或非整数 → 退出码 2，
     与缺配置的处理一致：**看起来在配、其实配了个没用的值**最危险。"""
@@ -137,16 +197,31 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    if workers > 1:
-        # **每条 SSE 连接占 1 个文件描述符**：200 连接 × 4 worker = 800，
-        # Linux `ulimit -n` 默认 1024 就贴着上限。根子上要改 systemd 的 LimitNOFILE，
-        # 这里只把当前值打出来，让人知道自己站在什么上面。
-        import resource
+    # fd 护栏：先自己抬软限（nginx 的做法），再判够不够。
+    # **警告而不是退出码 2**——见 `_raise_fd_limit` 的文档串。
+    import resource as _resource
 
+    redis_pool = int(os.environ.get("PMSTUDIO_REDIS_MAX_CONNECTIONS", "256") or 256)
+    if redis_pool < 0:
+        redis_pool = 0
+    soft = _raise_fd_limit()
+    _, hard = _resource.getrlimit(_resource.RLIMIT_NOFILE)
+    print(f"文件描述符：软限 {soft}（硬限 {hard}，已尝试抬到硬限）")
+    if fd_pressure(soft_limit=soft, workers=workers, redis_pool=redis_pool):
+        # 每 worker 的连接数是**运行时才知道**的，这里只把公式打出来让人自己代入。
         print(
-            f"文件描述符上限：{resource.getrlimit(resource.RLIMIT_NOFILE)[0]}"
-            f"（{workers} 个 worker × 200 条 SSE 连接 ≈ {workers * 200} 个）"
+            f"  ⚠ 可能不够：{workers} 个 worker × ("
+            f"固定 {FIXED_FDS_PER_WORKER} + 登录限流池 ≤{redis_pool} + 每 worker 的在飞连接)"
         )
+        print(
+            "  改法：systemd 单元里加 LimitNOFILE=，或 ulimit -n。"
+            "不抬就够跑 200 连接 × 多 worker 的话，新连接会拿到 "
+            "\"Too many open files\"。"
+        )
+    else:
+        used = workers * (FIXED_FDS_PER_WORKER + redis_pool)
+        print(f"  够：固定开销与 Redis 连接池已占 {used} 个，"
+              "加上你预期的每 worker 在飞连接数即可。")
 
     uvicorn.run(
         "pmstudio.bootstrap.container:build_app",

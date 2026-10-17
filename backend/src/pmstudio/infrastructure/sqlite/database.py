@@ -1,7 +1,10 @@
 """SQLite 连接：建库、建表、WAL。单用户单进程，一个连接就够。"""
 
+import logging
 import sqlite3
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 #: 11 = 删 observations.sections/features/create
@@ -61,6 +64,99 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
+#: **WAL-reset bug**（`sqlite.org/wal.html §11`）：一个从 3.7.0（2010）就在的数据竞争
+#: ——一个连接在 checkpoint、另一个连接重置了 WAL 并写入，后续 checkpoint 会**跳过
+#: 一批已提交事务 → 数据库损坏**。
+#:
+#: 触发条件三条全中才会发生：① WAL 模式 ② 同一文件 ≥2 个**跨线程/跨进程**连接
+#: ③ 两者同时写或 checkpoint。**② 正是多 worker 的定义**——`container.py` 每个
+#: worker 一条连接。
+#:
+#: **修复在 3.51.3（2026-03-13）**，另有两条分支的 backport：**3.44.6 / 3.50.7**。
+#: 判定**必须按分支走**，不能用版本号大小比较：`min((3,50,7))` 会把 3.51.1 误判成
+#: 已修（3.51.1 > 3.50.7），而 3.51 分支要到 3.51.3 才修。
+#: 已修复的版本**区间**（闭区间）。backport 只落在 3.50.7 与 3.44.6 两个版本上，
+#: **不是**从那个版本起一直到 3.51 之前——3.45 ~ 3.49 与 3.43 及更早的分支都没有
+#: backport，全都仍然中招。
+#:
+#: 3.51.3 起是主修复版，之后的版本（含 3.52 / 3.53）都带修复。
+_WAL_RESET_FIXED_RANGES = (
+    ((3, 51, 3), None),      # None = 没有上界
+    ((3, 50, 7), (3, 50, 99)),
+    ((3, 44, 6), (3, 44, 99)),
+)
+
+
+def wal_reset_vulnerable(version: str) -> bool:
+    """链接的 SQLite 是否落在 WAL-reset 的受影响区间内。
+
+    **解析不了就当中招**（返回 True）——把未知当成安全是"看起来正常"的静默失效。
+    """
+
+    try:
+        parts = tuple(int(part) for part in version.strip().split("."))
+        if len(parts) < 3:
+            return True
+    except (AttributeError, ValueError):
+        return True
+    current = parts[:3]
+    # **按分支走**：每条分支有自己的修复点。写成"对三个修复点逐个比大小"会跨分支
+    # 误判——`(3,51,1) >= (3,50,7)` 成立，于是把 3.51.1 判成已修，而 3.51 分支
+    # 要到 3.51.3 才修。先确定落在哪条分支，再比那一条的修复点。
+    # **按区间比，不能只比大小**。两种错法都踩过：
+    #   · 「对三个修复点逐个比大小」→ `(3,51,1) >= (3,50,7)` 成立，
+    #     把 3.51.1 判成已修，而 3.51 分支要到 3.51.3 才修；
+    #   · 「3.44.6 是分界」→ 把 3.45~3.49 全吞成已修，可那些分支**没有** backport。
+    for low, high in _WAL_RESET_FIXED_RANGES:
+        if current >= low and (high is None or current <= high):
+            return False
+    return current >= (3, 7, 0)
+
+
+#: 已就 WAL 模式发过一次警告之后置位。**按状态转换打、不按发生次数打**
+#: ——形状照抄 `redis_bus._mark_leg_down`（每条连接都警告会把日志刷爆：
+#: 4 个 worker 各自建连接，逐连接警告就是刷屏）。
+_wal_reset_warned = False
+
+
+def _warn_wal_reset_risk(journal_mode: str = "wal") -> None:
+    """链接的 SQLite 有 WAL-reset 风险 → 打一条**把四件事说清**的警告。
+
+    仓库已有一条明写的规矩（`assert_owners_backfilled` 的文档串）：错误文案
+    **必须点名要配的变量 / 要改的东西**。这里同理，四件事：
+      ① 现在是什么版本、受影响到哪个版本为止
+      ② 触发条件（本仓多 worker 正好满足②）
+      ③ 官方严重度——发生率 ≤ SSD 故障率，**不是紧急事件**，不夸大
+      ④ **真修只能换一个捆绑了新 SQLite 的解释器**——本仓改不了，
+         而且 `pysqlite3-binary` 捆绑的 3.51.1 同样中招（本机实测）
+    """
+
+    global _wal_reset_warned
+    # **先验"真的在 WAL 模式"**：触发条件之一就是 WAL，没开就不该喊。
+    # 这一步不是多余的假设——`PRAGMA journal_mode` 可能抢不到锁而没切成。
+    if str(journal_mode).lower() != "wal":
+        return
+    version = sqlite3.sqlite_version
+    if not wal_reset_vulnerable(version):
+        # 版本已经修好 → 清标志。**恢复要清**是 redis_bus 立下的规矩：
+        # 不清的话进程跑几天之后那次偶发中招就再也看不见了。
+        _wal_reset_warned = False
+        return
+    if _wal_reset_warned:
+        return
+    _wal_reset_warned = True
+    logger.warning(
+        "链接的 SQLite %s 落在 WAL-reset bug 的受影响区间内（3.7.0 – 3.51.2，"
+        "修复在 3.51.3；backport 只有 3.44.6 与 3.50.7 两条分支）。"
+        "触发条件三条：WAL 模式 + 同一库上 ≥2 个**跨进程**连接 + 两者同时写或 checkpoint"
+        "——多 worker 正好满足第二条。官方严重度：发生率 ≤ SSD 故障率，**不是紧急事件**。"
+        "本仓改不了它（Python 的 sqlite3 链接的是解释器自带的 libsqlite3，"
+        "pyproject.toml 加依赖无效；pysqlite3-binary 捆绑的 3.51.1 同样中招）。"
+        "**真修只能换一个捆绑了 ≥3.51.3 的 SQLite 的解释器**（生产镜像里 pin 住）。",
+        version,
+    )
+
+
 def _enable_wal(connection: sqlite3.Connection) -> None:
     """切到 WAL。**多进程下这一步本身会争用**（高并发 P4 真跑抓到的）。
 
@@ -73,11 +169,14 @@ def _enable_wal(connection: sqlite3.Connection) -> None:
     """
     try:
         connection.execute("PRAGMA journal_mode = WAL")
+        mode = "wal"
     except sqlite3.OperationalError:
         current = connection.execute("PRAGMA journal_mode").fetchone()[0]
         if str(current).lower() != "wal":
             raise
-    return
+        mode = str(current).lower()
+        # 已经在 WAL 模式（只是这次 pragma 抢不到锁）——按它现在的模式判
+    _warn_wal_reset_risk(mode)
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
