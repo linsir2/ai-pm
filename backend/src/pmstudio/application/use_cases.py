@@ -855,15 +855,29 @@ class SubmitOpening:
         if not chosen or tool is None or self._web_search is None:
             return (), ()
         limit = _declared(tool, "max_results")
-        for query in chosen:
-            try:
-                drafts = await self._web_search.search(query=query, limit=limit)
-            except ToolCallFailed as error:
-                drops.append(_tool_drop(f"联网检索 {query}", f"检索失败：{error.message}"))
-                continue  # 一条坏了不连累后面（工具韧性 P1）：各记各的痕，剩下的照打
-            if not drafts:
+        # 局部绑定：类型收窄（下面 genexp 里 `self._web_search` 会被当成可能 None）。
+        web_search = self._web_search
+        # 多条 query **并发发出**（工具韧性 P2）——原来是串行 for-await（3 条 = 3× 延迟）。
+        # 异常当值（不是整批取消）：一条坏了不连累后面，与失败隔离同一条口径。
+        results = await asyncio.gather(
+            *(web_search.search(query=query, limit=limit) for query in chosen),
+            return_exceptions=True,
+        )
+        # **按勾选序 settle**（循环顺序执行）：`packets` 的顺序必须等于勾选序——
+        # `select_chunks(query="")` 是 **in-order first-fit**（预算选哪几块依赖顺序），
+        # 出处的 E 编号也按 `picks` 序发（顺序一变，E1/E2 就换人）。
+        # 所以只并行"搜"、不并行"落"。
+        # （注意：`material_id` 生产是 `UuidIdGenerator` 的随机 `m-<hex>`，**不是**顺序计数器，
+        #  它不构成"必须保序"的理由；真正的理由只有上面两条。）
+        for query, result in zip(chosen, results, strict=True):
+            if isinstance(result, ToolCallFailed):
+                drops.append(_tool_drop(f"联网检索 {query}", f"检索失败：{result.message}"))
+                continue  # 一条坏了不连累后面（工具韧性 P1）：各记各的痕
+            if isinstance(result, BaseException):
+                raise result  # 非工具异常照旧**不吞**（gather 只是把它当成了值）
+            if not result:
                 drops.append(_tool_drop(f"联网检索 {query}", "没有搜到结果"))
-            for draft in drafts:
+            for draft in result:
                 packets.append(self._keep(project_id, draft))
         picked = select_chunks(packets, budget=WEB_BUDGET, cost=web_block_cost)
         if 0 < len(picked) < len(packets):

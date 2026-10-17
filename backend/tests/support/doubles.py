@@ -216,6 +216,7 @@ class RecordingWebSearch:
         returns: Sequence["ParsedMaterial"] = (),
         failure: Exception | None = None,
         failures: Mapping[str, Exception] | None = None,
+        returns_by_query: Mapping[str, Sequence["ParsedMaterial"]] | None = None,
     ) -> None:
         self.calls: list[tuple[str, int]] = []
         self.returns = tuple(returns)
@@ -223,14 +224,27 @@ class RecordingWebSearch:
         #: 按 query 定向失败（工具韧性 P1）：测"一条炸了不连累后面"。
         #: 与全局 `failure` 并存——那个是"整个工具坏了"，这个是"某条 query 坏了"。
         self.failures = dict(failures or {})
+        #: 按 query 定向返回（工具韧性 P2）：测"多条 query 并发、但落地保序"。
+        self.returns_by_query = {key: tuple(val) for key, val in (returns_by_query or {}).items()}
+        #: 并发峰值（工具韧性 P2）：证"多条 query 并发发出"这一 R，测试专用。
+        self.peak_in_flight = 0
+        self._in_flight = 0
 
     async def search(self, *, query: str, limit: int) -> tuple["ParsedMaterial", ...]:
         self.calls.append((query, limit))
-        if query in self.failures:
-            raise self.failures[query]
-        if self.failure is not None:
-            raise self.failure
-        return self.returns
+        self._in_flight += 1
+        self.peak_in_flight = max(self.peak_in_flight, self._in_flight)
+        try:
+            # **必须让出一次**：`async def` 没有 await 点就不会回事件循环，
+            # 那样即使调用方用 `gather`，也测不出并发（实测串行/并发峰值都是 1）。
+            await asyncio.sleep(0)
+            if query in self.failures:
+                raise self.failures[query]
+            if self.failure is not None:
+                raise self.failure
+            return self.returns_by_query.get(query, self.returns)
+        finally:
+            self._in_flight -= 1
 
 
 class RecordingWebFetch:

@@ -10,6 +10,8 @@
 import json
 import re
 
+import pytest
+
 from pmstudio.application.use_cases import external_material_text
 from pmstudio.domain.provenance.evidence import EvidenceKind
 from pmstudio.domain.round.round import DropSource
@@ -248,3 +250,64 @@ async def test_one_failing_query_does_not_kill_the_others():
     tool_drops = [item for item in round_.dropped if item.source is DropSource.TOOL]
     assert len(tool_drops) == 1
     assert QUERY in tool_drops[0].handle
+
+
+async def test_chosen_queries_are_issued_concurrently():
+    """R（工具韧性 P2）：多条 query **并发**发出（原来是串行 for-await）。
+
+    I：两条勾选、替身让出一次（`sleep(0)`）；P：真 `submit_opening`；R：并发峰值为 2。
+    """
+
+    harness = web_harness(make_web_packet(url="https://a"))
+    second = "第二条能成的 query"
+    round_id = await recap_round(harness)
+
+    await harness.submit_opening()(
+        round_id=round_id, seats=(SEAT,), web_queries=(QUERY, second)
+    )
+
+    assert [q for q, _ in harness.web_search.calls] == [QUERY, second]
+    assert harness.web_search.peak_in_flight == 2
+
+
+async def test_materials_land_in_query_order_even_though_search_is_concurrent():
+    """R：并发搜、但**按勾选序落地**——`select_chunks(query="")` 是 in-order first-fit
+    （预算选块依赖顺序），出处的 E 编号也按 `picks` 序发（顺序一变 E1/E2 就换人）。"""
+
+    harness = web_harness()
+    harness.web_search.returns_by_query = {
+        QUERY: (make_web_packet(url="https://first"),),
+        "second": (make_web_packet(url="https://second"),),
+    }
+    round_id = await recap_round(harness)
+
+    await harness.submit_opening()(
+        round_id=round_id, seats=(SEAT,), web_queries=(QUERY, "second")
+    )
+
+    externals = [
+        item
+        for item in harness.evidences.get(PROJECT).evidences()
+        if item.kind is EvidenceKind.EXTERNAL
+    ]
+    assert [item.source.external_ref for item in externals] == [
+        "https://first",
+        "https://second",
+    ]
+    assert [ref.chunk_id for ref in harness.rounds.get(round_id).materials] == [
+        "m1#c00",
+        "m2#c00",
+    ]
+
+
+async def test_a_non_tool_error_still_propagates():
+    """R：非工具异常照旧**不吞**——`gather` 把异常当值时，必须重新抛出去（不能静默）。"""
+
+    harness = web_harness()
+    harness.web_search.failure = ValueError("不是工具错")
+    round_id = await recap_round(harness)
+
+    with pytest.raises(ValueError):
+        await harness.submit_opening()(
+            round_id=round_id, seats=(SEAT,), web_queries=(QUERY,)
+        )
