@@ -11,7 +11,10 @@ def make_event() -> Event:
     return Event(name=ROUND_UPDATED, project_id="p1", occurred_at=NOW)
 
 
-async def test_bus_stamps_sequence_and_delivers_in_order():
+async def test_bus_delivers_in_publish_order():
+    """总线保证**顺序**。**不保证序号**——`seq` 字段 2026-10-17（P4）删掉了：
+    它是逐进程自增的，而前端拿它当全局水位，多 worker 下会丢事件。"""
+
     bus = InProcessEventBus()
 
     async def reader() -> list[Event]:
@@ -28,7 +31,8 @@ async def test_bus_stamps_sequence_and_delivers_in_order():
     bus.publish(make_event())
 
     events = await asyncio.wait_for(task, timeout=1)
-    assert [event.seq for event in events] == [1, 2]
+    assert len(events) == 2
+    assert events[0] == events[1] == make_event()
 
 
 async def test_bus_delivers_to_every_subscriber():

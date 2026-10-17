@@ -30,7 +30,6 @@ export interface State {
   explorationStale: boolean;
   /** 讨论线程列表该重读了。与轮次无关：它由 `discussion.updated` 置起（M9）。 */
   discussionStale: boolean;
-  lastSeq: number;
   connection: Connection["state"];
   error: string | null;
   justWritten: string[];
@@ -61,7 +60,6 @@ export const initialState: State = {
   roundStale: false,
   explorationStale: false,
   discussionStale: false,
-  lastSeq: 0,
   connection: "idle",
   error: null,
   justWritten: [],
@@ -128,11 +126,20 @@ export function reduce(state: State, action: Action): State {
 }
 
 function applyEvent(state: State, event: WorkspaceEvent): State {
-  // 别的项目的事件与当前工作区无关；重复推送的事件也不重复处理。
+  // 别的项目的事件与当前工作区无关。
   if (state.projectId !== null && event.project_id !== state.projectId) return state;
-  if (event.seq > 0 && event.seq <= state.lastSeq) return state;
 
-  const base = event.seq > 0 ? { ...state, lastSeq: event.seq } : state;
+  // **这里曾经有一个全局水位门**（`event.seq <= state.lastSeq` 就丢弃）：
+  // `seq` 由事件总线的**逐进程**自增计数器盖（`bus.py` 的 `_seq`），而这条判断
+  // 把它当**全局**水位——4 个 worker 下 worker B 的 seq=3 会被当成 worker A 的
+  // seq=9 的重复而丢掉，大约 3/4 的事件静默消失。2026-10-17（P4）两边一起删。
+  //
+  // 删它的依据不是"修好了"，是**它防的那个东西不存在**：进程内队列与 Redis
+  // pub/sub 都是 at-most-once（Redis 文档原话："subscriber offline 时消息永久丢失"），
+  // 没有任何路径会重复送达。而留着它的两条路各自引入更严重的新失效：
+  // Redis `INCR` 计数器遇 Redis 重启归零会把客户端的 lastSeq「饿死」，
+  // 用服务端时钟派生 seq 则同微秒碰撞会丢一条。详见计划文档 P4 段。
+  const base = state;
 
   switch (event.name) {
     case "packet.emitted": {

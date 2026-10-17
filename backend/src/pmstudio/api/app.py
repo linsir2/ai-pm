@@ -1,6 +1,9 @@
 """FastAPI 应用：唯一职责是把 HTTP 变成用例调用，把错误变成状态码。"""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Protocol
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -55,6 +58,14 @@ from pmstudio.harness.errors import ApplicationError
 from pmstudio.harness.events import EventStream
 
 
+class BackgroundResource(Protocol):
+    """有生命周期的后台资源。**只给一个方法存在的接口不值得抽**——但它有两个
+    （start/stop）且"谁创建谁负责关"是这里唯一要表达的东西，所以留在类型里。"""
+
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ApiServices:
     runner: RoundOrchestrator
@@ -104,8 +115,30 @@ class ApiServices:
     model_name: str
 
 
-def create_app(services: ApiServices) -> FastAPI:
-    app = FastAPI(title="PM Studio", version="0.2.0")
+def create_app(
+    services: ApiServices,
+    *,
+    background: BackgroundResource | None = None,
+) -> FastAPI:
+    """`background` 是有生命周期的后台资源（当前只有 Redis 扇出总线）。
+
+    **全仓原本零 lifespan**，P4 加它是因为：没有它，`--reload` 每热重载一次就泄漏
+    一个 reader 任务 + 一组 Redis 连接，`uvicorn --workers` 关停时也一样。
+
+    默认 `None` 是为了**测试那 9 个 `create_app(services)` 调用点一行都不用改**。
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if background is not None:
+            await background.start()
+        try:
+            yield
+        finally:
+            if background is not None:
+                await background.stop()
+
+    app = FastAPI(title="PM Studio", version="0.2.0", lifespan=lifespan)
     app.state.services = services
     app.include_router(routes.router, prefix="/api")
     app.include_router(auth.router, prefix="/api")

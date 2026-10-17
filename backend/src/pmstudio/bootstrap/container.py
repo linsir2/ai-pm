@@ -1,4 +1,5 @@
 """唯一组装点。infrastructure 在这里被注入到 application，别处不许 new 实现。"""
+import sqlite3
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -165,17 +166,48 @@ def _seed_first_admin(users: SqliteUserRepository, settings: Settings) -> None:
     """首管理员种子：**users 表为空**且 env 给了用户名+密码才建（幂等，非空直接跳过）。
 
     存量库（已有用户）不动；没配 env 就不建——不写"默认口令"那种假降级。
+
+    **"表为空"这个检查在多 worker 下不够**（高并发 P4 真跑抓到的）：N 个 worker
+    同时启动时它们都看到空表，然后都去 insert，第二个撞 `UNIQUE(username)` 直接
+    `IntegrityError` 起不来。所以这里把"别人已经种好了"当成成功——种子的目标是
+    "这个账号存在且是 active admin"，不是"由我插入"。
+
+    `backfill_owners` / `assert_owners_backfilled` 也是同样的多进程竞争面，
+    但它们是幂等的读-改-写，由 SQLite 的写锁串行化，不需要额外处理。
     """
     if users.list_all():
         return
     if not (settings.first_admin_username and settings.first_admin_password):
         return
-    admin_id = users.register(
-        username=settings.first_admin_username,
-        password_hash=hash_password(settings.first_admin_password),
-        role="admin",
-    )
+    try:
+        admin_id = users.register(
+            username=settings.first_admin_username,
+            password_hash=hash_password(settings.first_admin_password),
+            role="admin",
+        )
+    except sqlite3.IntegrityError:
+        # 别的 worker 抢先种好了——那就是我们要的结果。
+        return
     users.set_status(admin_id, "active")
+def _build_event_bus(settings: Settings):  # noqa: ANN202 —— 返回两种实现之一
+    """按配置选事件总线：Redis 跨进程扇出，或进程内总线。
+
+    **不做"Redis 配错就起不来"**：与登录限流同一条规矩——Redis 连不上时
+    `RedisFanoutEventBus` 自己会降级到进程内总线，所以这里只在**配都没配**时
+    直接给进程内的（单 worker 开发够用）。
+    """
+    if not settings.redis_url:
+        return InProcessEventBus()
+
+    from pmstudio.infrastructure.redis_bus import RedisFanoutEventBus
+
+    return RedisFanoutEventBus(
+        url=settings.redis_url,
+        socket_timeout=settings.redis_timeout,
+        max_connections=settings.redis_max_connections,
+    )
+
+
 def _build_login_guard(settings: Settings, clock: Clock) -> LoginGuard:
     """按配置选登录限流闸：Redis 共享计数，或进程内计数。
 
@@ -228,7 +260,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     connection = database.connect(settings.db_path)
     clock = SystemClock()
     ids = UuidIdGenerator()
-    bus = InProcessEventBus()
+    bus = _build_event_bus(settings)
     users = SqliteUserRepository(connection)
     # 次序是契约（Ruling 13）：先种首 admin，再回填存量 owner，最后熔断。
     # 反过来（connect 里熔断）会让"存量内容 + users 空 + FIRST_ADMIN"的首次升级永远卡住。
@@ -718,7 +750,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         sessions=sessions,
         cookie_max_age=settings.session_ttl_days * 86400,
     )
-    app = create_app(services)
+    app = create_app(services, background=bus)
     app.state.auth = auth_services
     # owner 上下文由 api 层（`require_user` / SSE 归属过滤）经 `app.state` 取用：
     # api 不许 import infrastructure（分层守卫），装配点把实现注进去（依赖倒置）。

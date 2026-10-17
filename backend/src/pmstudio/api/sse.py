@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import contextlib
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, is_dataclass
@@ -47,11 +48,21 @@ def owner_visible(
 
     归属**只判一次就缓存**（owner 写入后不可改，§0.7）：别人的项目永远不会变成自己的，
     自己的也不会变别人的。所以缓存布尔值安全，且避免每条外部事件都查一次库。
+
+    **事件自带 `owner_id` 时不查库**（P4 多 worker）：多 worker 下每条 worker 都会
+    收到**全部**事件，落到本 worker 的连接上要一条条判归属——查库判据会让每个陌生
+    project_id 都触发一次全表聚合查询，200 个连接 × N 个用户 × M 个项目就是 NM 次。
+    事件上的 owner 是投递侧盖的，与"归属写入后不可改"是同一条依据。
+
+    **`owner_id` 缺失 ≠ 可见**：回落到查库判定。只有查不到归属才放行，
+    这条路径是"没盖到章"的兜底，不是快路。
     """
 
     seen: dict[str, bool] = {}
 
     async def visible(event: Event) -> bool:
+        if event.owner_id is not None:
+            return event.owner_id == str(owner)
         project_id = event.project_id
         if project_id in seen:
             return seen[project_id]
@@ -74,18 +85,33 @@ async def event_stream(
     visible: Callable[[Event], Awaitable[bool]] | None = None,
 ) -> AsyncIterator[str]:
     iterator = stream.subscribe()
-    # 建流先发一行注释：`EventSource` 的 onopen 因此立刻到，顶栏不用等 15 秒心跳
-    # 才显示"已连接"（`04-未决.md` 界面侧-2）。
-    yield ": ready\n\n"
-    while True:
-        try:
-            event = await asyncio.wait_for(anext(iterator), timeout=heartbeat_seconds)
-        except TimeoutError:
-            yield ": ping\n\n"
-            continue
-        except StopAsyncIteration:
-            return
-        if visible is not None and not await visible(event):
-            continue
-        payload = json.dumps(as_json(event), ensure_ascii=False)
-        yield f"event: {event.name}\ndata: {payload}\n\n"
+    try:
+        # 建流先发一行注释：`EventSource` 的 onopen 因此立刻到，顶栏不用等 15 秒心跳
+        # 才显示"已连接"（`04-未决.md` 界面侧-2）。
+        # 放在 `try` 里面（我第一版写在外面）：虽然"刚建流就断开"时内层生成器
+        # 还没启动、确实没有订阅者可漏，但把它放进 try 让"发完 ready 就断"与
+        # "进了循环才断"走同一条清理路径，少一条要推理的分支。
+        yield ": ready\n\n"
+        while True:
+            try:
+                event = await asyncio.wait_for(
+                    anext(iterator), timeout=heartbeat_seconds
+                )
+            except TimeoutError:
+                yield ": ping\n\n"
+                continue
+            except StopAsyncIteration:
+                return
+            if visible is not None and not await visible(event):
+                continue
+            payload = json.dumps(as_json(event), ensure_ascii=False)
+            yield f"event: {event.name}\ndata: {payload}\n\n"
+    finally:
+        # **必须显式关掉内层迭代器**（P4 顺手修的现存泄漏）：客户端断连时
+        # `StreamingResponse` 抛异常打断 `async for`，没有这个 `finally` 的话
+        # 内层 `subscribe()` 的清理要等异步生成器被 GC 才跑——订阅者摘除是
+        # **非确定性**的。单 worker 下泄漏慢，多 worker 下速率 ×N。
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            with contextlib.suppress(Exception):
+                await close()

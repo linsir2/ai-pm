@@ -12,8 +12,6 @@
 
 import asyncio
 
-import pytest
-
 from pmstudio.harness.events import (
     DEFAULT_QUEUE_SIZE,
     Event,
@@ -32,7 +30,6 @@ def an_event(name: str = "round.updated", **overrides: object) -> Event:
         "name": name,
         "project_id": "p1",
         "occurred_at": datetime(2026, 10, 4, tzinfo=UTC),
-        "seq": 0,
         "round_id": "r1",
         "payload": {"step": "seats_running"},
     }
@@ -55,29 +52,31 @@ def test_any_event_name_is_accepted() -> None:
     assert an_event("完全没注册过的名字").name == "完全没注册过的名字"
 
 
-def test_seq_is_still_checked() -> None:
-    """删掉的只是"名字认不认得"，序号的自洽性照旧。
+def test_事件上不再有_seq_字段() -> None:
+    """**2026-10-17（P4）删除 `seq`**。
 
-    （`project_id` / `occurred_at` **本来就没有校验**，那是搬移前就有的现状，
-    不在这次范围内补——补它属于新增行为，另案。）
+    它是逐进程自增的，而前端 `workspace.ts` 拿它当**全局水位**——多 worker 下
+    会把大约 3/4 的事件当成重复而丢掉。它防的"重复投递"在本架构里不可能发生
+    （进程内队列与 Redis pub/sub 都是 at-most-once）。
     """
 
-    with pytest.raises(ValueError, match="序号"):
-        an_event("x", seq=-1)
+    assert "seq" not in Event.__dataclass_fields__
 
 
-def test_seq_is_stamped_by_the_bus_not_by_the_business_side() -> None:
-    """业务侧一律用默认 `seq=0`，真序号由总线在投递时盖（`in_process.py` 的原口径）。"""
+def test_owner_id_业务侧一律留空_由总线盖() -> None:
+    """owner 是**投递判据**：业务侧盖章要透传 41 处，而分层守卫规定
+    application 根本 import 不到 `owner_scope`。"""
 
-    assert an_event().seq == 0
+    assert an_event().owner_id is None
+    assert "owner_id" in Event.__dataclass_fields__
 
 
 
 # —— 总线：只做通知，绝不阻塞 ——
 
 
-async def test_the_bus_stamps_a_monotonic_sequence() -> None:
-    """序号由总线盖，业务侧一律交 0（`Event.seq` 的默认）。
+async def test_the_bus_delivers_in_publish_order() -> None:
+    """总线保证**顺序**（这才是订阅端唯一需要的性质），不保证序号。
 
     注意 `subscribe()` 是**惰性异步生成器**：不先让它跑到 `await`，订阅者还没注册，
     先 publish 的两条会进一个不存在的队列——所以下面用 reader 协程 + `sleep(0)`。
@@ -99,7 +98,7 @@ async def test_the_bus_stamps_a_monotonic_sequence() -> None:
     bus.publish(an_event("b"))
 
     events = await asyncio.wait_for(task, timeout=1)
-    assert [event.seq for event in events] == [1, 2]
+    assert [event.name for event in events] == ["a", "b"]
 
 
 async def test_a_full_subscriber_queue_drops_the_oldest_and_never_blocks() -> None:

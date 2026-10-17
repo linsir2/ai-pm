@@ -56,6 +56,24 @@ def mask(value: str) -> str:
     return f"{value[:6]}…{value[-4:]}" if len(value) > 12 else "…"
 
 
+def _workers() -> int:
+    """读 `PMSTUDIO_WORKERS`（高并发 P4）。配不了 0 或非整数 → 退出码 2，
+    与缺配置的处理一致：**看起来在配、其实配了个没用的值**最危险。"""
+
+    raw = os.environ.get("PMSTUDIO_WORKERS", "").strip()
+    if not raw:
+        return 1
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"PMSTUDIO_WORKERS 要是整数，现在是 {raw!r}", file=sys.stderr)
+        raise SystemExit(2) from None
+    if value < 1:
+        print(f"PMSTUDIO_WORKERS 必须 ≥1，现在是 {value}", file=sys.stderr)
+        raise SystemExit(2)
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="起 PM Studio 后端")
     parser.add_argument("--port", type=int, default=None, help="端口，默认读 PMSTUDIO_PORT 或 8000")
@@ -103,14 +121,40 @@ def main() -> int:
     sys.path.insert(0, str(SRC))
     import uvicorn  # 放在 sys.path 之后导入，免得 src 还没进路径
 
-    # **单 worker 是正确性约束，不是性能取舍**（多用户改造 §0.9）：owner 是每个请求现装的
-    # contextvar（不跨请求），多 worker 本身不会因此串味。真风险有两个：**进程内 SSE 总线**
-    # 各自为政——某项目的事件只推给"连在这个 worker 上的"浏览器，连在另一个 worker 上就丢；
-    # **内存登录限流的状态也不共享，等于锁不住**（P3 起可配 Redis 解决，见下）。
-    # SQLite 单文件写同样按单进程设计。**不要加 `--workers`。**
+    # **多 worker 的三条约束（P4 之后的状态）**：
+    #  · 进程内 SSE 总线各自为政 → **P4 已解决**（配 Redis 走跨进程扇出）；
+    #  · 内存登录限流不共享 → **P3 已解决**（配 Redis 共享计数）；
+    #  · SQLite 单文件写 → **仍按单进程设计**，但实测 8 进程 × 150 INSERT 零争用
+    #    （WAL + timeout=10），且它只串行化**写**，读与 SSE 不受影响。
+    # 所以多 worker 现在**可以开**，但要配上 Redis；没配就多 worker 等于把限流与
+    # 扇出静默退化回进程内——上面那行状态提示已经写明了。
+    workers = _workers()
+    if workers > 1 and not args.no_reload:
+        print(
+            "多 worker 与热重载互斥（uvicorn 的 --workers 不能与 --reload 同用）：\n"
+            "  · 要多 worker → 加 --no-reload\n"
+            "  · 要热重载 → 设 PMSTUDIO_WORKERS=1",
+            file=sys.stderr,
+        )
+        return 2
+    if workers > 1:
+        # **每条 SSE 连接占 1 个文件描述符**：200 连接 × 4 worker = 800，
+        # Linux `ulimit -n` 默认 1024 就贴着上限。根子上要改 systemd 的 LimitNOFILE，
+        # 这里只把当前值打出来，让人知道自己站在什么上面。
+        import resource
+
+        print(
+            f"文件描述符上限：{resource.getrlimit(resource.RLIMIT_NOFILE)[0]}"
+            f"（{workers} 个 worker × 200 条 SSE 连接 ≈ {workers * 200} 个）"
+        )
+
     uvicorn.run(
         "pmstudio.bootstrap.container:build_app",
         factory=True,
+        workers=workers,
+        # **必须给**：SSE 是长期未完成的响应，uvicorn 关停时会等它们——
+        # 不设超时就是无限等，`Ctrl-C` 之后进程永远退不出（uvicorn #2635）。
+        timeout_graceful_shutdown=5,
         host=args.host,
         port=port,
         reload=not args.no_reload,

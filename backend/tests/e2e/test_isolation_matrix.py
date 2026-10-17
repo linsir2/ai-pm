@@ -454,7 +454,6 @@ def test_sse_only_delivers_my_events(tmp_path):
             name="round.updated",
             project_id=project_id,
             occurred_at=NOW,
-            seq=1,
         )
 
     index = SqliteWorkspaceIndex(conn)

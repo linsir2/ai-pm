@@ -27,6 +27,7 @@ REDIS_MAX_CONNECTIONS_ENV = "PMSTUDIO_REDIS_MAX_CONNECTIONS"
 LOGIN_IP_MAX_ENV = "PMSTUDIO_LOGIN_IP_MAX_ATTEMPTS"
 LOGIN_USER_MAX_ENV = "PMSTUDIO_LOGIN_USER_MAX_ATTEMPTS"
 LOGIN_ATTEMPT_WINDOW_ENV = "PMSTUDIO_LOGIN_ATTEMPT_WINDOW_SECONDS"
+WORKERS_ENV = "PMSTUDIO_WORKERS"
 
 #: 会话滑动 / 绝对上限（天）与登录防爆阈值。多用户改造 §0.10/§0.11。
 SESSION_TTL_DAYS = 30
@@ -55,6 +56,11 @@ REDIS_TIMEOUT = 0.3
 #: 实测 200 并发会直接 `MaxConnectionsError`。每次 Redis 调用约 1.3ms，
 #: 所以 256 足够 200 并发同时各占一条连接。
 REDIS_MAX_CONNECTIONS = 256
+
+#: uvicorn worker 进程数（高并发 P4）。**默认 1**：多 worker 需要 Redis 扇出
+#: 与足够的文件描述符（每条 SSE 连接占 1 个 fd，200 连接 × 4 worker = 800，
+#: Linux `ulimit -n` 默认 1024 就贴着上限）。单 worker 下没有这些约束。
+WORKERS = 1
 
 #: 每次模型调用的墙钟上限（秒）。**按次算**，不是按一次业务动作算：
 #: 一次业务调用最多 3 次尝试 ⇒ 最坏 3 × 150 + 退避(1+3) ≈ 7.6 分钟。
@@ -133,6 +139,8 @@ class Settings:
     redis_url: str = ""
     redis_timeout: float = REDIS_TIMEOUT
     redis_max_connections: int = REDIS_MAX_CONNECTIONS
+    #: worker 进程数（高并发 P4）。
+    workers: int = WORKERS
 
     def available_tool_keys(self) -> frozenset[str]:
         """当前环境**配好**了哪些工具的依赖（工具目录按它过滤）。"""
@@ -215,6 +223,7 @@ class Settings:
             redis_max_connections=_positive_int(
                 source, REDIS_MAX_CONNECTIONS_ENV, REDIS_MAX_CONNECTIONS
             ),
+            workers=_positive_int(source, WORKERS_ENV, WORKERS),
             redis_timeout=_positive_float(
                 source, REDIS_TIMEOUT_ENV, REDIS_TIMEOUT, minimum=0.001
             ),

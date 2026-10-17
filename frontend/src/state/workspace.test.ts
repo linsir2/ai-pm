@@ -78,7 +78,6 @@ describe("reduce", () => {
           pass_index: 1,
         },
         occurred_at: "2026-09-22T10:00:00+00:00",
-        seq: 4,
       } as never,
     });
 
@@ -98,7 +97,6 @@ describe("reduce", () => {
         project_id: "p2",
         round_id: "r9",
         payload: {},
-        seq: 5,
       } as never,
     });
     expect(state).toBe(base);
@@ -114,7 +112,6 @@ describe("reduce", () => {
           project_id: "p1",
           round_id: "r1",
           payload: { version_no: 2 },
-          seq: 6,
         } as never,
       },
     );
@@ -132,7 +129,6 @@ describe("reduce", () => {
           project_id: "p1",
           round_id: "r1",
           payload: { version_no: 2, written_block_ids: ["b-1", "b-2"] },
-          seq: 7,
         } as never,
       },
     );
@@ -149,7 +145,6 @@ describe("reduce", () => {
           project_id: "p1",
           round_id: "r1",
           payload: { step: "awaiting_answers", waiting_on: "questionnaire", seat_round_count: 2 },
-          seq: 8,
         } as never,
       },
     );
@@ -157,21 +152,6 @@ describe("reduce", () => {
     expect(state.round!.seat_round_count).toBe(2);
     // 题目还没取回来，所以这一轮不会凭事件弹出问卷（awaitingMode 会判成 loading）
     expect(state.round!.questions).toBeUndefined();
-  });
-
-  it("重复送达的旧事件不再处理", () => {
-    const base = { ...initialState, projectId: "p1", round, lastSeq: 9 };
-    const state = reduce(base, {
-      type: "event",
-      event: {
-        name: "doc.changed",
-        project_id: "p1",
-        round_id: "r1",
-        payload: { version_no: 2 },
-        seq: 4,
-      } as never,
-    });
-    expect(state).toBe(base);
   });
 
   it("generation.failed 记下原因并且要重读这一轮（失败原因在领域里）", () => {
@@ -184,7 +164,6 @@ describe("reduce", () => {
           project_id: "p1",
           round_id: "r1",
           payload: { reason: "模型复述时改了原话" },
-          seq: 9,
         } as never,
       },
     );
@@ -231,7 +210,6 @@ describe("reduce", () => {
           project_id: "p1",
           round_id: null,
           payload: { exploration_id: "x-1", status: "running" },
-          seq: 11,
         } as never,
       },
     );
@@ -250,7 +228,6 @@ describe("reduce", () => {
         project_id: "p2",
         round_id: null,
         payload: { exploration_id: "x-9", status: "done" },
-        seq: 12,
       } as never,
     });
     expect(state).toBe(base);
@@ -271,7 +248,6 @@ describe("reduce", () => {
       project_id: "p1",
       round_id: "r1",
       payload: {},
-      seq: 3,
     } as unknown as WorkspaceEvent;
     expect(reduce(base, { type: "event", event }).round).toBe(round);
   });

@@ -61,6 +61,25 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
+def _enable_wal(connection: sqlite3.Connection) -> None:
+    """切到 WAL。**多进程下这一步本身会争用**（高并发 P4 真跑抓到的）。
+
+    `PRAGMA journal_mode = WAL` 要短暂持排他锁，而它**不吃 `timeout=10` 的
+    busy 等待**——两个 worker 同时启动、都在一个新库上执行，直接
+    `database is locked`，**两个都起不来**。
+
+    判据很直接：**目标达成就行**。切完之后再读一次，如果已经是 `wal` 就没事；
+    真的切不过去（别的原因）才抛。
+    """
+    try:
+        connection.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.OperationalError:
+        current = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        if str(current).lower() != "wal":
+            raise
+    return
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # 显式 `timeout=10.0`（多用户改造 §0.9）：Python 默认 5.0 是隐式的，写出来是为了
@@ -69,7 +88,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
         db_path, isolation_level=None, check_same_thread=False, timeout=10.0
     )
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode = WAL")
+    _enable_wal(connection)
     connection.execute("PRAGMA foreign_keys = ON")
     # **先补列、再建 schema**（多用户改造 Task 5）：`schema.sql` 里有
     # `CREATE INDEX ... ON <表>(owner_id)`，老库那一刻还没这列——`CREATE TABLE IF NOT

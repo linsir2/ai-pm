@@ -71,7 +71,7 @@ def test_event_no_longer_rejects_names_it_does_not_know():
     删掉这条校验之后，`Event` 仍然拒收负序号（见 `tests/harness/test_events.py`）。
     """
 
-    event = Event(name="doc.updated", project_id="p1", occurred_at=NOW, seq=1)
+    event = Event(name="doc.updated", project_id="p1", occurred_at=NOW)
     assert event.name == "doc.updated"
 
 
@@ -82,11 +82,11 @@ def test_event_is_frozen_and_carries_round_and_payload():
         round_id="r1",
         payload={"step": "seats_running"},
         occurred_at=NOW,
-        seq=7,
     )
     assert event.payload["step"] == "seats_running"
+    assert event.owner_id is None  # 由总线盖，业务侧留空
     with pytest.raises(FrozenInstanceError):
-        event.seq = 8  # type: ignore[misc]
+        event.owner_id = "u1"  # type: ignore[misc]
 
 
 def test_model_request_carries_purpose_schema_and_metadata():
