@@ -860,7 +860,7 @@ class SubmitOpening:
                 drafts = await self._web_search.search(query=query, limit=limit)
             except ToolCallFailed as error:
                 drops.append(_tool_drop(f"联网检索 {query}", f"检索失败：{error.message}"))
-                break  # 工具坏了就别把剩下的也打出去
+                continue  # 一条坏了不连累后面（工具韧性 P1）：各记各的痕，剩下的照打
             if not drafts:
                 drops.append(_tool_drop(f"联网检索 {query}", "没有搜到结果"))
             for draft in drafts:

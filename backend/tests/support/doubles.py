@@ -215,13 +215,19 @@ class RecordingWebSearch:
         *,
         returns: Sequence["ParsedMaterial"] = (),
         failure: Exception | None = None,
+        failures: Mapping[str, Exception] | None = None,
     ) -> None:
         self.calls: list[tuple[str, int]] = []
         self.returns = tuple(returns)
         self.failure = failure
+        #: 按 query 定向失败（工具韧性 P1）：测"一条炸了不连累后面"。
+        #: 与全局 `failure` 并存——那个是"整个工具坏了"，这个是"某条 query 坏了"。
+        self.failures = dict(failures or {})
 
     async def search(self, *, query: str, limit: int) -> tuple["ParsedMaterial", ...]:
         self.calls.append((query, limit))
+        if query in self.failures:
+            raise self.failures[query]
         if self.failure is not None:
             raise self.failure
         return self.returns

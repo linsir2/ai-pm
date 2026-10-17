@@ -221,3 +221,30 @@ async def test_the_same_url_twice_is_one_material():
         if item.kind is EvidenceKind.EXTERNAL
     ]
     assert len(externals) == 1
+
+
+async def test_one_failing_query_does_not_kill_the_others():
+    """R（缺口 G2）：原来一条 query 失败就 `break`，后面本来能成的也一起丢。
+
+    I：两条 query，第一条定向失败、第二条正常；P：走真 `submit_opening`；
+    R：第二条的结果照常落库进材料、只留一条 tool 痕（第一条的）、轮继续。
+    """
+
+    harness = web_harness(make_web_packet(url="https://b"))
+    second = "第二条能成的 query"
+    harness.web_search.failures = {
+        QUERY: ToolCallFailed("联网搜索失败：HTTP 429", tool_id="tool.web_search", status=429)
+    }
+    round_id = await recap_round(harness)
+
+    await harness.submit_opening()(
+        round_id=round_id, seats=(SEAT,), web_queries=(QUERY, second)
+    )
+
+    assert [q for q, _ in harness.web_search.calls] == [QUERY, second]  # 第二条真的打了
+    round_ = harness.rounds.get(round_id)
+    assert round_.step is Step.SEATS_RUNNING
+    assert [ref.chunk_id for ref in round_.materials] == ["m1#c00"]     # 第二条的材料
+    tool_drops = [item for item in round_.dropped if item.source is DropSource.TOOL]
+    assert len(tool_drops) == 1
+    assert QUERY in tool_drops[0].handle

@@ -16,7 +16,7 @@ import asyncio
 import ipaddress
 import random
 import socket
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -205,21 +205,30 @@ class _Attempt:
     retry_after: str | None
 
 
-async def _backoff(index: int, retry_after: str | None = None) -> None:
+async def _backoff(
+    index: int,
+    retry_after: str | None = None,
+    *,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
     """退避：优先听服务端 `Retry-After`（封顶 5s），否则封顶指数 + full jitter。
 
     jitter 不是装饰：无 jitter 的同步重试会在限流场景里自己制造峰值
     （AWS 架构博客：Full Jitter 在 100 竞争客户端下工作量减半以上）。
+
+    `sleep` 可注入（默认真睡）：测试传即时替身，避免重试用例各慢几秒——
+    走过的时长仍算得出来，断言"封顶生效"才准。**唯二调用方都在本文件**，
+    加 `tavily.py` 后是第三个，默认路径行为逐字不变。
     """
 
     if retry_after:
         try:
-            await asyncio.sleep(min(float(retry_after), 5.0))
+            await sleep(min(float(retry_after), 5.0))
             return
         except ValueError:
             pass
     ceiling = min(2.0 * 2**index, 8.0)
-    await asyncio.sleep(ceiling / 2 * (1 + random.random()))
+    await sleep(ceiling / 2 * (1 + random.random()))
 
 
 def _pinned_target(url: str, ip: str) -> tuple[str, dict[str, str], dict[str, str]]:
