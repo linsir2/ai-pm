@@ -12,8 +12,13 @@ import asyncio
 import random
 
 import pytest
+from litellm import exceptions as litellm_exceptions
 
-from pmstudio.harness.model.failure import FailureKind, classify
+from pmstudio.harness.model.failure import (
+    STRUCTURED_OUTPUT_REFUSAL_HINT,
+    FailureKind,
+    classify,
+)
 from pmstudio.harness.model.resilience import (
     BreakerConfig,
     Bulkhead,
@@ -192,6 +197,82 @@ async def test_非依赖失败不会让闸门打开():
 
     assert breaker.is_open is False
     assert breaker.failures == 0
+
+
+# ── 真 5xx 进熔断计数（P5 混沌补断言）─────────────────────────────────────────
+# `classify()` 的 5xx 覆盖在 `test_failure*.py`，熔断器桩异常在上面——
+# 但两者之间的**接缝**（`exclude=[lambda exc: classify(exc) not in ...]` 到底
+# 放不放真 5xx 进 pybreaker 的计数器）一直没人断言。下面三条钉的就是这条缝。
+
+
+_CTX = {"model": "qwen3.8-flash", "llm_provider": "dashscope"}
+
+
+def _真异常(cls: type[BaseException], message: str) -> BaseException:
+    """造一个**真的** litellm 异常——签名大多收 `message` + 那两个固定参数。
+    照抄 `test_failure_types._err`，不另起一套造法。"""
+
+    return cls(message=message, **_CTX)
+
+
+@pytest.mark.parametrize(
+    "cls,message",
+    [
+        (litellm_exceptions.InternalServerError, "Internal Server Error"),
+        (litellm_exceptions.BadGatewayError, "Bad Gateway"),
+        (litellm_exceptions.ServiceUnavailableError, "upstream overloaded"),
+    ],
+)
+async def test_真5xx连到阈值就开闸(cls, message):  # noqa: ANN201
+    """R：供应商 5xx 是**依赖不健康**，连着失败必须开闸——熔断器就是为它存在的。
+
+    I：真 litellm 5xx 类型 × `minimum_samples` 次，走 `call_upstream` 真路径；
+    P：喂完；R：开闸，`failures` 正好等于阈值（一个没多一个没少）。"""
+
+    breaker = CircuitBreaker(BreakerConfig(minimum_samples=5))
+    for _ in range(5):
+        await _喂一次(breaker, _真异常(cls, message))
+
+    assert breaker.failures == 5, "真 5xx 没进计数——`exclude` 把它拦在外面了"
+    assert breaker.is_open is True
+    with pytest.raises(CircuitOpenError):
+        breaker.allow()
+
+
+async def test_真BadRequest_用户输错_不进计数():
+    """R：上面那条的反面对照——**同走 `call_upstream`，真参数错不许计数**。
+
+    拿桩 `_Validation` 测过一遍了，但桩走的是消息兜底那支；这一条走的是
+    **类型表**那支（`BadRequestError` 在 `_VALIDATION_TYPES` 里），两支都得钉。"""
+
+    breaker = CircuitBreaker(BreakerConfig(minimum_samples=5))
+    for _ in range(20):
+        await _喂一次(
+            breaker,
+            _真异常(litellm_exceptions.BadRequestError, "InvalidParameter: field x"),
+        )
+
+    assert breaker.failures == 0
+    assert breaker.is_open is False
+
+
+async def test_同是BadRequest_拒收抖动仍然计入():
+    """R：最锋利的一条——**同一个类，消息不同， verdict 相反**。
+
+    供应商间歇性拒收 `json_schema` 时（qwen 真抖过两分钟），`BadRequestError`
+    带着拒收提示，那次抖动是真的，不计入就等于一次调用判死。
+    这一条钉的是"接缝按 `classify()` 走、不是按类型走"——
+    如果有人把 `exclude` 改成按类型判，这一对里必有一条变红。"""
+
+    breaker = CircuitBreaker(BreakerConfig(minimum_samples=5))
+    for _ in range(5):
+        await _喂一次(
+            breaker,
+            _真异常(litellm_exceptions.BadRequestError, STRUCTURED_OUTPUT_REFUSAL_HINT),
+        )
+
+    assert breaker.failures == 5
+    assert breaker.is_open is True
 
 
 # ── 隔离舱 ──────────────────────────────────────────────────────────────────
