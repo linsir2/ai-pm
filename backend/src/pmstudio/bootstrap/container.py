@@ -109,7 +109,10 @@ from pmstudio.infrastructure.security import (
 from pmstudio.infrastructure.sqlite import database, owner_scope
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
-from pmstudio.infrastructure.sqlite.materials import SqliteLikeRetriever, SqliteMaterialStore
+from pmstudio.infrastructure.sqlite.materials import (
+    SqliteFtsRetriever,
+    SqliteMaterialStore,
+)
 from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
 from pmstudio.infrastructure.sqlite.observations_repo import SqliteObservationRepository
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
@@ -279,8 +282,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     discussions = SqliteDiscussionRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
     materials = SqliteMaterialStore(connection, ids=ids)
-    # 材料检索 v1：LIKE（中文可靠、零索引）。换 FTS5 / 向量只改这一行（`P18` C-2c-1）
-    material_search = SqliteLikeRetriever(connection)
+    # 材料检索：FTS5 + jieba 预分词（检索 P1，词级 + OR）。升级前 v1 是整句 LIKE。
+    # 换实现只改这一行（`P18` C-2c-1）——`MaterialRetriever` 协议的升级位就在这儿。
+    material_search = SqliteFtsRetriever(connection)
     parser = LocalMaterialParser()
     # 按网址抓网页（P27）：真 httpx，护栏在实现里（只抓公开网页、限 3 跳 / 15s / 5MB）。
     # 与解析器一样，换实现（无头浏览器 / 更强的正文抽取）只改这一行。

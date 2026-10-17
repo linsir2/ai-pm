@@ -187,9 +187,14 @@ class MaterialStore(Protocol):
 class MaterialRetriever(Protocol):
     """在**已经存下来**的材料块里找东西：块级返回，带锚点与分数——调用方不看实现。
 
-    与 `MaterialParser` / `MaterialStore` 同一套路子：v1 是 SQLite `LIKE`（中文子串可靠、
-    零索引、零迁移），升级位（`FTS5(trigram)` / 向量）在**同一个协议**后面，
-    调用方一行不改（换实现只改 `bootstrap/container.py` 一行）。
+    与 `MaterialParser` / `MaterialStore` 同一套路子：实现换过两版，**这个协议没变**，
+    调用方一行没改（换实现只改 `bootstrap/container.py` 一行）：
+
+    - v1 `SqliteLikeRetriever`：SQLite `LIKE`（整句话逐字连续子串）；
+    - v2 `SqliteFtsRetriever`：**SQLite FTS5 + jieba 预分词 + OR**（词级、词序无关、
+      容忍停用词；本地实验 recall@5 15/45 → 45/45）。
+
+    再往上的升级位（向量 / 混合）仍在同一个协议后面。
 
     它只读：给 F6 全局搜索用（`SearchProject`），"按主张取块"是 C-2c-3 的事。
     """

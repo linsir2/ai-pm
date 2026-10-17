@@ -4,6 +4,8 @@ import logging
 import sqlite3
 from pathlib import Path
 
+from pmstudio.infrastructure.sqlite.tokenize import index_tokens
+
 logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
@@ -242,6 +244,32 @@ def migrate(connection: sqlite3.Connection) -> None:
         connection.execute(
             "UPDATE sessions SET created_at = last_seen_at"
             " WHERE created_at IS NULL AND last_seen_at IS NOT NULL"
+        )
+
+    _backfill_chunk_index(connection)
+
+
+def _backfill_chunk_index(connection: sqlite3.Connection) -> None:
+    """给"升级前入库的块"补全文索引（检索 P1）。**幂等**：只补缺的那些，重复跑不动。
+
+    为什么要它：`material_chunks_fts` 是随本次升级新增的；老库里的块没有索引条目，
+    不补的话那些材料**永远搜不到**。分词在应用层（jieba），所以不能纯 SQL 干——
+    逐条选出"没有 FTS 条目"的块，分词后补写。表/索引不存在时（极老的库）什么都不做。
+    """
+
+    has_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'material_chunks_fts'"
+    ).fetchone()
+    if has_table is None:
+        return
+    missing = connection.execute(
+        "SELECT c.chunk_id, c.material_id, c.text FROM material_chunks c"
+        " WHERE c.chunk_id NOT IN (SELECT chunk_id FROM material_chunks_fts)"
+    ).fetchall()
+    for row in missing:
+        connection.execute(
+            "INSERT INTO material_chunks_fts (chunk_id, material_id, tokens) VALUES (?, ?, ?)",
+            (row["chunk_id"], row["material_id"], index_tokens(row["text"])),
         )
 
 

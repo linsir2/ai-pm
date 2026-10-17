@@ -28,6 +28,7 @@ dependencies = [
     # 注：`limits` 的 `[redis]` extra 声明 `redis<8`，我们实测 8.1.0 全通过
     # （原子性 / 连接池 / 超时），所以上界放到 <9 而非跟着 extra 降级。
     "redis>=6,<9",
+    "jieba>=0.42.1",
 ]
 
 [dependency-groups]

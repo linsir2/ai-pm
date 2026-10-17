@@ -40,8 +40,11 @@ OWNER_TABLES = frozenset(
     }
 )
 
-#: 明确**不带**归属的表：身份本身（users/sessions）与留样（model_calls，join 查）。
-EXEMPT_TABLES = frozenset({"users", "sessions", "model_calls"})
+#: 明确**不带**归属的表：身份本身（users/sessions）与留样（model_calls，join 查）；
+#: 外加 FTS5 影子表 `material_chunks_fts`——它是**派生的索引**，归属由 JOIN `materials`
+#: 判定（`material_chunks_fts.chunk_id → material_chunks → materials.owner_id`），
+#: 自己不带也没有 owner 列。它的 5 张内部影表（`_data/_idx/...`）由下面的取表口径跳过。
+EXEMPT_TABLES = frozenset({"users", "sessions", "model_calls", "material_chunks_fts"})
 
 
 def _tables_and_columns() -> dict[str, set[str]]:
@@ -50,12 +53,13 @@ def _tables_and_columns() -> dict[str, set[str]]:
     connection = sqlite3.connect(":memory:")
     try:
         connection.executescript(SCHEMA.read_text(encoding="utf-8"))
+        # 只取**真表**与**虚拟表**：FTS5 的 5 张内部影表（`type='shadow'`）是引擎的
+        # 实现细节，不是应用表——把它们当"新表"来审是误报。虚拟表（fts5 本体）留下，
+        # 它需要显式回答"归不归 owner"。
         names = [
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-            if not row[0].startswith("sqlite_")
+            row[1]
+            for row in connection.execute("PRAGMA table_list")
+            if not row[1].startswith("sqlite_") and row[2] in ("table", "virtual")
         ]
         return {
             name: {row[1] for row in connection.execute(f"PRAGMA table_info({name})")}

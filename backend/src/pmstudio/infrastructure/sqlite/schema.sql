@@ -90,6 +90,18 @@ CREATE TABLE IF NOT EXISTS material_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_material_chunks_material ON material_chunks(material_id, ordinal);
 
+-- 材料块的全文索引（检索 P1）：FTS5 **影子表**，存 jieba 预分词后的 token 流。
+-- 为什么影子表不是 external-content：external-content 会**原样读源列**，读不到应用层
+-- 分词结果（触发器也调不了 Python）；所以由 `SqliteMaterialStore` 在**同一事务**里维护。
+-- `chunk_id`/`material_id` 是 UNINDEXED（存值不建索引）：前者用于回连 `material_chunks`，
+-- 后者用于按材料整批删（材料删除/重解析时）。
+CREATE VIRTUAL TABLE IF NOT EXISTS material_chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  material_id UNINDEXED,
+  tokens,
+  tokenize = 'unicode61'
+);
+
 -- 探索运行（M8）：一趟调研（将来还有讨论/体检）一行，产物与候选状态全在 payload。
 -- 与 rounds 同一个范式：列只放"要按它查"的（项目/状态），其余进 JSON。
 CREATE TABLE IF NOT EXISTS explorations (

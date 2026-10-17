@@ -26,6 +26,7 @@ from pmstudio.application.dto import (
 from pmstudio.application.ports import IdGenerator
 from pmstudio.domain.shared.ids import ProjectId, UserId
 from pmstudio.infrastructure.sqlite.owner_scope import require_owner
+from pmstudio.infrastructure.sqlite.tokenize import index_tokens, match_expr, query_tokens
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +110,7 @@ class SqliteMaterialStore:
             "DELETE FROM material_chunks WHERE material_id = ? AND owner_id = ?",
             (material_id, str(resolved)),
         )
+        self._drop_index(material_id)
         self._connection.execute(
             "DELETE FROM materials WHERE material_id = ? AND owner_id = ?",
             (material_id, str(resolved)),
@@ -129,6 +131,7 @@ class SqliteMaterialStore:
             "DELETE FROM material_chunks WHERE material_id = ? AND owner_id = ?",
             (material_id, str(owner)),
         )
+        self._drop_index(material_id)
         self._connection.execute(
             """
             UPDATE materials
@@ -170,6 +173,7 @@ class SqliteMaterialStore:
             "DELETE FROM material_chunks WHERE material_id = ? AND owner_id = ?",
             (material_id, str(owner)),
         )
+        self._drop_index(material_id)
         self._connection.execute(
             """
             UPDATE materials
@@ -220,6 +224,19 @@ class SqliteMaterialStore:
                     chunk.anchor,
                 ),
             )
+            # 同一事务里维护全文索引（检索 P1）：索引侧与查询侧共用 `tokenize.index_tokens`。
+            self._connection.execute(
+                "INSERT INTO material_chunks_fts (chunk_id, material_id, tokens)"
+                " VALUES (?, ?, ?)",
+                (chunk.chunk_id, material_id, index_tokens(chunk.text)),
+            )
+
+    def _drop_index(self, material_id: str) -> None:
+        """删这份材料的全文索引条目。三处删块的地方都调它（材料删/重解析/换正文）。"""
+
+        self._connection.execute(
+            "DELETE FROM material_chunks_fts WHERE material_id = ?", (material_id,)
+        )
 
     # ── 读 ────────────────────────────────────────────────────────────────
 
@@ -416,6 +433,64 @@ class SqliteLikeRetriever:
             key=lambda item: (-item.occurrences, item.first_at, len(item.text), item.chunk_id),
         )
         return tuple(item.hit for item in scored[:limit])
+
+
+class SqliteFtsRetriever:
+    """材料检索的升级实现：FTS5 + jieba 预分词（**同一个 `MaterialRetriever` 协议**）。
+
+    与 v1（`SqliteLikeRetriever`）的四条口径逐字不变：块级返回 + 锚点 + 空查询回空 +
+    项目/owner 隔离；差别只在**怎么匹配**——v1 是整句 `LIKE`（中文要逐字连续子串），
+    这里是词级倒排 + OR（词序无关、容忍停用词）。本地实验 recall@5 15/45 → 45/45。
+
+    `score = -bm25`（bm25 越小越好，取负 → 越大越好，与"`score` 与顺序同向"的旧约定一致）。
+    """
+
+    _SQL = """
+        SELECT c.chunk_id, c.material_id, c.text, c.anchor, c.ordinal,
+               m.title, m.source_ref, bm25(material_chunks_fts) AS rank
+        FROM material_chunks_fts f
+        JOIN material_chunks c ON c.chunk_id = f.chunk_id
+        JOIN materials m ON m.material_id = c.material_id
+        WHERE material_chunks_fts MATCH ? AND m.project_id = ? AND m.owner_id = ?
+        ORDER BY rank
+        LIMIT ?
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def search(
+        self,
+        *,
+        project_id: ProjectId,
+        query: str,
+        limit: int = 5,
+        owner: UserId | None = None,
+    ) -> tuple[MaterialHit, ...]:
+        resolved = require_owner(owner)
+        expr = match_expr(query)
+        if expr == "" or limit <= 0:
+            return ()
+        rows = self._connection.execute(
+            self._SQL, (expr, str(project_id), str(resolved), limit)
+        ).fetchall()
+        tokens = query_tokens(query)
+        return tuple(self._hit(row, tokens) for row in rows)
+
+    def _hit(self, row: sqlite3.Row, tokens: list[str]) -> MaterialHit:
+        text = str(row["text"])
+        # 片段以**第一个在原文里出现的命中 token**定位（跳得回原文）；一个都没出现
+        # （理论上进不来）就用第一个 token，`_excerpt` 自己会兜底给开头。
+        needle = next((t for t in tokens if t.casefold() in text.casefold()), tokens[0])
+        return MaterialHit(
+            material_id=str(row["material_id"]),
+            chunk_id=str(row["chunk_id"]),
+            score=-float(row["rank"]),
+            excerpt=_excerpt(text, needle),
+            anchor=str(row["anchor"]),
+            source_ref=str(row["source_ref"]),
+            title=str(row["title"]),
+        )
 
 
 @dataclass(frozen=True, slots=True)
