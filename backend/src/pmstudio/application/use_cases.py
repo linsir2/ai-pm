@@ -1126,7 +1126,7 @@ class RunSeatRound:
 
     def _build_observations_index(self, project_id) -> str:
         """读取最近观察，渲染为索引注入提示词。"""
-        recent = self._observations_repo.recent(str(project_id), limit=5)
+        recent = self._observations_repo.recent(str(project_id))  # 全部去重后的：截断与报数在渲染层
         return render_observations_index(recent)
 
     def _extract_and_store_observations(self, round_) -> None:
@@ -2175,7 +2175,7 @@ class IntegrateRound:
 
     def _build_observations_index(self, project_id) -> str:
         """读取最近观察，渲染为索引注入提示词。"""
-        recent = self._observations_repo.recent(str(project_id), limit=5)
+        recent = self._observations_repo.recent(str(project_id))  # 全部去重后的：截断与报数在渲染层
         return render_observations_index(recent)
 
     async def _integrate_with_repair(self, *, round_id: RoundId):  # type: ignore[no-untyped-def]

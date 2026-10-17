@@ -14,13 +14,7 @@ class NoOpObservationRepository:
     def save_batch(self, observations) -> None:
         pass
 
-    def get(self, obs_id: str):
-        return None
-
-    def search(self, project_id: str, query: str, limit: int = 10):
-        return ()
-
-    def recent(self, project_id: str, limit: int = 5):
+    def recent(self, project_id: str, limit: int | None = None):
         return ()
 
     def increment_relevance(self, obs_id: str) -> None:

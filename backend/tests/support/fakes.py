@@ -299,25 +299,17 @@ class InMemoryObservationRepository:
         for obs in observations:
             self.save(obs)
 
-    def get(self, obs_id: str):
-        return self._items.get(obs_id)
-
-    def search(self, project_id: str, query: str, limit: int = 10):
-        results = [
-            obs for obs in self._items.values()
-            if obs.project_id == project_id and (query in obs.title or query in obs.detail)
-        ]
-        return tuple(results[:limit])
-
-    def recent(self, project_id: str, limit: int = 5):
-        """最新观察，同 source_ref 只保留最新一条。"""
+    def recent(self, project_id: str, limit: int | None = None):
+        """最新观察，同 `source_ref` 只保留最新一条；`limit=None` = 全部去重后的。"""
         items = [obs for obs in self._items.values() if obs.project_id == str(project_id)]
         items.sort(key=lambda o: o.obs_id, reverse=True)
         seen: dict[str, RoundObservation] = {}
         for obs in items:
             if obs.source_ref not in seen:
                 seen[obs.source_ref] = obs
-        deduped = sorted(seen.values(), key=lambda o: o.obs_id, reverse=True)[:limit]
+        deduped = sorted(seen.values(), key=lambda o: o.obs_id, reverse=True)
+        if limit is not None:
+            deduped = deduped[:limit]
         return tuple(deduped)
 
 

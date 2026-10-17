@@ -1,10 +1,16 @@
-"""L2 观察的 SQLite 存储：CRUD + FTS5 搜索 + 相关性淘汰。"""
+"""L2 观察的 SQLite 存储：写入 + 最近观察（去重 / 排序 / 隔离）。
+
+`get` / `search` **已删**（2026-10-17）：它们当初为"按需拉详情"预留，而 L2 索引定为
+**详情内联**（`render_observations_index` 直接带 `detail`），两个方法 0 生产调用。
+读取只剩 `recent`——它给**全部去重后的**（`limit=None`），截断与"共 N 条"的报数交给渲染层。
+"""
 
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+from pmstudio.application.context import render_observations_index
 from pmstudio.domain.memory.observations import (
     ObservationType,
     RoundObservation,
@@ -16,7 +22,9 @@ NOW = datetime(2026, 10, 8, 10, 0, 0)
 
 
 def _obs(
-    obs_id: str, title: str, detail: str = "detail",
+    obs_id: str,
+    title: str,
+    detail: str = "detail",
     obs_type: ObservationType = ObservationType.SEAT_INSIGHT,
     source_ref: str = "seat.business_rules:O1",
 ) -> RoundObservation:
@@ -40,29 +48,33 @@ def repo(tmp_path):
 
 
 class TestObservationRepository:
-    def test_save_and_get(self, repo):
-        obs = _obs("obs-1", "保证金")
-        repo.save(obs)
-        loaded = repo.get("obs-1")
-        assert loaded is not None
-        assert loaded.title == "保证金"
-        assert loaded.obs_type == ObservationType.SEAT_INSIGHT
+    def test_saved_observation_is_readable_via_recent(self, repo):
+        repo.save(_obs("obs-1", "保证金"))
 
-    def test_get_missing_returns_none(self, repo):
-        assert repo.get("nonexistent") is None
+        loaded = repo.recent("p1")
+
+        assert len(loaded) == 1
+        assert loaded[0].title == "保证金"
+        assert loaded[0].obs_type is ObservationType.SEAT_INSIGHT
 
     def test_save_batch(self, repo):
-        obs = (_obs("obs-1", "A"), _obs("obs-2", "B"), _obs("obs-3", "C"))
-        repo.save_batch(obs)
-        assert repo.get("obs-1") is not None
-        assert repo.get("obs-2") is not None
-        assert repo.get("obs-3") is not None
+        repo.save_batch(
+            (
+                _obs("obs-1", "A", source_ref="seat.a:O1"),
+                _obs("obs-2", "B", source_ref="seat.b:O1"),
+                _obs("obs-3", "C", source_ref="seat.c:O1"),
+            )
+        )
+
+        assert {o.title for o in repo.recent("p1")} == {"A", "B", "C"}
 
     def test_save_replaces_on_conflict(self, repo):
-        repo.save(_obs("obs-1", "原始"))
-        repo.save(_obs("obs-1", "更新"))
-        loaded = repo.get("obs-1")
-        assert loaded.title == "更新"
+        repo.save(_obs("obs-1", "原始", source_ref="seat.x:O1"))
+        repo.save(_obs("obs-1", "更新", source_ref="seat.x:O1"))
+
+        loaded = repo.recent("p1")
+        assert len(loaded) == 1
+        assert loaded[0].title == "更新"
 
     def test_recent_returns_latest_first(self, repo):
         repo.save(_obs("obs-1", "A", source_ref="seat.a:O1"))
@@ -77,17 +89,20 @@ class TestObservationRepository:
     def test_recent_filters_by_project(self, repo):
         repo.save(_obs("obs-1", "A"))
         repo.save(_obs("obs-2", "B"))
-        # 不同 project_id 的观察
-        repo.save(RoundObservation(
-            obs_id="obs-other",
-            round_id="r1",
-            project_id="p-other",
-            obs_type=ObservationType.SEAT_INSIGHT,
-            title="Other",
-            detail="",
-            source_ref="",
-        ))
+        repo.save(
+            RoundObservation(
+                obs_id="obs-other",
+                round_id="r1",
+                project_id="p-other",
+                obs_type=ObservationType.SEAT_INSIGHT,
+                title="Other",
+                detail="",
+                source_ref="",
+            )
+        )
+
         recent = repo.recent("p1")
+
         assert all(o.project_id == "p1" for o in recent)
 
     def test_recent_dedups_by_source_ref(self, repo):
@@ -115,15 +130,25 @@ class TestObservationRepository:
         assert "判断8" in titles
         assert "判断7" in titles
 
-    def test_search_fts(self, repo):
-        repo.save(_obs("obs-1", "团长保证金制度"))
-        repo.save(_obs("obs-2", "SKU数量未定"))
-        repo.save(_obs("obs-3", "品控标准化流程"))
-        results = repo.search("p1", "保证金")
-        assert len(results) >= 1
-        assert any("保证金" in r.title for r in results)
+    def test_recent_without_limit_returns_every_deduped_observation(self, repo):
+        """R：`limit=None`（默认）返回**全部**去重后的——索引层要拿它算"共 N 条"。"""
 
-    def test_search_no_match(self, repo):
-        repo.save(_obs("obs-1", "保证金"))
-        results = repo.search("p1", "不存在的关键词")
-        assert results == ()
+        for i in range(8):
+            repo.save(_obs(f"obs-{i}", f"判断{i}", source_ref=f"seat.s{i}:O1"))
+
+        assert len(repo.recent("p1")) == 8
+        assert len(repo.recent("p1", limit=5)) == 5
+
+    def test_the_index_reports_how_many_were_left_out(self, repo):
+        """R：`recent()` 给全部 + 渲染层截断 → "共 N 条，只带了前 5 条"**真的出现**。
+
+        改前调用点先 `limit=5` 截断，渲染层的报数分支永不触发（死路）。
+        """
+
+        for i in range(8):
+            repo.save(_obs(f"obs-{i}", f"判断{i}", source_ref=f"seat.s{i}:O1"))
+
+        text = render_observations_index(repo.recent("p1"))
+
+        assert "共 8 条" in text
+        assert "只带了前 5 条" in text

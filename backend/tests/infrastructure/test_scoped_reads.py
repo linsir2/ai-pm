@@ -364,10 +364,8 @@ def test_observations_reads_are_scoped_to_the_owner(connection):
         owner=ALICE,
     )
 
-    assert observations.get("obs-a", owner=ALICE) is not None
-    assert observations.get("obs-a", owner=BOB) is None
+    # `get`/`search` 已删（详情内联定案，0 生产者）——只剩 `recent` 这一条读路。
     assert observations.recent(str(PROJECT), owner=BOB) == ()
-    assert observations.search(str(PROJECT), "保证金", owner=BOB) == ()
 
 
 def test_inspirations_reads_are_scoped_to_the_owner(connection):

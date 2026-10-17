@@ -52,6 +52,8 @@ class TavilySearchGateway:
         client: httpx.AsyncClient | None = None,
         sleeper: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
+        # 注意：`timeout` 只作用于**本类自建**的 client（下面 `search` 里那条）。
+        # 注入 `client` 时（测试用）超时**由调用方负责**——我们不该去改别人给的 client。
         if not api_key.strip():
             # 没配密钥就不该有这一步（工具目录已经把它过滤掉了）；真走到这儿也明确报错
             raise ToolCallFailed("没有配置 Tavily 密钥，联网搜索不可用", tool_id=TOOL_ID)

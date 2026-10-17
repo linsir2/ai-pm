@@ -44,20 +44,15 @@ class SqliteObservationRepository:
         for obs in observations:
             self.save(obs)
 
-    def get(self, obs_id: str, *, owner: UserId | None = None) -> RoundObservation | None:
-        resolved = require_owner(owner)
-        row = self._connection.execute(
-            "SELECT * FROM observations WHERE id = ? AND owner_id = ?",
-            (obs_id, str(resolved)),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_obs(row)
-
     def recent(
-        self, project_id: str, limit: int = 5, *, owner: UserId | None = None
+        self, project_id: str, limit: int | None = None, *, owner: UserId | None = None
     ) -> tuple[RoundObservation, ...]:
-        """最新观察，同 source_ref 只保留最新一条（id 最大）。"""
+        """最新观察，同 `source_ref` 只保留最新一条（id 最大）。
+
+        `limit=None`（默认）= **全部**去重后的：本方法本就全表读进来再去重，给全部不增加 IO，
+        而调用方（观察索引）要拿它算出"共 N 条、只带了前 5 条"——截断与报数分开，
+        截断在渲染层（`render_observations_index`）。传整数则截断后返回。
+        """
         resolved = require_owner(owner)
         rows = self._connection.execute(
             "SELECT * FROM observations WHERE project_id = ? AND owner_id = ?"
@@ -70,24 +65,10 @@ class SqliteObservationRepository:
             ref = row["source_ref"]
             if ref not in seen:
                 seen[ref] = row
-        deduped = sorted(seen.values(), key=lambda r: r["id"], reverse=True)[:limit]
-        return tuple(self._row_to_obs(row) for row in deduped)
-
-    def search(
-        self, project_id: str, query: str, limit: int = 10, *, owner: UserId | None = None
-    ) -> tuple[RoundObservation, ...]:
-        """搜索 title + detail（LIKE，支持中文）。"""
-        resolved = require_owner(owner)
-        if not query.strip():
-            return ()
-        pattern = f"%{query}%"
-        rows = self._connection.execute(
-            "SELECT * FROM observations WHERE project_id = ? AND owner_id = ?"
-            " AND (title LIKE ? OR detail LIKE ?)"
-            " ORDER BY id DESC LIMIT ?",
-            (str(project_id), str(resolved), pattern, pattern, limit),
-        ).fetchall()
-        return tuple(self._row_to_obs(row) for row in rows)
+        ordered = sorted(seen.values(), key=lambda r: r["id"], reverse=True)
+        if limit is not None:
+            ordered = ordered[:limit]
+        return tuple(self._row_to_obs(row) for row in ordered)
 
     def _row_to_obs(self, row) -> RoundObservation:
         return RoundObservation(

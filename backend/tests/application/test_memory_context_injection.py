@@ -224,3 +224,39 @@ async def test_l2_index_carries_the_detail_not_just_the_title(harness):
     obs_index = harness.prompts.last("seat_review").get("observations_index", "")
     assert "200-500个SKU" in obs_index   # claim 进了（改前这里只有标题 "SKU"）
     assert "过多增加损耗" in obs_index    # because 也进了
+
+
+@pytest.mark.asyncio
+async def test_the_observations_index_says_how_many_were_left_out(harness):
+    """R（尾注真生效）：种子观察 > 5 条时，席位提示词的索引里真有"共 N 条，只带了前 5 条"。
+
+    改前调用点 `recent(limit=5)` 先截断，渲染层的报数分支**永不触发**。
+    """
+
+    from pmstudio.domain.memory.observations import ObservationType, RoundObservation
+
+    pid = harness.seed_project(title="社区团购平台")
+    harness.observations.save_batch(
+        tuple(
+            RoundObservation(
+                obs_id=f"seed-{i}",
+                round_id="r0",
+                project_id=str(pid),
+                obs_type=ObservationType.SEAT_INSIGHT,
+                title=f"旧判断{i}",
+                detail="细节",
+                source_ref=f"seat.s{i}:O1",
+            )
+            for i in range(8)
+        )
+    )
+
+    start = harness.start_round()
+    round_id = await start.create(project_id=pid, user_input="社区团购预售模式，团长配送")
+    await start.analyze(round_id=round_id)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+    await harness.run_seat_round()(round_id=round_id)
+
+    obs_index = harness.prompts.last("seat_review").get("observations_index", "")
+    assert "共 8 条" in obs_index, obs_index
+    assert "只带了前 5 条" in obs_index
