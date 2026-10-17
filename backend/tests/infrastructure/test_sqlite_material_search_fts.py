@@ -1,11 +1,10 @@
 """材料检索升级（FTS5 + jieba）：词级、词序无关、容忍停用词（检索 P1）。
 
-v1（`SqliteLikeRetriever`）是整句 `LIKE`：中文要**逐字连续子串**。本地实验
-（`.codex/runs/2026-10-17-检索实验/measure_fts_zh.py`，46 条真中文语料）实测：
-LIKE 对"同词换序 / 插停用词"两类查询 recall@5 **0/15**，jieba-FTS+**OR** **45/45**。
+被替换掉的 v1（整句 `LIKE`，**2026-10-17 删除**）要求中文"逐字连续子串"。
+验收实测（`docs/plans/2026-10-17-检索升级验收.md`）：v1 对"同词换序 / 插停用词 / 按标题"
+三类 recall@5 **全 0**，v2 jieba-FTS+**OR** 各 42/43/42 于 46；合计 top1 34→134。
 
-本文件复用 `test_sqlite_material_search.py` 的装置与四条口径（块级、锚点、字面通配符、
-项目隔离）——**换实现类，签名与语义不变**。
+四条口径（块级、锚点、字面通配符、项目隔离）与 v1 逐字不变——**换实现类，签名与语义不变**。
 """
 
 import pytest
@@ -17,11 +16,36 @@ from pmstudio.infrastructure.sqlite.materials import (
     SqliteMaterialStore,
 )
 from tests.conftest import TEST_OWNER
-from tests.infrastructure.test_sqlite_material_search import parsed
 from tests.support.builders import NOW, PROJECT
 from tests.support.doubles import SeqIds
 
 OTHER = ProjectId("p2")
+
+
+def parsed(*texts: str, title: str = "诊断报告.pdf", origin: str = "upload"):
+    """一份解析草稿（单块/多块）。照搬原 v1 测试的构造器（v1 已删，留在这儿）。"""
+
+    from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+
+    return ParsedMaterial(
+        origin=origin,
+        title=title,
+        source_ref=f"attachment:{title}",
+        media_type="text/markdown",
+        bytes_len=42,
+        chunks=tuple(
+            MaterialChunk(
+                chunk_id=f"local-text#c{index:02d}",
+                ordinal=index,
+                text=text,
+                heading_path=(),
+                anchor=f"第 {index + 1} 行",
+            )
+            for index, text in enumerate(texts)
+        ),
+        parser_id="local-text",
+        parser_version="v1",
+    )
 
 
 @pytest.fixture()
@@ -211,3 +235,53 @@ def test_backfill_indexes_existing_chunks_idempotently(tmp_path):
     rows = connection.execute("SELECT COUNT(*) FROM material_chunks_fts").fetchone()[0]
     assert rows == 1
     connection.close()
+
+
+# ── 索引源：标题 + 祖先标题 + 正文（真数据坐实的缺口）──────────────────────────
+
+
+def _parsed_with_chunks(title, chunks):
+    from pmstudio.application.dto import ParsedMaterial
+
+    return ParsedMaterial(
+        origin="upload", title=title, source_ref=f"attachment:{title}",
+        media_type="text/markdown", bytes_len=1, chunks=tuple(chunks),
+        parser_id="local-text", parser_version="v1",
+    )
+
+
+def test_a_section_name_finds_every_chunk_under_it(world):
+    """R：长节被切成多块时，**后几块正文里没有节名**（只在 `heading_path`）——
+    所以搜节名必须也命中它们（改前只中第 1 块）。用**真解析器**切块，不手搓。"""
+
+    from pmstudio.infrastructure.tools.extract import chunk_text
+
+    retriever, _, store, _ = world
+    chunks = chunk_text("## 权限模型\n" + "角色绑定说明。" * 120, parser_id="t")
+    assert len(chunks) >= 3
+    in_text = [c for c in chunks if "权限模型" in c.text]
+    assert len(in_text) == 1, "前置不成立：本该只有第一块正文带节名"
+
+    packet = store.put(
+        project_id=PROJECT,
+        parsed=_parsed_with_chunks("长节.md", chunks),
+        sha256="long-section".ljust(64, "0")[:64],
+        content=b"raw",
+        now=NOW,
+    )
+
+    hits = retriever.search(project_id=PROJECT, query="权限模型")
+
+    assert len(hits) == len(chunks), "节名只命中了正文带它的那块，`heading_path` 没进索引"
+    assert all(h.material_id == packet.material_id for h in hits)
+
+
+def test_a_material_is_findable_by_its_title(world):
+    """R：材料标题（文件名/页标题）不在任何块正文里——搜它要能按标题找到。"""
+
+    retriever, seed, _, _ = world
+    mid = seed("正文里一个字都没有那个词", title="权限说明.pdf")
+
+    hits = retriever.search(project_id=PROJECT, query="权限说明")
+
+    assert [h.chunk_id for h in hits] == [f"{mid}#c00"]

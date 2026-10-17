@@ -49,3 +49,18 @@ def test_container_has_no_fake_model_switch(tmp_path):
     container = build_container(settings)
     with pytest.raises(AttributeError):
         _ = container.use_fake_model  # type: ignore[attr-defined]
+
+
+def test_container_warms_the_chinese_tokenizer(tmp_path, monkeypatch):
+    """R（检索 P1）：组装点预热中文分词——jieba 首次 cut ~0.6s，别落在首个请求里。"""
+
+    import pmstudio.bootstrap.container as container_module
+
+    calls: list[int] = []
+    monkeypatch.setattr(container_module, "warm_tokenizer", lambda: calls.append(1))
+
+    build_container(
+        Settings(db_path=tmp_path / "pm.db", model="m", api_key="k", api_base=None)
+    )
+
+    assert calls == [1], "组装没有预热分词器"

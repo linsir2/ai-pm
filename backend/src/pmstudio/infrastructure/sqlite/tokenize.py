@@ -10,6 +10,7 @@ jieba 是唯一"纯 Python、可 pip 装、离线、词典内置"的中文分词
 """
 
 import re
+from collections.abc import Sequence
 
 import jieba
 
@@ -41,3 +42,22 @@ def match_expr(query: str) -> str:
     空/纯标点回 `""`——调用方据此回空，**不把空串塞进 MATCH**（FTS5 对空查询报错）。
     """
     return " OR ".join('"' + token.replace('"', '""') + '"' for token in query_tokens(query))
+
+
+def index_source(*, title: str, heading_path: Sequence[str], text: str) -> str:
+    """一块的索引源：**材料标题 + 祖先标题 + 正文**（写路径与回填**共用这一份**）。
+
+    为什么加标题：材料标题（文件名 / 页标题）**不在任何块正文里**，搜它只能靠这一份。
+    为什么加祖先标题：长节被切成多块时，**后几块的正文里没有节名**（只在 `heading_path`），
+    不补就搜不到（真数据坐实：3 块只有第 1 块正文带节名）。
+    """
+    return index_tokens(" ".join((title, *heading_path, text)))
+
+
+def warm() -> None:
+    """把 jieba 词典**提前加载**（首次 `cut` 要 ~0.6s——别落在首个请求里）。
+
+    只是调 jieba 自己的初始化，**不自己实现加载逻辑**。组装点调一次即可（幂等）。
+    """
+
+    jieba.initialize()

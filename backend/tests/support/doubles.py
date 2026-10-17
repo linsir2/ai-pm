@@ -280,7 +280,7 @@ class RecordingWebFetch:
 class RecordingMaterialRetriever:
     """材料检索替身：记录每次查询，按配置回命中（**只在测试里**）。
 
-    真实现是 `infrastructure/sqlite/materials.py` 的 `SqliteLikeRetriever`——
+    真实现是 `infrastructure/sqlite/materials.py` 的 `SqliteFtsRetriever`——
     排序口径只在那边测一次，这里不复制一份，免得两套口径慢慢漂移。
     """
 

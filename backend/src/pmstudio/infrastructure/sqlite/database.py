@@ -1,10 +1,11 @@
 """SQLite 连接：建库、建表、WAL。单用户单进程，一个连接就够。"""
 
+import json
 import logging
 import sqlite3
 from pathlib import Path
 
-from pmstudio.infrastructure.sqlite.tokenize import index_tokens
+from pmstudio.infrastructure.sqlite.tokenize import index_source
 
 logger = logging.getLogger(__name__)
 
@@ -263,13 +264,22 @@ def _backfill_chunk_index(connection: sqlite3.Connection) -> None:
     if has_table is None:
         return
     missing = connection.execute(
-        "SELECT c.chunk_id, c.material_id, c.text FROM material_chunks c"
+        "SELECT c.chunk_id, c.material_id, c.text, c.heading_path, m.title AS title"
+        " FROM material_chunks c JOIN materials m ON m.material_id = c.material_id"
         " WHERE c.chunk_id NOT IN (SELECT chunk_id FROM material_chunks_fts)"
     ).fetchall()
     for row in missing:
         connection.execute(
             "INSERT INTO material_chunks_fts (chunk_id, material_id, tokens) VALUES (?, ?, ?)",
-            (row["chunk_id"], row["material_id"], index_tokens(row["text"])),
+            (
+                row["chunk_id"],
+                row["material_id"],
+                index_source(
+                    title=row["title"],
+                    heading_path=json.loads(row["heading_path"]),
+                    text=row["text"],
+                ),
+            ),
         )
 
 

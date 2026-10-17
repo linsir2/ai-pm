@@ -126,6 +126,7 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteTemplateRepository,
     SqliteWorkspaceIndex,
 )
+from pmstudio.infrastructure.sqlite.tokenize import warm as warm_tokenizer
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from pmstudio.infrastructure.sqlite.usage import (
     SqliteAdminStatsRepository,
@@ -260,6 +261,10 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     # 登录哈希隔离舱（高并发 P1）：容量来自 settings，**必须在事件循环跑起来之前**设。
     # argon2 每次约 64MB，这个数同时是内存上限——登录风暴排队，而不是把机器打死。
     configure_gate(settings.login_hash_concurrency)
+
+    # 中文分词预热（检索 P1）：jieba 词典首次 `cut` 要 ~0.6s——组装时加载一次，
+    # 别落在首个搜索/上传请求里。幂等，多个测试进程各付一次（本就如此）。
+    warm_tokenizer()
 
     connection = database.connect(settings.db_path)
     clock = SystemClock()
