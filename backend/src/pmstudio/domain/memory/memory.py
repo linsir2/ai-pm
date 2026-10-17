@@ -132,10 +132,15 @@ class ProjectMemory:
             return self
 
         known = {entry.memory_id for entry in self.entries}
+        taken = set(_taken_keys(self.entries))
         for change in changes:
-            rejected = _reject(change, known_entries=known, known_refs=known_refs)
+            rejected = _reject(
+                change, known_entries=known, known_refs=known_refs, taken=frozenset(taken)
+            )
             if rejected is not None:
                 raise rejected[1]
+            if change.op is MemoryOp.ADD:
+                taken.add((str(change.kind), normalized_text(change.text)))
 
         adds = sum(1 for change in changes if change.op is MemoryOp.ADD)
         deletes = sum(1 for change in changes if change.op is MemoryOp.DELETE)
@@ -236,6 +241,7 @@ def screen_changes(
     """
 
     known = {entry.memory_id for entry in memory.entries}
+    taken = set(_taken_keys(memory.entries))
     accepted: list[MemoryChange] = []
     dropped: list[MemoryDrop] = []
     for change in changes:
@@ -246,9 +252,13 @@ def screen_changes(
         # 回填**只用本轮真实存在的编号**，一条都没有就照旧丢掉——绝不编。
         if change.op is not MemoryOp.DELETE and not change.refs and fallback_refs:
             change = replace(change, refs=tuple(sorted(fallback_refs))[:FALLBACK_REF_LIMIT])
-        rejected = _reject(change, known_entries=known, known_refs=known_refs)
+        rejected = _reject(
+            change, known_entries=known, known_refs=known_refs, taken=frozenset(taken)
+        )
         if rejected is None:
             accepted.append(change)
+            if change.op is MemoryOp.ADD:
+                taken.add((str(change.kind), normalized_text(change.text)))
         else:
             dropped.append(MemoryDrop(change=change, reason=rejected[0]))
 
@@ -277,8 +287,20 @@ def normalized_text(text: str) -> str:
     return squeezed.strip(_TRAILING_PUNCTUATION)
 
 
+def _taken_keys(entries: Sequence[MemoryEntry]) -> frozenset[tuple[str, str]]:
+    """已有记忆的（类别, 归一化文本）集合——去重判据的输入，一处算。"""
+
+    return frozenset(
+        (str(entry.kind), normalized_text(entry.text)) for entry in entries
+    )
+
+
 def _reject(
-    change: MemoryChange, *, known_entries: set[str], known_refs: frozenset[str]
+    change: MemoryChange,
+    *,
+    known_entries: set[str],
+    known_refs: frozenset[str],
+    taken: frozenset[tuple[str, str]],
 ) -> tuple[str, DomainError] | None:
     """一条变更不合法 → `(留痕理由, 该抛的错)`；合法 → `None`。留痕与抛错同一处判、同一句话。"""
 
@@ -295,6 +317,12 @@ def _reject(
             return reason, ShapeError(reason)
         if len(change.text.strip().splitlines()) > MAX_ENTRY_LINES:
             reason = "记忆条目最多两行"
+            return reason, ShapeError(reason)
+        # 去重只看**完全重复**（同类别 + 归一化后一模一样）——相似度不做（`02 §11.0.16`）。
+        if change.op is MemoryOp.ADD and (
+            str(change.kind), normalized_text(change.text)
+        ) in taken:
+            reason = "与已有记忆完全重复"
             return reason, ShapeError(reason)
 
     if change.op in (MemoryOp.UPDATE, MemoryOp.MERGE, MemoryOp.DELETE):
