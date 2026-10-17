@@ -21,15 +21,23 @@
 
 `OperationalError("no such table: xxx")` 是**代码 bug**，不是忙。
 把它也回 503 等于告诉客户端"等一下就好"——而它永远不会好。
+
+## 磁盘满是第三类：507，不带 `Retry-After`
+
+`OperationalError("database or disk is full")` 既不是忙也不是 bug，是**容量耗尽**。
+它不能进 503 ——**判据是 `Retry-After` 那个头**能不能兑现：写锁 3 秒后大概率解开，
+我们**兑现得起**；磁盘满要等有人在删文件，**兑现不起**，给 `Retry-After: 3`
+就是教客户端在一个永远不会好的结果上重试。所以走 RFC 4918 的 **507**。
 """
 
 import sqlite3
 from pathlib import Path
+from sqlite3 import OperationalError
 
 import pytest
 
-from pmstudio.api.errors import is_busy_error
-from pmstudio.harness.errors import DatabaseBusy
+from pmstudio.api.errors import is_busy_error, is_storage_full_error, status_for
+from pmstudio.harness.errors import DatabaseBusy, StorageFull
 from pmstudio.infrastructure.sqlite import database as database_module
 from tests.e2e.conftest import build_app
 from tests.e2e.test_isolation_matrix import _seed_active_user  # noqa: E402
@@ -168,3 +176,68 @@ async def test_没有争用时写请求正常(locked_app):
         )
 
     assert response.status_code == 200, response.text
+
+
+# ── 磁盘满 → 507（真 tmpfs 注入，见 scripts/disk_full_probe.py）──────────────
+# 下面是**纯判据**的断言（不挂 tmpfs）；真 ENOSPC 的那一条在
+# tests/e2e/test_disk_full.py ——它要挂载，所以单列。
+
+
+def test_磁盘满判据认_sqlite_的原话():
+    """R：认的是 SQLite 真报的那句，不是猜的。
+
+    真跑（4M tmpfs 填满）拿到的原话就是 `database or disk is full`，
+    所以判据照抄这句——写成 "full" 会把 `unable to open database file` 之类的
+    无关错也吞进来。"""
+
+    assert is_storage_full_error(OperationalError("database or disk is full")) is True
+
+
+def test_磁盘满判据认_out_of_disk_space():
+    """R：换个说法也要认，否则换个平台就漏判。"""
+
+    assert is_storage_full_error(OperationalError("out of disk space")) is True
+
+
+def test_等锁超时不算磁盘满():
+    """R：两者**必须**分开——等锁回 503 + 一个我们兑现得起的 `Retry-After`，
+    磁盘满回 507（重试无用，得有人腾空间）。混了就等于给了个兑现不了的承诺。"""
+
+    assert is_storage_full_error(OperationalError("database is locked")) is False
+
+
+def test_读不了库不算磁盘满():
+    """R：`unable to open database file` 是路径/权限/文件不存在，
+    归它 507 等于告诉运维"去腾磁盘"——**指错了方向**。"""
+
+    assert is_storage_full_error(OperationalError("unable to open database file")) is False
+
+
+def test_只读库不算磁盘满():
+    """R：只读库是部署错（挂载选项/文件属主），回 507 也是指错方向。"""
+
+    assert is_storage_full_error(OperationalError("attempt to write a readonly database")) is False
+
+
+def test_507这个码登记在册():
+    """R：`status_for` 靠 `CODE_STATUS` 查表，新增码必须登记——
+    没登记就落到默认的 500，**静默变成我们要修的那个 bug**。"""
+
+    assert status_for(StorageFull("磁盘满了")) == 507
+
+
+def test_磁盘满的码就是_storage_full():
+    """R：码本身是**给运维看的**（前端只透传 message，但日志/告警按 code 聚合）。
+    `insufficient_storage` 与 HTTP 语义对齐，`storage_full` 更直白——取后者。"""
+
+    assert StorageFull("磁盘满了").code == "storage_full"
+
+
+def test_磁盘满不带RetryAfter():
+    """R：**刻意不给 `Retry-After`**。判据：那个头是"3 秒后再来"的**承诺**，
+    写锁我们兑现得起，磁盘满兑现不起——得有人在删文件。
+    给了就是教客户端在一个永远不会好的结果上重试。"""
+
+    error = StorageFull("磁盘满了")
+
+    assert error.retry_after is None

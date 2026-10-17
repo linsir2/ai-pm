@@ -1,7 +1,11 @@
 """领域/应用错误 → HTTP 状态码。只有这一处做这个映射。"""
 
 from pmstudio.domain.shared.errors import DomainError, ShapeError
-from pmstudio.harness.errors import ApplicationError, ModelCallFailed, PacketParseError
+from pmstudio.harness.errors import (
+    ApplicationError,
+    ModelCallFailed,
+    PacketParseError,
+)
 
 CODE_STATUS = {
     "unknown_project": 404,
@@ -17,6 +21,9 @@ CODE_STATUS = {
     # 管理动作落在 admin 头上（含自封）：请求本身合法、状态不允许 → 409。
     # 用 400 是"请求有问题"，用 403 是"你没权限"——都不是这两件事。
     "admin_protected": 409,
+    # 磁盘满（RFC 4918 §11.5）：不是暂时的——别给 `Retry-After`，
+    # 重试要等**有人腾磁盘**，而客户端等不了那件事发生。
+    "storage_full": 507,
     "model_call_failed": 502,
     "model_packet_unparsable": 502,
     "round_busy": 409,
@@ -70,6 +77,27 @@ def is_busy_error(error: BaseException) -> bool:
 
     text = str(error).lower()
     return "locked" in text or "busy" in text
+
+
+#: SQLite 报满盘的原话。照抄真跑抓到的那句（4M tmpfs 填满时拿到的），
+#: 不写裸的 `"full"`——`unable to open database file` 之类会被一起吞进来，
+#: 而那几类是路径/权限/只读挂载，回 507 等于**指错方向**。
+_STORAGE_FULL_HINTS = ("database or disk is full", "out of disk space", "disk full")
+
+
+def is_storage_full_error(error: BaseException) -> bool:
+    """这条 sqlite 错误是「磁盘满」吗。
+
+    **必须与 `is_busy_error` 分开**：等锁回 503 + 兑现得起的 `Retry-After`，
+    磁盘满回 507（重试无用）。混了就等于给了一个兑现不了的承诺。
+
+    与 `_LITELLM` 那边同样的分层约束：`model_calls.py` 里另有一份同规则的小判据，
+    两边**不共享**——`ALLOWED_LAYER_IMPORTS` 规定 api 只能 import
+    api/application/domain/harness，api 拿不到 infrastructure 的东西，反向也不允许。
+    """
+
+    text = str(error).lower()
+    return any(hint in text for hint in _STORAGE_FULL_HINTS)
 
 
 def status_for(error: DomainError | ApplicationError) -> int:

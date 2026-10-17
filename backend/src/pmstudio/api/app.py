@@ -10,7 +10,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from pmstudio.api import auth, routes
-from pmstudio.api.errors import body_for, is_busy_error, status_for
+from pmstudio.api.errors import (
+    body_for,
+    is_busy_error,
+    is_storage_full_error,
+    status_for,
+)
 from pmstudio.application.ports import DiscussionRunner, ExplorationOrchestrator, RoundOrchestrator
 from pmstudio.application.use_cases import (
     AbandonExploration,
@@ -55,7 +60,7 @@ from pmstudio.application.use_cases import (
     UploadMaterial,
 )
 from pmstudio.domain.shared.errors import DomainError
-from pmstudio.harness.errors import ApplicationError, DatabaseBusy
+from pmstudio.harness.errors import ApplicationError, DatabaseBusy, StorageFull
 from pmstudio.harness.events import EventStream
 
 #: 等锁超时告诉客户端等多久（秒）。**常量而非配置**：这是一句提示，而我们并不
@@ -71,6 +76,9 @@ def _error_response(error: DomainError | ApplicationError) -> JSONResponse:
     retry_after = getattr(error, "retry_after", None)
     # **凡是"我们主动拒绝、过一会儿再来"的都带 Retry-After**（429 速率闸、
     # 503 卸载 / 503 数据库忙）。只给一半的话，客户端在另一种上只能硬重试。
+    #
+    # 507 磁盘满**故意不在这个元组里**——它要等有人在删文件，那个头兑现不起。
+    # 这行条件就是那个承诺的开关，所以别把 507 加进来。
     if status_for(error) in (429, 503) and retry_after is not None:
         headers["Retry-After"] = str(retry_after)
     return JSONResponse(
@@ -186,7 +194,16 @@ def create_app(
             return _error_response(
                 DatabaseBusy("数据库正忙，请稍后重试", retry_after=DATABASE_BUSY_RETRY_SECONDS)
             )
-        # 非等锁类：是我们自己的问题，形状照常，内码 500。
+        if is_storage_full_error(error):
+            # 507，**故意不带 Retry-After**：那要等有人在删文件，
+            # 客户端等不了那件事发生。判据见 `StorageFull` 的文档串。
+            return _error_response(
+                StorageFull(
+                    "磁盘空间不足，这次改动没能保存——请腾出空间后重试。"
+                    "已经确认写进去的内容不受影响。"
+                )
+            )
+        # 其余（`no such table` / `readonly database`）：代码 bug 或部署错，形状照常，内码 500。
         return JSONResponse(
             status_code=500,
             content={"code": "internal_error", "message": "数据库写入失败", "details": {}},

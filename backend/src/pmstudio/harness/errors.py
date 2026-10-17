@@ -128,3 +128,35 @@ class DatabaseBusy(ApplicationError):
     def __init__(self, message: str, *, retry_after: int = 3, **details: object) -> None:
         super().__init__(message, code="database_busy", **details)
         self.retry_after = retry_after
+
+
+class StorageFull(ApplicationError):
+    """**磁盘满了**——RFC 4918 的 507 `Insufficient Storage`。
+
+    既不是 `DatabaseBusy`（等锁，会自己解开）也不是代码 bug（库没坏、数据没丢），
+    是**容量耗尽**：应用好着，只是没地方写了。
+
+    ## 为什么不复用 503
+
+    判据只有一个：**`Retry-After` 那个头兑现得起吗？**
+
+    - 写锁：持锁者是短事务，多半早就结束了 → 我们**兑现得起** `Retry-After: 3`。
+    - 磁盘满：得等**有人在删文件** → **兑现不起**。给 `Retry-After: 3`
+      等于教客户端在一个永远不会好的结果上重试，把满盘打得更死。
+
+    RFC 4918 §11.5 就是为这件事定义的码，它明确表达"不是暂时的，别重试"。
+
+    ## 为什么不复用 500
+
+    磁盘满是**运维事件**，不是代码 bug。回 500 会污染错误告警（真事故里
+    "磁盘满"和"我们写错了"混在同一堆 500 里，前者该叫人腾空间、后者该叫人
+    改代码），也与 P5b 刚定的"容量问题回 503 而不是 500"原则自相矛盾。
+
+    **刻意没有 `retry_after` 字段**：与 `DatabaseBusy` 刻意区分开，
+    让"这个错误该不该教客户端重试"在类型上就分得清——不是靠调用点记得判断。
+    """
+
+    def __init__(self, message: str, **details: object) -> None:
+        super().__init__(message, code="storage_full", **details)
+        #: **永远是 `None`**：兑现不起的等待不叫 `Retry-After`，叫骗人。
+        self.retry_after: int | None = None
