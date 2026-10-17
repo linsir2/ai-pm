@@ -354,3 +354,28 @@ async def test_Redis实现满足协议():
     guard = await _dead_guard()
 
     assert isinstance(guard, LoginGuard)
+
+
+async def test_降级标志在恢复后清零():
+    """**标志说谎比没有标志更坏**。
+
+    限流的降级是**每次调用各自判**的：Redis 一恢复，下一次调用就走回共享
+    计数了，没有"卡住"的进程内状态。标志要是停在 True 不清，
+    就会报"限流已降级"报一整天——而实际第二次故障就已经恢复。
+
+    I/P：先让一次调用降级，再用真 Redis 的同款 limiter 打一次；R：标志回到 False。
+    """
+
+    from uuid import uuid4
+
+    storage = await _make_storage(namespace=f"t{uuid4().hex[:12]}")
+    guard = RedisLoginGuard(
+        limiter=MovingWindowRateLimiter(storage),
+        max_fails=5, lock_minutes=15, attempt_window_seconds=60,
+        ip_max_attempts=20, username_max_attempts=10,
+    )
+    # 同一个 RedisLoginGuard：先注入一次降级，再打一次成功的
+    guard._degraded = True
+    await guard.consume_attempt(ip="1.1.1.1", username="a")
+
+    assert guard.degraded is False, "恢复后标志还是 True——它在骗人"

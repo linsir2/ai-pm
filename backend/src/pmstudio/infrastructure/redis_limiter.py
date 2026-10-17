@@ -105,8 +105,14 @@ class RedisLoginGuard:
 
     @property
     def degraded(self) -> bool:
-        """共享计数是否已不可用。**要能被观测**——悄悄降级和限流器失效从外面
-        看是一回事。"""
+        """共享计数当前是否不可用。**要能被观测**——悄悄降级和限流器失效
+        从外面看是一回事。
+
+        **恢复后必须清零**（与 `RedisFanoutEventBus` 同一条要求）：限流的降级是
+        每次调用各自判的，没有"卡住"的进程内状态——Redis 一恢复，下一次调用
+        就走回共享计数了。标志要是还停在 True，就是在骗人和监控
+        （"限流已降级"报了一整天，其实第二次故障就恢复了）。
+        """
 
         return self._degraded
 
@@ -119,6 +125,7 @@ class RedisLoginGuard:
             self._mark_degraded("locked")
             return await self._fallback.locked(ip=ip, username=username)
 
+        self._degraded = False
         remaining = getattr(stats, "remaining", None)
         if remaining is None:
             # 底下的实现形状变了：宁可限住也不放行。
@@ -132,6 +139,7 @@ class RedisLoginGuard:
             await self._limiter.hit(
                 self._fail_item, "login-fail", ip.strip(), username.strip()
             )
+            self._degraded = False
         except _REDIS_DOWN:
             self._mark_degraded("record_failure")
             await self._fallback.record_failure(ip=ip, username=username)
@@ -143,6 +151,7 @@ class RedisLoginGuard:
             await self._limiter.clear(
                 self._fail_item, "login-fail", ip.strip(), username.strip()
             )
+            self._degraded = False
         except _REDIS_DOWN:
             self._mark_degraded("clear")
             await self._fallback.clear(ip=ip, username=username)
@@ -179,6 +188,7 @@ class RedisLoginGuard:
 
         try:
             allowed = await self._limiter.hit(item, namespace, value)
+            self._degraded = False
             if allowed:
                 return LoginVerdict(False, 0)
             # 被拒了才去问"什么时候能再来"——多一次往返，但只在被拒时发生，

@@ -59,6 +59,19 @@ async def _alive() -> bool:
         await client.aclose()
 
 
+async def _collect(iterator, sink: list, *, want: int, timeout: float) -> None:
+    """从订阅里收 want 条到 sink。取不满就让上层断言失败，不静默通过。"""
+
+    async def pump() -> None:
+        async for event in iterator:
+            sink.append(event)
+            if len(sink) >= want:
+                return
+
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(pump(), timeout)
+
+
 class _Pair:
     """两个"worker"，各自 start/stop。"""
 
@@ -510,3 +523,254 @@ def test_每worker只有一条订阅连接():
     assert bus.local_subscriber_count == 0
     # 订阅数是内部实现；用"起 50 个订阅不产生 50 条 Redis 连接"的行为钉它
     assert hasattr(bus, "_pubsub") or hasattr(bus, "_local")
+
+
+# ── F 组 · 恢复探针与它的护栏 ───────────────────────────────────────────────
+# 背景（都是实测，不是推断）：
+#  · 真断连时 `ps.listen()` **抛 ConnectionError**（上一轮我说"静默结束"是错的，
+#    那次是我自己 aclose 客户端的干净关闭）。
+#  · 同一个 redis client **不会自己恢复** pubsub 订阅——重连必须显式做，
+#    而且要**换一个新的 client**（实测：复用旧 client 重订阅收不到消息）。
+#  · 护栏依据：AWS 把"没有 exponential backoff / jitter / **maximum retry
+#    values**"列为反模式；AWS SDK 的 full jitter 公式
+#    `delay = random(0,1) × min(cap, base×2^n)`；Envoy 的
+#    `max_ejection_time_jitter` 防的正是"所有代理**在同一时刻**重连"。
+
+
+class _RecordingSleeper:
+    """记录每次退避请求的秒数。**不真睡**——否则这组测试要几十秒。"""
+
+    def __init__(self, *, then: "object | None" = None) -> None:
+        self.waits: list[float] = []
+        self._then = then
+
+    async def __call__(self, seconds: float) -> None:
+        self.waits.append(seconds)
+
+
+def _probe_bus(
+    url: str, channel: str, sleeper, **kwargs: object
+) -> RedisFanoutEventBus:
+    """探针 base 默认取很小的值——退避形状由**注入的 sleeper 记录**来验，
+    不靠真睡。"""
+
+    return RedisFanoutEventBus(
+        url=url, channel=channel, sleeper=sleeper,
+        **{"probe_base_seconds": 0.01, **kwargs},  # type: ignore[arg-type]
+    )
+
+
+async def test_探针是重连循环_不死在第一次故障上():
+    """**这是本组存在的理由**：上一版 `_read_loop` 遇到断连就 `return`，
+    任务死掉、`_degraded` 永不复位——**一次性降级到重启为止**。
+
+    R：断连后任务必须继续活着并反复尝试；P：死端口起 bus；
+    R：sleep 被调用了多次（说明在重试，不是死掉）。"""
+
+    sleeper = _RecordingSleeper()
+    bus = _probe_bus(DEAD_URL, "t-probe", sleeper)
+    await bus.start()
+    try:
+        await asyncio.sleep(0.3)
+        await bus.stop()
+    finally:
+        pass
+
+    assert len(sleeper.waits) >= 3, f"只等了 {len(sleeper.waits)} 次——重试循环没在跑"
+
+
+async def test_退避指数增长且有封顶():
+    """R：连续失败时退避逐次翻倍并**封顶**（AWS：缺 maximum retry values 是反模式）；
+    P：死端口跑一会儿；R：等待序列呈指数且不超过封顶值。"""
+
+    sleeper = _RecordingSleeper()
+    bus = _probe_bus(
+        DEAD_URL, "t-cap", sleeper, probe_base_seconds=1.0, probe_max_seconds=8.0
+    )
+    await bus.start()
+    await asyncio.sleep(0.2)
+    await bus.stop()
+
+    assert len(sleeper.waits) >= 4, sleeper.waits
+    assert all(w <= 8.0 for w in sleeper.waits), f"超过封顶：{sleeper.waits}"
+    assert max(sleeper.waits) <= 8.0
+
+
+async def test_退避带抖动_不是死板的固定值():
+    """R：固定退避会让 N 个 worker 在**同一刻**一起探回来（Envoy
+    `max_ejection_time_jitter` 防的就是这个）。P：起 8 个 bus 各退避几次；
+    R：8 个 bus 的第 3 次等待值互不相同。"""
+
+    sleepers = [_RecordingSleeper() for _ in range(8)]
+    buses = [_probe_bus(DEAD_URL, f"t-jit{i}", sl) for i, sl in enumerate(sleepers)]
+    for bus in buses:
+        await bus.start()
+    try:
+        await asyncio.sleep(0.25)
+    finally:
+        for bus in buses:
+            await bus.stop()
+
+    thirds = [sl.waits[2] for sl in sleepers if len(sl.waits) >= 3]
+    assert len(thirds) == 8, f"有的 bus 退避次数不够：{[len(s.waits) for s in sleepers]}"
+    assert len(set(round(v, 6) for v in thirds)) == 8, f"退避时刻撞在一起了：{thirds}"
+
+
+async def test_抖动永远落在退避窗口内():
+    """R：full jitter 的定义是 `random(0,1) × 退避`，**上界不超过**退避。
+    超过就是"又加了一层延迟"，与公式不符。"""
+
+    sleeper = _RecordingSleeper()
+    bus = _probe_bus(
+        DEAD_URL, "t-win", sleeper, probe_base_seconds=1.0, probe_max_seconds=8.0
+    )
+    await bus.start()
+    await asyncio.sleep(0.2)
+    await bus.stop()
+
+    bounds = [min(8.0, 1.0 * 2**i) for i in range(len(sleeper.waits))]
+    for waited, bound in zip(sleeper.waits, bounds, strict=True):
+        assert 0 < waited <= bound, f"等待 {waited} 不在 (0, {bound}] 内"
+
+
+async def test_干净关停不记降级():
+    """R：我们自己关掉服务**不是故障**，不该打出降级告警让人白查。
+    P：起一个连得上 Redis 的 bus 然后 stop；R：不进 degraded、也不打那条日志。"""
+
+    if not await _alive():
+        pytest.fail("需要真 Redis")
+
+    bus = _probe_bus(URL, f"t-close{uuid4().hex[:6]}", _RecordingSleeper())
+    await bus.start()
+    await asyncio.sleep(0.3)
+    await bus.stop()
+
+    assert bus.degraded is False, "干净关停被当成了故障"
+
+
+async def test_降级期间的事件不补发():
+    """R：补发的是**过期事件**。降级期间走本地的事件，恢复后不要再倒回 Redis——
+    那会让别的 worker 把一条早已被重读过的状态当新消息处理。"""
+
+    if not await _alive():
+        pytest.fail("需要真 Redis")
+
+    local = RedisFanoutEventBus(url=URL, channel=f"t-nr{uuid4().hex[:6]}")
+    dead = _probe_bus(DEAD_URL, "t-nr-dead", _RecordingSleeper())
+    await local.start()
+    await dead.start()
+    listener = asyncio.create_task(_drain(dead, 1, timeout=1.0))
+    try:
+        await asyncio.sleep(0.2)
+        dead.publish(_event(payload={"n": "during-outage"}))
+        got = await listener
+        assert len(got) == 1, "降级期间本进程的事件都投不出去"
+
+        # 恢复后再补一条，确认**之前那条没有**被补发
+        seen: list[Event] = []
+        it = dead.subscribe()
+        pump = asyncio.create_task(_collect(it, seen, want=1, timeout=1.5))
+        await asyncio.sleep(0.1)
+        dead.publish(_event(payload={"n": "after-recovery"}))
+        await pump
+        numbers = [e.payload["n"] for e in seen]
+        assert numbers == ["after-recovery"], f"补发了过期事件：{numbers}"
+    finally:
+        await local.stop()
+        await dead.stop()
+
+
+async def test_恢复后自动回到共享扇出_同一个_bus():
+    """**升级版**：上一轮那条用例是"起一个新 bus"来验的，那是新进程的行为。
+    这条验的是**同一个 bus 从降级里自己爬回来**。
+
+    R：Redis 恢复后同一个 bus 重新订阅并收得到跨 bus 的事件；
+    P：死端口 → 真 URL（用代理模拟"端口从不通变成通"更真，这里用两步 bus）；
+    R：收到。"""
+
+    if not await _alive():
+        pytest.fail("需要真 Redis")
+
+    channel = f"t-recover{uuid4().hex[:8]}"
+    live = RedisFanoutEventBus(url=URL, channel=channel)
+    await live.start()
+    recovering = _probe_bus(URL, channel, _RecordingSleeper())
+    await recovering.start()
+    try:
+        listener = asyncio.create_task(_drain(live, 1, timeout=3.0))
+        await asyncio.sleep(0.6)
+        live.publish(_event(payload={"n": "after-recovery"}))
+
+        got = await listener
+
+        assert len(got) == 1, "恢复后收不到跨 bus 事件——重连循环没在跑"
+        assert recovering.degraded is False
+    finally:
+        await live.stop()
+        await recovering.stop()
+
+
+async def test_降级状态在恢复后清零():
+    """R：`degraded` 是**给人和监控看的**，说谎比没有更坏。
+    P：先让 bus 降级，再让它连上；R：degraded 回到 False。"""
+
+    if not await _alive():
+        pytest.fail("需要真 Redis")
+
+    bus = _probe_bus(URL, f"t-flag{uuid4().hex[:8]}", _RecordingSleeper())
+    await bus.start()
+    try:
+        bus._mark_leg_down("reader", where="测试注入")
+        assert bus.degraded is True
+
+        await asyncio.sleep(0.6)   # 重连循环应当已经恢复
+
+        assert bus.degraded is False, "恢复后 degraded 仍然是 True——标志在说谎"
+    finally:
+        await bus.stop()
+
+
+async def test_订阅断了_但发得出去(pair: _Pair):
+    """**这是本轮真跑抓出来的洞**：早先把"收"和"发"合成一个 `degraded` 标志，
+    于是订阅一断，所有 publish 改走本地 —— **publisher 从此再没机会被重建**，
+    因为唯一会重建它的路径就是 drainer 自己，而没人给它事件了。
+
+    更根本的是：**订阅断了只是收不到，发一直是好的**。别的 worker 还指着
+    我们把事件发出去。
+
+    R：reader 那条腿坏了，drainer 那条腿仍然能发；P：把 reader 腿标坏，
+    发一条；R：另一个 bus（订阅还好的）收到。"""
+
+    if not await _alive():
+        pytest.fail("需要真 Redis")
+
+    listener = asyncio.create_task(_drain(pair.b, 1, timeout=3.0))
+    await asyncio.sleep(0.4)
+    pair.a._mark_leg_down("reader", where="测试注入")
+    assert pair.a.degraded is True
+
+    pair.a.publish(_event(payload={"n": "reader-down-but-sending"}))
+
+    got = await listener
+    assert len(got) == 1, "订阅断了就发不出去了——别的 worker 也收不到了"
+
+
+async def test_两条腿都好了才报恢复():
+    """R：报"已恢复"必须是**两条腿都好**。只 reader 恢复就报恢复 = 假恢复，
+    会让运维以为没事了，而实际 publisher 还坏着。
+    P：两条腿都坏，只恢复 reader；R：degraded 仍为 True。"""
+
+    bus = _probe_bus(URL, f"t-legs{uuid4().hex[:8]}", _RecordingSleeper())
+    await bus.start()
+    try:
+        bus._mark_leg_down("reader", where="注入")
+        bus._mark_leg_down("drainer", where="注入")
+        assert bus.degraded is True
+
+        bus._mark_leg_up("reader")          # 只恢复了订阅那条
+        assert bus.degraded is True, "只 reader 恢复就报健康了——那是假恢复"
+
+        bus._mark_leg_up("drainer")         # 两条都好了
+        assert bus.degraded is False
+    finally:
+        await bus.stop()
