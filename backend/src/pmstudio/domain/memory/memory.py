@@ -262,6 +262,21 @@ def screen_changes(
     return ScreenedChanges(accepted=tuple(accepted), dropped=tuple(dropped))
 
 
+#: 比较"是不是同一条记忆"时剥掉的首尾标点（全角 + 半角）。
+_TRAILING_PUNCTUATION = "，。、；：！？,.!?;:"
+
+
+def normalized_text(text: str) -> str:
+    """归一化后比较"是不是同一条"：去全部空白 + 剥首尾标点。
+
+    **只剥首尾**——中间的问号/逗号是内容的一部分（`assembly._asked_how` 剥标点同一口径）。
+    只做**完全重复**，不做相似度（`02 §11.0.16`：相似度不做，要动得单独拍板）。
+    """
+
+    squeezed = "".join(text.split())
+    return squeezed.strip(_TRAILING_PUNCTUATION)
+
+
 def _reject(
     change: MemoryChange, *, known_entries: set[str], known_refs: frozenset[str]
 ) -> tuple[str, DomainError] | None:
