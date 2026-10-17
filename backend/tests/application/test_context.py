@@ -1219,3 +1219,33 @@ def test_placement_text_drops_the_steps_chapter_rule_when_there_is_none():
 
     assert "s6" not in text
     assert "- s5 功能需求" in text
+
+
+def test_placement_text_carves_chain_exceptions_out_of_feature_fields():
+    """`§J-B` 的修复在 T6 搬家时丢了（`3b7faf5` 修的是 analyzer.md 里那张硬编码表，
+    T6 用生成的 `placement_text` 取代了它，但新表没带上 s5 侧的排除句）。
+
+    R：模板重构不许丢归位语义。I：standard 模板渲染；P：读文本；
+    R：链路本身 + 链上异常只归步骤章、功能字段只写单功能内部——两句都必须在，
+    且都用适配器的章号（不许写死 s5/s6，light 等模板章号不同）。
+    """
+
+    text = placement_text(STD)
+
+    assert "只写**单个功能内部**的事" in text
+    assert "不许一段流程散两处" in text
+    # 章号来自适配器：standard 下是 s5/s6，换模板跟着变
+    assert "s5" in text and "s6" in text
+
+
+def test_placement_text_carve_out_only_with_a_steps_chapter():
+    """R：light 没有步骤章，排除句也不该出现——说了就是教模型往不存在的章写
+    （与 `test_placement_text_drops_the_steps_chapter_rule_when_there_is_none` 同口径）。"""
+
+    from pmstudio.infrastructure.templates import loader
+
+    light = adapt(loader.load_template_file(loader.TEMPLATES_DIR / "light.toml"))
+    text = placement_text(light)
+
+    assert "单个功能内部" not in text
+    assert "散两处" not in text

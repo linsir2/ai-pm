@@ -34,8 +34,9 @@ from evals.assertions import EVAL_ASSERTIONS, check  # noqa: E402
 from pmstudio.application.commands import RoundCommand  # noqa: E402
 from pmstudio.bootstrap.container import build_container  # noqa: E402
 from pmstudio.bootstrap.settings import Settings  # noqa: E402
-from pmstudio.domain.shared.ids import ProjectId, RoundId  # noqa: E402
+from pmstudio.domain.shared.ids import ProjectId, RoundId, UserId  # noqa: E402
 from pmstudio.harness.errors import ApplicationError  # noqa: E402
+from pmstudio.infrastructure.sqlite import owner_scope  # noqa: E402
 
 CASES_DIR = BACKEND_ROOT / "evals" / "cases"
 #: eval 默认跑在这个库上：**永远不碰工作库**（`Settings.from_env()` 里 PMSTUDIO_DB 优先级更高，
@@ -210,6 +211,9 @@ async def main() -> int:
         flush=True,
     )
     services = build_container(settings).app.state.services
+    # 多用户改造后内容仓储读写要 owner：eval 是单用户跑法，固定一个 eval 身份
+    #（与 e2e 的 E2E_OWNER 同理，id 不同避免混淆）。不设会崩在第一轮。
+    owner_scope.set_owner_scope(UserId("u-eval"))
 
     results: list[tuple[str, bool]] = []
     for case in cases:

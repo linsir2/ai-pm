@@ -136,6 +136,14 @@ def placement_text(adapter: TemplateAdapter) -> str:
             f"- {steps} 写的是**跨功能 / 端到端**的流程与异常路径，kind 必须写 steps；"
             f"功能**内部**的正常路径写功能字段 main_flow——同一段流程只写一处"
         )
+        # `§J-B` 的修复（`3b7faf5`）在 T6 搬家时丢了：当时修的是 analyzer.md 里那张
+        # 硬编码表上的 s5 侧排除句（"不含这条链路上的异常"），T6 用这张生成表取代它
+        # 时没带上——于是"异常落 s5/*.exceptions"的失败原样回来（2026-10-17 存活验证
+        # 1/3，红的那轮与修复前同签名）。章号全走适配器，不写死 s5/s6。
+        lines.append(
+            f"- {home} 的功能字段只写**单个功能内部**的事：链路本身、链上的异常"
+            f"（失败、没收到、断网时怎么办）只写 {steps}，不许一段流程散两处"
+        )
     if decision is not None:
         lines.append(f"- {decision} 写关键决策与备选，kind 写 decision")
     for sid in adapter.section_ids:
