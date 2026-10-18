@@ -221,6 +221,8 @@ export interface RoundView {
   web_queries: WebQueryView[];
   /** 服务端现在有没有可用的联网工具（没配密钥就是 false）——据此决定出不出现那一栏。 */
   web_search_available: boolean;
+  /** 这一轮用的联网工具声明了 `network_access`（检索词会外发给第三方）——授权处据此说清。 */
+  web_search_network_access: boolean;
   /** 这一轮攒下的记忆提议（M6）：**提议**，界面上默认不勾。老轮次为 undefined。 */
   memory_proposals?: MemoryProposalView[];
   /** 模拟调研产物（M10）：没跑过是 null/undefined；抽屉靠它决定出不出现。 */

@@ -49,6 +49,7 @@ function round(over: Partial<RoundView>): RoundView {
     web_queries: [],
     web_queries_chosen: [],
     web_search_available: false,
+    web_search_network_access: false,
     write_scope: [],
     contradictions: [],
     proposed_offered: null,

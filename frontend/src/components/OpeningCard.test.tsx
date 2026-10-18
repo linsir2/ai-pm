@@ -39,6 +39,7 @@ function round(over: Partial<RoundView> = {}): RoundView {
       { query: "RBAC 权限模型", why: "要查行业通行做法", chosen: false },
     ],
     web_search_available: true,
+    web_search_network_access: false,
     ...over,
   } as unknown as RoundView;
 }
@@ -97,6 +98,28 @@ describe("OpeningCard · 联网检索词", () => {
     draw({ round: round({ web_queries: [] }) });
 
     expect(screen.queryByText(/联网检索/)).toBeNull();
+  });
+
+  it("联网工具声明会外发时，授权处要说清检索词发给第三方", () => {
+    draw({
+      round: round({
+        web_search_available: true,
+        web_search_network_access: true,
+      }),
+    });
+
+    expect(screen.getByText(/检索词会发给第三方/)).toBeTruthy();
+  });
+
+  it("不外发的工具不许出现那句话", () => {
+    draw({
+      round: round({
+        web_search_available: true,
+        web_search_network_access: false,
+      }),
+    });
+
+    expect(screen.queryByText(/检索词会发给第三方/)).toBeNull();
   });
 });
 

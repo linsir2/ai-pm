@@ -182,6 +182,7 @@ it("起轮成功后立刻刷新轮次列表（新轮不再显示成本轮、开�
     web_queries: [],
     web_queries_chosen: [],
     web_search_available: false,
+    web_search_network_access: false,
     write_scope: [],
     contradictions: [],
     proposed_offered: null,

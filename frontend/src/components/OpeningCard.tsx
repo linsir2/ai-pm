@@ -204,6 +204,11 @@ export function OpeningCard({
                 <p className="seat__note">
                   分析席位建议查 {round.web_queries.length} 条，默认不查；勾了才查。
                 </p>
+                {round.web_search_network_access && (
+                  <p className="seat__note">
+                    检索词会发给第三方搜索服务；勾选前请确认里面没有不想外发的内容。
+                  </p>
+                )}
                 {round.web_queries.map((item) => {
                   const on = webQueries.includes(item.query);
                   return (
