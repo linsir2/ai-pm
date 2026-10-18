@@ -364,9 +364,6 @@ class InMemoryDigestRepository:
     def save(self, digest: RoundDigest) -> None:
         self._items[digest.round_id] = digest
 
-    def get(self, round_id: str):
-        return self._items.get(round_id)
-
     def recent(self, project_id: str, limit: int = 3):
         items = [d for d in self._items.values() if d.project_id == project_id]
         items.sort(key=lambda d: d.round_id, reverse=True)
@@ -385,17 +382,6 @@ class InMemoryInspirationRepository:
     def save_batch(self, items) -> None:
         for item in items:
             self.save(item)
-
-    def get(self, item_id: str):
-        return self._items.get(item_id)
-
-    def search(self, project_id: str, query: str, limit: int = 10):
-        results = [
-            item for item in self._items.values()
-            if item.project_id == project_id
-            and (query in item.statement or (item.context and query in item.context))
-        ]
-        return tuple(results[:limit])
 
     def recent(self, project_id: str, limit: int = 5):
         items = [i for i in self._items.values() if i.project_id == project_id]
