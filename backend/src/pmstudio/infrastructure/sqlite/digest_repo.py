@@ -66,17 +66,27 @@ class SqliteDigestRepository:
     def recent(
         self, project_id: str, limit: int | None = None, *, owner: UserId | None = None
     ) -> tuple[RoundDigest, ...]:
-        """最近若干轮摘要（`limit=None` = 全部）。
+        """最近若干轮摘要（`limit=None` = 全部），按 `created_at` 倒序。
 
-        默认给全部，与 L2 `SqliteObservationRepository.recent` 同一口径：调用方
-        （`render_digests`）要拿总数算出"只带最近 N 轮"与超水位时的"更早的 N−M 轮
-        待复核"——截断与报数分开，截断在渲染层。`LIMIT -1` 即 SQLite 的不限行。
-        传整数则截断后返回。
+        排序键是 `created_at` 而不是 id：摘要 id 是 `digest-r-<8 位随机 hex>`（生产 id
+        生成器就是 `f"{prefix}-{uuid4().hex[:8]}"`），**里面没有时间**，`ORDER BY id DESC`
+        给的是随机序——"只带最近 3 轮摘要"会取到任意 3 轮。时间相同的行按 `id DESC` 破平。
+
+        第一项把无时间的行沉到最后，判据用 `COALESCE(created_at, '') = ''` 而不是
+        `created_at IS NULL`：这一列是 `NOT NULL`（`schema.sql` 与 `PRAGMA table_info`
+        都确认，无默认值），`IS NULL` 在任何按现形状建的库上恒为假、等于白写；
+        而 `''` 是唯一真能出现的"无时间"（这两张表的 `created_at` 不在 `ADDED_COLUMNS` 里，
+        老库也是 `NOT NULL`，只有手改库/外部导入才可能留下空串），这条判据照样兜住。
+
+        `limit=None`（默认）= **全部**：调用方（`render_digests`）要拿总数算出
+        "只带最近 N 轮"与超水位时的"更早的 N−M 轮待复核"——截断与报数分开，
+        截断在渲染层。`LIMIT -1` 即 SQLite 的不限行。传整数则截断后返回。
         """
         resolved = require_owner(owner)
         rows = self._connection.execute(
             "SELECT * FROM round_digests WHERE project_id = ? AND owner_id = ?"
-            " ORDER BY id DESC LIMIT ?",
+            " ORDER BY (COALESCE(created_at, '') = '') ASC, created_at DESC, id DESC"
+            " LIMIT ?",
             (str(project_id), str(resolved), -1 if limit is None else limit),
         ).fetchall()
         return tuple(self._row_to_digest(row) for row in rows)

@@ -1,4 +1,7 @@
-"""L3 灵感档案的 SQLite 仓储：CRUD + LIKE 搜索 + 最近 N 条（多用户改造后按 owner 隔离）。"""
+"""L3 灵感档案的 SQLite 仓储：CRUD + LIKE 搜索 + 最近 N 条（多用户改造后按 owner 隔离）。
+
+`recent()` 按 `created_at` 倒序而不是 id——灵感 id 里没有时间，按 id 排等于乱排。
+"""
 
 import sqlite3
 from collections.abc import Sequence
@@ -71,16 +74,27 @@ class SqliteInspirationRepository:
     def recent(
         self, project_id: str, limit: int | None = None, *, owner: UserId | None = None
     ) -> tuple[InspirationItem, ...]:
-        """最近若干条灵感（`limit=None` = 全部）。
+        """最近若干条灵感（`limit=None` = 全部），按 `created_at` 倒序。
 
-        默认给全部，与 L2 `SqliteObservationRepository.recent` 同一口径：调用方
-        （`render_inspirations_index`）要拿总数算出"共 N 条"与超水位时的
-        "更早的 N−M 条待复核"——截断在渲染层。`LIMIT -1` 即 SQLite 的不限行。
+        排序键是 `created_at` 而不是 id：灵感 id 是 `ins-<来源>-<卡 id>-<6 位随机 hex>`，
+        **里面没有时间**，`ORDER BY id DESC` 等于按卡的序号加随机数排——跨轮谁"最近"
+        全看运气。时间相同的行按 `id DESC` 破平。
+
+        第一项把无时间的行沉到最后，判据用 `COALESCE(created_at, '') = ''` 而不是
+        `created_at IS NULL`：这一列是 `NOT NULL`（`schema.sql` 与 `PRAGMA table_info`
+        都确认，无默认值），`IS NULL` 在任何按现形状建的库上恒为假、等于白写；
+        而 `''` 是唯一真能出现的"无时间"（这两张表的 `created_at` 不在 `ADDED_COLUMNS` 里，
+        老库也是 `NOT NULL`，只有手改库/外部导入才可能留下空串），这条判据照样兜住。
+
+        `limit=None`（默认）= **全部**：调用方（`render_inspirations_index`）要拿总数算出
+        "共 N 条"与超水位时的"更早的 N−M 条待复核"——截断在渲染层。`LIMIT -1` 即
+        SQLite 的不限行。
         """
         resolved = require_owner(owner)
         rows = self._connection.execute(
             "SELECT * FROM inspirations WHERE project_id = ? AND owner_id = ?"
-            " ORDER BY id DESC LIMIT ?",
+            " ORDER BY (COALESCE(created_at, '') = '') ASC, created_at DESC, id DESC"
+            " LIMIT ?",
             (str(project_id), str(resolved), -1 if limit is None else limit),
         ).fetchall()
         return tuple(self._row_to_item(row) for row in rows)
