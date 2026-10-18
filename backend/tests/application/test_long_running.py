@@ -170,7 +170,8 @@ async def test_l2_observations_accumulate():
 
     recent = h.observations.recent(str(pid), limit=10)
 
-    # seat.data_scale:O1 应只保留最新（R3）
+    # seat.data_scale:O1 应只保留最新（R3）。判据是 created_at：这三行用 FixedClock
+    # 拿到的是同一时刻，所以是 id 倒序破平才留下 R3——**不是**因为 id 本身代表新旧。
     scale_obs = [o for o in recent if o.source_ref == "seat.data_scale:O1"]
     assert len(scale_obs) == 1
     assert scale_obs[0].title == "R3 观察A"

@@ -53,8 +53,10 @@ class SqliteObservationRepository:
 
         排序键是 `created_at` 而不是 id：id 里带序号，真库上 `obs-9-792a3a` 排在
         `obs-10-5cf824` 前面（`'9' > '1'`），按 id 排会把上一轮的老判断当"最新"，
-        去重也会挑错那一条。空 `created_at`（迁移前的老行）排最后——迁移不猜它们的
-        时间，宁可让它们沉底，也别冒充最新。
+        去重也会挑错那一条。第一项把无时间的行沉到最后，`COALESCE` 是必需的：
+        pre-v11 的老库那一列可空，而 `(NULL = '')` 求值为 NULL、NULL 在 ASC 里排最前，
+        不 COALESCE 就会把"最该沉底的存量"浮到顶上。迁移已把 NULL 统一填成 `''`，
+        这里仍然兜住库被手改出 NULL 的情况。
 
         `limit=None`（默认）= **全部**去重后的：本方法本就全表读进来再去重，给全部不增加 IO，
         而调用方（观察索引）要拿它算出"共 N 条、只带了前 5 条"——截断与报数分开，
@@ -63,7 +65,7 @@ class SqliteObservationRepository:
         resolved = require_owner(owner)
         rows = self._connection.execute(
             "SELECT * FROM observations AS o WHERE project_id = ? AND owner_id = ?"
-            " ORDER BY (o.created_at = '') ASC, o.created_at DESC, o.id DESC",
+            " ORDER BY (COALESCE(o.created_at, '') = '') ASC, o.created_at DESC, o.id DESC",
             (str(project_id), str(resolved)),
         ).fetchall()
         # 同 source_ref 去重：SQL 已经按时间序返回，有序遍历，第一次遇到即最新

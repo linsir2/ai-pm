@@ -254,6 +254,15 @@ def migrate(connection: sqlite3.Connection) -> None:
             " WHERE created_at IS NULL AND last_seen_at IS NOT NULL"
         )
 
+    # pre-v11 的库 `observations.created_at` 是**可空**列并留着 NULL，v14 又把它捡回来当
+    # `recent()` 的排序判据——"无时间"于是有两种存法，而 NULL 那一种在排序里排**最前**
+    # （`(NULL = '')` 求值为 NULL，ASC 里 NULL 领先），正好把意图做反。统一填 `''`：
+    # 迁移**不猜**这些观察的时间，空串就是诚实的"没有"。幂等：只碰 NULL。
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'observations'"
+    ).fetchone() is not None:
+        connection.execute("UPDATE observations SET created_at = '' WHERE created_at IS NULL")
+
     _backfill_chunk_index(connection)
 
 
