@@ -2,6 +2,8 @@
 
 
 from pmstudio.application.context import (
+    DIGEST_LIMIT,
+    L4_CAPACITY,
     build_round_digest,
     render_digests,
     render_inspirations_index,
@@ -123,6 +125,33 @@ class TestRenderDigests:
         text = render_digests((d,))
         assert "共 10 条" in text
         assert "只带了前 5 条" in text
+
+    def test_over_capacity_notes_the_older_rounds_wait_for_review(self):
+        """R：L4 超水位照实说"更早的待复核"。
+
+        调用点已不再预截断（要让渲染层看得到总数），所以截断必须落在渲染层这里；
+        否则 50 轮摘要会整份进提示词，而"只带最近 3 轮"这句就成了假话。
+        """
+        digests = tuple(
+            RoundDigest(round_id=f"r{i:03d}", project_id="p1", summary="摘要")
+            for i in range(L4_CAPACITY + 1)
+        )
+        text = render_digests(digests)
+
+        assert f"### r{DIGEST_LIMIT - 1:03d}" in text
+        assert f"### r{DIGEST_LIMIT:03d}" not in text
+        assert f"更早的 {L4_CAPACITY + 1 - DIGEST_LIMIT} 轮待复核" in text
+
+    def test_below_capacity_does_not_mention_waiting_for_review(self):
+        """没超水位不多话（水位不是常驻噪音）。"""
+        digests = tuple(
+            RoundDigest(round_id=f"r{i}", project_id="p1", summary="摘要")
+            for i in range(DIGEST_LIMIT)
+        )
+        text = render_digests(digests)
+
+        assert "只带最近 3 轮摘要" in text
+        assert "待复核" not in text
 
 
 class TestRenderInspirationsIndex:

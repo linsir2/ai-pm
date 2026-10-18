@@ -69,13 +69,19 @@ class SqliteInspirationRepository:
         return tuple(self._row_to_item(row) for row in rows)
 
     def recent(
-        self, project_id: str, limit: int = 5, *, owner: UserId | None = None
+        self, project_id: str, limit: int | None = None, *, owner: UserId | None = None
     ) -> tuple[InspirationItem, ...]:
+        """最近若干条灵感（`limit=None` = 全部）。
+
+        默认给全部，与 L2 `SqliteObservationRepository.recent` 同一口径：调用方
+        （`render_inspirations_index`）要拿总数算出"共 N 条"与超水位时的
+        "更早的 N−M 条待复核"——截断在渲染层。`LIMIT -1` 即 SQLite 的不限行。
+        """
         resolved = require_owner(owner)
         rows = self._connection.execute(
             "SELECT * FROM inspirations WHERE project_id = ? AND owner_id = ?"
             " ORDER BY id DESC LIMIT ?",
-            (str(project_id), str(resolved), limit),
+            (str(project_id), str(resolved), -1 if limit is None else limit),
         ).fetchall()
         return tuple(self._row_to_item(row) for row in rows)
 

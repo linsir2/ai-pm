@@ -2,11 +2,15 @@
 
 
 from pmstudio.application.context import (
+    L2_CAPACITY,
+    L3_CAPACITY,
     OBSERVATION_DETAIL_CHARS,
+    render_inspirations_index,
     render_observations_index,
     render_project_context,
 )
 from pmstudio.domain.memory.context import ProjectContext
+from pmstudio.domain.memory.inspiration import InspirationItem, InspirationOrigin
 from pmstudio.domain.memory.observations import (
     ObservationType,
     RoundObservation,
@@ -14,6 +18,15 @@ from pmstudio.domain.memory.observations import (
 
 #: 渲染只吃实体、不看时间，但构造器要（实体自带时间，仓储只落库）。
 AT = "2026-10-08T10:00:00+00:00"
+
+
+def _inspiration(item_id: str) -> InspirationItem:
+    return InspirationItem(
+        item_id=item_id,
+        project_id="p1",
+        origin=InspirationOrigin.DISCUSSION,
+        statement=f"灵感{item_id}",
+    )
 
 
 class TestRenderProjectContext:
@@ -100,6 +113,46 @@ class TestRenderObservationsIndex:
         text = render_observations_index(obs)
         assert "共 10 条" in text
         assert "只带了前 5 条" in text
+
+    def test_over_capacity_notes_the_older_ones_wait_for_review(self):
+        """R：L2 超水位照实说"更早的待复核"——一行不删，但也不假装只有带出来的那几条。"""
+
+        obs = tuple(
+            RoundObservation(
+                obs_id=f"obs-{i}",
+                round_id="r1",
+                project_id="p1",
+                obs_type=ObservationType.SEAT_INSIGHT,
+                title=f"洞察{i}",
+                detail="",
+                source_ref="seat.biz:O1",
+                created_at=AT,
+            )
+            for i in range(L2_CAPACITY + 1)
+        )
+        text = render_observations_index(obs)
+        assert f"共 {L2_CAPACITY + 1} 条" in text
+        assert f"更早的 {L2_CAPACITY + 1 - 5} 条待复核" in text
+
+    def test_below_capacity_does_not_mention_waiting_for_review(self):
+        """没超水位不多话：水位是超了才响的提醒，不是常驻噪音。"""
+
+        obs = tuple(
+            RoundObservation(
+                obs_id=f"obs-{i}",
+                round_id="r1",
+                project_id="p1",
+                obs_type=ObservationType.SEAT_INSIGHT,
+                title=f"洞察{i}",
+                detail="",
+                source_ref="seat.biz:O1",
+                created_at=AT,
+            )
+            for i in range(6)
+        )
+        text = render_observations_index(obs)
+        assert "共 6 条" in text
+        assert "待复核" not in text
 
     def test_format_includes_source(self):
         obs = (
@@ -218,3 +271,18 @@ class TestRenderObservationsIndex:
         text = render_observations_index(obs)
         # SEAT_INSIGHT 用洞察标记
         assert "洞察" in text or "●" in text
+
+
+def test_over_capacity_says_the_older_ones_wait_for_review():
+    """R：超水位照实说"更早的待复核"——不删，但也不假装没有。"""
+    many = tuple(_inspiration(f"insp-{i}") for i in range(L3_CAPACITY + 1))
+    text = render_inspirations_index(many)
+    assert f"共 {L3_CAPACITY + 1} 条" in text
+    assert "待复核" in text
+
+
+def test_below_capacity_keeps_the_plain_wording():
+    """没超水位不多话（水位不是常驻噪音）。"""
+    text = render_inspirations_index(tuple(_inspiration(f"insp-{i}") for i in range(6)))
+    assert "共 6 条" in text
+    assert "待复核" not in text

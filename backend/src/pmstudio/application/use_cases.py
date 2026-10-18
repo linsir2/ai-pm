@@ -2278,13 +2278,14 @@ class IntegrateRound:
             # L2 观察索引：上一轮席位的洞察
             observations_index=self._build_observations_index(round_.project_id),
             # L4 轮次摘要：之前轮次发生了什么
+            # 全部的：截断、"共几轮"与超水位的"更早的待复核"都在渲染层（与 L2 同一口径）
             digests=render_digests(
-                self._digest_repo.recent(round_.project_id, limit=DIGEST_LIMIT),
+                self._digest_repo.recent(round_.project_id),
                 limit=DIGEST_LIMIT,
             ),
-            # L3 灵感档案：讨论/探索/模拟中的发现
+            # L3 灵感档案：讨论/探索/模拟中的发现（同上：不预截断）
             inspirations_index=render_inspirations_index(
-                self._inspiration_repo.recent(round_.project_id, limit=5)
+                self._inspiration_repo.recent(round_.project_id)
             ),
             entry_ids=render_existing_entries(document),
                     external_material=external_material_text(round_, store=self._materials),

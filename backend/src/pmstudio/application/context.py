@@ -1442,6 +1442,11 @@ def extract_observations_from_reviews(
 #: 长度上限，模型偶发长文会撑预算；真库实测 detail 87–150 字，200 留余量。
 OBSERVATION_DETAIL_CHARS = 200
 
+#: L2 水位：观察总数超过这条线，尾注才加一句"更早的 N−M 条待复核"。
+#: **到顶不删、不淘汰**（2026-10-18 批 3）——水位是"该去翻旧账"的提醒，不是裁剪线：
+#: 真要收口只由用户发起，AI 不得替人删记忆。水位之下不多话，免得常驻噪音。
+L2_CAPACITY = 200
+
 
 def render_observations_index(
     observations: Sequence[RoundObservation], limit: int = 5
@@ -1467,7 +1472,11 @@ def render_observations_index(
         lines.append(f"  {mark} [{obs.source_ref}] {obs.title}{suffix}")
     omitted = len(observations) - len(shown)
     if omitted > 0:
-        lines.append(f"  （共 {len(observations)} 条，只带了前 {len(shown)} 条）")
+        # 超水位才点名"更早的还在"：水位之下（10 条 vs 200）这句是纯噪音
+        over = f"；更早的 {omitted} 条待复核" if len(observations) > L2_CAPACITY else ""
+        lines.append(
+            f"  （共 {len(observations)} 条，只带了前 {len(shown)} 条{over}）"
+        )
     lines.append("</observations-index>")
     return "\n".join(lines)
 
@@ -1475,6 +1484,10 @@ def render_observations_index(
 # ── L4 轮次摘要构建 ──────────────────────────────────────────────
 
 MAX_OUTCOMES = 5
+
+#: L4 水位：轮次摘要总数超过这条线，尾注才加一句"更早的 N−M 轮待复核"。
+#: 到顶不删、不淘汰（同 L2/L3）；单位是**轮**，不是条。
+L4_CAPACITY = 50
 
 
 def build_round_digest(
@@ -1517,17 +1530,21 @@ def build_round_digest(
     )
 
 
-def render_digests(digests: Sequence[RoundDigest], *, limit: int = 3) -> str:
-    """渲染轮次摘要列表。
+def render_digests(
+    digests: Sequence[RoundDigest], *, limit: int = DIGEST_LIMIT
+) -> str:
+    """渲染轮次摘要列表（≤limit 轮）。
 
-    `limit` 是"最多带几轮"（调用侧 `recent(limit=…)` 同一个数）；**带满时才说**
-    "只带最近 N 轮"——没带满说明不知道有没有更早，不虚报。
+    调用点**不再预截断**（2026-10-18 批 3）——渲染层要拿到总数才报得出"共几轮、
+    更早的还等着复核"，所以截断落在这里，与 L2/L3 索引同一口径。
+    带满时才说"只带最近 N 轮"，这个"带满"沿用旧判据（条数 ≥ limit）。
     """
 
     if not digests:
         return ""
+    shown = digests[:limit]
     lines = ["<round-digests>"]
-    for digest in digests:
+    for digest in shown:
         lines.append(f"### {digest.round_id}")
         if digest.sections_touched:
             lines.append(f"触及: {', '.join(digest.sections_touched)}")
@@ -1541,12 +1558,21 @@ def render_digests(digests: Sequence[RoundDigest], *, limit: int = 3) -> str:
                     f"{len(digest.key_outcomes)} 条）"
                 )
     if len(digests) >= limit:
-        lines.append(f"（只带最近 {limit} 轮摘要）")
+        over = (
+            f"；更早的 {len(digests) - limit} 轮待复核"
+            if len(digests) > L4_CAPACITY
+            else ""
+        )
+        lines.append(f"（只带最近 {limit} 轮摘要{over}）")
     lines.append("</round-digests>")
     return "\n".join(lines)
 
 
 # ── L3 灵感档案渲染 ──────────────────────────────────────────────
+
+#: L3 水位：灵感总数超过这条线，尾注才加一句"更早的 N−M 条待复核"。
+#: 到顶不删、不淘汰（同 L2/L4）。
+L3_CAPACITY = 200
 
 
 def render_inspirations_index(
@@ -1561,6 +1587,7 @@ def render_inspirations_index(
         lines.append(f"  💡 [{item.origin.value}:{item.item_id}] {item.statement}")
     omitted = len(inspirations) - len(shown)
     if omitted > 0:
-        lines.append(f"  （共 {len(inspirations)} 条，只带了前 {len(shown)} 条）")
+        over = f"；更早的 {omitted} 条待复核" if len(inspirations) > L3_CAPACITY else ""
+        lines.append(f"  （共 {len(inspirations)} 条，只带了前 {len(shown)} 条{over}）")
     lines.append("</inspirations-index>")
     return "\n".join(lines)

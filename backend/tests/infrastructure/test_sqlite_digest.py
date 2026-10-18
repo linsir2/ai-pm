@@ -67,6 +67,15 @@ class TestSqliteDigestRepository:
         recent = repo.recent("p1", limit=2)
         assert len(recent) == 2
 
+    def test_recent_defaults_to_all_so_the_renderer_can_count(self, repo):
+        """默认**不截断**：渲染层要拿总数报"共几轮 / 更早的待复核"（2026-10-18 批 3）。
+
+        默认给 3 的话，渲染层只看得见 3，报出来的"共 3 轮"就是假话。
+        """
+        for i in range(6):
+            repo.save(_digest(f"d-{i}", f"r{i}"))
+        assert len(repo.recent("p1")) == 6
+
     def test_recent_filters_by_project(self, repo):
         repo.save(_digest("d-1", "r1"))
         # 不同 project

@@ -289,9 +289,14 @@ class TestTimelessRowsSink:
     def test_a_null_created_at_row_sorts_after_rows_with_a_real_time(self, legacy_repo):
         """M1：pre-v11 老库那一列可空，NULL 行同样沉底。
 
-        这里守的是 `recent()` 排序键里"无时间"那一项：`(NULL = '')` 求值为 NULL，
-        而 NULL 在 ASC 里排**最前**——不 COALESCE 的话，"最该沉底的存量"会浮到顶上，
-        正好把意图做反。
+        这里守的是排序键第一项里 `COALESCE(o.created_at, '') = ''` 这个**包装**加它
+        的方向（ASC = 无时间沉底）：漏了 COALESCE，`(NULL = '')` 求值为 NULL，
+        而 NULL 在 ASC 里排**最前**，"最该沉底的存量"就浮到顶上，正好把意图做反。
+
+        守**不**住"这一项整个没了"的退化：SQLite 里 NULL 与 `''` 在 `DESC` 下本来就
+        沉底，光留 `ORDER BY created_at DESC` 这两条测试照样绿。老行 `created_at=''`
+        的结果由 `test_recent_sorts_timeless_legacy_rows_last` 单独盯着；
+        迁移把 NULL 回填成 `''` 是另一条测试（M2）。
         """
 
         repo, conn = legacy_repo

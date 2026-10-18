@@ -66,6 +66,15 @@ class TestSqliteInspirationRepository:
         recent = repo.recent("p1", limit=5)
         assert len(recent) == 5
 
+    def test_recent_defaults_to_all_so_the_renderer_can_count(self, repo):
+        """默认**不截断**：渲染层要拿总数报"共 N 条 / 更早的待复核"（2026-10-18 批 3）。
+
+        默认给 5 的话，渲染层只看得见 5，报出来的"共 5 条"就是假话。
+        """
+        for i in range(10):
+            repo.save(_item(f"ins-{i}", statement=f"灵感{i}"))
+        assert len(repo.recent("p1")) == 10
+
     def test_recent_filters_by_project(self, repo):
         repo.save(_item("ins-1", statement="A"))
         repo.save(

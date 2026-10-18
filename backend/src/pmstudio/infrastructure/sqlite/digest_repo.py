@@ -64,13 +64,20 @@ class SqliteDigestRepository:
         return self._row_to_digest(row)
 
     def recent(
-        self, project_id: str, limit: int = 3, *, owner: UserId | None = None
+        self, project_id: str, limit: int | None = None, *, owner: UserId | None = None
     ) -> tuple[RoundDigest, ...]:
+        """最近若干轮摘要（`limit=None` = 全部）。
+
+        默认给全部，与 L2 `SqliteObservationRepository.recent` 同一口径：调用方
+        （`render_digests`）要拿总数算出"只带最近 N 轮"与超水位时的"更早的 N−M 轮
+        待复核"——截断与报数分开，截断在渲染层。`LIMIT -1` 即 SQLite 的不限行。
+        传整数则截断后返回。
+        """
         resolved = require_owner(owner)
         rows = self._connection.execute(
             "SELECT * FROM round_digests WHERE project_id = ? AND owner_id = ?"
             " ORDER BY id DESC LIMIT ?",
-            (str(project_id), str(resolved), limit),
+            (str(project_id), str(resolved), -1 if limit is None else limit),
         ).fetchall()
         return tuple(self._row_to_digest(row) for row in rows)
 
