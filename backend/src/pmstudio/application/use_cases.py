@@ -1133,7 +1133,11 @@ class RunSeatRound:
         """从完成的席位轮提炼观察并存储。"""
         ids = _SimpleIdGen()
         observations = extract_observations_from_reviews(
-            round_.current_reviews, str(round_.round_id), str(round_.project_id), ids
+            round_.current_reviews,
+            str(round_.round_id),
+            str(round_.project_id),
+            ids,
+            created_at=round_.created_at.isoformat(),
         )
         if observations:
             self._observations_repo.save_batch(observations)

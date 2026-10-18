@@ -25,3 +25,7 @@ class RoundObservation:
     title: str
     detail: str
     source_ref: str
+    #: 归属轮次的时刻（ISO 文本），不是入库时刻：重试重跑要落在同一个时间点上，
+    #: 用提取当时的时间会让同一轮重跑出两条"新"观察，去重判据也就跟着漂。
+    #: `''` = 迁移前的老行，排最后（仓储 `recent()` 兜着，不当它是最新）。
+    created_at: str

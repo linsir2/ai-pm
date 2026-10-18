@@ -12,6 +12,9 @@ from pmstudio.domain.memory.observations import (
     RoundObservation,
 )
 
+#: 渲染只吃实体、不看时间，但构造器要（实体自带时间，仓储只落库）。
+AT = "2026-10-08T10:00:00+00:00"
+
 
 class TestRenderProjectContext:
     def test_empty(self):
@@ -68,6 +71,7 @@ class TestRenderObservationsIndex:
                 title=f"洞察{i}",
                 detail="",
                 source_ref="seat:biz:O1",
+                created_at=AT,
             )
             for i in range(10)
         )
@@ -89,6 +93,7 @@ class TestRenderObservationsIndex:
                 title=f"洞察{i}",
                 detail="",
                 source_ref="seat:biz:O1",
+                created_at=AT,
             )
             for i in range(10)
         )
@@ -106,6 +111,7 @@ class TestRenderObservationsIndex:
                 title="SKU数量？",
                 detail="",
                 source_ref="seat.data_scale:O2",
+                created_at=AT,
             ),
         )
         text = render_observations_index(obs)
@@ -129,6 +135,7 @@ class TestRenderObservationsIndex:
                 title="讨论区验收标准缺失",
                 detail="必须在 s12 补验收条目（依据：当前 s12 只覆盖调研）",
                 source_ref="seat.business_rules:O4",
+                created_at=AT,
             ),
         )
         text = render_observations_index(obs)
@@ -148,6 +155,7 @@ class TestRenderObservationsIndex:
                 title="标题",
                 detail="长" * 500,
                 source_ref="seat:biz:O1",
+                created_at=AT,
             ),
         )
         text = render_observations_index(obs)
@@ -168,6 +176,7 @@ class TestRenderObservationsIndex:
                 title="只有标题",
                 detail="",
                 source_ref="seat:biz:O1",
+                created_at=AT,
             ),
         )
         text = render_observations_index(obs)
@@ -186,6 +195,7 @@ class TestRenderObservationsIndex:
                 title="问题",
                 detail="",
                 source_ref="seat:biz:O1",
+                created_at=AT,
             ),
         )
         text = render_observations_index(obs)
@@ -202,6 +212,7 @@ class TestRenderObservationsIndex:
                 title="判断",
                 detail="",
                 source_ref="seat:biz:O1",
+                created_at=AT,
             ),
         )
         text = render_observations_index(obs)

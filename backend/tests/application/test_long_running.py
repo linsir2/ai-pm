@@ -124,10 +124,12 @@ async def test_source_ref_dedup():
     h.observations.save(RoundObservation(
         obs_id="obs-1", round_id="r1", project_id=str(pid),
         obs_type=ObservationType.SEAT_INSIGHT, title="旧", detail="旧", source_ref="seat.x:O1",
+        created_at=h.clock.now().isoformat(),
     ))
     h.observations.save(RoundObservation(
         obs_id="obs-2", round_id="r2", project_id=str(pid),
         obs_type=ObservationType.SEAT_INSIGHT, title="新", detail="新", source_ref="seat.x:O1",
+        created_at=h.clock.now().isoformat(),
     ))
 
     recent = h.observations.recent(str(pid), limit=5)
@@ -157,11 +159,13 @@ async def test_l2_observations_accumulate():
             obs_id=f"obs-r{i+1}-a", round_id=f"r{i+1}", project_id=str(pid),
             obs_type=ObservationType.SEAT_INSIGHT, title=f"R{i+1} 观察A", detail="A",
             source_ref="seat.data_scale:O1",  # 同 source_ref
+            created_at=h.clock.now().isoformat(),
         ))
         h.observations.save(RoundObservation(
             obs_id=f"obs-r{i+1}-b", round_id=f"r{i+1}", project_id=str(pid),
             obs_type=ObservationType.GAP_IDENTIFIED, title=f"R{i+1} 观察B", detail="B",
             source_ref=f"seat.seat{i}:O1",  # 不同 source_ref
+            created_at=h.clock.now().isoformat(),
         ))
 
     recent = h.observations.recent(str(pid), limit=10)

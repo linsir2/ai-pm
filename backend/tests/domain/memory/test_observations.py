@@ -13,6 +13,9 @@ from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 
 NOW = datetime(2026, 10, 8, 10, 0, 0)
 
+#: 提取函数不自己取时间（调用方给轮次的时刻），所以纯函数测试里自己指定。
+AT = "2026-10-08T10:00:00+00:00"
+
 
 class SeqIds:
     def __init__(self) -> None:
@@ -58,7 +61,7 @@ class TestExtractObservationsFromReviews:
             "seat.data_scale",
             _opinion("O1", OpinionForm.QUESTION, "SKU", "SKU数量？", "影响损耗"),
         )
-        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds())
+        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds(), created_at=AT)
         assert len(obs) == 1
         assert obs[0].obs_type == ObservationType.GAP_IDENTIFIED
         assert "SKU" in obs[0].title
@@ -69,7 +72,7 @@ class TestExtractObservationsFromReviews:
             "seat.business_rules",
             _opinion("O1", OpinionForm.JUDGMENT, "准入", "保证金", "降低流失"),
         )
-        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds())
+        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds(), created_at=AT)
         assert len(obs) == 1
         assert obs[0].obs_type == ObservationType.SEAT_INSIGHT
         assert "准入" in obs[0].title
@@ -82,7 +85,7 @@ class TestExtractObservationsFromReviews:
             _opinion("O2", OpinionForm.QUESTION, "退出", "退还周期？"),
             _opinion("O3", OpinionForm.JUDGMENT, "品控", "标准化流程"),
         )
-        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds())
+        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds(), created_at=AT)
         assert len(obs) == 3
         types = [o.obs_type for o in obs]
         assert types.count(ObservationType.SEAT_INSIGHT) == 2
@@ -91,16 +94,16 @@ class TestExtractObservationsFromReviews:
     def test_multiple_reviews_all_extracted(self):
         r1 = _review("seat.business_rules", _opinion("O1", OpinionForm.JUDGMENT, "准入", "保证金"))
         r2 = _review("seat.data_scale", _opinion("O1", OpinionForm.QUESTION, "SKU", "SKU数量？"))
-        obs = extract_observations_from_reviews((r1, r2), "r1", "p1", SeqIds())
+        obs = extract_observations_from_reviews((r1, r2), "r1", "p1", SeqIds(), created_at=AT)
         assert len(obs) == 2
 
     def test_empty_reviews_returns_empty(self):
-        obs = extract_observations_from_reviews((), "r1", "p1", SeqIds())
+        obs = extract_observations_from_reviews((), "r1", "p1", SeqIds(), created_at=AT)
         assert obs == ()
 
     def test_empty_opinions_returns_empty(self):
         review = _review("seat.business_rules")
-        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds())
+        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds(), created_at=AT)
         assert obs == ()
 
     def test_observation_has_correct_round_and_project(self):
@@ -108,7 +111,7 @@ class TestExtractObservationsFromReviews:
             "seat.business_rules",
             _opinion("O1", OpinionForm.JUDGMENT, "准入", "保证金"),
         )
-        obs = extract_observations_from_reviews((review,), "r42", "p-abc", SeqIds())
+        obs = extract_observations_from_reviews((review,), "r42", "p-abc", SeqIds(), created_at=AT)
         assert obs[0].round_id == "r42"
         assert obs[0].project_id == "p-abc"
 
@@ -118,7 +121,7 @@ class TestExtractObservationsFromReviews:
             _opinion("O1", OpinionForm.JUDGMENT, "准入", "保证金"),
         )
         ids = SeqIds()
-        obs = extract_observations_from_reviews((review,), "r1", "p1", ids)
+        obs = extract_observations_from_reviews((review,), "r1", "p1", ids, created_at=AT)
         assert obs[0].obs_id.startswith("obs-")
 
     def test_observation_preserves_detail(self):
@@ -126,6 +129,20 @@ class TestExtractObservationsFromReviews:
             "seat.business_rules",
             _opinion("O1", OpinionForm.JUDGMENT, "准入", "团长需缴纳保证金", "降低流失率"),
         )
-        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds())
+        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds(), created_at=AT)
         assert "保证金" in obs[0].detail
         assert "降低流失" in obs[0].detail
+
+    def test_every_observation_carries_the_given_time(self):
+        """R：时间由调用方盖章且**逐条**盖上——仓储的排序判据就是它。
+
+        漏盖一条就是一条"永远排最后"的观察，而测试看不出来（空时间不报错）。
+        """
+
+        review = _review(
+            "seat.business_rules",
+            _opinion("O1", OpinionForm.JUDGMENT, "准入", "保证金"),
+            _opinion("O2", OpinionForm.QUESTION, "SKU", "SKU数量？"),
+        )
+        obs = extract_observations_from_reviews((review,), "r1", "p1", SeqIds(), created_at=AT)
+        assert [o.created_at for o in obs] == [AT, AT]

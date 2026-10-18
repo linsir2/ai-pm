@@ -15,7 +15,8 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 #: 12 = 模板库：`templates` 表（CREATE TABLE IF NOT EXISTS 自建）+
 #:     `documents.template` 列（老库 ALTER 补）。
 #: 13 = 多用户改造：13 张表补 `owner_id` + 存量回填给首 admin + NULL 熔断。
-USER_VERSION = 13
+#: 14 = L2 观察回填 `created_at`（v11 当死字段删过，这里再加回来并让它当排序依据）。
+USER_VERSION = 14
 
 #: v13 起带 `owner_id` 的表：12 张项目域表 + `templates`（裁决 A）。
 #: `templates` 的 builtin 行 owner 留 NULL（出厂模板人人可见）——回填与熔断都跳过它们。
@@ -51,7 +52,12 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "explorations": (("owner_id", "TEXT"),),
     "discussions": (("owner_id", "TEXT"),),
     "project_memory": (("owner_id", "TEXT"),),
-    "observations": (("owner_id", "TEXT"),),
+    "observations": (
+        ("owner_id", "TEXT"),
+        # v11 把这一列当死字段删了；v14 再加回来——`recent()` 的"最新"判据改成它。
+        # 老行留 `''`（迁移**不猜**时间），仓储把空时间排最后，不当它是最新。
+        ("created_at", "TEXT NOT NULL DEFAULT ''"),
+    ),
     "round_digests": (("owner_id", "TEXT"),),
     "inspirations": (("owner_id", "TEXT"),),
     "templates": (("owner_id", "TEXT"),),
@@ -203,8 +209,9 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 #: 老库要删的列（销账死字段）。`ALTER TABLE ... DROP COLUMN` 要求 SQLite ≥ 3.35。
+#: `observations.created_at` 不在删名单里——v14 把它捡回来当排序依据（见 `ADDED_COLUMNS`）。
 DROPPED_COLUMNS: dict[str, tuple[str, ...]] = {
-    "observations": ("relevance_count", "last_accessed", "sections", "features", "created_at"),
+    "observations": ("relevance_count", "last_accessed", "sections", "features"),
     "inspirations": ("grounding", "context"),
 }
 

@@ -27,6 +27,7 @@ def _obs(
     detail: str = "detail",
     obs_type: ObservationType = ObservationType.SEAT_INSIGHT,
     source_ref: str = "seat.business_rules:O1",
+    created_at: str = NOW.isoformat(),
 ) -> RoundObservation:
     return RoundObservation(
         obs_id=obs_id,
@@ -36,6 +37,7 @@ def _obs(
         title=title,
         detail=detail,
         source_ref=source_ref,
+        created_at=created_at,
     )
 
 
@@ -98,6 +100,7 @@ class TestObservationRepository:
                 title="Other",
                 detail="",
                 source_ref="",
+                created_at=NOW.isoformat(),
             )
         )
 
@@ -152,3 +155,95 @@ class TestObservationRepository:
 
         assert "共 8 条" in text
         assert "只带了前 5 条" in text
+
+
+class TestRecentOrdersByTime:
+    """`recent()` 的"最新"判据是 `created_at`，不是 id（批 3/2 修字典序 bug）。
+
+    这组用例的每行都得给**自己的** `source_ref`：`recent()` 按 `source_ref` 去重，
+    撞了就只剩一行，排序断言还没轮到就塌了（brief 原文漏了这一步）。
+    """
+
+    def test_recent_orders_by_created_at_not_the_id_alphabet(self, repo):
+        """R：`obs-9-…` 不许排在 `obs-10-…` 前面（字典序≠时间序，真库实证）。"""
+
+        # 第十条时间上更晚。旧实现按 id 字典序会把 obs-9 当"最新"——这正是真库上的 bug
+        # （真库既有 obs-10-5cf824 也有 obs-9-792a3a）。两行时间**不能**写成一样：
+        # 一样就由 id 破平，而 `'obs-9-bbbb' > 'obs-10-aaaa'` 字典序仍然把第九条排前面，
+        # 那就不是在测"按时间排"了。
+        repo.save(
+            _obs(
+                "obs-10-aaaa",
+                "同一轮第十条",
+                source_ref="seat.a:O1",
+                created_at="2026-10-18T10:00:00+00:00",
+            )
+        )
+        repo.save(
+            _obs(
+                "obs-9-bbbb",
+                "同一轮第九条",
+                source_ref="seat.b:O1",
+                created_at="2026-10-18T09:00:00+00:00",
+            )
+        )
+        titles = [o.title for o in repo.recent("p1")]
+        assert titles.index("同一轮第十条") < titles.index("同一轮第九条")
+
+    def test_recent_puts_older_observations_first_in_return(self, repo):
+        """R：跨轮按时间倒序（最新在前）。"""
+
+        repo.save(
+            _obs(
+                "obs-1-aaaa",
+                "旧轮",
+                source_ref="seat.a:O1",
+                created_at="2026-10-01T00:00:00+00:00",
+            )
+        )
+        repo.save(
+            _obs(
+                "obs-2-bbbb",
+                "新轮",
+                source_ref="seat.b:O1",
+                created_at="2026-10-18T00:00:00+00:00",
+            )
+        )
+        assert [o.title for o in repo.recent("p1")] == ["新轮", "旧轮"]
+
+    def test_recent_sorts_timeless_legacy_rows_last(self, repo):
+        """R：老行没时间戳（`created_at=''`）排最后，不炸、不挤掉有时间的。"""
+
+        repo.save(_obs("obs-9-zzzz", "老行无时间", source_ref="seat.a:O1", created_at=""))
+        repo.save(
+            _obs(
+                "obs-1-aaaa",
+                "新轮",
+                source_ref="seat.b:O1",
+                created_at="2026-10-18T00:00:00+00:00",
+            )
+        )
+        titles = [o.title for o in repo.recent("p1")]
+        assert titles[0] == "新轮" and titles[-1] == "老行无时间"
+
+    def test_dedup_keeps_the_newest_variant_by_time(self, repo):
+        """R：同 `source_ref` 留**时间较新**那条（不再按 id）。"""
+
+        repo.save(
+            _obs(
+                "obs-9-aaaa",
+                "旧判断",
+                source_ref="seat.x:O1",
+                created_at="2026-10-01T00:00:00+00:00",
+            )
+        )
+        repo.save(
+            _obs(
+                "obs-1-bbbb",
+                "新判断",
+                source_ref="seat.x:O1",
+                created_at="2026-10-18T00:00:00+00:00",
+            )
+        )
+        recent = repo.recent("p1")
+        assert len(recent) == 1 and recent[0].title == "新判断"

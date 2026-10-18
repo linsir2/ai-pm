@@ -246,6 +246,7 @@ async def test_the_observations_index_says_how_many_were_left_out(harness):
                 title=f"旧判断{i}",
                 detail="细节",
                 source_ref=f"seat.s{i}:O1",
+                created_at=harness.clock.now().isoformat(),
             )
             for i in range(8)
         )

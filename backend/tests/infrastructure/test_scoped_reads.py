@@ -360,6 +360,7 @@ def test_observations_reads_are_scoped_to_the_owner(connection):
             title="保证金",
             detail="",
             source_ref="seat.x:O1",
+            created_at=NOW.isoformat(),
         ),
         owner=ALICE,
     )

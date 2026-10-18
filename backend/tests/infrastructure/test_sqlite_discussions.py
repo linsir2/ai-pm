@@ -260,9 +260,9 @@ def test_unknown_thread_raises_unknown_discussion(store) -> None:  # type: ignor
         repo.get(DiscussionId("d-9"))
 
 
-def test_user_version_is_13_and_discussions_table_exists(store) -> None:  # type: ignore[no-untyped-def]
+def test_user_version_is_current_and_discussions_table_exists(store) -> None:  # type: ignore[no-untyped-def]
     _, connection = store
-    assert database.USER_VERSION == 13
+    assert database.USER_VERSION == 14
     assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
     tables = {
         row["name"]
@@ -281,7 +281,8 @@ def test_user_version_is_13_and_discussions_table_exists(store) -> None:  # type
     assert "last_accessed" not in obs_cols
     assert "sections" not in obs_cols
     assert "features" not in obs_cols
-    assert "created_at" not in obs_cols
+    # 原先这里还断言 `created_at` 不在——v11 当死字段删掉，v14 把它加回来当
+    # `recent()` 的排序判据（修 obs-9 排在 obs-10 前的字典序 bug），故不再断言缺席。
     insp_cols = {
         row["name"]
         for row in connection.execute("PRAGMA table_info(inspirations)")

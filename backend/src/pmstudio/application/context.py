@@ -1397,11 +1397,15 @@ def extract_observations_from_reviews(
     round_id: str,
     project_id: str,
     ids,  # IdSource protocol
+    created_at: str,
 ) -> tuple[RoundObservation, ...]:
     """从席位意见中提炼观察（纯函数）。
 
     question → GAP_IDENTIFIED（标题 = about, detail = claim + because）
     judgment → SEAT_INSIGHT（标题 = about, detail = claim + because）
+
+    `created_at` 由调用方给（**轮次**的时刻，不在这里取当前时间）：同一轮重跑提取
+    出来的观察必须落在同一个时间点上，否则 `recent()` 的"最新"判据会跟着重试漂。
     """
     from pmstudio.domain.round.opinion import OpinionForm
     observations: list[RoundObservation] = []
@@ -1425,6 +1429,7 @@ def extract_observations_from_reviews(
                 title=opinion.about,
                 detail=detail,
                 source_ref=f"{review.seat_id}:{opinion.local_id}",
+                created_at=created_at,
             )
             observations.append(obs)
 
