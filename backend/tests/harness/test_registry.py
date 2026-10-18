@@ -6,12 +6,11 @@
 **这个文件不许有业务词**——`harness/tools/registry.py` 在架构守卫的
 `PRODUCT_VOCABULARY` 检查范围内（`tool_id` / `requires` / `max_queries` 都不在表里）。
 
-**9 个字段被砍掉了**（`risk_level` / `side_effect` / `idempotent` / `approval_policy` /
-`required_permissions` / `network_access` / `filesystem_access` / `max_retries` /
-`timeout_seconds`）：它们在 `03-案例与验收.md` 里零定义、全仓零命中、且**没有任何消费者**
-（`use_cases.py` 只读 `tool_id` / `requires` / `max_queries` / `max_results`）。
-填它们只能靠编，编完没人读——那是为别人的 checklist 建字段，不是为本项目建能力。
-真有消费方时（要审批、要权限、要超时）再按设计补，那时取值有依据。
+**还有 8 个字段被砍掉**（`risk_level` / `side_effect` / `idempotent` / `approval_policy` /
+`required_permissions` / `filesystem_access` / `max_retries` / `timeout_seconds`）：它们在
+`03-案例与验收.md` 里零定义、全仓零命中、且**没有任何消费者**——填它们只能靠编，编完没人读。
+`network_access` 已于 2026-10-18 从这张名单里移出（复述卡的授权披露是它的第一个消费者）。
+字段准入的道理与这次补记**以 `registry.py` 的模块 docstring 为唯一真相**，这里不复述。
 """
 
 import pytest
