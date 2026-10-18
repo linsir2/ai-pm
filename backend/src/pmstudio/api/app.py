@@ -4,7 +4,7 @@ import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -87,9 +87,14 @@ def _error_response(error: DomainError | ApplicationError) -> JSONResponse:
     )
 
 
+@runtime_checkable
 class BackgroundResource(Protocol):
     """有生命周期的后台资源。**只给一个方法存在的接口不值得抽**——但它有两个
-    （start/stop）且"谁创建谁负责关"是这里唯一要表达的东西，所以留在类型里。"""
+    （start/stop）且"谁创建谁负责关"是这里唯一要表达的东西，所以留在类型里。
+
+    `@runtime_checkable` 是给装配点用的：`container` 要判"这东西有没有生命周期"
+    才决定交不交给 lifespan。**非 runtime 的 Protocol 直接 `isinstance` 会 TypeError**，
+    少了这个装饰器那道守卫就当场炸。"""
 
     async def start(self) -> None: ...
     async def stop(self) -> None: ...

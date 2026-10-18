@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from pmstudio.api.app import ApiServices, create_app
+from pmstudio.api.app import ApiServices, BackgroundResource, create_app
 from pmstudio.api.auth import AuthServices
 from pmstudio.application.agents.analyzer import ClaimAnalyzer
 from pmstudio.application.agents.discusser import Discusser
@@ -768,7 +768,11 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         sessions=sessions,
         cookie_max_age=settings.session_ttl_days * 86400,
     )
-    app = create_app(services, background=bus)
+    # 只有**真有生命周期**的总线才交给 lifespan。`BackgroundResource` 表达的是
+    # "谁创建谁负责关"——进程内总线没有可关的东西，它本来就不是；照传会让 lifespan
+    # 去 `await bus.start()`（不存在）而把服务整个带崩。
+    background = bus if isinstance(bus, BackgroundResource) else None
+    app = create_app(services, background=background)
     app.state.auth = auth_services
     # owner 上下文由 api 层（`require_user` / SSE 归属过滤）经 `app.state` 取用：
     # api 不许 import infrastructure（分层守卫），装配点把实现注进去（依赖倒置）。

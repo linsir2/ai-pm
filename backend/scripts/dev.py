@@ -176,6 +176,7 @@ def main() -> int:
     else:
         print("登录限流：**进程内计数**（没配 PMSTUDIO_REDIS_URL）")
         print("  ⚠ 多 worker 下每个进程各有一份，等于锁不住；上多 worker 前先配 Redis")
+        print("事件：进程内总线（单 worker，不跨进程扇出）")
     print(f"起在 http://{args.host}:{port} · 健康检查 /api/health")
 
     sys.path.insert(0, str(SRC))
