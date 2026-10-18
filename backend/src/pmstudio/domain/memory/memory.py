@@ -22,7 +22,7 @@
 两处共用同一套判据 `_reject()`——一处实现，别写第二份。
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -70,6 +70,35 @@ class MemoryEntry:
             raise ShapeError("记忆条目不能是空的", memory_id=self.memory_id)
         if not self.refs:
             raise UntraceableMemory(reason="没有出处编号")
+
+
+def unused_entries(
+    entries: Sequence[MemoryEntry],
+    cited_by_round: Mapping[str, frozenset[str]],
+    *,
+    window: int,
+    order: Sequence[str] = (),
+) -> frozenset[str]:
+    """最近 `window` 轮里**一次都没被引用过**的记忆条目 id。
+
+    **现算，不落库**（`ProjectMemory` 的既有口径：删掉"连续 5 轮未命中"那类计数字段，
+    命中与否现算）。`order` 是按时间**升序**的 `round_id`；只取尾部 `window` 轮——
+    映射没有顺序，靠 `dict` 插入序是隐式契约，测试里说不出口。
+
+    判据是**交集非空即命中**：记忆的 `refs` 只要出现在任何一轮"交代过的编号"里
+    （`assembly.cited_eids` 的口径），就算它被用上了——模型多半引用它的出处而不是它本身。
+    """
+
+    if not entries:
+        return frozenset()
+    recent = order[-window:] if order else list(cited_by_round)[-window:]
+    cited: frozenset[str] = frozenset().union(
+        *(cited_by_round[round_id] for round_id in recent)
+    )
+    return frozenset(
+        entry.memory_id for entry in entries
+        if not {str(ref) for ref in entry.refs} & cited
+    )
 
 
 @dataclass(frozen=True, slots=True)
