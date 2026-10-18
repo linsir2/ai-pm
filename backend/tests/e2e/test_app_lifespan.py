@@ -13,18 +13,27 @@ lifespan，`await background.start()` 抛 `AttributeError`）在整套 e2e 全�
 - #2 进程内总线**不是** `BackgroundResource`（钉住 B 方案：不给它加空 start/stop）；
 - #3 Redis 总线**是** `BackgroundResource`（防守卫把 Redis 生命周期一起关掉）；
 - #4 真传 background 时 start/stop 都被调（lifespan 回归锚）；
-- #5 不带 Redis 起服务时照实说（`scripts/dev.py` 的空分支给了提示）。
+- #5 不带 Redis 起服务时照实说（`scripts/dev.py` 的空分支给了提示）；
+- #6 装配点**实际传给 `create_app` 的 `background`** 随配置变（防"恒传 None"倒退）。
+
+#2/#3 只在本地构造总线做 `isinstance`，#4 直接给 `create_app` 传假资源——它们都
+**不经过装配点**，于是"把守卫改成恒传 `None`"（会静默关掉 Redis 多 worker 扇出）
+一条测试都挡不住。#6 就是补这个洞：在真 `build_container` 缝上观测。
 """
 
 import sys
 
+import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 from scripts import dev
 
 from pmstudio.api.app import BackgroundResource, create_app
+from pmstudio.bootstrap.container import build_container
+from pmstudio.bootstrap.settings import Settings
 from pmstudio.harness.events import InProcessEventBus
 from pmstudio.infrastructure.redis_bus import RedisFanoutEventBus
+from tests.support.doubles import ScriptedModelGateway
 
 
 class _RecordingBackground:
@@ -109,3 +118,48 @@ def test_不带Redis起服务时照实说(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "事件：进程内总线（单 worker，不跨进程扇出）" in out
     assert "Redis 共享计数" not in out
+
+
+@pytest.mark.parametrize(
+    ("redis_url", "expect_none"),
+    [("redis://127.0.0.1:6379/9", False), ("", True)],
+)
+def test_装配点只把真有生命周期的总线交给create_app(
+    monkeypatch, tmp_path, redis_url, expect_none
+):
+    """R：这道守卫的唯一职责是"真有生命周期才交给 lifespan"，所以要在**装配点**
+    观测它到底传了什么给 `create_app`，而不是在本地造个总线去 `isinstance`。
+    I：`build_container` 两次（带/不带 `redis_url`）；把 container 命名空间里的
+    `create_app` 换成按实记录 `background` 的 spy——**转调真函数**，生产路径不变。
+    P：读 spy 记下的 `background`。
+    R：不带 Redis 为 None；带 Redis 非 None 且是 `BackgroundResource`。
+
+    这是"守卫被改成恒传 None"时**唯一**会红的测试（#1 在恒 None 下照样绿，
+    而 Redis 多 worker 扇出的 reader/drainer 会被静默关掉）。
+    `RedisFanoutEventBus` 只在 `start()` 时连 Redis，这里只构造，故无需 Redis。"""
+
+    recorded: dict[str, object] = {}
+
+    def spy(*args, **kwargs):
+        recorded["background"] = kwargs.get("background")
+        return create_app(*args, **kwargs)
+
+    # 字符串目标 = container 模块里 `build_container` 实际调用的那个 `create_app`。
+    # spy 转调真 `create_app`（本模块从 `pmstudio.api.app` 导入的那个），不桩掉应用。
+    monkeypatch.setattr("pmstudio.bootstrap.container.create_app", spy)
+
+    settings = Settings(
+        db_path=tmp_path / "x.db",
+        model="scripted",
+        api_key="test-key",
+        api_base=None,
+        redis_url=redis_url,
+    )
+    build_container(settings, gateway=ScriptedModelGateway(replies={}))
+
+    background = recorded["background"]
+    if expect_none:
+        assert background is None
+    else:
+        assert background is not None
+        assert isinstance(background, BackgroundResource)
