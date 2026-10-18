@@ -36,6 +36,8 @@ EXPECTED_PATHS = {
     "/api/projects/{project_id}/evidence/{eid}",
     # M6：忘掉一条记忆（记忆抽屉上的删除按钮）——唯一一条不走确认卡的记忆写入
     "/api/projects/{project_id}/memory/{memory_id}",
+    # 批 4 Task 2：最近 10 轮未命中的记忆 id（记忆抽屉「久未使用」标签读它，只读）
+    "/api/projects/{project_id}/memory/usage",
     "/api/rounds/{round_id}",
     "/api/rounds/{round_id}/opening",
     "/api/rounds/{round_id}/answers",
