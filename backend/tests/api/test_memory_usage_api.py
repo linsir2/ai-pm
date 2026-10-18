@@ -159,3 +159,208 @@ async def test_usage_is_scoped_to_the_owner():
 
     assert response.status_code == 200
     assert response.json() == {"window": 10, "unused": [own]}
+
+
+def seed_memories(harness: Harness, project_id: ProjectId, items) -> list[str]:
+    """一次塞多条记忆：同项目多次 seed 会覆写，所以一批 apply 后一次 seed。
+
+    `items` = [(refs, text), ...]；text 必须各不相同（同类+同文算重复，`apply` 会拒）。
+    """
+
+    memory = ProjectMemory.empty(project_id)
+    known = frozenset(ref for refs, _text in items for ref in refs)
+    for refs, text in items:
+        memory = memory.apply(
+            (
+                MemoryChange(
+                    op=MemoryOp.ADD,
+                    kind=MemoryKind.DECISION,
+                    text=text,
+                    refs=refs,
+                ),
+            ),
+            round_id="r0",
+            known_refs=known,
+            now=harness.clock.now(),
+            ids=harness.ids,
+        )
+    harness.memory.seed(memory)
+    return [entry.memory_id for entry in memory.entries]
+
+
+def seed_window_rounds(
+    harness: Harness, project_id: ProjectId, cited: dict[str, tuple[str, ...]]
+) -> None:
+    """11 轮 r-00…r-10：同一时刻，顺序全靠 id 字典序（与生产 ORDER BY 同口径）。
+
+    `cited[round_id]` = 该轮提案引用的编号；没点名的轮引无关 E-X（提案 refs 不许空）。
+    """
+
+    for index in range(11):
+        rid = f"r-{index:02d}"
+        seed_round(
+            harness,
+            round_id=rid,
+            project_id=project_id,
+            proposal_refs=cited.get(rid, ("E-X",)),
+            question_refs=(),
+        )
+
+
+def seed_round_two_batches(
+    harness: Harness,
+    *,
+    round_id: str,
+    project_id: ProjectId,
+    old_refs: tuple[str, ...],
+    new_refs: tuple[str, ...],
+    proposal_refs: tuple[str, ...],
+) -> None:
+    """一轮两批问卷：旧批 f1 引 old_refs，新批 f2 引 new_refs（history 按追加顺序）。"""
+
+    rid = RoundId(round_id)
+
+    def _form(form_id: str, question_id: str, refs: tuple[str, ...]) -> Questionnaire:
+        return Questionnaire(
+            form_id=FormId(form_id),
+            round_id=rid,
+            questions=(
+                Question(
+                    question_id=QuestionId(question_id),
+                    target=Target.body("s5"),
+                    type=QuestionType.TEXT,
+                    title="导出保留期定多久？",
+                    why="落 s5 的保留口径",
+                    consequence_if_skipped="落成开放问题",
+                    evidence_refs=tuple(EvidenceId(ref) for ref in refs),
+                ),
+            ),
+        )
+
+    round_ = Round(
+        round_id=rid,
+        project_id=project_id,
+        user_input="想做个订单导出的功能",
+        created_at=harness.clock.now(),
+        draft=Draft(
+            draft_id=DraftId(f"d-{round_id}"),
+            round_id=rid,
+            proposals=(
+                Proposal(
+                    proposal_id=ProposalId(f"p-{round_id}"),
+                    entry_id=EntryId("en-1"),
+                    op=WriteOp.REMOVE,
+                    target=Target.body("s5"),
+                    text="导出记录保留 30 天",
+                    origin=Origin(
+                        OriginType.DERIVED,
+                        tuple(EvidenceId(ref) for ref in proposal_refs),
+                        "席位判断",
+                    ),
+                ),
+            ),
+        ),
+        questionnaire_history=(
+            _form("f1", "q1", old_refs),
+            _form("f2", "q2", new_refs),
+        ),
+    )
+    harness.rounds.seed(round_)
+
+
+async def test_usage_window_excludes_the_11th_oldest_round():
+    """R：窗口只看最近 10 轮——第 11 老的 r-00 里交代过的也算未命中。
+
+    守的是 `limit=MEMORY_USAGE_WINDOW` 那一行：改成 5（或取头不取尾），
+    r-05 的 E-MID 会掉出窗口 → `unused` 多出它 → 红。
+    """
+    harness = Harness(replies={}, seat_replies={})
+    harness.seed_project()
+    mem_old, _mem_mid = seed_memories(
+        harness,
+        PROJECT,
+        [(("E-OLD",), "11 轮前定的保留期"), (("E-MID",), "6 轮前定的保留口径")],
+    )
+    seed_window_rounds(harness, PROJECT, {"r-00": ("E-OLD",), "r-05": ("E-MID",)})
+    app = create_app(harness.api_services(model_name="m"))
+
+    async with async_client(app) as client:
+        response = await client.get(f"/api/projects/{PROJECT}/memory/usage")
+
+    assert response.status_code == 200
+    assert response.json() == {"window": 10, "unused": [mem_old]}
+
+
+async def test_usage_sees_citations_in_older_batches():
+    """R：引用集扫的是整条 questionnaire_history——旧批题目交代过的算命中。
+
+    守的是扁平化那两行：只读当批（`round_.questionnaire`）的话，
+    旧批的 E-Q 看不见 → 这条会被冤成未命中 → 红。
+    """
+    harness = Harness(replies={}, seat_replies={})
+    harness.seed_project()
+    seed_memory(harness, PROJECT, ("E-Q",))
+    seed_round_two_batches(
+        harness,
+        round_id="r1",
+        project_id=PROJECT,
+        old_refs=("E-Q",),
+        new_refs=(),
+        proposal_refs=("E-X",),
+    )
+    app = create_app(harness.api_services(model_name="m"))
+
+    async with async_client(app) as client:
+        response = await client.get(f"/api/projects/{PROJECT}/memory/usage")
+
+    assert response.status_code == 200
+    assert response.json() == {"window": 10, "unused": []}
+
+
+async def test_usage_counts_proposal_only_citations():
+    """R：只被提案引用的也算命中（题目一个没引它）。
+
+    守的是 `cited_eids(proposals, questions)` 这一侧：提案被无视的话，
+    E-P 在问卷里找不到 → 冤成未命中 → 红。
+    """
+    harness = Harness(replies={}, seat_replies={})
+    harness.seed_project()
+    seed_memory(harness, PROJECT, ("E-P",))
+    seed_round(
+        harness,
+        round_id="r1",
+        project_id=PROJECT,
+        proposal_refs=("E-P",),
+        question_refs=(),
+    )
+    app = create_app(harness.api_services(model_name="m"))
+
+    async with async_client(app) as client:
+        response = await client.get(f"/api/projects/{PROJECT}/memory/usage")
+
+    assert response.status_code == 200
+    assert response.json() == {"window": 10, "unused": []}
+
+
+async def test_usage_window_tail_covers_newest_round():
+    """R：窗口是尾部 10 轮——最新 r-10 里交代过的算命中，最老 r-00 的不算。
+
+    守的是 `order` 升序+取尾：取头（最老 10 轮）的话 r-10 的 E-NEW 看不见 → 红；
+    窗口放大到全覆盖的话 r-00 的 E-OLD 会被命中 → 红。与窗口测试互补：
+    那边用 r-05 验窗内，这边用边界两端验窗沿。
+    """
+    harness = Harness(replies={}, seat_replies={})
+    harness.seed_project()
+    mem_old, _mem_new = seed_memories(
+        harness,
+        PROJECT,
+        [(("E-OLD",), "11 轮前定的保留期"), (("E-NEW",), "最新轮重申的保留期")],
+    )
+    seed_window_rounds(harness, PROJECT, {"r-00": ("E-OLD",), "r-10": ("E-NEW",)})
+    app = create_app(harness.api_services(model_name="m"))
+
+    async with async_client(app) as client:
+        response = await client.get(f"/api/projects/{PROJECT}/memory/usage")
+
+    assert response.status_code == 200
+    assert response.json() == {"window": 10, "unused": [mem_old]}
