@@ -140,7 +140,7 @@ class ProjectMemory:
             if rejected is not None:
                 raise rejected[1]
             if change.op is MemoryOp.ADD:
-                taken.add((str(change.kind), normalized_text(change.text)))
+                taken.add(_identity(change.kind, change.text))
 
         adds = sum(1 for change in changes if change.op is MemoryOp.ADD)
         deletes = sum(1 for change in changes if change.op is MemoryOp.DELETE)
@@ -258,7 +258,7 @@ def screen_changes(
         if rejected is None:
             accepted.append(change)
             if change.op is MemoryOp.ADD:
-                taken.add((str(change.kind), normalized_text(change.text)))
+                taken.add(_identity(change.kind, change.text))
         else:
             dropped.append(MemoryDrop(change=change, reason=rejected[0]))
 
@@ -272,27 +272,37 @@ def screen_changes(
     return ScreenedChanges(accepted=tuple(accepted), dropped=tuple(dropped))
 
 
-#: 比较"是不是同一条记忆"时剥掉的首尾标点（全角 + 半角）。
-_TRAILING_PUNCTUATION = "，。、；：！？,.!?;:"
+#: 比较"是不是同一条记忆"时剥掉的首尾标点（全角 + 半角）。只剥首尾。
+_EDGE_PUNCTUATION = "，。、；：！？,.!?;:"
 
 
 def normalized_text(text: str) -> str:
     """归一化后比较"是不是同一条"：去全部空白 + 剥首尾标点。
 
-    **只剥首尾**——中间的问号/逗号是内容的一部分（`assembly._asked_how` 剥标点同一口径）。
+    **只剥首尾**——中间的问号/逗号是内容的一部分。这与 `assembly._asked_how` 只共享
+    **同一种精神**（两边都只剥首尾、都不吃内部标点），**不是同一口径**：标点集、空白处理
+    （这里是去**全部**空白，那边是压成一个空格）都**本处另定**，不共享常量、也不保证同结果。
     只做**完全重复**，不做相似度（`02 §11.0.16`：相似度不做，要动得单独拍板）。
     """
 
     squeezed = "".join(text.split())
-    return squeezed.strip(_TRAILING_PUNCTUATION)
+    return squeezed.strip(_EDGE_PUNCTUATION)
+
+
+def _identity(kind: MemoryKind, text: str) -> tuple[str, str]:
+    """一条记忆的判重身份 `(类别, 归一化文本)`。
+
+    **只此一处构造**：提议侧（`screen_changes`）与写入侧（`apply`）靠它对齐"这是不是同一条"，
+    任何一侧换个写法，两边就会静默对不上——这正是本批要防的漂。
+    """
+
+    return (str(kind), normalized_text(text))
 
 
 def _taken_keys(entries: Sequence[MemoryEntry]) -> frozenset[tuple[str, str]]:
-    """已有记忆的（类别, 归一化文本）集合——去重判据的输入，一处算。"""
+    """已有记忆的判重身份集合——去重判据的输入，一处算。"""
 
-    return frozenset(
-        (str(entry.kind), normalized_text(entry.text)) for entry in entries
-    )
+    return frozenset(_identity(entry.kind, entry.text) for entry in entries)
 
 
 def _reject(
@@ -319,9 +329,7 @@ def _reject(
             reason = "记忆条目最多两行"
             return reason, ShapeError(reason)
         # 去重只看**完全重复**（同类别 + 归一化后一模一样）——相似度不做（`02 §11.0.16`）。
-        if change.op is MemoryOp.ADD and (
-            str(change.kind), normalized_text(change.text)
-        ) in taken:
+        if change.op is MemoryOp.ADD and _identity(change.kind, change.text) in taken:
             reason = "与已有记忆完全重复"
             return reason, ShapeError(reason)
 

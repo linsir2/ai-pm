@@ -23,6 +23,10 @@ class TestNormalizedText:
     def test_trailing_punctuation_is_ignored(self):
         assert normalized_text("不要做多租户。") == normalized_text("不要做多租户")
 
+    def test_leading_punctuation_is_ignored(self):
+        # 剥的是 `strip`（两端）而非 `rstrip`——只测末尾会放过写错的实现
+        assert normalized_text("。不要做多租户") == normalized_text("不要做多租户")
+
     def test_leading_and_trailing_only(self):
         # 中间的问号是内容的一部分，不许剥
         assert normalized_text("先定范围？再谈排期") != normalized_text("先定范围再谈排期")
