@@ -15,9 +15,15 @@
 **测不了**：L2 观察 / L3 灵感 / L4 摘要 / M6 记忆——它们没有 E 编号，模型"引不了"
 （这正是 `07` §7 想法⑤要解决的）。
 
+本脚本还有**第二件**测量（`--memory`）：三层记忆的水位读数（行数 + 最旧 `created_at` + 是否
+超 `L*_CAPACITY`）。那是**上下文里看不见的那一半**——提示词只带最近 5 条，其余的"还在库里"
+这件事只有遥测能说。水位**只报不删**（`02` 的三层生命周期口径：删除只有用户能触发），
+所以这里一律 `mode=ro` 开库。
+
 用法：
-    cd backend && uv run python scripts/telemetry.py              # 扫 .codex/runs/**/*.db
-    cd backend && uv run python scripts/telemetry.py --db 库路径   # 只扫一个库
+    cd backend && uv run python scripts/telemetry.py                       # 扫 .codex/runs/**/*.db
+    cd backend && uv run python scripts/telemetry.py --db 库路径            # 只扫一个库
+    cd backend && uv run python scripts/telemetry.py --db 库路径 --memory   # 只打三层水位表
 """
 
 from __future__ import annotations
@@ -27,7 +33,8 @@ import re
 import sqlite3
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -35,7 +42,12 @@ sys.path.insert(0, str(BACKEND_ROOT / "src"))
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from pmstudio.application.assembly import cited_eids  # noqa: E402
-from pmstudio.application.context import answer_eids  # noqa: E402
+from pmstudio.application.context import (  # noqa: E402
+    L2_CAPACITY,
+    L3_CAPACITY,
+    L4_CAPACITY,
+    answer_eids,
+)
 from pmstudio.domain.provenance.ledger import EvidenceLedger  # noqa: E402
 from pmstudio.domain.round.round import Round  # noqa: E402
 from pmstudio.domain.shared.ids import EvidenceId, RoundId  # noqa: E402
@@ -165,10 +177,137 @@ def _print_report(label: str, measured: MeasuredRounds) -> None:
         print(f"  {round_id}: {row}")
 
 
+# ── 三层水位遥测（只读） ─────────────────────────────────────────
+
+#: 三层的固定顺序（报告里按 L2 → L3 → L4 排，跟 `02` 的层次编号一致）。
+LAYERS = ("L2", "L3", "L4")
+
+#: 层 → 库里的表。层名只是 `07` 的叫法，遥测要落到表上才量得到。
+LAYER_TABLES = {"L2": "observations", "L3": "inspirations", "L4": "round_digests"}
+
+#: 层 → 水位线。**从生产那边 import**（`render_*` 的尾注用的就是这三个数），
+#: 这里再抄一份就会两边漂移：表里报"超水位"、提示词里一句多余的话都没说。
+LAYER_CAPACITIES = {"L2": L2_CAPACITY, "L3": L3_CAPACITY, "L4": L4_CAPACITY}
+
+
+@dataclass(frozen=True)
+class LayerWatermark:
+    """一层的只读水位读数。`over` 是**算出来的**，不给第二处赋值的地方。"""
+
+    count: int
+    capacity: int
+    #: 最旧一行的 `created_at`。三种"没有"必须分开：查不出（`created_at` 列不在，
+    #: 库还没迁移）／`''`（一行有时间戳的都没有，全是老行）／有值。
+    #: 混为一谈就是把"没问出来"说成"没有"，那比报错更坏。
+    oldest: str | None = None
+
+    @property
+    def over(self) -> bool:
+        """超水位 = 该去翻旧账。**超了也不删**——尾注里照实说"更早的待复核"。
+
+        判据 `>` 与渲染层（`len(...) > L*_CAPACITY`）同一位：等于水位不算超。
+        """
+
+        return self.count > self.capacity
+
+
+def memory_watermarks(counts: dict[str, int]) -> dict[str, LayerWatermark]:
+    """纯函数：每层行数 → 水位读数（只认给的层，缺的层不补零）。
+
+    补零会撒谎：某张表在老库里根本不存在，报 0 行像"这层是空的"，实际上是没这层。
+    反过来，**层名拼错直接 KeyError**——悄悄少报一层，比炸掉更难发现。
+    """
+
+    return {
+        layer: LayerWatermark(count=count, capacity=LAYER_CAPACITIES[layer])
+        for layer, count in counts.items()
+    }
+
+
+def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    return row is not None
+
+
+def scan_memory_layers(path: Path) -> dict[str, LayerWatermark]:
+    """只读扫三层表：行数 + 最旧 `created_at`。
+
+    两种"读不到"分开处置（同本脚本扫轮次时的防守：不炸整次扫描）：
+    **表压根没有** → 跳这一层，且**不补零**（"没这层"和"这层是空的"是两回事，
+    补零会撒谎）；**表在但 `created_at` 列不在**（迁移前的库，真库 2026-10-18 就是
+    这副样子）→ 行数照报，时间戳老实说"查不出"。
+
+    最旧时间戳用 `MIN` 且**跳过没时间的行**：老行 `created_at=''` 参与 `MIN` 会把
+    结果压成 `''`，等于白问一句。老行是"没时间"，不是"最早"。
+    """
+
+    counts: dict[str, int] = {}
+    oldest: dict[str, str | None] = {}
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        for layer in LAYERS:
+            table = LAYER_TABLES[layer]
+            if not _table_exists(connection, table):
+                continue
+            counts[layer] = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            try:
+                oldest[layer] = (
+                    connection.execute(
+                        f"SELECT MIN(created_at) FROM {table}"
+                        " WHERE COALESCE(created_at, '') <> ''"
+                    ).fetchone()[0]
+                    or ""
+                )
+            except sqlite3.Error:
+                oldest[layer] = None  # 行数照样报（老库也该看得见还剩几行），时间说"查不出"
+    finally:
+        connection.close()
+    return {
+        layer: replace(row, oldest=oldest[layer])
+        for layer, row in memory_watermarks(counts).items()
+    }
+
+
+def _print_memory_report(paths: Sequence[Path]) -> int:
+    """水位表：一层一行，数 / 水位线 / 超没超 / 最旧时间戳。超了只标，不动数据。"""
+
+    for path in paths:
+        print(f"\n=== {path.name} · 三层记忆水位 ===")
+        try:
+            marks = scan_memory_layers(path)
+        except sqlite3.Error as error:
+            print(f"  跳过：{error}")
+            continue
+        for layer in LAYERS:
+            if layer not in marks:
+                print(f"  {layer}  （读不到表 {LAYER_TABLES[layer]}，跳过）")
+                continue
+            mark = marks[layer]
+            # 三种"没有最旧时间"分开说：查不出（列不在）／一行有时间戳的都没有／有值
+            if mark.oldest is None:
+                oldest = "查不出（created_at 列不在）"
+            elif mark.oldest:
+                oldest = mark.oldest
+            else:
+                oldest = "无一行有时间戳"
+            print(
+                f"  {layer} {mark.count:>6} 行 / 水位 {mark.capacity:<4}"
+                f" {'超水位' if mark.over else '未超  '}  最旧 {oldest}"
+            )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="消费遥测（只读）")
     parser.add_argument(
         "--db", default=None, help="只扫这一个库（默认扫 .codex/runs/**/*.db）"
+    )
+    parser.add_argument(
+        "--memory",
+        action="store_true",
+        help="只打三层记忆水位表（行数 / 水位线 / 最旧 created_at）",
     )
     args = parser.parse_args()
 
@@ -180,6 +319,9 @@ def main() -> int:
     if not paths:
         print("没有找到库", file=sys.stderr)
         return 2
+
+    if args.memory:
+        return _print_memory_report(paths)
 
     totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     measured_rounds = 0
