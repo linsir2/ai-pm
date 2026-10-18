@@ -70,7 +70,10 @@ class SqliteDigestRepository:
 
         排序键是 `created_at` 而不是 id：摘要 id 是 `digest-r-<8 位随机 hex>`（生产 id
         生成器就是 `f"{prefix}-{uuid4().hex[:8]}"`），**里面没有时间**，`ORDER BY id DESC`
-        给的是随机序——"只带最近 3 轮摘要"会取到任意 3 轮。时间相同的行按 `id DESC` 破平。
+        给的是随机序——"只带最近 3 轮摘要"会取到任意 3 轮。时间相同的行按 `rowid DESC`
+        破平，即按**落库先后**（先写的在前），不按 id 字典序——这一项**取代**了原来的
+        `id DESC`：`id` 是 PRIMARY KEY、彼此不同，留在前面就永远压过 `rowid`，破平等于
+        没写。
 
         第一项把无时间的行沉到最后，判据用 `COALESCE(created_at, '') = ''` 而不是
         `created_at IS NULL`：这一列是 `NOT NULL`（`schema.sql` 与 `PRAGMA table_info`
@@ -85,7 +88,8 @@ class SqliteDigestRepository:
         resolved = require_owner(owner)
         rows = self._connection.execute(
             "SELECT * FROM round_digests WHERE project_id = ? AND owner_id = ?"
-            " ORDER BY (COALESCE(created_at, '') = '') ASC, created_at DESC, id DESC"
+            " ORDER BY (COALESCE(created_at, '') = '') ASC, created_at DESC,"
+            " rowid DESC"
             " LIMIT ?",
             (str(project_id), str(resolved), -1 if limit is None else limit),
         ).fetchall()

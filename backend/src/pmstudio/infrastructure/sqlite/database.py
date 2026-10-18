@@ -55,7 +55,9 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "observations": (
         ("owner_id", "TEXT"),
         # v11 把这一列当死字段删了；v14 再加回来——`recent()` 的"最新"判据改成它。
-        # 老行留 `''`（迁移**不猜**时间），仓储把空时间排最后，不当它是最新。
+        # 老行补的是空串，迁移**不猜**时间：空着的那批接着由下面 `migrate()` 里
+        # "按轮次回填"那条收拾（补它自己那一轮的真实时刻），回填不到的才留 `''`，
+        # 仓储把空时间排最后，不当它是最新。
         ("created_at", "TEXT NOT NULL DEFAULT ''"),
     ),
     "round_digests": (("owner_id", "TEXT"),),

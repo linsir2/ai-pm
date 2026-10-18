@@ -135,6 +135,24 @@ class TestSqliteInspirationRepository:
         ]
         assert newest_two == ["ins-disc-00000001-aaaaaa", "ins-disc-00000002-aaaaaa"]
 
+    def test_recent_orders_ties_by_insertion_not_by_the_id_alphabet(self, repo_and_conn):
+        """R：`created_at` 相同（秒级 `_now()` 让同批灵感全一样）时按**落库先后**排。
+
+        破平键是 `rowid` 而不是 id：id 里是卡序号 + 随机 hex，字典序与收下顺序无关。
+        这里三行的落库顺序是 `03 → 01 → 02`，而 `id DESC` 会给成 `03 → 02 → 01`——
+        两者**不同**，按 id 破平就露馅。
+        """
+        repo, conn = repo_and_conn
+        _insert_item_at(conn, "ins-disc-00000003-aaaaaa", "2026-10-18T10:00:00+00:00")
+        _insert_item_at(conn, "ins-disc-00000001-aaaaaa", "2026-10-18T10:00:00+00:00")
+        _insert_item_at(conn, "ins-disc-00000002-aaaaaa", "2026-10-18T10:00:00+00:00")
+
+        assert [i.item_id for i in repo.recent("p1")] == [
+            "ins-disc-00000002-aaaaaa",
+            "ins-disc-00000001-aaaaaa",
+            "ins-disc-00000003-aaaaaa",
+        ]
+
     def test_created_at_column_refuses_null(self, repo_and_conn):
         """这一列是 `NOT NULL`，所以"无时间"只能是 `''`，不是 NULL。
 

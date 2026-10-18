@@ -78,7 +78,9 @@ class SqliteInspirationRepository:
 
         排序键是 `created_at` 而不是 id：灵感 id 是 `ins-<来源>-<卡 id>-<6 位随机 hex>`，
         **里面没有时间**，`ORDER BY id DESC` 等于按卡的序号加随机数排——跨轮谁"最近"
-        全看运气。时间相同的行按 `id DESC` 破平。
+        全看运气。时间相同的行（同一次落库、秒级 `_now()`）按 `rowid DESC` 破平，即按
+        **落库先后**（先收下的在前），不按 id 字典序——这一项**取代**了原来的 `id DESC`：
+        `id` 是 PRIMARY KEY、彼此不同，留在前面就永远压过 `rowid`，破平等于没写。
 
         第一项把无时间的行沉到最后，判据用 `COALESCE(created_at, '') = ''` 而不是
         `created_at IS NULL`：这一列是 `NOT NULL`（`schema.sql` 与 `PRAGMA table_info`
@@ -93,7 +95,8 @@ class SqliteInspirationRepository:
         resolved = require_owner(owner)
         rows = self._connection.execute(
             "SELECT * FROM inspirations WHERE project_id = ? AND owner_id = ?"
-            " ORDER BY (COALESCE(created_at, '') = '') ASC, created_at DESC, id DESC"
+            " ORDER BY (COALESCE(created_at, '') = '') ASC, created_at DESC,"
+            " rowid DESC"
             " LIMIT ?",
             (str(project_id), str(resolved), -1 if limit is None else limit),
         ).fetchall()

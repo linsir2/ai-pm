@@ -153,7 +153,7 @@ class TestObservationRepository:
         assert all(o.project_id == "p1" for o in recent)
 
     def test_recent_dedups_by_source_ref(self, repo):
-        """同 source_ref 只保留最新一条（`created_at` 较新者；同一时刻才由 id 倒序破平）。"""
+        """同 source_ref 只保留最新一条（`created_at` 较新者；同一时刻按落库先后破平）。"""
         repo.save(_obs("obs-1", "旧判断", source_ref="seat.data_scale:O1"))
         repo.save(_obs("obs-2", "新判断", source_ref="seat.data_scale:O1"))
         repo.save(_obs("obs-3", "另一席位", source_ref="seat.ux:O1"))
@@ -233,6 +233,21 @@ class TestRecentOrdersByTime:
         )
         titles = [o.title for o in repo.recent("p1")]
         assert titles.index("同一轮第十条") < titles.index("同一轮第九条")
+
+    def test_recent_orders_within_a_round_by_insertion_not_by_the_id_alphabet(self, repo):
+        """R：同一轮同一时刻的观察，按**落库先后**排，不按 id 字典序。
+
+        同一轮的所有观察按设计共用一个 `round_.created_at`（存量行回填后也一样），轮内
+        先后全靠破平键。破平键必须是 `rowid`（落库顺序，与 `_SimpleIdGen`"先抽到的先落库"
+        一致）；拿 id 破平则是字典序，一轮抽到 10 条以上时 `obs-9` 压在 `obs-10` 上面。
+        这里故意让 id 字典序与落库顺序**相反**，否则按 id 排也能蒙对。
+        """
+
+        repo.save(_obs("obs-1-aaaa", "第一条", source_ref="seat.a:O1"))
+        repo.save(_obs("obs-9-bbbb", "第二条", source_ref="seat.b:O1"))
+        repo.save(_obs("obs-10-cccc", "第三条", source_ref="seat.c:O1"))
+
+        assert [o.title for o in repo.recent("p1")] == ["第三条", "第二条", "第一条"]
 
     def test_recent_puts_older_observations_first_in_return(self, repo):
         """R：跨轮按时间倒序（最新在前）。"""

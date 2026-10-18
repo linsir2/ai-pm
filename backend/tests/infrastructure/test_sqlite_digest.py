@@ -135,6 +135,24 @@ class TestSqliteDigestRepository:
         assert every == ["r-00000001", "r-00000002", "r-00000003", "r-00000004"]
         assert newest_two == ["r-00000001", "r-00000002"]
 
+    def test_recent_orders_ties_by_insertion_not_by_the_id_alphabet(self, repo_and_conn):
+        """R：`created_at` 相同（`save` 盖的是秒级 `_now()`）时按**落库先后**排。
+
+        破平键是 `rowid` 而不是 id：摘要 id 是随机 hex，字典序与写的先后无关。
+        这里三行的落库顺序是 `03 → 01 → 02`，而 `id DESC` 会给成 `03 → 02 → 01`——
+        两者**不同**，按 id 破平就露馅。
+        """
+        repo, conn = repo_and_conn
+        _insert_digest_at(conn, "digest-r-00000003", "2026-10-18T10:00:00+00:00")
+        _insert_digest_at(conn, "digest-r-00000001", "2026-10-18T10:00:00+00:00")
+        _insert_digest_at(conn, "digest-r-00000002", "2026-10-18T10:00:00+00:00")
+
+        assert [d.round_id for d in repo.recent("p1")] == [
+            "r-00000002",
+            "r-00000001",
+            "r-00000003",
+        ]
+
     def test_created_at_column_refuses_null(self, repo_and_conn):
         """这一列是 `NOT NULL`，所以"无时间"只能是 `''`，不是 NULL。
 
