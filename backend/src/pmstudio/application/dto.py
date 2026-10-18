@@ -403,6 +403,8 @@ class RoundView:
     sim_review: SimReviewView | None = None
     #: 联网工具现在能不能用（没配密钥就是 False）——复述卡据此决定要不要出现那一栏
     web_search_available: bool = False
+    #: 联网工具会不会把检索词发到本机之外（工具 TOML 声明；复述卡授权处的披露靠它）。
+    web_search_network_access: bool = False
     #: 分析者交回的「我读了什么才切出这些主张」——复述卡在批准主张之前显示它，
     #: 用户据此看出分析者读没读对章节（老行没有 → 空串）
     analysis_basis: str = ""
@@ -1289,6 +1291,7 @@ def round_view(
     ledger: EvidenceLedger | None = None,
     materials: Sequence[MaterialPacket] = (),
     web_search_available: bool = False,
+    web_search_network_access: bool = False,
 ) -> RoundView:
     warnings: dict[str, str] = {}
     advisories: tuple[str, ...] = ()
@@ -1378,6 +1381,7 @@ def round_view(
         sim_inquiry=_sim_inquiry_view(round_),
         sim_review=_sim_review_view(round_),
         web_search_available=web_search_available,
+        web_search_network_access=web_search_network_access,
         memory_proposals=tuple(
             MemoryProposalView(
                 proposal_id=item.proposal_id,
@@ -1586,6 +1590,7 @@ def workspace_view(
     ledger: EvidenceLedger | None = None,
     materials: Sequence[MaterialPacket] = (),
     web_search_available: bool = False,
+    web_search_network_access: bool = False,
     readiness: Sequence[ReadinessItem] = (),
     memory: Sequence[MemoryEntry] = (),
 ) -> WorkspaceView:
@@ -1602,6 +1607,7 @@ def workspace_view(
                 ledger=ledger,
                 materials=materials,
                 web_search_available=web_search_available,
+                web_search_network_access=web_search_network_access,
             )
         ),
         readiness=tuple(readiness_view(item) for item in readiness),

@@ -3278,6 +3278,7 @@ class GetWorkspace:
         round_ = None if round_id is None else self._rounds.get(round_id)
         ledger = None if round_ is None else self._evidence.get(project_id)
         view = document.view()
+        web_tool = web_search_tool(self._tools, keys=self._available_tool_keys)
         return workspace_view(
             project=self._index.summary(project_id),
             document=view,
@@ -3286,10 +3287,8 @@ class GetWorkspace:
             catalog=self._catalog,
             ledger=ledger,
             materials=() if round_ is None else _materials_of(round_, store=self._materials),
-            web_search_available=web_search_tool(
-                self._tools, keys=self._available_tool_keys
-            )
-            is not None,
+            web_search_available=web_tool is not None,
+            web_search_network_access=False if web_tool is None else web_tool.network_access,
             readiness=self._checker.check(view, adapter=adapt(document.template)),
             memory=self._memory.get(project_id).entries,
         )
@@ -3922,16 +3921,15 @@ class GetRound:
     async def __call__(self, *, round_id: RoundId) -> RoundView:
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
         round_ = self._rounds.get(round_id)
+        web_tool = web_search_tool(self._tools, keys=self._available_tool_keys)
         return round_view(
             round_,
             seat_titles=titles,
             catalog=self._catalog,
             ledger=self._evidence.get(round_.project_id),
             materials=_materials_of(round_, store=self._materials),
-            web_search_available=web_search_tool(
-                self._tools, keys=self._available_tool_keys
-            )
-            is not None,
+            web_search_available=web_tool is not None,
+            web_search_network_access=False if web_tool is None else web_tool.network_access,
         )
 
 
