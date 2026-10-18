@@ -7,3 +7,6 @@ kind = "web_search"
 requires = ["tavily_api_key"]
 max_queries = 3
 max_results = 5
+
+# 会把检索词发到本机之外（Tavily）。复述卡在授权处据此说一句（B 组批 2）。
+network_access = true

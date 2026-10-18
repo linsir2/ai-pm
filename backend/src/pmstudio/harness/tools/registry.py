@@ -7,10 +7,12 @@
 协议，和 `infrastructure/tools/catalog.py` 的 TOML 实现。它们本来是一件事，
 拆在两层只让 import 绕一圈。逻辑一字未改。
 
-**为什么不补 `risk_level` / `approval_policy` / `network_access` 等 9 个字段**：
-它们在 `03-案例与验收.md` 里零定义、全仓零命中、且**没有任何消费者**（`use_cases.py`
-只读 `tool_id` / `requires` / `max_queries` / `max_results`）。填它们只能靠编，编完没人读——
-那是为别人的 checklist 建字段。真有消费方时（要审批、要权限、要超时）再按设计补。
+**字段准入**：只加**有消费者**的字段。曾经一次拒掉 `risk_level` / `approval_policy` /
+`network_access` 等 9 个"看起来该有"的字段（`03` 零定义、全仓零命中、无人读）。
+
+2026-10-18：`network_access` 补上了——它有了第一个消费者：**复述卡的授权处**要告诉用户
+"检索词会发给第三方"（`06 §1`：界面不造后端给不出的东西，所以这个事实得有出处）。
+其余 8 个仍然没有消费者，仍然不加。
 """
 
 import tomllib
@@ -40,6 +42,8 @@ class ToolDefinition:
     requires: tuple[str, ...] = ()
     max_queries: int = 0
     max_results: int = 0
+    #: 这个工具会把数据发到本机之外吗（复述卡的授权披露靠它；缺省保守=False）。
+    network_access: bool = False
 
 
 @runtime_checkable
@@ -72,4 +76,5 @@ class TomlToolCatalog:
             requires=tuple(str(item) for item in data.get("requires", ())),
             max_queries=int(data.get("max_queries", 0)),
             max_results=int(data.get("max_results", 0)),
+            network_access=bool(data.get("network_access", False)),
         )

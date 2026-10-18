@@ -156,3 +156,44 @@ def test_tool_definitions_are_frozen():
         assert type(error).__name__ in ("FrozenInstanceError", "AttributeError")
     else:
         raise AssertionError("ToolDefinition 竟然可以被改")
+
+
+def test_network_access_comes_from_the_toml(tmp_path):
+    """R：工具会不会把数据发出本机，写在它的 TOML 里（不许在 Python 里猜）。"""
+    (tmp_path / "a.toml").write_text(
+        'tool_id = "tool.a"\ntitle = "A"\nkind = "a"\nnetwork_access = true\n',
+        encoding="utf-8",
+    )
+
+    assert TomlToolCatalog(tmp_path).all()[0].network_access is True
+
+
+def test_network_access_defaults_to_false(tmp_path):
+    """R：缺省 = 不碰外网（新工具默认不外发，保守的那一侧）。"""
+    (tmp_path / "b.toml").write_text(
+        'tool_id = "tool.b"\ntitle = "B"\nkind = "b"\n', encoding="utf-8"
+    )
+
+    assert TomlToolCatalog(tmp_path).all()[0].network_access is False
+
+
+def test_the_real_catalog_agrees_with_reality():
+    """R：真目录里联网工具声明为真、本地工具声明为假——TOML 写歪要当场红。"""
+    by_id = {item.tool_id: item for item in TomlToolCatalog(DEFINITIONS_DIR).all()}
+
+    assert by_id["tool.web_search"].network_access is True
+    assert by_id["tool.attachment"].network_access is False
+
+
+def test_the_field_set_is_deliberate():
+    """守卫：字段集合钉死——**加字段必须是一次自觉的改动**。
+
+    `registry.py` 的 docstring 明写"只加**有消费者**的字段"（曾一次拒掉 9 个）。
+    这条把那句人话变成机器判据：谁要加字段，就得先在这里解释它的消费者是谁。
+    """
+    from dataclasses import fields
+
+    assert {f.name for f in fields(ToolDefinition)} == {
+        "tool_id", "title", "kind", "requires",
+        "max_queries", "max_results", "network_access",
+    }
