@@ -9,6 +9,7 @@ import type {
   ExplorationView,
   KeepSimResult,
   MaterialSummaryView,
+  MemoryUsageView,
   ProjectSummaryView,
   RollbackResult,
   RoundView,
@@ -565,6 +566,10 @@ export const api = {
   /** 忘掉一条记忆（M6）：记忆抽屉上的按钮，删了以后下一轮提示词立刻不带它。 */
   forgetMemory: (projectId: string, memoryId: string) =>
     request<void>(`/projects/${projectId}/memory/${memoryId}`, { method: "DELETE" }),
+
+  /** 最近 10 轮一次没引用过的记忆 id（记忆抽屉的「久未使用」标签读它；失败时抽屉静默无标）。 */
+  memoryUsage: (projectId: string) =>
+    request<MemoryUsageView>(`/projects/${projectId}/memory/usage`),
 
   retry: (roundId: string) =>
     request<RoundView>(`/rounds/${roundId}/retry`, { method: "POST", body: "{}" }),

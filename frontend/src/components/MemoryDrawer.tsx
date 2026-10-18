@@ -6,6 +6,9 @@
    ② 删是**立刻生效**的（下一轮提示词就不带它了）——记错一条比不记更麻烦，
       所以"看得见也删得掉"是这套东西能被信任的前提。 */
 
+import { useEffect, useState } from "react";
+
+import { api } from "../api/client";
 import type { MemoryEntryView } from "../api/types";
 import { EvidenceChip } from "./EvidenceChip";
 
@@ -23,12 +26,32 @@ export function MemoryDrawer({
   pending,
   onDelete,
   onCollapse,
+  projectId,
 }: {
   memory: MemoryEntryView[];
   pending: boolean;
   onDelete: (memoryId: string) => void;
   onCollapse: () => void;
+  /** 传了才打「久未使用」标：抽屉打开时懒查 usage；不传 / 查失败 = 无标（静默降级）。 */
+  projectId?: string;
 }) {
+  const [unused, setUnused] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    if (projectId === undefined) return;
+    let alive = true;
+    api.memoryUsage(projectId).then(
+      (view) => {
+        if (alive) setUnused(new Set(view.unused));
+      },
+      () => {
+        /* 工具/网络类失败不判死：无标就是今天的抽屉，不打断。 */
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
+
   const groups = new Map<string, MemoryEntryView[]>();
   for (const entry of memory) {
     groups.set(entry.kind, [...(groups.get(entry.kind) ?? []), entry]);
@@ -60,6 +83,7 @@ export function MemoryDrawer({
                   <p className="prop__text">{entry.text}</p>
                   <div className="prop__foot">
                     <span className="tag">{entry.memory_id}</span>
+                    {unused.has(entry.memory_id) && <span className="tag">久未使用</span>}
                     <EvidenceChip eids={entry.refs} />
                     <button
                       type="button"

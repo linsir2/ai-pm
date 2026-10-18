@@ -729,6 +729,7 @@ function Workspace() {
               <MemoryDrawer
                 memory={state.memory ?? []}
                 pending={data.pending === "memory"}
+                projectId={project.project_id}
                 onDelete={(memoryId) => void data.forgetMemory(memoryId)}
                 onCollapse={() => setMemoryOpen(false)}
               />

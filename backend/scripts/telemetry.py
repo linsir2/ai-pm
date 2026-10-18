@@ -20,10 +20,11 @@
 这件事只有遥测能说。水位**只报不删**（`02` 的三层生命周期口径：删除只有用户能触发），
 所以这里一律 `mode=ro` 开库。
 
-用法：
-    cd backend && uv run python scripts/telemetry.py                       # 扫 .codex/runs/**/*.db
-    cd backend && uv run python scripts/telemetry.py --db 库路径            # 只扫一个库
-    cd backend && uv run python scripts/telemetry.py --db 库路径 --memory   # 只打三层水位表
+ 用法：
+     cd backend && uv run python scripts/telemetry.py                       # 扫 .codex/runs/**/*.db
+     cd backend && uv run python scripts/telemetry.py --db 库路径            # 只扫一个库
+     cd backend && uv run python scripts/telemetry.py --db 库路径 --memory   # 只打三层水位表
+     cd backend && uv run python scripts/telemetry.py --db 库路径 --memory-hits  # 只打记忆命中表
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ import re
 import sqlite3
 import sys
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -48,12 +49,17 @@ from pmstudio.application.context import (  # noqa: E402
     L4_CAPACITY,
     answer_eids,
 )
+from pmstudio.domain.memory.memory import (  # noqa: E402
+    MEMORY_USAGE_WINDOW,
+    MemoryEntry,
+)
 from pmstudio.domain.provenance.ledger import EvidenceLedger  # noqa: E402
 from pmstudio.domain.round.round import Round  # noqa: E402
-from pmstudio.domain.shared.ids import EvidenceId, RoundId  # noqa: E402
+from pmstudio.domain.shared.ids import EvidenceId, ProjectId, RoundId, UserId  # noqa: E402
 from pmstudio.harness.model.prompt_log import TRUNCATION_MARK  # noqa: E402
 from pmstudio.infrastructure.sqlite.repositories import (  # noqa: E402
     SqliteEvidenceRepository,
+    SqliteMemoryRepository,
     SqliteRoundRepository,
 )
 
@@ -299,6 +305,120 @@ def _print_memory_report(paths: Sequence[Path]) -> int:
     return 0
 
 
+# ── 记忆命中遥测（只读） ─────────────────────────────────────────
+
+def memory_hit_counts(
+    entries: Sequence[MemoryEntry],
+    cited_by_round: Mapping[str, frozenset[str]],
+    *,
+    window: int = MEMORY_USAGE_WINDOW,
+    order: Sequence[str] = (),
+) -> dict[str, int]:
+    """每条记忆在最近 `window` 轮里**被引用过的轮数**（现算，只读）。
+
+    判据与 `unused_entries` 同一判据（交集非空即命中），只是这里报的是轮数
+    而不是"谁是 0"：0 的那几条，抽屉里标「久未使用」。`order` 是按时间**升序**
+    的 `round_id`，只取尾部 `window` 轮。
+    """
+
+    if not entries:
+        return {}
+    recent = order[-window:] if order else list(cited_by_round)[-window:]
+    return {
+        entry.memory_id: sum(
+            1
+            for round_id in recent
+            if {str(ref) for ref in entry.refs} & cited_by_round.get(round_id, frozenset())
+        )
+        for entry in entries
+    }
+
+
+def scan_memory_hits(path: Path) -> dict[str, dict[str, int]]:
+    """只读扫库：每个项目 → 每条 `memory_id` × 最近 `WINDOW` 轮命中轮数。
+
+    口径与生产端点（`GetMemoryUsage`）同一套：最近 WINDOW 轮 + `cited_eids` +
+    上面的纯函数。两种"读不到"分开处置（同本脚本既有防守）：**表不在**（老库）
+    → 跳过不补零；**半截轮读不回来** → 跳过那一轮，不炸整次扫描。
+    """
+
+    result: dict[str, dict[str, int]] = {}
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row  # 仓储读行用 `row["payload"]`，没它就 TypeError
+    try:
+        if not _table_exists(connection, "project_memory"):
+            return result
+        rounds_missing = not _table_exists(connection, "rounds")
+        memories = SqliteMemoryRepository(connection)
+        round_repo = SqliteRoundRepository(connection)
+        for project_id, owner_id in connection.execute(
+            "SELECT project_id, owner_id FROM project_memory"
+        ).fetchall():
+            owner = UserId(owner_id)
+            entries = memories.get(ProjectId(project_id), owner=owner).entries
+            if rounds_missing:
+                recent: list[str] = []
+            else:
+                recent = [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT round_id FROM rounds"
+                        " WHERE project_id = ? AND owner_id = ?"
+                        " ORDER BY rowid DESC LIMIT ?",
+                        (project_id, owner_id, MEMORY_USAGE_WINDOW),
+                    ).fetchall()
+                ][::-1]
+            cited_by_round: dict[str, frozenset[str]] = {}
+            for round_id in recent:
+                try:
+                    round_ = round_repo.get(RoundId(round_id), owner=owner)
+                except Exception:  # noqa: BLE001 —— 半截轮/老行：跳过，不炸整次扫描
+                    continue
+                if round_.draft is None:
+                    cited_by_round[round_id] = frozenset()
+                    continue
+                questions = tuple(
+                    question
+                    for form in round_.questionnaire_history
+                    for question in form.questions
+                )
+                cited_by_round[round_id] = frozenset(
+                    str(eid) for eid in cited_eids(round_.draft.proposals, questions)
+                )
+            result[project_id] = memory_hit_counts(
+                entries, cited_by_round, order=tuple(recent)
+            )
+    finally:
+        connection.close()
+    return result
+
+
+def _print_memory_hits_report(paths: Sequence[Path]) -> int:
+    """命中表：每条 `memory_id` × 最近 WINDOW 轮命中轮数。0 = 抽屉里标「久未使用」。"""
+
+    for path in paths:
+        print(f"\n=== {path.name} · 记忆命中（最近 {MEMORY_USAGE_WINDOW} 轮） ===")
+        try:
+            scans = scan_memory_hits(path)
+        except sqlite3.Error as error:
+            print(f"  跳过：{error}")
+            continue
+        if not scans:
+            print("  （没有记忆行）")
+            continue
+        for project_id, hits in scans.items():
+            if not hits:
+                print(f"  {project_id}  （空记忆）")
+                continue
+            for memory_id in sorted(hits):
+                stale = "久未使用" if hits[memory_id] == 0 else ""
+                print(
+                    f"  {memory_id}  {hits[memory_id]}/{MEMORY_USAGE_WINDOW}"
+                    f" 轮命中  {stale}"
+                )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="消费遥测（只读）")
     parser.add_argument(
@@ -308,6 +428,11 @@ def main() -> int:
         "--memory",
         action="store_true",
         help="只打三层记忆水位表（行数 / 水位线 / 最旧 created_at）",
+    )
+    parser.add_argument(
+        "--memory-hits",
+        action="store_true",
+        help="只打记忆命中表（每条 memory_id × 最近 10 轮命中轮数）",
     )
     args = parser.parse_args()
 
@@ -322,6 +447,9 @@ def main() -> int:
 
     if args.memory:
         return _print_memory_report(paths)
+
+    if args.memory_hits:
+        return _print_memory_hits_report(paths)
 
     totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     measured_rounds = 0

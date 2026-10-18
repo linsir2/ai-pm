@@ -155,6 +155,12 @@ export interface MemoryEntryView {
   updated_at: string;
 }
 
+/** `GET /projects/{id}/memory/usage`：最近 10 轮一次没被引用过的记忆 id（只列 unused 的）。 */
+export interface MemoryUsageView {
+  window: number;
+  unused: string[];
+}
+
 export interface SeatSuggestionView {
   seat_id: string;
   title: string;
