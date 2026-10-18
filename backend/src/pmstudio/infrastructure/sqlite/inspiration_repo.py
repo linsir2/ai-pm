@@ -1,4 +1,4 @@
-"""L3 灵感档案的 SQLite 仓储：CRUD + LIKE 搜索 + 最近 N 条（多用户改造后按 owner 隔离）。
+"""L3 灵感档案的 SQLite 仓储：写入 + 最近 N 条（多用户改造后按 owner 隔离）。
 
 `recent()` 按 `created_at` 倒序而不是 id——灵感 id 里没有时间，按 id 排等于乱排。
 """
@@ -44,32 +44,6 @@ class SqliteInspirationRepository:
     def save_batch(self, items: Sequence[InspirationItem]) -> None:
         for item in items:
             self.save(item)
-
-    def get(self, item_id: str, *, owner: UserId | None = None) -> InspirationItem | None:
-        resolved = require_owner(owner)
-        row = self._connection.execute(
-            "SELECT * FROM inspirations WHERE id = ? AND owner_id = ?",
-            (item_id, str(resolved)),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_item(row)
-
-    def search(
-        self, project_id: str, query: str, limit: int = 10, *, owner: UserId | None = None
-    ) -> tuple[InspirationItem, ...]:
-        """LIKE 搜索 statement（支持中文）。"""
-        resolved = require_owner(owner)
-        if not query.strip():
-            return ()
-        pattern = f"%{query}%"
-        rows = self._connection.execute(
-            "SELECT * FROM inspirations WHERE project_id = ? AND owner_id = ?"
-            " AND statement LIKE ?"
-            " ORDER BY id DESC LIMIT ?",
-            (str(project_id), str(resolved), pattern, limit),
-        ).fetchall()
-        return tuple(self._row_to_item(row) for row in rows)
 
     def recent(
         self, project_id: str, limit: int | None = None, *, owner: UserId | None = None

@@ -57,16 +57,17 @@ def repo_and_conn(tmp_path):
 
 
 class TestSqliteDigestRepository:
-    def test_save_and_get(self, repo):
+    def test_saved_digest_is_readable_via_recent(self, repo):
+        """`get` 已删（详情内联定案，0 生产者）——存了就能从 `recent` 里读回。"""
         d = _digest("digest-1")
         repo.save(d)
-        loaded = repo.get("digest-1")
-        assert loaded is not None
-        assert loaded.summary == "摘要"
-        assert loaded.sections_touched == ("s1", "s5")
+        loaded = repo.recent("p1")
+        assert len(loaded) == 1
+        assert loaded[0].summary == "摘要"
+        assert loaded[0].sections_touched == ("s1", "s5")
 
-    def test_get_missing_returns_none(self, repo):
-        assert repo.get("nonexistent") is None
+    def test_missing_digest_is_absent_from_recent(self, repo):
+        assert repo.recent("p1") == ()
 
     def test_save_refuses_to_rewrite_what_is_already_written(self, repo):
         """同一个 round 的摘要只追加、不改写（`07 §7.14`）。
@@ -82,7 +83,7 @@ class TestSqliteDigestRepository:
         with pytest.raises(DigestAlreadyWritten):
             repo.save(_digest("digest-1", summary="更新"))
 
-        assert repo.get("digest-1").summary == "原始"
+        assert repo.recent("p1")[0].summary == "原始"
 
     def test_recent_limit(self, repo):
         repo.save(_digest("d-1", "r1"))

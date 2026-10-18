@@ -53,16 +53,6 @@ class SqliteDigestRepository:
         except sqlite3.IntegrityError as error:
             raise DigestAlreadyWritten(digest.round_id) from error
 
-    def get(self, round_id: str, *, owner: UserId | None = None) -> RoundDigest | None:
-        resolved = require_owner(owner)
-        row = self._connection.execute(
-            "SELECT * FROM round_digests WHERE id = ? AND owner_id = ?",
-            (f"digest-{round_id}", str(resolved)),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_digest(row)
-
     def recent(
         self, project_id: str, limit: int | None = None, *, owner: UserId | None = None
     ) -> tuple[RoundDigest, ...]:

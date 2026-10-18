@@ -39,7 +39,9 @@ def test_the_first_write_lands(tmp_path):
 
     repo.save(_digest())
 
-    assert repo.get("r1").summary == "第一版摘要"
+    loaded = repo.recent("p1")
+    assert len(loaded) == 1
+    assert loaded[0].summary == "第一版摘要"
 
 
 def test_a_second_write_for_the_same_round_is_refused_not_silently_overwritten(tmp_path):
@@ -51,7 +53,7 @@ def test_a_second_write_for_the_same_round_is_refused_not_silently_overwritten(t
     with pytest.raises(DigestAlreadyWritten):
         repo.save(_digest(summary="改过的摘要"))
 
-    assert repo.get("r1").summary == "第一版摘要"      # 原文一个字节都没动
+    assert repo.recent("p1")[0].summary == "第一版摘要"      # 原文一个字节都没动
 
 
 def test_a_different_round_still_gets_its_own(tmp_path):
@@ -62,4 +64,4 @@ def test_a_different_round_still_gets_its_own(tmp_path):
 
     repo.save(_digest(round_id="r2", summary="另一轮的"))
 
-    assert repo.get("r1").summary == "第一版摘要"
+    assert {d.round_id: d for d in repo.recent("p1")}["r1"].summary == "第一版摘要"

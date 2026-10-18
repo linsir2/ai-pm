@@ -54,31 +54,34 @@ def repo_and_conn(tmp_path):
 
 
 class TestSqliteInspirationRepository:
-    def test_save_and_get(self, repo):
+    def test_saved_item_is_readable_via_recent(self, repo):
+        """`get` 已删（详情内联定案，0 生产者）——存了就能从 `recent` 里读回。"""
         item = _item("ins-1", InspirationOrigin.DISCUSSION, "团长流失率15%")
         repo.save(item)
-        loaded = repo.get("ins-1")
-        assert loaded is not None
-        assert loaded.statement == "团长流失率15%"
-        assert loaded.origin == InspirationOrigin.DISCUSSION
+        loaded = repo.recent("p1")
+        assert len(loaded) == 1
+        assert loaded[0].statement == "团长流失率15%"
+        assert loaded[0].origin == InspirationOrigin.DISCUSSION
 
-    def test_get_missing_returns_none(self, repo):
-        assert repo.get("nonexistent") is None
+    def test_missing_item_is_absent_from_recent(self, repo):
+        assert repo.recent("p1") == ()
 
     def test_save_batch(self, repo):
         items = [_item("ins-1"), _item("ins-2"), _item("ins-3")]
         repo.save_batch(items)
-        assert repo.get("ins-1") is not None
-        assert repo.get("ins-2") is not None
-        assert repo.get("ins-3") is not None
+        saved_ids = {i.item_id for i in repo.recent("p1")}
+        assert {"ins-1", "ins-2", "ins-3"} <= saved_ids
 
-    def test_search(self, repo):
+    def test_saved_items_are_all_visible_via_recent(self, repo):
+        """`search` 已删（同上）——按关键词过滤的那条读路没了，剩下"存了就可见"。
+
+        原断言是 `search("保证金")` 命中；改后只钉"三条都在 `recent` 里"，不过滤语义。
+        """
         repo.save(_item("ins-1", InspirationOrigin.DISCUSSION, "团长保证金制度"))
         repo.save(_item("ins-2", InspirationOrigin.EXPLORATION, "SKU数量未定"))
         repo.save(_item("ins-3", InspirationOrigin.SIM_INQUIRY, "品控标准化流程"))
-        results = repo.search("p1", "保证金")
-        assert len(results) >= 1
-        assert any("保证金" in r.statement for r in results)
+        statements = {i.statement for i in repo.recent("p1")}
+        assert {"团长保证金制度", "SKU数量未定", "品控标准化流程"} <= statements
 
     def test_recent_limit(self, repo):
         for i in range(10):

@@ -343,9 +343,8 @@ def test_digest_reads_are_scoped_to_the_owner(connection):
         owner=ALICE,
     )
 
-    assert digests.get("r-a", owner=ALICE).summary == "A摘要"
-    assert digests.get("r-a", owner=BOB) is None
-    assert digests.recent(str(PROJECT), owner=ALICE) != ()
+    # `get` 已删（详情内联定案，0 生产者）——owner 隔离只剩 `recent` 这一条读路。
+    assert [d.summary for d in digests.recent(str(PROJECT), owner=ALICE)] == ["A摘要"]
     assert digests.recent(str(PROJECT), owner=BOB) == ()
 
 
@@ -381,7 +380,6 @@ def test_inspirations_reads_are_scoped_to_the_owner(connection):
         owner=ALICE,
     )
 
-    assert inspirations.get("ins-a", owner=ALICE) is not None
-    assert inspirations.get("ins-a", owner=BOB) is None
+    # `get`/`search` 已删（详情内联定案，0 生产者）——owner 隔离只剩 `recent` 这一条读路。
+    assert [i.item_id for i in inspirations.recent(str(PROJECT), owner=ALICE)] == ["ins-a"]
     assert inspirations.recent(str(PROJECT), owner=BOB) == ()
-    assert inspirations.search(str(PROJECT), "灵感", owner=BOB) == ()
