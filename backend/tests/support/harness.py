@@ -1055,6 +1055,7 @@ class Harness:
             rollback_version=self.rollback_version(),
             get_evidence=self.get_evidence(),
             forget_memory=self.forget_memory(),
+            memory_usage=self.memory_usage(),
             stream=self.events,
             model_name=model_name,
         )
@@ -1067,6 +1068,15 @@ class Harness:
             memory_writer=self.memory,
             uow=self.uow,
             clock=self.clock,
+        )
+
+    def memory_usage(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import GetMemoryUsage
+
+        return GetMemoryUsage(
+            memory=self.memory,
+            index=_RoundHeadIndex(self.rounds),
+            rounds=self.rounds,
         )
 
     def edit_entry(self):  # type: ignore[no-untyped-def]

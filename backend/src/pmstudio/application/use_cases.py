@@ -239,7 +239,7 @@ from pmstudio.domain.exploration.exploration import (
 )
 from pmstudio.domain.exploration.item import BlindSpot, CandidateState, Hypothesis
 from pmstudio.domain.memory.inspiration import InspirationItem, InspirationOrigin
-from pmstudio.domain.memory.memory import screen_changes
+from pmstudio.domain.memory.memory import MEMORY_USAGE_WINDOW, screen_changes, unused_entries
 from pmstudio.domain.null_repos import (
     NO_DIGESTS,
     NO_INSPIRATIONS,
@@ -2824,6 +2824,50 @@ class ForgetMemory:
         with self._uow:
             memory = self._memory.get(project_id)
             self._memory_writer.save(memory.delete(memory_id, now=self._clock.now()))
+
+
+class GetMemoryUsage:
+    """最近 N 轮一次没引用过的记忆 id（记忆抽屉的「久未使用」标签读它）。
+
+    只读：只注入 `MemoryReader` / `WorkspaceIndex` / `RoundReader`，拿不到任何写端口——
+    所以它不可能改东西（与 `ListRounds` 同一结构保证）。
+    """
+
+    def __init__(
+        self,
+        *,
+        memory: MemoryReader,
+        index: WorkspaceIndex,
+        rounds: RoundReader,
+    ) -> None:
+        self._memory = memory
+        self._index = index
+        self._rounds = rounds
+
+    async def __call__(self, *, project_id: ProjectId) -> tuple[str, ...]:
+        heads = self._index.list_rounds(project_id, limit=MEMORY_USAGE_WINDOW)
+        order = tuple(reversed([head.round_id for head in heads]))
+        cited_by_round: dict[str, frozenset[str]] = {}
+        for head in heads:
+            round_ = self._rounds.get(RoundId(head.round_id))
+            if round_.draft is None:
+                cited_by_round[head.round_id] = frozenset()
+                continue
+            questions = tuple(
+                question
+                for form in round_.questionnaire_history
+                for question in form.questions
+            )
+            cited_by_round[head.round_id] = frozenset(
+                str(eid) for eid in cited_eids(round_.draft.proposals, questions)
+            )
+        unused = unused_entries(
+            self._memory.get(project_id).entries,
+            cited_by_round,
+            window=MEMORY_USAGE_WINDOW,
+            order=order,
+        )
+        return tuple(sorted(unused))
 
 
 class RetryRound:

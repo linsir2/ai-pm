@@ -35,6 +35,7 @@ from pmstudio.application.use_cases import (
     ForgetMemory,
     GetDocument,
     GetEvidence,
+    GetMemoryUsage,
     GetRound,
     GetSchema,
     GetTemplate,
@@ -146,6 +147,7 @@ class ApiServices:
     rollback_version: RollbackVersion
     get_evidence: GetEvidence
     forget_memory: ForgetMemory
+    memory_usage: GetMemoryUsage
     stream: EventStream
     model_name: str
 

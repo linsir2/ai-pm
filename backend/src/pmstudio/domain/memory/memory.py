@@ -43,6 +43,9 @@ if TYPE_CHECKING:
 #: 容量：与"教训区 ≤60 行"对齐（`记忆层与门禁条款.md` §2.3）。到顶必须合并或删除。
 MEMORY_CAPACITY = 60
 
+#: 命中窗口：最近 N 轮一次没被引用 = 未命中（现算，不落库，见 `unused_entries`）。
+MEMORY_USAGE_WINDOW = 10
+
 #: 一条最多两行（同 §2.3）：记忆是**被每一轮读**的东西，不是文档。
 MAX_ENTRY_LINES = 2
 

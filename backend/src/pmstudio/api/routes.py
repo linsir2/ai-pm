@@ -36,6 +36,7 @@ from pmstudio.application.use_cases import (
 )
 from pmstudio.domain.discussion.thread import QuestionSnapshot
 from pmstudio.domain.exploration.exploration import ExplorationScope, ScopeKind
+from pmstudio.domain.memory.memory import MEMORY_USAGE_WINDOW
 from pmstudio.domain.shared.ids import DiscussionId, ExplorationId, ProjectId, RoundId
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.target import Target
@@ -736,3 +737,17 @@ async def forget_memory(  # type: ignore[no-untyped-def]
         project_id=ProjectId(project_id), memory_id=memory_id
     )
     return Response(status_code=204)
+
+
+@router.get("/projects/{project_id}/memory/usage")
+async def memory_usage(request: Request, project_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
+    """最近 10 轮一次没被引用过的记忆 id（记忆抽屉的「久未使用」标签读它）。只读。"""
+
+    return as_json(
+        {
+            "window": MEMORY_USAGE_WINDOW,
+            "unused": await services_of(request).memory_usage(
+                project_id=ProjectId(project_id)
+            ),
+        }
+    )

@@ -40,6 +40,7 @@ from pmstudio.application.use_cases import (
     GetDocument,
     GetEvidence,
     GetMe,
+    GetMemoryUsage,
     GetRound,
     GetSchema,
     GetStats,
@@ -731,6 +732,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         forget_memory=ForgetMemory(
             memory=memory, memory_writer=memory, uow=uow, clock=clock
         ),
+        memory_usage=GetMemoryUsage(memory=memory, index=index, rounds=rounds),
         stream=bus,
         model_name=settings.model,
     )
