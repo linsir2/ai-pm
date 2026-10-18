@@ -258,10 +258,34 @@ def migrate(connection: sqlite3.Connection) -> None:
     # `recent()` 的排序判据——"无时间"于是有两种存法，而 NULL 那一种在排序里排**最前**
     # （`(NULL = '')` 求值为 NULL，ASC 里 NULL 领先），正好把意图做反。统一填 `''`：
     # 迁移**不猜**这些观察的时间，空串就是诚实的"没有"。幂等：只碰 NULL。
+    # v14 给存量行补 `created_at` 时同样是空串，下面那条按轮次回填接着收。
     if connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'observations'"
     ).fetchone() is not None:
         connection.execute("UPDATE observations SET created_at = '' WHERE created_at IS NULL")
+
+    # 存量观察回填时间：取**它自己那一轮**的 `rounds.created_at`。这一列一直在记，只是
+    # v14 才被捡回来当排序键——空着等于白扔库里已有的信息，而 `recent()` 对存量行也因此
+    # 完全无效（全是空串时仍按 `id DESC` 排，`obs-9` 照样压着 `obs-10`）。
+    # 补的是**轮次时刻**（那批观察真正产生的时刻），不是迁移时刻：拿 now 填是撒谎。
+    # `EXISTS` 兜住"轮次已不在"：子查询会给 NULL，写进 `NOT NULL` 列会炸——那类行留 `''`，
+    # 排序本来就把空值沉底，留着无害。幂等：只碰仍是 `''` 的行。
+    if (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'observations'"
+        ).fetchone()
+        is not None
+        and connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rounds'"
+        ).fetchone()
+        is not None
+    ):
+        connection.execute(
+            "UPDATE observations SET created_at = ("
+            " SELECT r.created_at FROM rounds r WHERE r.round_id = observations.round_id)"
+            " WHERE created_at = ''"
+            " AND EXISTS (SELECT 1 FROM rounds r WHERE r.round_id = observations.round_id)"
+        )
 
     _backfill_chunk_index(connection)
 

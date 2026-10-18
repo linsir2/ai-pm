@@ -20,6 +20,9 @@ from pmstudio.infrastructure.sqlite.observations_repo import SqliteObservationRe
 
 NOW = datetime(2026, 10, 8, 10, 0, 0)
 
+#: 迁移回填用：那一轮的 `rounds.created_at`（ISO 文本，与仓储写进去的形状一致）。
+ROUND_TIME = NOW.isoformat()
+
 
 def _obs(
     obs_id: str,
@@ -71,6 +74,13 @@ CREATE TABLE observations (
 def _downgrade_to_legacy_observations(connection) -> None:
     connection.execute("DROP TABLE observations")
     connection.executescript(LEGACY_NULLABLE_OBSERVATIONS_DDL)
+
+
+def _created_at_by_id(connection) -> dict[str, str]:
+    return {
+        row["id"]: row["created_at"]
+        for row in connection.execute("SELECT id, created_at FROM observations")
+    }
 
 
 @pytest.fixture
@@ -324,6 +334,7 @@ class TestTimelessRowsSink:
 
         迁移**不猜**这些观察的时间（宁可沉底也不冒充最新），但"没有"与"空的"要统一成
         一个值：留 NULL 等于把同一个"无时间"状态存成两种，其中一种还会排到最前。
+        （时间本身由下面那条"按轮次回填"负责——它回填不到的行才留 `''`。）
         """
 
         path = Path(tmp_path) / "legacy_null.db"
@@ -354,3 +365,42 @@ class TestTimelessRowsSink:
         )
         assert migrated.execute("SELECT count(*) FROM observations").fetchone()[0] == 1
         migrated.close()
+
+    def test_migrate_backfills_legacy_created_at_from_its_own_round(self, tmp_path):
+        """R：老行的时间**它那一轮有**（`rounds.created_at` 一直在记），空着是白扔信息。
+
+        I：不回填的话 `recent()` 对存量行完全无效——全是空串时仍按 `id DESC`（字典序）排，
+        `obs-9` 还是压着 `obs-10`。补的是**轮次时刻**（那批观察真正产生的时刻），
+        不是迁移时刻：拿 now 填进去是撒谎，比空着更坏。
+        找不到轮次的行保持 `''`：子查询会给出 NULL，不能写进 `NOT NULL` 列。
+        """
+
+        path = Path(tmp_path) / "legacy_round_fill.db"
+        conn = database.connect(path)
+        conn.execute(
+            "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,"
+            " created_at, updated_at) VALUES ('r1', 'p1', 'done', 'none', '{}', ?, ?)",
+            (ROUND_TIME, ROUND_TIME),
+        )
+        conn.executemany(
+            "INSERT INTO observations (id, project_id, round_id, obs_type, title, detail,"
+            " source_ref, created_at) VALUES (?, 'p1', ?, 'seat_insight', ?, 'd', 'seat.a:O1', ?)",
+            [
+                ("obs-legacy", "r1", "有轮次的空行", ""),
+                ("obs-orphan", "r-gone", "轮次没了的空行", ""),
+                ("obs-stamped", "r1", "本来就有时间", "2026-10-01T00:00:00"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        migrated = database.connect(path)  # 迁移在 connect 里跑
+        first = _created_at_by_id(migrated)
+        database.migrate(migrated)  # 幂等：第二轮不动任何值
+        second = _created_at_by_id(migrated)
+        migrated.close()
+
+        assert first["obs-legacy"] == ROUND_TIME
+        assert second == first  # 再跑一遍完全一样，且有时间的行没被覆盖
+        assert first["obs-orphan"] == ""
+        assert first["obs-stamped"] == "2026-10-01T00:00:00"
