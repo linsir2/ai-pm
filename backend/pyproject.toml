@@ -29,6 +29,8 @@ dependencies = [
     # （原子性 / 连接池 / 超时），所以上界放到 <9 而非跟着 extra 降级。
     "redis>=6,<9",
     "jieba>=0.42.1",
+    "sqlite-vec>=0.1.9",
+    "fastembed>=0.9.0",
 ]
 
 [dependency-groups]
@@ -47,6 +49,10 @@ filterwarnings = [
     # litellm 内部 pydantic 的 ReadOnly 告警（第三方库自己的兼容提示，与我们无关）；
     # 只有真 HTTP 那条测试会走到它，别让它把测试输出搞脏。
     "ignore:Item 'summary' on TypedDict class:UserWarning",
+]
+markers = [
+    # 需要真模型/真网络/首次下载模型的测试：默认不跑，显式 -m slow 才跑。
+    "slow: requires network and/or downloads large models on first run",
 ]
 
 [tool.ruff]
