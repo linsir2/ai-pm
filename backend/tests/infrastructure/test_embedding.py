@@ -9,7 +9,7 @@ from tests.support.embedding import FakeEmbedder
 
 def _cos(a, b):
     denom = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(x * x for x in b))
-    return sum(x * y for x, y in zip(a, b)) / denom if denom else 0.0
+    return sum(x * y for x, y in zip(a, b, strict=True)) / denom if denom else 0.0
 
 
 def test_fake_embedder_is_deterministic_and_sized():

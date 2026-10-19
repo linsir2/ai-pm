@@ -4,7 +4,8 @@
 **懒加载**：不碰检索的进程（绝大多数测试与 CLI）永远不下载模型、不载 onnxruntime。
 """
 
-from typing import Protocol, Sequence
+from collections.abc import Sequence
+from typing import Protocol
 
 MODEL_NAME = "BAAI/bge-small-zh-v1.5"
 DIMENSIONS = 512
@@ -26,7 +27,9 @@ class FastEmbedEmbedder:
 
     def _ensure(self) -> None:
         if self._model is None:
-            from fastembed import TextEmbedding  # 延迟 import：不碰检索就不付 onnxruntime 的启动成本
+            # 延迟 import：不碰检索就不付 onnxruntime 的启动成本
+            from fastembed import TextEmbedding
+
             self._model = TextEmbedding(model_name=self._model_name)
         return self._model
 
