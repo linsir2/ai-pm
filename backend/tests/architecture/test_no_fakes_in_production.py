@@ -33,6 +33,21 @@ TESTS = SRC.parent / "tests"
 #: **显式欠账**，每条都要写清为什么。新增一条等于公开承认"这里需要一个替身"，
 #: 评审时一眼可见；而不登记就意味着守卫会红，藏不住。
 ALLOWED_TEST_FAKES: dict[str, str] = {
+    "FakeEmbedder": (
+        "向量检索的确定性 embedder（批 5）：把字符 n-gram 哈希成固定维单位向量。"
+        "**真模型下不下来**（HuggingFace/GCS 均不可达），而 KNN 与 RRF 的判据是"
+        "**几何关系**不是真实语义——只要向量确定、维度对、相似文本够近，就能验召回与排序。"
+        "真模型那条是 `slow` marker 的独立用例，不拿它冒充离线验收。"
+    ),
+    "test_fake_embedder_is_deterministic_and_sized": (
+        "`FakeEmbedder` 自身的契约测试（批 5）：固定维、输出单位向量、同文本同向量。"
+        "它是上面那条替身登记能成立的前提——不保证确定性，离线测试就没法复现。"
+    ),
+    "test_fake_embedder_puts_similar_texts_close": (
+        "`FakeEmbedder` 的几何判据（批 5）：相近文本的余弦距离要小于无关文本。"
+        "这条决定它能不能当 RRF/KNN 测试的**可信**替身——只会算确定性但完全不近似的向量，"
+        "验出来的排序毫无意义。"
+    ),
     "FakeTransaction": (
         "内存 UnitOfWork：测领域服务与整条闭环时不碰 SQLite（真库留给仓储自己的测试）。"
         "它实现的是 `pmstudio.domain.services` 用的那个协议，不是业务组件。"

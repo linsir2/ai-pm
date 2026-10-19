@@ -244,7 +244,7 @@ domain/shared/        ids.py errors.py invariants.py target.py label.py sections
 application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py discusser.py sim_inquirer.py persona_simulator.py definitions.py
 infrastructure/        security.py redis_limiter.py redis_bus.py
 infrastructure/templates/ loader.py standard.toml light.toml
-infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py tokenize.py model_calls.py project_factory.py observations_repo.py digest_repo.py inspiration_repo.py users.py owner_scope.py usage.py
+infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py tokenize.py model_calls.py project_factory.py observations_repo.py digest_repo.py inspiration_repo.py users.py owner_scope.py usage.py embedding.py vector_index.py
 infrastructure/seats/ catalog.py definitions/*.toml
 infrastructure/personas/ catalog.py personas.toml
 infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py

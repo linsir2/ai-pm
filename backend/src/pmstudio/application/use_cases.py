@@ -3398,6 +3398,10 @@ class UploadMaterial:
                 content=data,
                 now=self._clock.now(),
             )
+        # 向量在**主事务提交之后**另起小事务写（ONNX 推理 ~20ms/块，不许占着写锁）。
+        # 崩溃窗口由 `migrate()` 的幂等回填兜底。
+        if existing is None:
+            self._vectors.write(packet.material_id)
         return material_summary_view(packet, current=self._parser.identities())
 
 
@@ -3502,6 +3506,10 @@ class FetchMaterial:
                 packet = self._materials.refresh(
                     existing.material_id, parsed=parsed, content=page.content
                 )
+                # 就地刷新换了正文：旧向量作废，同事务删掉（不跑推理），提交后重算。
+                self._vectors.drop(packet.material_id)
+        # 推理在主事务之外：新抓与变体按各自 id 补，就地刷新按原 id 重算。
+        self._vectors.write(packet.material_id)
         return material_summary_view(packet, current=self._parser.identities())
 
 
@@ -3607,6 +3615,9 @@ class DeleteMaterial:
         if eids:
             raise MaterialFrozen(material_id, eids=eids, action="删")
         with self._uow:
+            # vec 表是影子表，没有 CASCADE 兜底：**先删向量再删块**——反过来的话
+            # 块已被 CASCADE 带走，`drop()` 的子查询就找不到任何 chunk_id，删了个空。
+            self._vectors.drop(material_id)
             self._materials.delete(material_id)
         return list_material_views(
             project_id=project_id,
@@ -3675,15 +3686,21 @@ class ReparseMaterial:
         frozen = tuple(self._index.material_references(project_id).get(material_id, ()))
         with self._uow:
             if frozen:
-                self._materials.put(
+                variant_id = self._materials.put(
                     project_id=project_id,
                     parsed=parsed,
                     sha256=_reparse_key(material_id, parsed),
                     content=raw,
                     now=self._clock.now(),
-                )
+                ).material_id
+                # 变体是**另一份材料**：新 id 提交后补它的向量，旧的留着（冻结记录）。
             else:
+                # 就地换块 = 块 id 与正文都可能变：旧向量作废，**先删向量再换块**
+                # （反过来块的旧行已没，`drop()` 删了个空），提交后再重算。
+                self._vectors.drop(material_id)
                 self._materials.replace_chunks(material_id, parsed)
+        # 推理一律在主事务之外：变体按新 id 补，就地按原 id 重算。
+        self._vectors.write(variant_id if frozen else material_id)
         return list_material_views(
             project_id=project_id,
             materials=self._materials,
