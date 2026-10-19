@@ -49,7 +49,7 @@ def test_vectors_are_written_outside_any_open_transaction(conn):
             return super().embed_many(texts)
 
     _put_material(conn)
-    SqliteVectorIndex(conn, embedder=Recorder(dimensions=512)).write("m-1", owner=ALICE)
+    SqliteVectorIndex(conn, embedder=Recorder(dimensions=512)).write("m-1")
 
     assert seen, "向量索引一条都没算（测试没有鉴别力）"
     assert not any(seen), "推理时连接上有活动事务——写锁会被推理时长占住"
@@ -58,7 +58,7 @@ def test_vectors_are_written_outside_any_open_transaction(conn):
 def test_write_fills_the_vector_table_for_every_chunk(conn):
     _put_material(conn, chunks=(("c1", "用户退货流程"), ("c2", "机柜布线规范")))
 
-    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1", owner=ALICE)
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
 
     assert conn.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0] == 2
 
@@ -66,9 +66,9 @@ def test_write_fills_the_vector_table_for_every_chunk(conn):
 def test_drop_removes_the_vectors(conn):
     _put_material(conn)
     index = SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512))
-    index.write("m-1", owner=ALICE)
+    index.write("m-1")
 
-    index.drop("m-1", owner=ALICE)
+    index.drop("m-1")
 
     assert conn.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0] == 0
 
@@ -81,7 +81,7 @@ def test_a_broken_embedder_does_not_raise(conn):
         def embed_many(self, texts):
             raise RuntimeError("模型下载失败")
 
-    SqliteVectorIndex(conn, embedder=Broken()).write("m-1", owner=ALICE)   # 不抛即通过
+    SqliteVectorIndex(conn, embedder=Broken()).write("m-1")   # 不抛即通过
 
     assert conn.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0] == 0
 

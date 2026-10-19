@@ -35,6 +35,80 @@ def test_extension_is_loaded_or_reported_not_crashed(tmp_path):
     connection.close()
 
 
+def test_connect_survives_a_missing_extension(tmp_path, monkeypatch):
+    """R：扩展载不了时 `connect()` **不许炸**——没有 vec 模块时照样建出整库形状（降级到纯 FTS5）。
+
+    这是本任务最硬的降级判据：加载失败过去会让 `executescript(schema.sql)` 撞
+    「no such module: vec0」，整个后端起不来。vec 表改由代码建、建不成就跳过。
+    """
+
+    monkeypatch.setattr(database, "load_sqlite_vec", lambda _connection: False)
+
+    connection = database.connect(tmp_path / "noext.db")   # 不抛即通过
+
+    # 形状迁移照跑：非向量的表/列该在
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
+    assert connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='materials'"
+    ).fetchone() is not None
+    connection.close()
+
+
+def test_backfill_survives_a_broken_embedder(tmp_path):
+    """R：回填时模型下载/推理炸了，**不许阻断启动**（老库升级最怕这条）。"""
+
+    class Broken(FakeEmbedder):
+        def embed_many(self, texts):
+            raise RuntimeError("模型下载失败")
+
+    connection = database.connect(tmp_path / "t.db")
+    _seed_chunks_without_vectors(connection)
+
+    database.migrate(connection, embedder=Broken())   # 不抛即通过
+
+    assert connection.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0] == 0
+    connection.close()
+
+
+def test_first_connect_backfills_an_upgraded_database(tmp_path):
+    """R：老库（有块、无 vec 表）**第一次** connect 就把向量补齐。
+
+    迁移顺序要求：vec 表必须在回填之前就建好；否则首次升级永远补不上，
+    要等第二次启动才补——这种"要跑两遍才对"的迁移等于坏了。
+    """
+    connection = database.connect(tmp_path / "old.db")
+    _seed_chunks_without_vectors(connection)
+    connection.execute("DROP TABLE material_chunks_vec")   # 模拟"升级前的老库"
+    connection.close()
+
+    reopened = database.connect(
+        tmp_path / "old.db", embedder=FakeEmbedder(dimensions=512)
+    )
+
+    assert reopened.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0] == 2
+    reopened.close()
+
+
+def _seed_chunks_without_vectors(connection) -> None:
+    """直接塞两份材料的块（绕过 store），且**不**写向量 —— 升级前的老库形状。"""
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    connection.execute(
+        "INSERT INTO materials (material_id, project_id, owner_id, origin, title, source_ref,"
+        " media_type, bytes_len, sha256, parser_id, parser_version, schema_version, truncated,"
+        " warnings, content, created_at) VALUES ('m0', ?, ?, 'upload', 't', 'r', 'text/x',"
+        " 1, 'sha', 'p', 'v', 1, 0, '[]', X'00', '2026-10-18T00:00:00+00:00')",
+        (str(PROJECT), str(TEST_OWNER)),
+    )
+    for index, text in enumerate(["退货流程", "机柜布线规范"]):
+        connection.execute(
+            "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
+            " heading_path, anchor) VALUES (?, 'm0', ?, ?, ?, '[]', ?)",
+            (f"m0#c{index:02d}", str(TEST_OWNER), index, text, f"第{index}段"),
+        )
+
+
 def test_backfill_fills_missing_vectors_idempotently(tmp_path):
     """R：老库（有块无向量）跑 migrate → 补全；再跑不重复。"""
     from tests.conftest import TEST_OWNER

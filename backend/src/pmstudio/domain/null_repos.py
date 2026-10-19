@@ -54,10 +54,10 @@ class NoOpVectorIndex:
     而不是 `Optional` + `if is not None` 守卫。
     """
 
-    def write(self, material_id: str, *, owner=None) -> None:
+    def write(self, material_id: str) -> None:
         pass
 
-    def drop(self, material_id: str, *, owner=None) -> None:
+    def drop(self, material_id: str) -> None:
         pass
 
 

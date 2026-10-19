@@ -102,13 +102,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS material_chunks_fts USING fts5(
   tokenize = 'unicode61'
 );
 
--- 材料块的**向量索引**（检索阶段 2）：`sqlite-vec` 的 vec0 虚拟表，与块**同库同文件**。
--- `embedding` 存 512 维 float32 `bge-small-zh-v1.5` 的结果；写入由 `SqliteVectorIndex`
--- 在**主事务之外**做（ONNX 推理不许持写锁，见 `docs/plans/2026-10-18-B组-批5-检索向量.md`）。
-CREATE VIRTUAL TABLE IF NOT EXISTS material_chunks_vec USING vec0(
-  chunk_id  TEXT PRIMARY KEY,
-  embedding FLOAT[512]
-);
+-- 材料块的**向量索引**（检索阶段 2）的 vec0 建表**不在本文件里**：
+-- 它要 `sqlite-vec` 扩展先载入才建得出来，而 `schema.sql` 是无条件执行的
+-- （`executescript` 不带条件）。扩展载不了时整份 schema 会撞「no such module: vec0」，
+-- 后端直接起不来 —— 与「降级到纯 FTS5」矛盾。故由 `database._create_vector_table()`
+-- 在载入成功后显式建（见 `docs/plans/2026-10-18-B组-批5-检索向量.md`）。
 
 -- 探索运行（M8）：一趟调研（将来还有讨论/体检）一行，产物与候选状态全在 payload。
 -- 与 rounds 同一个范式：列只放"要按它查"的（项目/状态），其余进 JSON。

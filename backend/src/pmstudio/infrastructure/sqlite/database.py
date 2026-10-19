@@ -205,14 +205,37 @@ def connect(db_path: Path, *, embedder=None) -> sqlite3.Connection:
     # EXISTS` 补不了已有表的列，只有 `migrate()` 的 `ALTER TABLE` 能。放在 schema 之后
     # 建索引就会在老库上炸「no such column: owner_id」。新库两边都幂等，不受影响。
     #
-    # 向量扩展在这里（`migrate` 之前）加载：`schema.sql` 要建 `vec0` 虚拟表，
-    # 模块没注册的话整份 schema 执行直接炸。载不了就记一行 warning；
-    # 检索侧会退回纯 FTS5（见 `migrate` 与 `SqliteVectorIndex`）。
+    # 向量扩展在这里（`migrate` 之前）加载，随后**由代码建 vec0 表**：建表必须在
+    # `migrate()` 的向量回填之前，否则老库首次升级补不上（要等第二次启动）。
+    # 载不了就记一行 warning，检索侧退回纯 FTS5（见 `_create_vector_table`）。
     load_sqlite_vec(connection)
+    _create_vector_table(connection)
     migrate(connection, embedder=embedder)
     connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     connection.execute(f"PRAGMA user_version = {USER_VERSION}")
     return connection
+
+
+def _create_vector_table(connection: sqlite3.Connection) -> bool:
+    """载入扩展后建 `material_chunks_vec`（vec0 虚拟表）。**建不成就返回 False。**
+
+    为什么不由 `schema.sql` 建：那张表需要 `sqlite-vec` 扩展先在连接里注册模块，
+    而 `executescript` 不带条件——模块不在时整份 schema 执行直接炸，后端起不来。
+    这里独立出来，扩展缺失就跳过这一张表，其余形状照常迁移（降级到纯 FTS5）。
+    """
+
+    if not load_sqlite_vec(connection):
+        return False
+    try:
+        connection.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS material_chunks_vec USING vec0("
+            " chunk_id TEXT PRIMARY KEY,"
+            " embedding FLOAT[512])"
+        )
+    except Exception as error:  # noqa: BLE001 —— 建表失败同样降级，不炸启动
+        logger.warning("向量索引表建不出来，检索退回纯 FTS5：%s", error)
+        return False
+    return True
 
 
 def load_sqlite_vec(connection: sqlite3.Connection) -> bool:
@@ -353,7 +376,11 @@ def _backfill_chunk_vectors(connection: sqlite3.Connection, *, embedder=None) ->
         )
         for row in missing
     ]
-    vectors = embedder.embed_many(texts)
+    try:
+        vectors = embedder.embed_many(texts)
+    except Exception as error:  # noqa: BLE001 —— 模型下载/推理失败降级，不阻断启动
+        logger.warning("向量回填失败，检索退回纯 FTS5：%s", error)
+        return
     for row, vector in zip(missing, vectors, strict=True):
         connection.execute(
             "INSERT OR REPLACE INTO material_chunks_vec (chunk_id, embedding)"

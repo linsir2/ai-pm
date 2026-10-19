@@ -19,7 +19,7 @@ class SqliteVectorIndex:
         self._connection = connection
         self._embedder = embedder
 
-    def write(self, material_id: str, *, owner=None) -> None:
+    def write(self, material_id: str) -> None:
         """给一份材料的所有块算向量并落库。失败只留 warning（降级不判死）。"""
         from pmstudio.infrastructure.sqlite.tokenize import index_source
 
@@ -68,7 +68,7 @@ class SqliteVectorIndex:
                 self._connection.execute("ROLLBACK")
             raise
 
-    def drop(self, material_id: str, *, owner=None) -> None:
+    def drop(self, material_id: str) -> None:
         """删一份材料名下的全部向量（与块删除同事务：调用方在删块的事务里调）。
 
         vec 表只有 `chunk_id` 主键：按"属于这份材料的块"删。

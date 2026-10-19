@@ -270,7 +270,10 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     # 别落在首个搜索/上传请求里。幂等，多个测试进程各付一次（本就如此）。
     warm_tokenizer()
 
-    connection = database.connect(settings.db_path, embedder=FastEmbedEmbedder())
+    # 向量 embedder 单一实例：懒加载（首次 `embed_many` 才下载/载入模型），
+    # 迁移回填与向量索引共用同一个，避免同一进程里装两份模型内存。
+    embedder = FastEmbedEmbedder()
+    connection = database.connect(settings.db_path, embedder=embedder)
     clock = SystemClock()
     ids = UuidIdGenerator()
     bus = _build_event_bus(settings)
@@ -293,7 +296,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     materials = SqliteMaterialStore(connection, ids=ids)
     # 向量索引（检索阶段 2）：扩展/模型不可用 → NoOp（检索只剩 FTS5，仍可用）。
     vector_index = (
-        SqliteVectorIndex(connection, embedder=FastEmbedEmbedder())
+        SqliteVectorIndex(connection, embedder=embedder)
         if database.load_sqlite_vec(connection)
         else NoOpVectorIndex()
     )
