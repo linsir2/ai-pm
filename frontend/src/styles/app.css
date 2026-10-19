@@ -3629,6 +3629,27 @@ details.loop__group[open] > summary::before {
   z-index: 6;
 }
 
+/* overlay-slot 里那五个抽屉（版本/材料库/就绪度/记忆/调研确认）**悬浮**在右缘，
+   宽度不随右列的折叠态变。
+
+   为什么必须有这条（2026-10-19 真跑坐实）：`.shell--noloop` 把 loop 列压成 56px 的
+   rail（只放一个「闭环」竖按钮），而 overlay-slot 的 `grid-area: loop` 让抽屉
+   跟着缩到 56px——「久未使用」这类标签被挤成一条竖排，实际读不了。批 4 当时的
+   终审只验到"标签被渲染出来"，没验默认态下它读不读得清。
+
+   上面那句 CSS 注释（「overlay-slot 那四个……保持悬浮」）本来就是这个意图，
+   实现只是没跟上：悬浮就该脱离栅格列，不该跟着折叠态缩。
+
+   展开态（`.shell`）不改：那时 loop 列本来就是 500px，抽屉填满它正是想要的。 */
+.shell--noloop .overlay-slot {
+  position: fixed;
+  top: 48px;
+  right: 0;
+  bottom: 0;
+  width: min(500px, 100vw);
+  z-index: 6;
+}
+
 .versions {
   list-style: none;
   margin: 0 0 var(--space-4);

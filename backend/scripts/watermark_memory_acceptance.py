@@ -244,15 +244,10 @@ def _screenshot(project_id: str, base: str, out_dir: Path) -> int:
                 _t.sleep(2)
                 _log("  已点开项目行")
 
-            # **先把右列展开**：默认 `loopExpanded=false` → shell 加 `shell--noloop`
-            # → loop 列只有 56px，而四个 overlay 抽屉都挂在 `.overlay-slot`
-            # （`grid-area: loop`）里 → 抽屉被压成 56px 宽，标签不可读。
-            # 点 rail 上的「闭环」按钮把右列展开（这是界面自己提供的入口）。
-            rail = page.locator("button[aria-label='展开闭环区']")
-            if rail.count():
-                rail.first.click()
-                page.wait_for_timeout(1500)
-                _log("  已展开右列（默认折叠成 56px rail，抽屉会挤成一条）")
+            # **不展开右列**：默认 `loopExpanded=false` → shell 加 `shell--noloop`
+            # → loop 列只有 56px。overlay 抽屉必须自己在这种状态下也可读
+            # （`.shell--noloop .overlay-slot` 悬浮到右缘，2026-10-19 修）。
+            # 所以这里刻意**不点** rail 的「闭环」——默认态就该看得清。
 
             # 打开记忆抽屉
             opened = False
@@ -273,6 +268,12 @@ def _screenshot(project_id: str, base: str, out_dir: Path) -> int:
 
             page.wait_for_timeout(2500)   # 等 usage 懒加载回来
             body = page.inner_text("body")
+            # **宽度是这次修的契约**：折叠态（默认）下抽屉必须还是可读的宽度。
+            # 修之前是 56px（跟着 loop 列缩），标签被挤成一条竖排。
+            box = page.locator("aside.drawer").first.bounding_box()
+            width = round(box["width"]) if box else 0
+            _log(f"  折叠态抽屉宽 = {width}px（应 ≥ 400）")
+            assert width >= 400, f"抽屉被压成 {width}px——折叠态下不可读（overlay-slot 修没生效？）"
             # 抽屉是浮在右缘的，整页截图会把它挤成一条：单独截这个元素。
             drawer = page.locator("aside.drawer")
             if drawer.count():
