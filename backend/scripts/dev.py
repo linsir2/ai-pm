@@ -176,7 +176,17 @@ def main() -> int:
     else:
         print("登录限流：**进程内计数**（没配 PMSTUDIO_REDIS_URL）")
         print("  ⚠ 多 worker 下每个进程各有一份，等于锁不住；上多 worker 前先配 Redis")
-        print("事件：进程内总线（单 worker，不跨进程扇出）")
+    print("事件：进程内总线（单 worker，不跨进程扇出）")
+    # 向量检索的模型源：下不动会静默退化成纯 FTS5，所以**起之前就说清楚**，
+    # 免得上线后只发现"搜不到换个说法的内容"却不知道模型压根没下下来。
+    endpoint = os.environ.get("HF_ENDPOINT", "").strip()
+    no_xet = os.environ.get("HF_HUB_DISABLE_XET", "").strip().upper() in {
+        "1", "TRUE", "YES", "ON",
+    }
+    if endpoint:
+        print(f"向量模型源：镜像 {endpoint}{'（已禁 Xet）' if no_xet else ''}")
+    else:
+        print("向量模型源：huggingface.co 默认源——连不上就退回纯 FTS5（无语义召回）")
     print(f"起在 http://{args.host}:{port} · 健康检查 /api/health")
 
     sys.path.insert(0, str(SRC))
