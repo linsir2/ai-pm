@@ -46,29 +46,41 @@ def _put_material(conn, material_id="m-1", *, project_id="p1", title="手册",
         )
 
 
-def test_rrf_order_is_the_sum_of_reciprocal_ranks():
-    """纯函数：两列排名 → 融合顺序 = Σ 1/(60+rank)。
+def test_rrf_is_kept_only_as_a_reference_implementation():
+    """RRF 现在**只作对照**（量化表里那一列就是这么算的），不再是融合口径。
 
-    交叉两列 `["a","b"]` + `["b","a"]` 时 "b" 两列都在（名次 2 和 1）得分
-    `1/62 + 1/61`，"a" 只得一列的 `1/61` → "b" 在前。这是 RRF 的**要点**：
-    两边都认可的条目优先于单边强命中（不是 BM25 的绝对分可比）。
+    留它是为了让"当初为什么换掉它"可复算：交叉两列时"两边都在"的条目得分更高，
+    这正是它**对称**、因而压不住"词法第 1 但语义第 50"的块的原因。
     """
-    from pmstudio.infrastructure.sqlite.materials import (
-        RRF_K,
-        reciprocal_rank_fusion,
-    )
+    from pmstudio.infrastructure.sqlite.materials import reciprocal_rank_fusion
 
     fused = reciprocal_rank_fusion([["a", "b"], ["b", "a"]])
     assert fused == ("b", "a")          # 交叉两列 → 两边都在的 "b" 优先
+    assert reciprocal_rank_fusion([["x"], ["y"]]) == ("x", "y")
 
-    assert reciprocal_rank_fusion([["x"], ["y"]]) == ("x", "y")   # 各命中一边 → 首列稳定序
 
-    # 单列退化：RRF 分应单调随名次下降（唯一列时序与输入一致）
-    assert reciprocal_rank_fusion([["p", "q", "r"], []]) == ("p", "q", "r")
+def test_a_lexical_exact_hit_is_never_knocked_out_by_a_semantic_one(conn):
+    """R：**词面原样在的块一定排在前面**（用户把原话打出来时不该被语义掀翻）。
 
-    # 打分口径：手算一次确认不是"随便排个序"
-    scores = {c: 1 / (RRF_K + i) for i, c in enumerate(["a", "b"])}
-    assert scores["a"] > scores["b"]    # 单列内 rank1 > rank2
+    这是 2026-10-19 实测逼出来的：RRF 下逐字子串类 top1 30→25、recall@5 40→36
+    （用户升级后反而搜不到以前能搜到的），所以融合换成"按词面覆盖率分档、
+    档内按语义分排"。
+    """
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    # 目标块的正文**原样**含查询的每个 token；另一块只在语义上像
+    _put_material(conn, "m-1", chunks=(("c1", "退货时限是七天"),))
+    _put_material(conn, "m-2", chunks=(("c2", "退款周期不超过一星期"),))
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-2")
+
+    hits = SqliteHybridRetriever(conn, embedder=FakeEmbedder(dimensions=512)).search(
+        project_id=PROJECT, query="退货时限", owner=TEST_OWNER)
+
+    assert hits, "查不到"
+    assert hits[0].chunk_id == "c1", f"词面原样命中的块被压到第 {hits[0].chunk_id}"
 
 
 def test_semantic_query_hits_where_fts_misses(conn):

@@ -467,10 +467,6 @@ def _excerpt(text: str, needle: str) -> str:
 
 logger = logging.getLogger(__name__)
 
-#: RRF 的常数（`Σ 1/(k+rank)`）。60 是原论文与主流实现的默认值——这里**不调参**：
-#: 材料块规模是十几个，任何 k 在几十的量级都不改变次序；调它属于没有数据支撑的调优。
-RRF_K = 60
-
 #: 两个分支各取多少候选再融合。单用户几百块封顶：FTS 取前 20 足够覆盖；
 #: KNN 内层扫 200（`ORDER BY distance` 的全序扫描在 C 里是点积，200 行可忽略），
 #: 然后按项目/owner 过滤——过滤放 Python 侧，不赌 vec0 对 JOIN 的优化器行为
@@ -478,21 +474,41 @@ RRF_K = 60
 _FTS_CANDIDATES = 20
 _KNN_SCAN_LIMIT = 200
 
+#: **融合的分档阈值**（2026-10-19 实测定的，见
+#: `docs/plans/2026-10-19-B组-批5-量化与端到端验收.md`）。
+#:
+#: 档位按**词面覆盖率** `cov = |查询 token ∩ 块 token| / |查询 token|` 定：
+#: `cov >= 1.0` = 用户的话**原样**在这块里；`cov >= 0.5` = 大半的话在；
+#: 再低就是"词面说不了"（换个说法问的典型情形）。
+#: 0.5 不是调出来的魔数，是"多数"的自然边界。
+COVERAGE_FULL = 1.0
+COVERAGE_MAJORITY = 0.5
+
+#: 语义分用**名次归一化**（vec#1 → 1.0，vec#N → 1/N），不用距离绝对值：
+#: 距离的绝对值随语料/模型变，名次归一化后跨语料可比。
+def _semantic_score(rank: int | None, total: int) -> float:
+    if rank is None or total <= 0:
+        return 0.0
+    return 1.0 - (rank - 1) / total
+
 
 def reciprocal_rank_fusion(
-    ranked: Sequence[Sequence[str]], *, k: int = RRF_K
+    ranked: Sequence[Sequence[str]], *, k: int = 60
 ) -> tuple[str, ...]:
-    """把若干"已按相关性排好的 id 列表"融成一个次序。
+    """把若干"已按相关性排好的 id 列表"融成一个次序（**RRF**，`Σ 1/(k+rank)`）。
 
-    手写约 10 行：没有值得引的 RRF 库，而 FTS5 已给 BM25、vec0 已给距离，
-    这里只需要把两列名次加起来（不引库能说清就不引）。
+    .. deprecated::
+        2026-10-19 实测：RRF **满足不了**本批的预注册判据——它是**对称**融合，
+        于是"词法第 1 但语义第 50"的块会被"语义第 1 但词法第 2"的块压下去
+        （逐字子串类 top1 30→25、recall@5 40→36，用户升级后反而搜不到以前能搜到的）。
+        现在用 `_fuse_by_coverage`（分档 + 语义排序）。本函数**留作对照与复算用**，
+        量化对照表里那一列就是这么算的。
     """
 
     scores: dict[str, float] = {}
     for column in ranked:
         for rank, item in enumerate(column, start=1):
             scores[item] = scores.get(item, 0.0) + 1.0 / (k + rank)
-    # 同分按**首列出现序**稳定（`sorted` 稳定；先用首列建一次序）
     first_seen = {item: i for column in ranked for i, item in enumerate(column)}
     return tuple(sorted(scores, key=lambda item: (-scores[item], first_seen[item])))
 
@@ -528,18 +544,79 @@ class SqliteHybridRetriever:
         )
         fts_ids = [hit.chunk_id for hit in fts_hits]
         vec_ids = self._knn_ids(str(project_id), str(resolved), query)
-        fused = reciprocal_rank_fusion([fts_ids, vec_ids])
-        # RRF 分 = 融合名次的函数；同分靠 `fused` 自身的稳定次序（`sorted` 稳定）。
-        scores = {
-            chunk_id: 1.0 / (RRF_K + rank) for rank, chunk_id in enumerate(fused, start=1)
-        }
-        ordered = sorted(scores, key=lambda chunk_id: -scores[chunk_id])
+        ordered = self._fuse_by_coverage(fts_ids, vec_ids, query)
         by_id = {hit.chunk_id: hit for hit in fts_hits}
         knn_only = [chunk_id for chunk_id in ordered if chunk_id not in by_id]
         by_id.update(self._hits_for(knn_only, str(project_id), str(resolved), tokens))
+        # `score` 越大越好（与顺序同向）：用**最终次序**的倒数排名，与旧约定一致。
+        total = len(ordered)
         return tuple(
-            replace(by_id[chunk_id], score=scores[chunk_id]) for chunk_id in ordered[:limit]
+            replace(by_id[chunk_id], score=1.0 / (total - position))
+            for position, chunk_id in enumerate(ordered[:limit])
         )
+
+    def _fuse_by_coverage(
+        self, fts_ids: list[str], vec_ids: list[str], query: str
+    ) -> list[str]:
+        """两路融合：**按词面覆盖率分档，档内按语义分排**。
+
+        ## 为什么不是 RRF（2026-10-19 实测定的）
+
+        RRF 是**对称**融合：一条在两路里都出现的块得两份分，于是
+        「词法第 1、语义第 50」的块会被「语义第 1、词法第 2」的块压下去。
+        实测（逐字子串类 40 条查询）：纯 FTS5 是 top1 30 / recall@5 40，
+        上了 RRF 变成 **25 / 36** ——用户升级后反而搜不到以前能搜到的东西。
+        预注册判据「逐字与换序两类逐档不低于 v2」因此**没通过**。
+
+        ## 现在的口径
+
+        **档位看词面**（`cov` = 查询 token 有多少比例出现在这块里）：
+        0 档 = 用户的话原样在（cov ≥ 1.0）；1 档 = 大半在（cov ≥ 0.5）；
+        2 档 = 词面说不了。
+        **档内按语义分排**（名次归一化）。
+
+        这样两头都对：用户把原话打出来时，词面强的块一定在前面（不退步）；
+        用户换个说法时，词面说不了，全靠语义定次序（能召回来）。
+        实测：逐字 34/40、同词换序 35/40、同义改述 recall@5 22/35 = 63%。
+        """
+
+        if not fts_ids and not vec_ids:
+            return []
+        candidates = list(dict.fromkeys(fts_ids + vec_ids))
+        semantic = {chunk_id: _semantic_score(index, len(vec_ids))
+                    for index, chunk_id in enumerate(vec_ids, start=1)}
+        coverage = self._coverage(candidates, query)
+        return sorted(
+            candidates,
+            key=lambda chunk_id: (
+                0 if coverage[chunk_id] >= COVERAGE_FULL
+                else 1 if coverage[chunk_id] >= COVERAGE_MAJORITY
+                else 2,
+                -semantic.get(chunk_id, 0.0),
+                candidates.index(chunk_id),
+            ),
+        )
+
+    def _coverage(self, chunk_ids: list[str], query: str) -> dict[str, float]:
+        """每个候选块的**词面覆盖率**。
+
+        token 直接读 FTS 影子表里存的那串（`index_source` 的产物）——**不重新分词**：
+        重新分词可能与建索引时那次的切法不同，覆盖率就名不副实了。
+        """
+
+        tokens = set(query_tokens(query))
+        if not tokens or not chunk_ids:
+            return {chunk_id: 0.0 for chunk_id in chunk_ids}
+        placeholders = ",".join("?" for _ in chunk_ids)
+        rows = self._connection.execute(
+            f"SELECT chunk_id, tokens FROM material_chunks_fts WHERE chunk_id IN ({placeholders})",
+            chunk_ids,
+        ).fetchall()
+        coverage: dict[str, float] = {}
+        for row in rows:
+            doc_tokens = set(str(row["tokens"]).split())
+            coverage[str(row["chunk_id"])] = len(tokens & doc_tokens) / len(tokens)
+        return {chunk_id: coverage.get(chunk_id, 0.0) for chunk_id in chunk_ids}
 
     def _knn_ids(self, project_id: str, owner: str, query: str) -> list[str]:
         """KNN 分支：query 向量 → vec0 按距离扫 → 只留本项目本 owner 的块（保序）。"""
