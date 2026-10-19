@@ -259,21 +259,35 @@ class CircuitBreaker:
     async def call_upstream(self, factory: Callable[[], Awaitable[_T]]) -> _T:
         """跑一次上游调用并交给 pybreaker 记账。
 
-        用库的 `call_async` 而不是"先 allow 再 record"：半开时的探针**必须是
-        那次真实调用**。实测踩过两个坑——
+        **为什么用 `calling()` 而不是 `call_async()`**（2026-10-19 修）：
+        pybreaker 的 `call_async` 内部是 `@gen.coroutine`，而 `gen` 只在**装了
+        tornado** 时才 import 进来（`try: from tornado import gen / except ImportError:
+        HAS_TORNADO_SUPPORT = False`——`gen` 压根没定义）。于是**没装 tornado 时
+        每一次调用都 `NameError: name 'gen' is not defined`**，熔断器在
+        Python 3.13 上等于恒坏（`gen.coroutine` 本身 3.11 起就移除了，装 tornado
+        也得钉到 6.5 之前的老版本）。实测 42 条韧性测试因此一直红。
+
+        `calling()` 是库的**同步**上下文管理器，走的是同一套状态机
+        （`state.call` → `before_call` / `_handle_success` / `_handle_error`），
+        语义逐条实测过没丢：连续失败计数、`fail_max` 到点开闸、`exclude`
+        扩展点（非依赖失败不计入）、`throw_new_error_on_trip=False` 时抛上游原异常、
+        手动 `half_open()` 后探针成功即闭合。**状态机还是库那个**，我们没重写判据。
+
+        半开时的探针**必须是那次真实调用**。实测踩过两个坑——
 
         * 拿假探针去问 `before_call`：它会把假探针的"成功"当成恢复成功，
           熔断器当场闭合，而上游其实还没好；
         * 不先迁移、让库自己在 `before_call` 里迁：那条路走**同步** `call()`，
           协程根本没被 await（`RuntimeWarning`），却被记成探针成功。
 
-        所以先 `_recovered()`（含自己切半开），再让库用 `call_async` 跑真调用。
+        所以先 `_recovered()`（含自己切半开），再在 `calling()` 里 await 真调用。
         """
 
         if not self._recovered():
             raise CircuitOpenError("模型调用已熔断：上游正在恢复中，稍后再试")
         try:
-            return await self._breaker.call_async(factory)
+            with self._breaker.calling():
+                return await factory()
         except CircuitBreakerError as error:
             raise CircuitOpenError("模型调用已熔断：上游正在恢复中，稍后再试") from error
 
