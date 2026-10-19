@@ -363,8 +363,14 @@ def main() -> int:
                 _log("[4] SKIP_SCREENSHOT=1，跳过截图")
                 return 0
             _log("[4] 真浏览器截图…")
-            return _screenshot(project_id, base, Path(
-                os.environ.get("SHOT_DIR", ".codex/runs/2026-10-19")))
+            # 证据落在**仓库根**的 `.codex/runs/`（该目录被 gitignore，与批 1/2 一致）。
+            # 默认值用绝对路径：脚本的 cwd 是 backend/，写相对路径会落成 backend/.codex。
+            shot_dir = Path(
+                os.environ.get(
+                    "SHOT_DIR", str(BACKEND.parent / ".codex" / "runs" / "2026-10-19")
+                )
+            )
+            return _screenshot(project_id, base, shot_dir)
         finally:
             proc.terminate()
             try:
