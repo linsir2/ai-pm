@@ -10,7 +10,9 @@
 """
 
 import json
+import logging
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -461,3 +463,134 @@ def _excerpt(text: str, needle: str) -> str:
     head = "…" if start > 0 else ""
     tail = "…" if end < len(text) else ""
     return f"{head}{text[start:end]}{tail}"
+
+
+logger = logging.getLogger(__name__)
+
+#: RRF 的常数（`Σ 1/(k+rank)`）。60 是原论文与主流实现的默认值——这里**不调参**：
+#: 材料块规模是十几个，任何 k 在几十的量级都不改变次序；调它属于没有数据支撑的调优。
+RRF_K = 60
+
+#: 两个分支各取多少候选再融合。单用户几百块封顶：FTS 取前 20 足够覆盖；
+#: KNN 内层扫 200（`ORDER BY distance` 的全序扫描在 C 里是点积，200 行可忽略），
+#: 然后按项目/owner 过滤——过滤放 Python 侧，不赌 vec0 对 JOIN 的优化器行为
+#: （实测：vec0 的 KNN 不接受 JOIN，哪怕带了 LIMIT）。
+_FTS_CANDIDATES = 20
+_KNN_SCAN_LIMIT = 200
+
+
+def reciprocal_rank_fusion(
+    ranked: Sequence[Sequence[str]], *, k: int = RRF_K
+) -> tuple[str, ...]:
+    """把若干"已按相关性排好的 id 列表"融成一个次序。
+
+    手写约 10 行：没有值得引的 RRF 库，而 FTS5 已给 BM25、vec0 已给距离，
+    这里只需要把两列名次加起来（不引库能说清就不引）。
+    """
+
+    scores: dict[str, float] = {}
+    for column in ranked:
+        for rank, item in enumerate(column, start=1):
+            scores[item] = scores.get(item, 0.0) + 1.0 / (k + rank)
+    # 同分按**首列出现序**稳定（`sorted` 稳定；先用首列建一次序）
+    first_seen = {item: i for column in ranked for i, item in enumerate(column)}
+    return tuple(sorted(scores, key=lambda item: (-scores[item], first_seen[item])))
+
+
+class SqliteHybridRetriever:
+    """材料检索的混合实现：FTS5（词法）+ sqlite-vec KNN（语义）→ RRF 融合。
+
+    协议零改（`MaterialRetriever` 的签名与 `MaterialHit` 不动）；两个分支的形状
+    与 v2 的 `SqliteFtsRetriever` 逐字一致（块级返回 + 锚点 + 隔离 + `score` 越大越好）。
+    某一分支失败（扩展没载 / 模型下不下来 / 推理抛错）就退化成另一分支 + warning，
+    检索本身永远有结果。
+    """
+
+    def __init__(self, connection: sqlite3.Connection, embedder) -> None:
+        self._connection = connection
+        self._fts = SqliteFtsRetriever(connection)
+        self._embedder = embedder
+
+    def search(
+        self,
+        *,
+        project_id: ProjectId,
+        query: str,
+        limit: int = 5,
+        owner: UserId | None = None,
+    ) -> tuple[MaterialHit, ...]:
+        resolved = require_owner(owner)
+        tokens = query_tokens(query)
+        if not tokens or limit <= 0:
+            return ()
+        fts_hits = self._fts.search(
+            project_id=project_id, query=query, limit=_FTS_CANDIDATES, owner=resolved
+        )
+        fts_ids = [hit.chunk_id for hit in fts_hits]
+        vec_ids = self._knn_ids(str(project_id), str(resolved), query)
+        fused = reciprocal_rank_fusion([fts_ids, vec_ids])
+        # RRF 分 = 融合名次的函数；同分靠 `fused` 自身的稳定次序（`sorted` 稳定）。
+        scores = {
+            chunk_id: 1.0 / (RRF_K + rank) for rank, chunk_id in enumerate(fused, start=1)
+        }
+        ordered = sorted(scores, key=lambda chunk_id: -scores[chunk_id])
+        by_id = {hit.chunk_id: hit for hit in fts_hits}
+        knn_only = [chunk_id for chunk_id in ordered if chunk_id not in by_id]
+        by_id.update(self._hits_for(knn_only, str(project_id), str(resolved), tokens))
+        return tuple(
+            replace(by_id[chunk_id], score=scores[chunk_id]) for chunk_id in ordered[:limit]
+        )
+
+    def _knn_ids(self, project_id: str, owner: str, query: str) -> list[str]:
+        """KNN 分支：query 向量 → vec0 按距离扫 → 只留本项目本 owner 的块（保序）。"""
+        try:
+            vector = self._embedder.embed_many([query])[0]
+        except Exception as error:  # noqa: BLE001 —— 模型/推理失败就退化成纯 FTS5
+            logger.warning("向量检索失败，退回纯 FTS5：%s", error)
+            return []
+        try:
+            from sqlite_vec import serialize_float32
+
+            rows = self._connection.execute(
+                "SELECT chunk_id FROM ("
+                " SELECT chunk_id FROM material_chunks_vec"
+                " WHERE embedding MATCH ? ORDER BY distance LIMIT ?"
+                ") WHERE chunk_id IN ("
+                " SELECT c.chunk_id FROM material_chunks c"
+                " JOIN materials m ON m.material_id = c.material_id"
+                " WHERE m.project_id = ? AND c.owner_id = ?)",
+                (serialize_float32(list(vector)), _KNN_SCAN_LIMIT, project_id, owner),
+            ).fetchall()
+        except Exception as error:  # noqa: BLE001 —— 扩展没载/表不在都退化，不炸检索
+            logger.warning("向量索引不可用，退回纯 FTS5：%s", error)
+            return []
+        return [str(row["chunk_id"]) for row in rows]
+
+    def _hits_for(self, chunk_ids, project_id: str, owner: str, tokens: list[str]):
+        """给"只在 KNN 里出现"的块造 `MaterialHit`（复用 `_excerpt` 的锚定规则）。"""
+        if not chunk_ids:
+            return {}
+        placeholders = ",".join("?" for _ in chunk_ids)
+        rows = self._connection.execute(
+            "SELECT c.chunk_id, c.material_id, c.text, c.anchor, m.title, m.source_ref"
+            " FROM material_chunks c JOIN materials m ON m.material_id = c.material_id"
+            f" WHERE c.chunk_id IN ({placeholders})"
+            " AND m.project_id = ? AND c.owner_id = ?",
+            (*chunk_ids, project_id, owner),
+        ).fetchall()
+        hits = {}
+        for row in rows:
+            text = str(row["text"])
+            needle = next(
+                (t for t in tokens if t.casefold() in text.casefold()), tokens[0]
+            )
+            hits[str(row["chunk_id"])] = MaterialHit(
+                material_id=str(row["material_id"]),
+                chunk_id=str(row["chunk_id"]),
+                score=0.0,
+                excerpt=_excerpt(text, needle),
+                anchor=str(row["anchor"]),
+                source_ref=str(row["source_ref"]),
+                title=str(row["title"]),
+            )
+        return hits
