@@ -34,7 +34,13 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.3", "pytest-asyncio>=1.4", "httpx>=0.28", "ruff>=0.7"]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=1.4",
+    "httpx>=0.28",
+    "ruff>=0.7",
+    "playwright>=1.64.0",
+]
 
 [tool.uv]
 package = false
