@@ -183,6 +183,7 @@ from pmstudio.application.ports import (
     MaterialParser,
     MaterialRetriever,
     MaterialStore,
+    MaterialVectorIndex,
     ProjectFactory,
     RoundCanceller,
     SeatCatalog,
@@ -244,6 +245,7 @@ from pmstudio.domain.null_repos import (
     NO_DIGESTS,
     NO_INSPIRATIONS,
     NO_OBSERVATIONS,
+    NO_VECTORS,
 )
 from pmstudio.domain.ports import (
     DigestRepository,
@@ -3359,12 +3361,14 @@ class UploadMaterial:
         parser: MaterialParser,
         clock: Clock,
         uow: UnitOfWork,
+        vectors: MaterialVectorIndex = NO_VECTORS,
     ) -> None:
         self._documents = documents
         self._materials = materials
         self._parser = parser
         self._clock = clock
         self._uow = uow
+        self._vectors = vectors
 
     async def __call__(
         self, *, project_id: ProjectId, filename: str, media_type: str, data: bytes
@@ -3424,6 +3428,7 @@ class FetchMaterial:
         index: WorkspaceIndex,
         clock: Clock,
         uow: UnitOfWork,
+        vectors: MaterialVectorIndex = NO_VECTORS,
     ) -> None:
         self._documents = documents
         self._materials = materials
@@ -3432,6 +3437,7 @@ class FetchMaterial:
         self._index = index
         self._clock = clock
         self._uow = uow
+        self._vectors = vectors
 
     async def __call__(self, *, project_id: ProjectId, url: str) -> MaterialSummaryView:
         # **归属先于副作用**（Task 6 fix round 2）：先按 owner 读项目，读不到即 `UnknownProject`
@@ -3583,11 +3589,13 @@ class DeleteMaterial:
         parser: MaterialParser,
         index: WorkspaceIndex,
         uow: UnitOfWork,
+        vectors: MaterialVectorIndex = NO_VECTORS,
     ) -> None:
         self._materials = materials
         self._parser = parser
         self._index = index
         self._uow = uow
+        self._vectors = vectors
 
     async def __call__(
         self, *, project_id: ProjectId, material_id: str
@@ -3631,12 +3639,14 @@ class ReparseMaterial:
         index: WorkspaceIndex,
         uow: UnitOfWork,
         clock: Clock,
+        vectors: MaterialVectorIndex = NO_VECTORS,
     ) -> None:
         self._materials = materials
         self._parser = parser
         self._index = index
         self._uow = uow
         self._clock = clock
+        self._vectors = vectors
 
     async def __call__(
         self, *, project_id: ProjectId, material_id: str

@@ -205,6 +205,19 @@ class MaterialRetriever(Protocol):
 
 
 @runtime_checkable
+class MaterialVectorIndex(Protocol):
+    """材料块的**向量**索引（检索阶段 2）：与 `MaterialStore` 同库同文件、不同表。
+
+    为什么是独立协议而不是塞进 `MaterialStore`：写向量要跑 ONNX 推理，
+    **不许**落在仓储的写事务里（持锁时长是基线写操作的百倍，见批 5 检索升级计划）。
+    所以向量由调用方在**主事务提交后**另起小事务写；崩溃窗口由 `migrate` 的幂等回填兜底。
+    """
+
+    def write(self, material_id: str, *, owner: UserId | None = None) -> None: ...
+    def drop(self, material_id: str, *, owner: UserId | None = None) -> None: ...
+
+
+@runtime_checkable
 class WorkspaceIndex(Protocol):
     """只读查询投影：项目摘要、项目列表、某项目最新一轮。
 

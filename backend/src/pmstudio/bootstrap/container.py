@@ -87,6 +87,7 @@ from pmstudio.application.use_cases import (
 )
 from pmstudio.bootstrap.settings import Settings
 from pmstudio.domain.authoring.readiness import ReadinessChecker
+from pmstudio.domain.null_repos import NoOpVectorIndex
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import ProposalCommitter
 from pmstudio.domain.services.scope_guard import ScopeGuard
@@ -109,6 +110,7 @@ from pmstudio.infrastructure.security import (
 )
 from pmstudio.infrastructure.sqlite import database, owner_scope
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
+from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
 from pmstudio.infrastructure.sqlite.materials import (
     SqliteFtsRetriever,
@@ -137,6 +139,7 @@ from pmstudio.infrastructure.sqlite.users import (
     SqliteSessionRepository,
     SqliteUserRepository,
 )
+from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
 from pmstudio.infrastructure.templates.loader import seed_builtin_templates
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
@@ -267,7 +270,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     # 别落在首个搜索/上传请求里。幂等，多个测试进程各付一次（本就如此）。
     warm_tokenizer()
 
-    connection = database.connect(settings.db_path)
+    connection = database.connect(settings.db_path, embedder=FastEmbedEmbedder())
     clock = SystemClock()
     ids = UuidIdGenerator()
     bus = _build_event_bus(settings)
@@ -288,6 +291,12 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     discussions = SqliteDiscussionRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
     materials = SqliteMaterialStore(connection, ids=ids)
+    # 向量索引（检索阶段 2）：扩展/模型不可用 → NoOp（检索只剩 FTS5，仍可用）。
+    vector_index = (
+        SqliteVectorIndex(connection, embedder=FastEmbedEmbedder())
+        if database.load_sqlite_vec(connection)
+        else NoOpVectorIndex()
+    )
     # 材料检索：FTS5 + jieba 预分词（检索 P1，词级 + OR）。升级前 v1 是整句 LIKE。
     # 换实现只改这一行（`P18` C-2c-1）——`MaterialRetriever` 协议的升级位就在这儿。
     material_search = SqliteFtsRetriever(connection)
@@ -691,7 +700,12 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             documents=documents, evidence=evidences, index=index, materials=material_search
         ),
         upload_material=UploadMaterial(
-            documents=documents, materials=materials, parser=parser, clock=clock, uow=uow
+            documents=documents,
+            materials=materials,
+            parser=parser,
+            clock=clock,
+            uow=uow,
+            vectors=vector_index,
         ),
         list_materials=ListMaterials(materials=materials, parser=parser, index=index),
         fetch_material=FetchMaterial(
@@ -702,12 +716,18 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             index=index,
             clock=clock,
             uow=uow,
+            vectors=vector_index,
         ),
         delete_material=DeleteMaterial(
-            materials=materials, parser=parser, index=index, uow=uow
+            materials=materials, parser=parser, index=index, uow=uow, vectors=vector_index
         ),
         reparse_material=ReparseMaterial(
-            materials=materials, parser=parser, index=index, uow=uow, clock=clock
+            materials=materials,
+            parser=parser,
+            index=index,
+            uow=uow,
+            clock=clock,
+            vectors=vector_index,
         ),
         get_document=GetDocument(documents=documents),
         export_markdown=ExportMarkdown(

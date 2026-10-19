@@ -47,7 +47,22 @@ class NoOpInspirationRepository:
         return ()
 
 
+class NoOpVectorIndex:
+    """材料向量索引的空实现（检索阶段 2：扩展/模型不可用时的装配）。
+
+    与 `NoOpObservationRepository` 同一个先例：用例签名里是"必有依赖、可为空操作"，
+    而不是 `Optional` + `if is not None` 守卫。
+    """
+
+    def write(self, material_id: str, *, owner=None) -> None:
+        pass
+
+    def drop(self, material_id: str, *, owner=None) -> None:
+        pass
+
+
 # 模块级单例：用例默认值引用这些实例，不在参数里调构造函数。
 NO_OBSERVATIONS = NoOpObservationRepository()
 NO_DIGESTS = NoOpDigestRepository()
 NO_INSPIRATIONS = NoOpInspirationRepository()
+NO_VECTORS = NoOpVectorIndex()
