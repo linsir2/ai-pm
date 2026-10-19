@@ -8,7 +8,7 @@
 
 ## 当前状态（2026-10-19：B 批三组全部交付；批 5 向量召回已落地）
 
-**分支** `new-branch` · 工作区干净 · 后端 **2630 passed** · `ruff` 全绿 ·
+**分支** `new-branch` · 工作区干净 · 后端 **2672 passed** · `ruff` 全绿 ·
 `check_api_parity` **65/65** · 前端 `tsc` 干净 / `vitest` **571 passed**。
 
 ### B 组三批的终态
@@ -16,9 +16,9 @@
 | 批 | 内容 | 状态 | 提交 |
 |---|---|---|---|
 | 2 | 工具 `network_access` 注解 + 复述卡披露 | 终审通过，**真跑见证**（轮 `r-c7ebaf15`） | `09d12a0`…`f7e5490` |
-| 3 | L2/L3/L4 三层水位 + 时间排序 | 终审通过 | `cdf69d1`…`768192d` |
-| 4 | 记忆命中端点 + 抽屉「久未使用」 | 终审通过 | `4b56ec4`…`e827ee5` |
-| 5 | 材料向量召回（FTS5 + KNN → RRF） | 代码与合成验收全绿 | `e4971f2`…`797c75f` |
+| 3 | L2/L3/L4 三层水位 + 时间排序 | 终审通过 + **真跑见证**（尾注真出现） | `cdf69d1`…`768192d` |
+| 4 | 记忆命中端点 + 抽屉「久未使用」 | 终审通过 + **真跑截图**（但有界面缺陷，见下） | `4b56ec4`…`e827ee5` |
+| 5 | 材料向量召回（FTS5 + KNN → RRF） | 代码 + **真模型** + **真服务真 HTTP** 全绿 | `e4971f2`…`ccbca7f` |
 
 **用户对"三批全部重做"的裁决**：批 2/3 不删绿码重写，只做完整复验与真跑证据；
 批 5 从零实现（6 个任务）。这条已执行完毕。
@@ -34,23 +34,38 @@
 
 ### 如实记（不要当成已验收）
 
-1. **真模型本环境不可达**：HuggingFace `[Errno 99]`、GCS/镜像 403。离线验收用
-   `FakeEmbedder`——它验的是**几何与排序**，不是语义质量。真模型那条是 `slow` 用例，
-   至今没跑通过。
-2. **批 5 的容器装配已换 `SqliteHybridRetriever`，但还没起过真服务**——合成验收脚本
-   `scripts/vector_acceptance.py` 走的是真装配组件，没走 HTTP 层与前端。
-3. 批 3 水位超限、批 4 抽屉标签**仍缺真跑见证**（真库观察仅 46 条、记忆 0 条），
-   需要合成数据跑一遍真服务补证据。
+1. **真模型已跑通**（2026-10-19）：`HF_ENDPOINT=https://hf-mirror.com` +
+   `HF_HUB_DISABLE_XET=1` 后 `BAAI/bge-small-zh-v1.5` 下载成功（26.9s，512 维，
+   语义区分度 0.625 vs 0.376），`slow` 用例转绿，批 5 的真服务真 HTTP 验收全过。
+2. **批 3 水位 / 批 4 抽屉标签已真跑+截图**（`.codex/runs/2026-10-19/`）：
+   L2 超水位尾注「更早的 245 条待复核」真的出现，L4 未超时不出现（反向判据），
+   `GET /memory/usage` 精确返回 6 条，界面上每条都带「久未使用」标签。
+3. **但批 4 顺带发现一个界面缺陷（未擅自改）**：右列默认折叠成 56px rail
+   （`shell--noloop`），而版本/材料库/就绪度/记忆/调研确认**五个** overlay 抽屉
+   都挂在同一个 `.overlay-slot`（`grid-area: loop`）里，**开抽屉不会展开右列**——
+   抽屉被压成 56px 宽，「久未使用」标签实际不可读。CSS 注释自己写着「保持悬浮」，
+   即意图与实现不符。批 4 当时的终审只验到"标签被渲染出来"，没验默认态下读不读得清。
+   修法（`.shell--noloop .overlay-slot` 改 `position: fixed` 悬浮到右缘）**留给作者拍板**。
 
-### 已知的、与本次工作无关的既存故障
+### 已修的既存故障：熔断器在 Python 3.13 上恒坏（2026-10-19，`6b12021`）
 
-`pybreaker` 1.4.1 在 **Python 3.13 上恒坏**：它的 `call_async` 用了从未 import 的
-`gen.coroutine`（Python 3.11 起移除），每次调用都 `NameError`。
-影响 `tests/infrastructure/test_llm.py`（23）、`tests/harness/test_resilience.py`（12）、
-`tests/harness/test_gateway_resilience.py`（6）、`tests/e2e/test_chaos_matrix.py`（1），
-**共 42 条**，批 4 基线（`e827ee5`）就已经是这样，不是任何一次新改动引入的。
-`requires-python = ">=3.13"`，所以这是**真故障**而非环境漂移——**尚未修**，
-下一个碰熔断/韧性的人第一件事应该是把它解决（换库或换解释器）。
+`pybreaker` 1.4.1 只在装了 tornado 时才 `from tornado import gen`，`except ImportError`
+分支只设 `HAS_TORNADO_SUPPORT=False`——**`gen` 压根没定义**；而 `call_async` 里直接用
+`@gen.coroutine` 与 `raise gen.Return(...)`。于是没装 tornado 时**每次调用都
+`NameError`**，熔断器在 3.13 上等于恒坏（`gen.coroutine` 3.11 起移除，装 tornado 也得
+钉 6.5 之前的老版本）。`requires-python = ">=3.13"`，所以这是**真故障**不是环境漂移。
+
+**修法**：`call_upstream` 里 `await breaker.call_async(factory)` 换成
+`with breaker.calling(): return await factory()`。`calling()` 是库的同步上下文管理器，
+走同一套状态机（`state.call` → `before_call` / `_handle_success` / `_handle_error`），
+**状态机还是库那个，判据没重写**。逐条实测语义未丢：连续失败计数、`fail_max` 开闸、
+`exclude` 扩展点、`throw_new_error_on_trip=False` 抛原异常、`half_open()` 后探针成功即闭合。
+
+**连带暴露的一条假绿**：`test_gateway_honours_the_timeout_against_a_silent_provider`
+此前靠 NameError **瞬间**抛成 `ModelCallFailed` 而"通过"——它从没真正量过超时。
+熔断器修好后它第一次跑到真路径，才发现自己量的是**进程冷启动**（litellm/httpx
+一次性初始化约 1.6 秒）而不是"超时有没有被放大"。已改成先预热一次再计时，
+判别力实测保留（正常 1.03s 过 / 放大版 6.44s 红）。
 
 ## 历史（2026-10-15 多模板收口）
 

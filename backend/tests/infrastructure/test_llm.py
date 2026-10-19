@@ -1018,15 +1018,68 @@ async def _accept_and_hang(reader, writer):  # type: ignore[no-untyped-def]
         writer.close()
 
 
+#: 预热那一把要回的最小 chat completion（OpenAI 兼容形状）。
+_WARM_BODY = (
+    b'{"id":"warm","object":"chat.completion","created":0,"model":"openai/x",'
+    b'"choices":[{"index":0,"message":{"role":"assistant","content":"{}"},'
+    b'"finish_reason":"stop"}]}'
+)
+
+
+async def _first_answers_then_hangs(state: list[int], reader, writer):  # type: ignore[no-untyped-def]
+    """**第一次连接正常回一句，之后每次都静默挂起**。
+
+    ## 为什么要有这"第一次"（2026-10-19 改）
+
+    litellm 首次调用的懒加载 + httpx 客户端初始化，进程内**一次性**约 1.6 秒。
+    冷启动直接量超时会把这笔一次性开销算进去：实测同一进程里
+    第一次调 2.64 秒、第二次调 1.05 秒（`num_retries=0`），不关 SDK 重试则是 4.40 秒。
+    于是"超时有没有被放大"这条判据被**冷启动噪声**盖住——阈值 3.0 秒卡在
+    噪声和真值中间，测的是进程热不热，不是超时行为。
+
+    这条测试此前一直是**假绿**：熔断器在 Python 3.13 上恒抛 NameError，
+    网关把它转成 `ModelCallFailed` 瞬间返回，计时断言"通过"了——它从没真正
+    量过超时。熔断器修好（`6b12021`）之后它第一次跑到真正的超时路径，
+    才暴露出自己量错了东西。
+
+    预热之后：正常 1.05 秒、放大版约 3.4 秒，**3.0 秒这条线仍然两边都不蹭**，
+    判别力原样保留。
+    """
+
+    try:
+        await reader.read()
+        state[0] += 1
+        if state[0] == 1:
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                + str(len(_WARM_BODY)).encode()
+                + b"\r\n\r\n"
+                + _WARM_BODY
+            )
+            await writer.drain()
+            return
+    except Exception:  # noqa: BLE001 —— 预热失败就当它不存在，测的是超时那条
+        pass
+    finally:
+        if state[0] > 1:
+            writer.close()
+
+
 async def test_gateway_honours_the_timeout_against_a_silent_provider():
     """真 HTTP、真 litellm：1 秒的超时必须在 3 秒内抛出来，不许被放大。
 
     边界怎么定的：直接量过"只传 timeout、不关 SDK 重试"的样子是 timeout 的约 4 倍
     （P5c §0.1：timeout=2 → 7.8 秒）。这里 timeout=1，正常的 1.1 秒左右结束，
     放大版要到 4 秒上下——3 秒这条线两边都不蹭。
+
+    **量之前先预热一次**（见 `_first_answers_then_hangs`）：litellm/httpx 的
+    进程内一次性初始化约 1.6 秒，不预热的话量的是冷启动而不是超时行为。
     """
 
-    server = await asyncio.start_server(_accept_and_hang, "127.0.0.1", 0)
+    state = [0]
+    server = await asyncio.start_server(
+        lambda r, w: _first_answers_then_hangs(state, r, w), "127.0.0.1", 0
+    )
     port = server.sockets[0].getsockname()[1]
     gateway = LiteLLMGateway(
         model="openai/x",
@@ -1036,6 +1089,21 @@ async def test_gateway_honours_the_timeout_against_a_silent_provider():
         max_attempts=1,
         backoff=(0.0,),
     )
+
+    # 预热：先跑一次**不计时的**调用（服务端第一次会正常回一句）。
+    # litellm 首次调用的懒加载 + httpx 客户端初始化是进程内一次性开销（约 1.6 秒），
+    # 不预热的话量的是冷启动而不是超时行为。
+    try:
+        await gateway.complete(
+            ModelRequest(
+                purpose="claims",
+                messages=(ModelMessage(role="user", content="x"),),
+                schema_name="ClaimsPacket",
+                response_schema={"type": "object"},
+            )
+        )
+    except BaseException:  # noqa: BLE001 —— 预热成功与否都不重要
+        pass
 
     start = time.monotonic()
     try:
