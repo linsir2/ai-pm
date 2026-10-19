@@ -16,7 +16,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 #:     `documents.template` 列（老库 ALTER 补）。
 #: 13 = 多用户改造：13 张表补 `owner_id` + 存量回填给首 admin + NULL 熔断。
 #: 14 = L2 观察回填 `created_at`（v11 当死字段删过，这里再加回来并让它当排序依据）。
-USER_VERSION = 14
+USER_VERSION = 15
 
 #: v13 起带 `owner_id` 的表：12 张项目域表 + `templates`（裁决 A）。
 #: `templates` 的 builtin 行 owner 留 NULL（出厂模板人人可见）——回填与熔断都跳过它们。
@@ -190,7 +190,7 @@ def _enable_wal(connection: sqlite3.Connection) -> None:
     _warn_wal_reset_risk(mode)
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
+def connect(db_path: Path, *, embedder=None) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # 显式 `timeout=10.0`（多用户改造 §0.9）：Python 默认 5.0 是隐式的，写出来是为了
     # "并发写等锁最多等多久"这件事有个可见的数；单 worker + 短事务是前提，见 `scripts/dev.py`。
@@ -204,10 +204,30 @@ def connect(db_path: Path) -> sqlite3.Connection:
     # `CREATE INDEX ... ON <表>(owner_id)`，老库那一刻还没这列——`CREATE TABLE IF NOT
     # EXISTS` 补不了已有表的列，只有 `migrate()` 的 `ALTER TABLE` 能。放在 schema 之后
     # 建索引就会在老库上炸「no such column: owner_id」。新库两边都幂等，不受影响。
-    migrate(connection)
+    #
+    # 向量扩展在这里（`migrate` 之前）加载：`schema.sql` 要建 `vec0` 虚拟表，
+    # 模块没注册的话整份 schema 执行直接炸。载不了就记一行 warning；
+    # 检索侧会退回纯 FTS5（见 `migrate` 与 `SqliteVectorIndex`）。
+    load_sqlite_vec(connection)
+    migrate(connection, embedder=embedder)
     connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     connection.execute(f"PRAGMA user_version = {USER_VERSION}")
     return connection
+
+
+def load_sqlite_vec(connection: sqlite3.Connection) -> bool:
+    """把 `sqlite-vec` 载进这条连接。**载不了就返回 False**——调用方据此降级，
+    绝不因此炸 `connect()`（"缺配置说缺，不是假装有"）。"""
+
+    try:
+        import sqlite_vec
+        connection.enable_load_extension(True)
+        sqlite_vec.load(connection)
+        connection.enable_load_extension(False)
+        return True
+    except Exception as error:  # noqa: BLE001 —— 扩展/平台问题一律降级
+        logger.warning("sqlite-vec 载入失败，检索退回纯 FTS5：%s", error)
+        return False
 
 
 #: 老库要删的列（销账死字段）。`ALTER TABLE ... DROP COLUMN` 要求 SQLite ≥ 3.35。
@@ -218,8 +238,12 @@ DROPPED_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 
-def migrate(connection: sqlite3.Connection) -> None:
-    """把老库补到当前形状：加列、删列、不丢业务数据、可重复跑。"""
+def migrate(connection: sqlite3.Connection, *, embedder=None) -> None:
+    """把老库补到当前形状：加列、删列、不丢业务数据、可重复跑。
+
+    `embedder` 只给向量回填用：`None` = 只做形状迁移（离线安全；调用方全不传时就是它）；
+    传了才补 `material_chunks_vec`。真跑里容器传 `FastEmbedEmbedder`，测试里传假实现。
+    """
 
     for table, columns in ADDED_COLUMNS.items():
         existing = {
@@ -290,6 +314,52 @@ def migrate(connection: sqlite3.Connection) -> None:
         )
 
     _backfill_chunk_index(connection)
+    _backfill_chunk_vectors(connection, embedder=embedder)
+
+
+def _backfill_chunk_vectors(connection: sqlite3.Connection, *, embedder=None) -> None:
+    """给"升级前入库的块"补向量（检索阶段 2）。**幂等**：只补缺的那些。
+
+    与 FTS 回填同一条"补缺"口径（`_backfill_chunk_index`）：`embedder=None` 就整段跳过
+    ——形状迁移本身不许依赖模型下载；真跑由调用方显式传，测试传假实现。
+    """
+
+    if embedder is None:
+        return
+    if not load_sqlite_vec(connection):
+        return
+    has_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'material_chunks'"
+    ).fetchone()
+    has_vec = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'material_chunks_vec'"
+    ).fetchone()
+    if has_table is None or has_vec is None:
+        return
+    missing = connection.execute(
+        "SELECT c.chunk_id, c.material_id, c.text, c.heading_path, m.title AS title"
+        " FROM material_chunks c JOIN materials m ON m.material_id = c.material_id"
+        " WHERE c.chunk_id NOT IN (SELECT chunk_id FROM material_chunks_vec)"
+    ).fetchall()
+    if not missing:
+        return
+    from sqlite_vec import serialize_float32
+
+    texts = [
+        index_source(
+            title=row["title"],
+            heading_path=json.loads(row["heading_path"]),
+            text=row["text"],
+        )
+        for row in missing
+    ]
+    vectors = embedder.embed_many(texts)
+    for row, vector in zip(missing, vectors, strict=True):
+        connection.execute(
+            "INSERT OR REPLACE INTO material_chunks_vec (chunk_id, embedding)"
+            " VALUES (?, ?)",
+            (row["chunk_id"], serialize_float32(list(vector))),
+        )
 
 
 def _backfill_chunk_index(connection: sqlite3.Connection) -> None:
