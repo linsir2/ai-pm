@@ -192,7 +192,9 @@ def main() -> int:
         vi = SqliteVectorIndex(connection, embedder=embedder)
         for mid in ids.values():
             vi.write(mid)
-        _log(f"灌库 {len(blocks)} 份，向量 {connection.execute('SELECT count(*) FROM material_chunks_vec').fetchone()[0]} 条")
+        _vector_rows = connection.execute(
+            "SELECT count(*) FROM material_chunks_vec").fetchone()[0]
+        _log(f"灌库 {len(blocks)} 份，向量 {_vector_rows} 条")
 
         # ── 造查询 ────────────────────────────────────────────────
         cases: dict[str, list[tuple[str, str]]] = {
@@ -247,8 +249,9 @@ def main() -> int:
                 universe = set(fts_ids) | set(vec_ids[:20])
                 rrf20 = _rrf([fts_ids, vec_ids[:20]])
 
-                def _cov(mid: str) -> float:
-                    return _coverage(connection, mid, tokens)
+                def _cov(mid: str, _tokens: tuple[str, ...] = tokens) -> float:
+                    # 默认参数绑一次循环变量（ruff B023）：闭包按调用时的值取，不踩循环末值
+                    return _coverage(connection, mid, _tokens)
 
                 variants = {
                     "v2": fts_ids,
