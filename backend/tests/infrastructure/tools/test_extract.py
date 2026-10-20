@@ -334,3 +334,48 @@ def test_splitting_prefers_a_line_boundary_over_a_hard_cut():
     for chunk in parsed.chunks:
         # 每块最后一行仍是完整一句（带句号），没有被腰斩
         assert chunk.text.split("\n")[-1].endswith("。"), chunk.anchor
+
+
+# ── 网页的标题层级要留下（批 6b Task 4）─────────────────────────────────
+#
+# 为什么：`<h1>`–`<h6>` 被 `get_text` 拍成普通行 → 网页材料的 `heading_path` **基本恒空**
+# → 章节名只以普通文本存在于**那一个块**里 → 长章节切开后，**后几块搜不到节名**
+# （这正是 `index_source` 的 docstring 点名的问题）。
+# 修法：拍平时给标题行加 markdown 前缀 → `chunk_text` 的 `_HEADING` 正则自然认出来
+# → 与「上传 .md」**同构**（`.md` 的 `# 标题` 就是这么进 `heading_path` 的）。零新依赖。
+
+
+def test_web_headings_become_the_heading_path():
+    """R：`<h2>角色映射</h2>` → `heading_path=("角色映射",)`（与上传 .md 同构）。
+
+    注意用例挑的是**不撞**中文公文规则（`1.2 ` / `一、` / `第N章`）的标题：
+    "1.1 角色映射" 恰好撞 `1.2 ` 那条规则，本来就能进 heading_path，用它测是假绿。
+    """
+    html = (
+        "<html><head><title>权限设计指南</title></head><body>"
+        "<h1>权限设计指南</h1>"
+        "<h2>角色映射</h2><p>用户属于角色，权限从角色汇集。</p>"
+        "</body></html>"
+    ).encode()
+
+    parsed = parser.parse(filename="page.html", media_type="text/html", data=html)
+
+    heading_paths = {chunk.heading_path for chunk in parsed.chunks}
+    # heading_path 里**带 markdown 前缀**——这是 `chunk_text` 的既有形状
+    # （上传 .md 的 "# 标题" 也是这样进 heading_path 的），我们与它同构。
+    assert ("# 权限设计指南", "## 角色映射") in heading_paths, (
+        f"标题没进 heading_path：{heading_paths}"
+    )
+
+
+def test_the_heading_text_is_also_kept_as_searchable_text():
+    """R：标题的**正文**也不丢（它仍是可搜的内容，只是多带个 markdown 前缀）。"""
+    html = (
+        "<html><head><title>指南</title></head><body>"
+        "<h2>角色映射</h2><p>正文。</p></body></html>"
+    ).encode()
+
+    parsed = parser.parse(filename="page.html", media_type="text/html", data=html)
+
+    text = "\n".join(chunk.text for chunk in parsed.chunks)
+    assert "角色映射" in text, "标题的正文丢了——它得能被搜到"

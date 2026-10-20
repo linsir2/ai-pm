@@ -175,10 +175,47 @@ def html_text(data: bytes) -> tuple[str, str | None]:
     title = node.get_text(strip=True) if node is not None else ""
     if node is not None:
         node.extract()
-    text = soup.get_text("\n", strip=True).strip()
+    text = _flatten_with_headings(soup)
     if not text:
         return "", (title or None)
     return (f"{title}\n{text}" if title and title not in text else text), (title or None)
+
+
+#: 网页标题层级 → markdown 前缀的级数（`h1` → `#`）。**和上传 .md 同构**：
+#: `chunk_text` 的 `_HEADING` 正则认的就是这些形状。
+_HEADING_LEVELS = {f"h{level}": level for level in range(1, 7)}
+
+
+def _flatten_with_headings(soup) -> str:  # type: ignore[no-untyped-def]
+    """把页面拍成文本，**标题行带 markdown 前缀**（`h2` → `## 标题`）。
+
+    ## 为什么（2026-10-19 实测定的）
+
+    原来直接 `soup.get_text("\\n", strip=True)`，`<h1>`–`<h6>` 被拍成**普通行**，
+    于是网页材料的 `heading_path` **基本恒空**——章节名只以普通文本存在于**那一个块**里，
+    长章节切开后**后几块搜不到节名**（`index_source` 的 docstring 点名的问题：
+    "长节被切成多块时，后几块的正文里没有节名"）。
+
+    加 markdown 前缀后，`chunk_text` 的 `_HEADING` 正则自然认出来 →
+    `heading_path` 有值，**零新依赖**，且与「上传 .md」**同构**
+    （`.md` 的 `# 标题` 就是这么进 `heading_path` 的）。
+
+    ## 怎么加（只动标题，其余一字不改）
+
+    **把标题元素替换成带前缀的纯文本**，再走原来那条 `get_text` 拍平——
+    所以裸 `div` 菜单之类"没有语义标签的站点噪音"**照旧留在正文里**
+    （`test_a_menu_div_without_semantic_tags_stays` 钉着这条取舍：
+    「宁留不删」——留着的噪音看得见，删错的内容看不见）。
+
+    标题的**正文也保留**（带前缀）——它仍是可搜的内容。
+    """
+
+    for element in soup.find_all(list(_HEADING_LEVELS)):
+        text = element.get_text(" ", strip=True)
+        if text:
+            level = _HEADING_LEVELS[element.name]
+            element.replace_with(f"{'#' * level} {text}")
+    return soup.get_text("\n", strip=True).strip()
 
 
 def _is_heading(line: str) -> bool:

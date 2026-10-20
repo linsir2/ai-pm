@@ -18,7 +18,8 @@ import random
 import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from pathlib import PurePosixPath
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -49,6 +50,34 @@ WANTED_MEDIA_TYPES = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
+
+#: URL 扩展名 → media_type。**扩展名是站点把类型返错时的唯一线索**：
+#: 很多站点把 .pdf 返成 `application/octet-stream`（上面那段注释承诺过两级判决，
+#: 但代码里只判了 media_type → 那些站点今天被拒，`04-未决` 记着这条）。
+#: 判决顺序：**media_type 认得就收**（最准）；media_type 认不得**再看扩展名**。
+#: 两级都认不得 → 拒（不是"放宽成什么都收"）。
+_EXTENSION_MEDIA_TYPES = {
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".txt": "text/plain",
+    ".md": "text/plain",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+
+def _is_wanted(media_type: str, url: str) -> bool:
+    """这份东西**是不是我们要的材料**？media_type 与扩展名**两级**都接受。
+
+    顺序有意义：media_type 更准（站点自己说的），扩展名只是兜底
+    （站点经常把 .pdf 返成 application/octet-stream）。
+    """
+
+    if media_type in WANTED_MEDIA_TYPES:
+        return True
+    suffix = PurePosixPath(urlparse(url).path).suffix.lower()
+    return suffix in _EXTENSION_MEDIA_TYPES
 
 
 def resolve_host(host: str) -> tuple[str, ...]:
@@ -120,7 +149,7 @@ class HttpxWebFetcher:
                             tool_id=TOOL_ID,
                             status=attempt.status_code,
                         )
-                    if attempt.media_type not in WANTED_MEDIA_TYPES:
+                    if not _is_wanted(attempt.media_type, current):
                         raise FetchRefused(
                             f"这个地址返回的不是已知材料类型（{attempt.media_type or '没写类型'}）"
                             "——支持网页 / PDF / Word / Excel，先下载再上传也行"

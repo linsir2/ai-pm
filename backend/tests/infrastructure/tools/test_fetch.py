@@ -340,3 +340,38 @@ async def test_every_hop_is_revalidated_after_a_redirect():
 
     assert "内网" in str(error.value)
     assert dns["n"] == 2                     # 每一跳都重新解析校验
+
+
+async def test_a_pdf_served_as_octet_stream_is_still_accepted():
+    """R：站点把 .pdf 返成 `application/octet-stream` **照样收**。
+
+    `fetch.py` 的注释承诺「判决按 media_type 与扩展名**两级**都接受
+    （站点经常把 .pdf 返成 application/octet-stream，那种情况下 URL 扩展名才是唯一线索）」，
+    但代码里**只判 media_type** → 那些站点今天被拒。**注释与实现不符 = bug**。
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/octet-stream"},
+            content=minimal_pdf("Hello export"),
+        )
+
+    page = await fetcher(handler).fetch(url="https://example.com/spec.pdf")
+
+    assert page.content.startswith(b"%PDF")
+    assert page.final_url == "https://example.com/spec.pdf"
+
+
+async def test_an_unknown_type_with_an_unknown_extension_is_still_refused():
+    """R：扩展名也认不出来时**照旧拒**（两级判决不是"放宽成什么都收"）。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/octet-stream"},
+            content=b"\x00\x01binary",
+        )
+
+    with pytest.raises(FetchRefused) as error:
+        await fetcher(handler).fetch(url="https://example.com/archive.zip")
+
+    assert "不是已知材料类型" in str(error.value)
