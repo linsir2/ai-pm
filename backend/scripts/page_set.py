@@ -38,6 +38,36 @@ OUT = BACKEND.parent / ".codex" / "runs" / "2026-10-19" / "pages"
 #: 每条带 `must_keep`（这段**必须在**：丢了就是丢内容）与 `may_drop`（这段是站点噪音）。
 PAGES = [
     {
+        "name": "ithome",
+        "url": "https://www.ithome.com/",
+        "type": "科技门户/首页",
+    },
+    {
+        "name": "36kr",
+        "url": "https://www.36kr.com/",
+        "type": "创投门户/首页",
+    },
+    {
+        "name": "juejin_collections",
+        "url": "https://juejin.cn/collections",
+        "type": "技术站/列表页",
+    },
+    {
+        "name": "cnblogs",
+        "url": "https://www.cnblogs.com/",
+        "type": "技术博客/首页",
+    },
+    {
+        "name": "runoob",
+        "url": "https://www.runoob.com/js/js-tutorial.html",
+        "type": "教程站/文章页",
+    },
+    {
+        "name": "github_cpython",
+        "url": "https://github.com/python/cpython",
+        "type": "代码托管/首页（噪音极重）",
+    },
+    {
         "name": "fastapi_zh",
         "url": "https://fastapi.tiangolo.com/zh/tutorial/",
         "type": "文档站",
