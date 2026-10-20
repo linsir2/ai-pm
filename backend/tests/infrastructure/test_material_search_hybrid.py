@@ -212,3 +212,155 @@ def test_the_first_hit_carries_the_largest_score(conn):
     assert len(hits) >= 2, "至少要有两条才能比大小"
     scores = [h.score for h in hits]
     assert scores == sorted(scores, reverse=True), f"第一名应拿最大分，实得 {scores}"
+
+
+def test_the_vector_side_gives_the_real_cosine_not_a_rank(conn):
+    """R：语义分是**真余弦**（不是名次归一化）。
+
+    为什么：凸组合要的是**可比的分数幅度**。名次归一化把「第 1 名」与「第 200 名」
+    压成 1.0 与 0.005——幅度整个丢了，这正是 RRF 一族（"纯名次函数"）的病根
+    （TOIS 2023：凸组合 > RRF，in/out-of-domain 都赢）。
+    两个 embedder 都已归一（实测 L2 范数 1.0）→ L2 距离 d 换算 `cos = 1 - d²/2`。
+    """
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    _put_material(conn, "m-1", chunks=(("c1", "退货时限是七天"),))
+    _put_material(conn, "m-2", chunks=(("c2", "机柜布线要走背板槽位"),))
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-2")
+    retriever = SqliteHybridRetriever(conn, embedder=FakeEmbedder(dimensions=512))
+
+    scores = retriever._knn_scores(str(PROJECT), str(TEST_OWNER), "退货时限")
+
+    assert scores, "向量侧没给出分数"
+    for chunk_id, cosine in scores.items():
+        assert -1.01 <= cosine <= 1.01, f"余弦越界：{chunk_id} → {cosine}"
+    # **不是名次归一化**：名次归一化给第一名**恰好 1.0**（与真实相似度无关），
+    # 真余弦不会——查询「退货时限」与「退货时限是七天」并不是同一段，余弦应 < 1。
+    assert max(scores.values()) < 1.0, (
+        "第一名恰好 1.0 —— 那还是名次归一化，不是真余弦"
+    )
+    # 词面更贴近查询的那块，余弦应当更高
+    assert scores["c1"] > scores["c2"], scores
+
+
+def test_an_exact_lexical_hit_is_not_knocked_out_by_a_semantic_one(conn):
+    """R：**词面完全命中**的块不被语义掀翻。
+
+    这是 RRF 一族的通病（纯名次函数丢掉了分数幅度）：语义第 1、词面第 2 的块
+    会赢过词面第 1、语义第 50 的块。实测（真数据）：旧口径让"同词换序"类少 1 条、
+    "同义改述"类少 2 条；改成凸组合后两类都与纯 FTS5 持平。
+    """
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    # 目标：正文**原样**含查询的每个 token（词面完全命中）
+    _put_material(conn, "m-1", chunks=(("c1", "退货时限是七天"),))
+    # 干扰：语义上像（共享很多字），词面上不含查询的 token
+    _put_material(conn, "m-2", chunks=(("c2", "退货的期限与流程说明"),))
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-2")
+
+    hits = SqliteHybridRetriever(conn, embedder=FakeEmbedder(dimensions=512)).search(
+        project_id=PROJECT, query="退货时限", owner=TEST_OWNER)
+
+    assert hits, "查不到"
+    assert hits[0].chunk_id == "c1", f"词面完全命中的块被压到第 {hits[0].chunk_id}"
+
+
+def test_the_fusion_score_is_a_bounded_combination(conn):
+    """R：融合分是**两个有界分量的凸组合**（不是名次的函数）。
+
+    语义是真余弦（[-1,1]），词面是饱和归一（[0,1)），`α·语义 + (1−α)·词面` 落在 [-1,1]。
+    """
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    _put_material(conn, "m-1", chunks=(("c1", "退货时限是七天"),))
+    _put_material(conn, "m-2", chunks=(("c2", "机柜布线要走背板槽位"),))
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-2")
+
+    hits = SqliteHybridRetriever(conn, embedder=FakeEmbedder(dimensions=512)).search(
+        project_id=PROJECT, query="退货时限", owner=TEST_OWNER)
+
+    for hit in hits:
+        assert -1.01 <= hit.score <= 1.01, f"融合分越界：{hit.score}"
+
+
+def _rare_term_corpus(conn):
+    from tests.conftest import TEST_OWNER
+
+    """一个能放大病灶的语料：**罕见词**在 m1、常见词在别人家。
+
+    为什么要这么造：病灶是「目标的词面覆盖率落在 0.5 上下 → 掉进纯语义档 →
+    丢掉 BM25 挣到的名次」。要让覆盖率**低**而 BM25 **高**，就得让目标只命中
+    一个**罕见**词（覆盖率 1/4），干扰块命中三个**常见**词（覆盖率 3/4）。
+    实测这时的 BM25：m1 = 1.0986（罕见词 IDF 高）vs m2 = 0.3365。
+    """
+    from pmstudio.infrastructure.sqlite.tokenize import index_source
+
+    docs = {
+        "m1": "紫貂 皮草 拍卖 记录",
+        "m2": "出口 关税 报关 流程",
+        "m3": "出口 关税 物流 规定",
+        "m4": "报关 关税 出口 清关",
+        "m5": "关税 出口 通关 说明",
+    }
+    for material_id, text in docs.items():
+        conn.execute(
+            "INSERT INTO materials (material_id, project_id, owner_id, origin, title, source_ref,"
+            " media_type, bytes_len, sha256, parser_id, parser_version, schema_version, truncated,"
+            " warnings, content, created_at) VALUES (?, 'p1', ?, 'upload', '手册', 'a',"
+            " 'text/plain', 0, ?, 'plain', '1', 1, 0, '[]', X'00', '2026-10-18T00:00:00+00:00')",
+            (material_id, str(TEST_OWNER), f"sha-{material_id}"),
+        )
+        conn.execute(
+            "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
+            " heading_path, anchor) VALUES (?, ?, ?, 0, ?, '[]', '第1段')",
+            (f"{material_id}#c00", material_id, str(TEST_OWNER), text),
+        )
+        conn.execute(
+            "INSERT INTO material_chunks_fts (chunk_id, material_id, tokens) VALUES (?, ?, ?)",
+            (f"{material_id}#c00", material_id,
+             index_source(title="手册", heading_path=(), text=text)),
+        )
+
+
+def test_a_rare_lexical_hit_survives_the_semantic_branch(conn):
+    """R：目标只命中**一个罕见词**时（覆盖率低、BM25 很高），**不许被语义掀翻**。
+
+    这是"离散分档"口径的病根：覆盖率 0.25 → 掉进纯语义档 → BM25 挣到的
+    第 1 位被一个只命中常见词的块抢走。实测（真数据）：旧口径让"同词换序"少 1 条、
+    "同义改述"少 2 条；凸组合后两类都与纯 FTS5 持平。
+    """
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    class _Constant(FakeEmbedder):
+        """**所有文本同一个向量**——语义项对每块都一样。
+
+        这样测试隔离出"融合有没有保住词面信号"这一件事：语义路不添乱，
+        排序就该完全由词面强度决定。旧口径（离散分档）在这里必错：
+        m1 覆盖率 0.25 → 掉进纯语义档 → 明明 BM25 第 1 却被排到后面。
+        """
+
+        def embed_many(self, texts):
+            return [tuple([1.0] + [0.0] * (self.dimensions - 1)) for _ in texts]
+
+    _rare_term_corpus(conn)
+    for material_id in ("m1", "m2", "m3", "m4", "m5"):
+        SqliteVectorIndex(conn, embedder=_Constant(dimensions=512)).write(material_id)
+
+    hits = SqliteHybridRetriever(conn, embedder=_Constant(dimensions=512)).search(
+        project_id=PROJECT, query="紫貂 出口 关税 报关", owner=TEST_OWNER)
+
+    assert hits, "查不到"
+    assert hits[0].chunk_id == "m1#c00", (
+        f"罕见词命中的块被压到第 {[h.chunk_id for h in hits]}"
+    )

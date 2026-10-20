@@ -88,8 +88,8 @@ def _knn_hits(connection, embedder, query: str, limit: int) -> list[tuple[str, f
     try:
         vector = embedder.embed_many([query])[0]
         rows = connection.execute(
-            "SELECT chunk_id FROM ("
-            " SELECT chunk_id FROM material_chunks_vec"
+            "SELECT chunk_id, distance FROM ("
+            " SELECT chunk_id, distance FROM material_chunks_vec"
             " WHERE embedding MATCH ? ORDER BY distance LIMIT ?"
             ") WHERE chunk_id IN ("
             " SELECT c.chunk_id FROM material_chunks c"
@@ -102,16 +102,17 @@ def _knn_hits(connection, embedder, query: str, limit: int) -> list[tuple[str, f
     if not rows:
         return []
     chunk_ids = [str(r["chunk_id"]) for r in rows]
+    distances = [float(r["distance"]) for r in rows]
     placeholders = ",".join("?" for _ in chunk_ids)
     mapping = connection.execute(
         f"SELECT chunk_id, material_id FROM material_chunks WHERE chunk_id IN ({placeholders})",
         chunk_ids,
     ).fetchall()
     by_chunk = {str(r["chunk_id"]): str(r["material_id"]) for r in mapping}
-    total = max(1, len(chunk_ids))
+    # 语义分 = **真余弦**（两个 embedder 都已归一 → L2 距离 d 换算 cos = 1 - d²/2）
     return [
-        (by_chunk[c], 1.0 - index / total)
-        for index, c in enumerate(chunk_ids)
+        (by_chunk[c], 1.0 - (float(d) * float(d)) / 2.0)
+        for c, d in zip(chunk_ids, distances, strict=True)
         if c in by_chunk
     ]
 
@@ -146,6 +147,34 @@ def _rrf(lists: list[list[str]], k: int = 60) -> list[str]:
             scores[item] = scores.get(item, 0.0) + 1.0 / (k + rank)
             first.setdefault(item, len(first))
     return sorted(scores, key=lambda item: (-scores[item], first[item]))
+
+
+def _convex(bm25: dict, sem: dict, alpha: float, mode: str):
+    """凸组合：`α·语义 + (1−α)·归一化词面`。
+
+    两种词面归一：
+    - `饱和`：`s/(s+pivot)`，pivot 取候选集 BM25 中位数（有界、查询内稳定）
+    - `minmax`：`(s-min)/(max-min)`（TOIS 的 TM2C2；论文说归一方式影响不大）
+    """
+    universe = set(bm25) | set(sem)
+    if not universe:
+        return []
+    if mode == "饱和":
+        pivot = sorted(bm25.values())[len(bm25) // 2] if bm25 else 1.0
+        def lex(mid):
+            s = bm25.get(mid, 0.0)
+            return s / (s + pivot) if s > 0 else 0.0
+    else:
+        lo = min(bm25.values()) if bm25 else 0.0
+        hi = max(bm25.values()) if bm25 else 0.0
+        span = hi - lo
+        def lex(mid):
+            if mid not in bm25 or span <= 0:
+                return 0.0
+            return (bm25[mid] - lo) / span
+    def total(mid):
+        return alpha * sem.get(mid, 0.0) + (1 - alpha) * lex(mid)
+    return sorted(universe, key=lambda mid: (-total(mid), mid))
 
 
 def _norm(value: float, best: float) -> float:
@@ -254,6 +283,9 @@ def main() -> int:
             "互补cov+(1-cov)sem", "cov+sem", "满覆盖优先",
             "满覆盖闸门+语义", "纯语义", "满覆盖闸门+RRF5",
             "BM25档(0.5)", "BM25档(0.25)", "BM25归一+sem",
+            "凸组合(饱和)a0.3", "凸组合(饱和)a0.4", "凸组合(饱和)a0.5",
+            "凸组合(饱和)a0.6", "凸组合(饱和)a0.7",
+            "凸组合(minmax)a0.4", "凸组合(minmax)a0.5", "凸组合(minmax)a0.6",
             "满覆盖闸门+语义倒数", "满覆盖闸门+语义倒数+词法破平",
             "半覆盖闸门+语义", "三档闸门+语义",
         )
@@ -267,6 +299,7 @@ def main() -> int:
                 fts_hits = fts.search(
                     project_id=PROJECT, query=query, limit=20, owner=OWNER)
                 fts_ids = [h.material_id for h in fts_hits]
+                bm25 = {h.material_id: float(h.score) for h in fts_hits}
                 # BM25 强度（`MaterialHit.score` 就是 `-bm25`，越大越强）
                 strength = {h.material_id: h.score for h in fts_hits}
                 best_strength = max(strength.values(), default=0.0)
@@ -297,6 +330,15 @@ def main() -> int:
                             _cov(mid) + (1 - _cov(mid)) * sem.get(mid, 0.0)
                         ),
                     ),
+                    # **凸组合**（2026-10-19 定的口径；TOIS 2023：归一化分数的凸组合 > RRF）
+                    "凸组合(饱和)a0.3": _convex(bm25, sem, 0.3, "饱和"),
+                    "凸组合(饱和)a0.4": _convex(bm25, sem, 0.4, "饱和"),
+                    "凸组合(饱和)a0.5": _convex(bm25, sem, 0.5, "饱和"),
+                    "凸组合(饱和)a0.6": _convex(bm25, sem, 0.6, "饱和"),
+                    "凸组合(饱和)a0.7": _convex(bm25, sem, 0.7, "饱和"),
+                    "凸组合(minmax)a0.4": _convex(bm25, sem, 0.4, "minmax"),
+                    "凸组合(minmax)a0.5": _convex(bm25, sem, 0.5, "minmax"),
+                    "凸组合(minmax)a0.6": _convex(bm25, sem, 0.6, "minmax"),
                     # **BM25 强度分档**（2026-10-19 真数据暴露的修法）：
                     # 词面"强不强"用 BM25 量（它天然给罕见词高权重），不用覆盖率
                     # ——覆盖率会因为查询多一个字/少一个字就整档掉，丢掉 BM25 挣到的位置。

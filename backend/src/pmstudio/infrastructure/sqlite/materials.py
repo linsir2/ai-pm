@@ -484,6 +484,11 @@ _KNN_SCAN_LIMIT = 200
 COVERAGE_FULL = 1.0
 COVERAGE_MAJORITY = 0.5
 
+#: **融合的 α**：语义那一路的权重（0=纯词面，1=纯语义）。
+#: 值由 `scripts/vector_fusion_lab.py` 在我们的语料上量出来（判据：逐字/换序两类
+#: 不低于纯 FTS5，改述类高于纯 FTS5）。**换个语料要重量**。
+FUSION_ALPHA = 0.5
+
 #: 语义分用**名次归一化**（vec#1 → 1.0，vec#N → 1/N），不用距离绝对值：
 #: 距离的绝对值随语料/模型变，名次归一化后跨语料可比。
 def _semantic_score(rank: int | None, total: int) -> float:
@@ -542,9 +547,8 @@ class SqliteHybridRetriever:
         fts_hits = self._fts.search(
             project_id=project_id, query=query, limit=_FTS_CANDIDATES, owner=resolved
         )
-        fts_ids = [hit.chunk_id for hit in fts_hits]
-        vec_ids = self._knn_ids(str(project_id), str(resolved), query)
-        ordered = self._fuse_by_coverage(fts_ids, vec_ids, query)
+        vec_scores = self._knn_scores(str(project_id), str(resolved), query)
+        ordered = self._fuse_by_score(fts_hits, vec_scores, query)
         by_id = {hit.chunk_id: hit for hit in fts_hits}
         knn_only = [chunk_id for chunk_id in ordered if chunk_id not in by_id]
         by_id.update(self._hits_for(knn_only, str(project_id), str(resolved), tokens))
@@ -557,47 +561,58 @@ class SqliteHybridRetriever:
             for position, chunk_id in enumerate(ordered[:limit])
         )
 
-    def _fuse_by_coverage(
-        self, fts_ids: list[str], vec_ids: list[str], query: str
+    def _fuse_by_score(
+        self, fts_hits, vec_scores: dict[str, float], query: str
     ) -> list[str]:
-        """两路融合：**按词面覆盖率分档，档内按语义分排**。
+        """两路融合：**凸组合** `α·余弦 + (1−α)·归一化 BM25`。
 
-        ## 为什么不是 RRF（2026-10-19 实测定的）
+        ## 为什么是凸组合而不是 RRF / 分档（2026-10-19 实测 + 调研定的）
 
-        RRF 是**对称**融合：一条在两路里都出现的块得两份分，于是
-        「词法第 1、语义第 50」的块会被「语义第 1、词法第 2」的块压下去。
-        实测（逐字子串类 40 条查询）：纯 FTS5 是 top1 30 / recall@5 40，
-        上了 RRF 变成 **25 / 36** ——用户升级后反而搜不到以前能搜到的东西。
-        预注册判据「逐字与换序两类逐档不低于 v2」因此**没通过**。
+        原来的口径是「**离散**分档（覆盖率 1.0 / 0.5 / else）+ 档内按语义名次排」。
+        它的病是**把分数幅度丢了**：BM25 说"这块多强"被一个阈值拍成两档，
+        档内再按语义名次重排 → 强度信息彻底没了。症状是"查询多一个字
+        （覆盖率 1.0→0.8）就整档掉，BM25 挣到的第 1 位被语义掀翻"。
 
-        ## 现在的口径
+        调研结论（TOIS 2023，9 个数据集，in-domain 与 out-of-domain 都赢 RRF）：
+        **归一化分数的凸组合 > RRF**；RRF 对参数敏感（NDCG "swings wildly"），
+        因为它是**纯名次**函数，丢掉了距离/幅度信息；凸组合的参数 α **sample-efficient**
+        （几个标注查询就够调，α∈[0.6,0.8] 稳健）。
 
-        **档位看词面**（`cov` = 查询 token 有多少比例出现在这块里）：
-        0 档 = 用户的话原样在（cov ≥ 1.0）；1 档 = 大半在（cov ≥ 0.5）；
-        2 档 = 词面说不了。
-        **档内按语义分排**（名次归一化）。
+        我们要的正是这个：**词面完全命中**（BM25 很高）与**语义很近**（余弦很高）
+        能在**同一个尺度上比**，谁强谁上。
 
-        这样两头都对：用户把原话打出来时，词面强的块一定在前面（不退步）；
-        用户换个说法时，词面说不了，全靠语义定次序（能召回来）。
-        实测：逐字 34/40、同词换序 35/40、同义改述 recall@5 22/35 = 63%。
+        ## 归一化方式
+
+        两路都归一化到 [0,1]：
+        - 语义：余弦本来就是 [-1,1]（`vec_scores` 给的是真余弦）；
+        - 词面：BM25 无上界（SQLite 的 `bm25()` 取负后越大越强），
+          用**饱和归一** `s/(s+k)`（k 取候选集里 BM25 的中位数）——
+          比 min-max 稳（min-max 被一个极端值压扁其余，TOIS 也说归一方式影响不大）。
+
+        ## α
+
+        `FUSION_ALPHA`（语义那一路的权重）在我们的语料上量出来的
+        （`scripts/vector_fusion_lab.py`）。选它的判据：逐字/换序两类**不低于纯 FTS5**，
+        改述类**高于纯 FTS5**。
         """
 
-        if not fts_ids and not vec_ids:
+        if not fts_hits and not vec_scores:
             return []
-        candidates = list(dict.fromkeys(fts_ids + vec_ids))
-        semantic = {chunk_id: _semantic_score(index, len(vec_ids))
-                    for index, chunk_id in enumerate(vec_ids, start=1)}
-        coverage = self._coverage(candidates, query)
-        return sorted(
-            candidates,
-            key=lambda chunk_id: (
-                0 if coverage[chunk_id] >= COVERAGE_FULL
-                else 1 if coverage[chunk_id] >= COVERAGE_MAJORITY
-                else 2,
-                -semantic.get(chunk_id, 0.0),
-                candidates.index(chunk_id),
-            ),
-        )
+        bm25 = {hit.chunk_id: float(hit.score) for hit in fts_hits}
+        candidates = list(dict.fromkeys([hit.chunk_id for hit in fts_hits] + list(vec_scores)))
+        if not bm25:
+            return sorted(vec_scores, key=lambda chunk_id: -vec_scores[chunk_id])
+        if not vec_scores:
+            return [hit.chunk_id for hit in fts_hits]
+        pivot = sorted(bm25.values())[len(bm25) // 2]
+        alpha = FUSION_ALPHA
+        scores = {
+            chunk_id: alpha * vec_scores.get(chunk_id, 0.0)
+            + (1 - alpha) * (bm25.get(chunk_id, 0.0) / (bm25.get(chunk_id, 0.0) + pivot)
+                               if chunk_id in bm25 else 0.0)
+            for chunk_id in candidates
+        }
+        return sorted(candidates, key=lambda chunk_id: -scores[chunk_id])
 
     def _coverage(self, chunk_ids: list[str], query: str) -> dict[str, float]:
         """每个候选块的**词面覆盖率**。
@@ -620,19 +635,35 @@ class SqliteHybridRetriever:
             coverage[str(row["chunk_id"])] = len(tokens & doc_tokens) / len(tokens)
         return {chunk_id: coverage.get(chunk_id, 0.0) for chunk_id in chunk_ids}
 
-    def _knn_ids(self, project_id: str, owner: str, query: str) -> list[str]:
-        """KNN 分支：query 向量 → vec0 按距离扫 → 只留本项目本 owner 的块（保序）。"""
+    def _knn_scores(
+        self, project_id: str, owner: str, query: str
+    ) -> dict[str, float]:
+        """KNN 分支：**块 id → 真余弦**（query 向量 → vec0 按距离扫 → 换算）。
+
+        ## 为什么给余弦而不是名次（2026-10-19 定的）
+
+        凸组合融合要的是**可比的分数幅度**。名次归一化把「第 1 名」与「第 200 名」
+        压成 1.0 与 0.005——幅度整个丢了，这正是 RRF 一族（纯名次函数）的病根
+        （TOIS 2023：凸组合 > RRF，in/out-of-domain 都赢）。
+        余弦保住了"差多远"，于是"词面完全命中"与"语义很近"可以**在同一个尺度上比**。
+
+        ## 余弦怎么来
+
+        两个 embedder 都**已归一**（实测 L2 范数 1.0：fastembed 默认归一，
+        `FakeEmbedder` 也显式归一）→ L2 距离 `d` 与余弦的关系是 `cos = 1 - d²/2`。
+        vec0 的 KNN 查询可以直接取 `distance` 列（实测可用）。
+        """
         try:
             vector = self._embedder.embed_many([query])[0]
         except Exception as error:  # noqa: BLE001 —— 模型/推理失败就退化成纯 FTS5
             logger.warning("向量检索失败，退回纯 FTS5：%s", error)
-            return []
+            return {}
         try:
             from sqlite_vec import serialize_float32
 
             rows = self._connection.execute(
-                "SELECT chunk_id FROM ("
-                " SELECT chunk_id FROM material_chunks_vec"
+                "SELECT chunk_id, distance FROM ("
+                " SELECT chunk_id, distance FROM material_chunks_vec"
                 " WHERE embedding MATCH ? ORDER BY distance LIMIT ?"
                 ") WHERE chunk_id IN ("
                 " SELECT c.chunk_id FROM material_chunks c"
@@ -642,8 +673,12 @@ class SqliteHybridRetriever:
             ).fetchall()
         except Exception as error:  # noqa: BLE001 —— 扩展没载/表不在都退化，不炸检索
             logger.warning("向量索引不可用，退回纯 FTS5：%s", error)
-            return []
-        return [str(row["chunk_id"]) for row in rows]
+            return {}
+        scores: dict[str, float] = {}
+        for row in rows:
+            distance = float(row["distance"])
+            scores[str(row["chunk_id"])] = 1.0 - (distance * distance) / 2.0
+        return scores
 
     def _hits_for(self, chunk_ids, project_id: str, owner: str, tokens: list[str]):
         """给"只在 KNN 里出现"的块造 `MaterialHit`（复用 `_excerpt` 的锚定规则）。"""

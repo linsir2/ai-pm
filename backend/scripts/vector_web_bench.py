@@ -311,6 +311,13 @@ def main() -> int:
 
             hybrid = SqliteHybridRetriever(connection, embedder=FastEmbedEmbedder())
             fts = SqliteFtsRetriever(connection)
+            # **α 扫描**：真数据才是决定性的（合成语料上 0.4–0.7 全过）。
+            # `FUSION_ALPHA` 是**调用时**读的，所以改模块常量就能换档。
+            import pmstudio.infrastructure.sqlite.materials as materials_mod
+
+            alpha_grid = [float(a) for a in os.environ.get(
+                "BENCH_ALPHA_GRID", "0.3,0.4,0.5,0.6,0.7").split(",")]
+            original_alpha = materials_mod.FUSION_ALPHA
 
             def measure(retriever, pairs) -> tuple[int, int]:
                 """命中按**材料**算，不是按块。
@@ -346,11 +353,21 @@ def main() -> int:
                     "同词换序": len(reorder_pairs),
                     "同义改述": len(para_pairs),
                 }
+            # α 扫描（只对混合这一路）
+            for alpha in alpha_grid:
+                materials_mod.FUSION_ALPHA = alpha
+                rows[f"α={alpha}"] = {
+                    "逐字子串": measure(hybrid, literal_pairs),
+                    "同词换序": measure(hybrid, reorder_pairs),
+                    "同义改述": measure(hybrid, para_pairs),
+                }
+            materials_mod.FUSION_ALPHA = original_alpha
             connection.close()
 
         for name, kinds in rows.items():
+            counts = measured.get(name) or measured.get("改后(混合)", {})
             for kind, (top1, r5) in kinds.items():
-                total = measured[name][kind]
+                total = counts.get(kind, 0)
                 _log(f"  {name:12} {kind:6} top1 {top1:2}/{total} r@5 {r5:2}/{total}")
         report[depth] = {"keep_ratio": keep_ratio, "rows": rows, "measured": measured}
 
@@ -361,7 +378,8 @@ def main() -> int:
         if ratio < KEEP_RATIO_MIN:
             failures.append(f"{depth}：入库保留率 {ratio:.1%} < {KEEP_RATIO_MIN:.0%}")
         rows = data["rows"]
-        before, after = rows["改前(纯FTS5)"], rows["改后(混合)"]
+        before = rows["改前(纯FTS5)"]
+        after = rows.get(f"α={os.environ.get('BENCH_ALPHA', '0.5')}", rows["改后(混合)"])
         for kind in ("逐字子串", "同词换序"):
             if after[kind][1] < before[kind][1]:
                 failures.append(
