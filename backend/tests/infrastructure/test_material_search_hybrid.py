@@ -190,3 +190,25 @@ def test_a_broken_embedder_still_returns_lexical_hits(conn):
         project_id=PROJECT, query="退货流程", owner=TEST_OWNER)
 
     assert [h.chunk_id for h in hits] == ["c1"]           # 降级后仍是可用结果
+
+
+def test_the_first_hit_carries_the_largest_score(conn):
+    """R：`score` 越大越好（与顺序同向）——**第一名必须拿最大的分**。
+
+    2026-10-19 实测的反例：实现算的是 `1.0/(total-position)`，于是**第一名拿最小分**，
+    与它上一行的注释正好相反。消费方（`dto.py:780`）不重排，所以只错在数值——
+    但"越大越好"是 `MaterialHit` 的对外约定（`ports.py` 里明写着），不能反着来。
+    """
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    _put_material(conn, "m-1", chunks=(("c1", "退货时限是七天"),))
+    _put_material(conn, "m-2", chunks=(("c2", "退货时限与运费"),))
+
+    hits = SqliteHybridRetriever(conn, embedder=FakeEmbedder(dimensions=512)).search(
+        project_id=PROJECT, query="退货时限", owner=TEST_OWNER)
+
+    assert len(hits) >= 2, "至少要有两条才能比大小"
+    scores = [h.score for h in hits]
+    assert scores == sorted(scores, reverse=True), f"第一名应拿最大分，实得 {scores}"

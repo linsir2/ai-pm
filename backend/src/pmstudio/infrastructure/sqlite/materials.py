@@ -549,9 +549,11 @@ class SqliteHybridRetriever:
         knn_only = [chunk_id for chunk_id in ordered if chunk_id not in by_id]
         by_id.update(self._hits_for(knn_only, str(project_id), str(resolved), tokens))
         # `score` 越大越好（与顺序同向）：用**最终次序**的倒数排名，与旧约定一致。
-        total = len(ordered)
+        # 2026-10-19 修：原先写的是 `1.0/(total-position)`，于是**第一名拿最小分**
+        # （`total` 是候选总数，`position` 从 0 起 → 第一名 1/total、末名 1.0），
+        # 与上面这句注释正好相反。改成 `1.0/(position+1)`：第一名 1.0，末名 1/limit。
         return tuple(
-            replace(by_id[chunk_id], score=1.0 / (total - position))
+            replace(by_id[chunk_id], score=1.0 / (position + 1))
             for position, chunk_id in enumerate(ordered[:limit])
         )
 
