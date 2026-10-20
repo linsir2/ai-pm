@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import sys
 import tempfile
@@ -29,8 +28,8 @@ sys.path.insert(0, str(BACKEND))
 from scripts.vector_web_bench import (  # noqa: E402
     _fetch,
     _literal_segment,
-    _make_paraphrases,
     _load_env,
+    _make_paraphrases,
 )
 
 
@@ -49,10 +48,8 @@ def main() -> int:
         SqliteMaterialStore,
     )
     from pmstudio.infrastructure.sqlite.owner_scope import set_owner_scope
-    from pmstudio.infrastructure.sqlite.tokenize import query_tokens
     from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
     from pmstudio.infrastructure.tools.tavily import _packet
-    from pmstudio.infrastructure.tools.webclean import normalize_web_text
     from pmstudio.infrastructure.tools.webdedup import dedupe_by_content
     from tests.support.doubles import SeqIds
 
@@ -81,8 +78,9 @@ def main() -> int:
                 content=b"x", now=datetime.now(UTC))
             vectors.write(item.material_id)
             stamped.append(item)
-        _log(f"入库 {len(stamped)} 份材料，"
-             f"{connection.execute('SELECT count(*) FROM material_chunks_vec').fetchone()[0]} 个向量")
+        _vector_rows = connection.execute(
+            "SELECT count(*) FROM material_chunks_vec").fetchone()[0]
+        _log(f"入库 {len(stamped)} 份材料，{_vector_rows} 个向量")
 
         # 挑几段做改述
         samples = []
@@ -103,7 +101,6 @@ def main() -> int:
             if len(_bigrams(text) & _bigrams(source)) > 1:
                 _log(f"  [跳过] 改述与原文词面重合太多：{text[:24]}")
                 continue
-            tokens = query_tokens(text)
             # ① KNN 召回
             vec_ids = hybrid._knn_ids(project, owner, text)
             chunk_ids = [c.chunk_id for c in item.parsed.chunks]

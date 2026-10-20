@@ -148,6 +148,30 @@ def _rrf(lists: list[list[str]], k: int = 60) -> list[str]:
     return sorted(scores, key=lambda item: (-scores[item], first[item]))
 
 
+def _norm(value: float, best: float) -> float:
+    return value / best if best > 0 else 0.0
+
+
+def _by_bm25_tier(universe, strength, sem, fts_ids, *, ratio: float):
+    """按 **BM25 强度**分档：强档按 BM25 序，其余按语义分排。"""
+    best = max(strength.values(), default=0.0)
+    def tier(mid: str) -> int:
+        if best > 0 and strength.get(mid, 0.0) >= ratio * best:
+            return 0
+        return 1
+    def strong_key(mid: str):
+        return (-strength.get(mid, 0.0), fts_ids.index(mid) if mid in fts_ids else 999)
+    def weak_key(mid: str):
+        return (-sem.get(mid, 0.0), fts_ids.index(mid) if mid in fts_ids else 999)
+    return sorted(
+        universe,
+        key=lambda mid: (
+            tier(mid),
+            strong_key(mid) if tier(mid) == 0 else weak_key(mid),
+        ),
+    )
+
+
 def main() -> int:
     _load_env()
     set_owner_scope(__import__("pmstudio.domain.shared.ids", fromlist=["UserId"]).UserId(OWNER))
@@ -229,6 +253,7 @@ def main() -> int:
             "v2", "RRF全量", "RRF语义top10", "覆盖率先",
             "互补cov+(1-cov)sem", "cov+sem", "满覆盖优先",
             "满覆盖闸门+语义", "纯语义", "满覆盖闸门+RRF5",
+            "BM25档(0.5)", "BM25档(0.25)", "BM25归一+sem",
             "满覆盖闸门+语义倒数", "满覆盖闸门+语义倒数+词法破平",
             "半覆盖闸门+语义", "三档闸门+语义",
         )
@@ -239,8 +264,12 @@ def main() -> int:
             for query, key in items:
                 target = ids[key]
                 tokens = query_tokens(query)
-                fts_ids = [h.material_id for h in fts.search(
-                    project_id=PROJECT, query=query, limit=20, owner=OWNER)]
+                fts_hits = fts.search(
+                    project_id=PROJECT, query=query, limit=20, owner=OWNER)
+                fts_ids = [h.material_id for h in fts_hits]
+                # BM25 强度（`MaterialHit.score` 就是 `-bm25`，越大越强）
+                strength = {h.material_id: h.score for h in fts_hits}
+                best_strength = max(strength.values(), default=0.0)
                 vec_pairs = _knn_hits(connection, embedder, query, 200)
                 vec_ids = [mid for mid, _ in vec_pairs]
                 sem = {mid: score for mid, score in vec_pairs}
@@ -266,6 +295,21 @@ def main() -> int:
                         universe,
                         key=lambda mid: -(
                             _cov(mid) + (1 - _cov(mid)) * sem.get(mid, 0.0)
+                        ),
+                    ),
+                    # **BM25 强度分档**（2026-10-19 真数据暴露的修法）：
+                    # 词面"强不强"用 BM25 量（它天然给罕见词高权重），不用覆盖率
+                    # ——覆盖率会因为查询多一个字/少一个字就整档掉，丢掉 BM25 挣到的位置。
+                    "BM25档(0.5)": _by_bm25_tier(
+                        universe, strength, sem, fts_ids, ratio=0.5),
+                    "BM25档(0.25)": _by_bm25_tier(
+                        universe, strength, sem, fts_ids, ratio=0.25),
+                    # BM25 归一 + 语义分**相加**（无阈值）
+                    "BM25归一+sem": sorted(
+                        universe,
+                        key=lambda mid: -(
+                            _norm(strength.get(mid, 0.0), best_strength)
+                            + sem.get(mid, 0.0)
                         ),
                     ),
                     # 纯相加（对照）
