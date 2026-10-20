@@ -129,7 +129,7 @@ def test_a_web_material_only_gets_vectors_for_its_first_blocks(conn):
 
     _put_material(
         conn,
-        chunks=tuple((f"c{index}", f"第 {index} 段正文") for index in range(12)),
+        chunks=tuple((f"c{index}", f"第 {index} 段正文") for index in range(30)),
         origin="web_search",
     )
 
@@ -137,7 +137,7 @@ def test_a_web_material_only_gets_vectors_for_its_first_blocks(conn):
 
     written = conn.execute("SELECT chunk_id FROM material_chunks_vec").fetchall()
     assert len(written) == WEB_VECTOR_BLOCKS
-    assert conn.execute("SELECT count(*) FROM material_chunks").fetchone()[0] == 12, (
+    assert conn.execute("SELECT count(*) FROM material_chunks").fetchone()[0] == 30, (
         "块不该被删——FTS 还要覆盖全部块"
     )
 
@@ -148,13 +148,13 @@ def test_an_upload_material_still_gets_a_vector_for_every_chunk(conn):
 
     _put_material(
         conn,
-        chunks=tuple((f"c{index}", f"第 {index} 段正文") for index in range(12)),
+        chunks=tuple((f"c{index}", f"第 {index} 段正文") for index in range(30)),
         origin="upload",
     )
 
     SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
 
-    assert conn.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0] == 12
+    assert conn.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0] == 30
 
 
 def test_an_explicit_limit_overrides_the_origin_rule(conn):

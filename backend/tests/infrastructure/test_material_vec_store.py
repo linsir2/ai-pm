@@ -155,7 +155,7 @@ def test_the_backfill_respects_the_same_vector_budget(tmp_path):
         " 1, 'sha', 'p', 'v', 1, 0, '[]', X'00', '2026-10-18T00:00:00+00:00')",
         (str(PROJECT), str(TEST_OWNER)),
     )
-    for index in range(12):
+    for index in range(30):
         connection.execute(
             "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
             " heading_path, anchor) VALUES (?, 'm0', ?, ?, ?, '[]', ?)",

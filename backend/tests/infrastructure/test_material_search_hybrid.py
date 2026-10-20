@@ -450,3 +450,32 @@ def test_a_search_that_is_already_full_does_not_use_the_fallback(conn):
         project_id=PROJECT, query="vecto", limit=2, owner=TEST_OWNER)
 
     assert len(hits) == 2
+
+
+def test_one_material_takes_only_one_slot_in_the_results(conn):
+    """R：**一份材料只占一个槽**——top5 里不能全是同一份材料的 5 个块。
+
+    为什么：① 界面（`dto.search_hits`）一份材料只出一行，检索器返回 5 个同材料的块
+    的话，界面只有 1 行，别的材料被挤出去了；
+    ② 它同时治了"部分向量索引"的偏置传导（2026-10-20 实测：N=8 时 KNN 的候选
+    都来自每份材料的前 8 块，不去重就占满 top5，**改述召回从 10/14 掉到 4/14**，
+    比不用向量还差）。
+    """
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    _put_material(
+        conn,
+        "m-1",
+        chunks=(("c1", "退货流程第一段"), ("c2", "退货流程第二段"), ("c3", "退货流程第三段")),
+    )
+    _put_material(conn, "m-2", chunks=(("c4", "机柜布线规范"),))
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-2")
+
+    hits = SqliteHybridRetriever(conn, embedder=FakeEmbedder(dimensions=512)).search(
+        project_id=PROJECT, query="退货流程", limit=5, owner=TEST_OWNER)
+
+    materials = [hit.material_id for hit in hits]
+    assert len(materials) == len(set(materials)), f"同一份材料占了多个槽：{materials}"

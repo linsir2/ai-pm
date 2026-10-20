@@ -565,13 +565,30 @@ class SqliteHybridRetriever:
             if filler:
                 by_id.update(self._hits_for(filler, str(project_id), str(resolved), tokens))
                 ordered = ordered + list(filler)
+        # **一份材料只占一个槽**（2026-10-20 批 6c 实测加的）。
+        #
+        # 为什么：① 界面（`dto.search_hits`）**一份材料只出一行**——检索器返回 5 个
+        # 块但都来自同一份材料的话，界面只有 1 行，别的材料被挤出去了；
+        # ② 它同时治了"部分向量索引"的偏置传导：KNN 的候选都来自前 N 块
+        # （同一份材料的标题/导言），不按材料去重的话它们会占满 top5，
+        # 把词面命中的真块挤掉——实测改述召回从 10/14 掉到 4/14（比不用向量还差）。
+        seen_materials: set[str] = set()
+        final: list[str] = []
+        for chunk_id in ordered:
+            material_id = by_id[chunk_id].material_id
+            if material_id in seen_materials:
+                continue
+            seen_materials.add(material_id)
+            final.append(chunk_id)
+            if len(final) >= limit:
+                break
         # `score` 越大越好（与顺序同向）：用**最终次序**的倒数排名，与旧约定一致。
         # 2026-10-19 修：原先写的是 `1.0/(total-position)`，于是**第一名拿最小分**
         # （`total` 是候选总数，`position` 从 0 起 → 第一名 1/total、末名 1.0），
         # 与上面这句注释正好相反。改成 `1.0/(position+1)`：第一名 1.0，末名 1/limit。
         return tuple(
             replace(by_id[chunk_id], score=1.0 / (position + 1))
-            for position, chunk_id in enumerate(ordered[:limit])
+            for position, chunk_id in enumerate(final)
         )
 
     def _substring_candidates(
