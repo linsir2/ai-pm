@@ -125,6 +125,8 @@ async def test_a_tool_that_is_available_but_not_wired_is_a_wiring_error_not_a_si
         evidence=harness.evidences,
         evidence_writer=harness.evidences,
         materials=harness.materials,
+        # 判"这份材料被哪些编号引用过"（`SubmitOpening` 新增的依赖）
+        index=harness.material_index,
         uow=harness.uow,
         clock=harness.clock,
         events=harness.events,

@@ -377,6 +377,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         evidence=evidences,
         evidence_writer=evidences,
         materials=materials,
+        # 判"这份材料被哪些编号引用过"（被引用过的不就地改写——编号指着它里面的块）
+        index=index,
         uow=uow,
         clock=clock,
         events=bus,

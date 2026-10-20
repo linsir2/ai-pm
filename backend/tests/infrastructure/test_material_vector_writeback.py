@@ -254,6 +254,8 @@ def test_a_web_result_also_gets_a_vector(tmp_path):
         evidence=harness.evidences,
         evidence_writer=harness.evidences,
         materials=store,
+        # 判"这份材料被哪些编号引用过"（`SubmitOpening` 新增的依赖）
+        index=_Index(),
         uow=SqliteUnitOfWork(connection),
         clock=harness.clock,
         events=harness.events,

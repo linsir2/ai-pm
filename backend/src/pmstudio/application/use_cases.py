@@ -763,6 +763,7 @@ class SubmitOpening:
         evidence: EvidenceReader,
         evidence_writer: EvidenceWriter,
         materials: MaterialStore,
+        index: WorkspaceIndex,
         uow: UnitOfWork,
         clock: Clock,
         events: EventPublisher,
@@ -777,6 +778,9 @@ class SubmitOpening:
         self._evidence = evidence
         self._evidence_writer = evidence_writer
         self._materials = materials
+        # 工作区索引（只读）：判"这份材料被哪些编号引用过"（`P19` 的冻结判据）——
+        # 被引用过的材料**不就地改写**（那些编号指着它里面的块）。
+        self._index = index
         self._uow = uow
         self._clock = clock
         self._events = events
@@ -920,26 +924,86 @@ class SubmitOpening:
         )
 
     def _keep(self, project_id: ProjectId, draft: ParsedMaterial) -> MaterialPacket:
-        """一条检索结果入库：**去重键是 URL**（同一网址不重复入库），原始字节=摘要文本。"""
+        """一条检索结果入库：**去重键是 URL**（同一网址不重复入库），原始字节=摘要文本。
 
-        digest = hashlib.sha256(f"web:{draft.source_ref}".encode()).hexdigest()
+        **老档位的材料就地升级**（2026-10-20 批 6c）：联网材料的入库口径换了
+        （`tavily-rest-v1` 的 query 片段 → `tavily-rest-v2-raw` 的整页），
+        而"同一 URL 已存在就返回既有份"这条规则会让**老材料永远停在旧档位**——
+        用户再次搜到同一个网址，拿到的还是片段版：页面主体依旧搜不到。
+
+        修法是**用这次已经搜到的整页内容把它换掉**（内容就在手里，用户本来就在搜，
+        **不额外花一次额度**）。三条纪律照 `FetchMaterial` 的分支模式：
+
+        ① 已被编号引用的**不就地改**（那些编号指着它里面的块）→ 另出一份变体；
+        ② 同一档位的**不重写**（重写一遍只是白花 ONNX 推理；真缺向量由幂等回填兜）；
+        ③ 升级换了正文 → 旧向量作废，先删后重算。
+        """
+        digest = _web_key(draft.source_ref)
+        content = "\n".join(chunk.text for chunk in draft.chunks).encode("utf-8")
         existing = self._materials.find_by_sha(project_id, digest)
-        if existing is not None:
-            # 同一网址已经收过：材料与它的向量都已经在库里（向量是入库时写的），
+        if existing is None:
+            packet = self._materials.put(
+                project_id=project_id,
+                parsed=draft,
+                sha256=digest,
+                content=content,
+                now=self._clock.now(),
+            )
+            # 写向量（检索阶段 2）：**联网结果也要能被语义召回**。
+            # 这里是**事务外**（`_search` 整段都在 `with self._uow:` 之前），
+            # 所以推理不占着写锁——与上传路径"主事务提交后再写"是同一条纪律。
+            self._vectors.write(packet.material_id)
+            return packet
+        if not _is_other_parser_version(existing.parsed, draft):
+            # 同一网址已经收过，且是同一档位：材料与它的向量都已经在库里，
             # 重写一遍只是白花 ONNX 推理。真缺向量的情况由启动时的幂等回填兜着。
             return existing
-        packet = self._materials.put(
-            project_id=project_id,
-            parsed=draft,
-            sha256=digest,
-            content="\n".join(chunk.text for chunk in draft.chunks).encode("utf-8"),
-            now=self._clock.now(),
-        )
-        # 写向量（检索阶段 2）：**联网结果也要能被语义召回**。
-        # 这里是**事务外**（`_search` 整段都在 `with self._uow:` 之前），
-        # 所以推理不占着写锁——与上传路径"主事务提交后再写"是同一条纪律。
+        # 老档位 → 用这次的整页内容升级它
+        if self._index.material_references(project_id).get(existing.material_id, ()):
+            # 发过编号：不就地改（那些编号指着它里面的块）——另出一份，旧的冻结留着
+            packet = self._materials.put(
+                project_id=project_id,
+                parsed=draft,
+                sha256=_web_variant_key(draft.source_ref, content),
+                content=content,
+                now=self._clock.now(),
+            )
+        else:
+            packet = self._materials.refresh(
+                existing.material_id, parsed=draft, content=content
+            )
+            # 就地刷新换了正文：旧向量作废（块数变了也会留下孤儿向量），
+            # 先删掉（不跑推理）再重算。
+            self._vectors.drop(packet.material_id)
         self._vectors.write(packet.material_id)
         return packet
+
+
+def _web_key(source_ref: str) -> str:
+    """联网材料的去重键：**按 URL**（同一网址不重复入库）。"""
+    return hashlib.sha256(f"web:{source_ref}".encode()).hexdigest()
+
+
+def _web_variant_key(source_ref: str, content: bytes) -> str:
+    """已被编号引用的老材料换新内容时的**变体键**（带内容指纹保幂等）。
+
+    与 `FetchMaterial._refetch_key` 同一把尺子：同一 URL + 同一内容 → 同一个键
+    → 反复刷不会堆出一堆变体。
+    """
+    fingerprint = hashlib.sha256(content).hexdigest()[:12]
+    return hashlib.sha256(f"web:{source_ref}|{fingerprint}".encode()).hexdigest()
+
+
+def _is_other_parser_version(existing: ParsedMaterial, draft: ParsedMaterial) -> bool:
+    """已入库的那份是**另一个解析器档位**读的吗（同一 parser、版本不同）。
+
+    为什么不用"哪个版本更新"来比：新材料来自**当前**网关，它的版本就是当前版本
+    → 版本不同就意味着已入库那份更旧（档位只增不改）。
+    """
+    return (
+        existing.parser_id == draft.parser_id
+        and existing.parser_version != draft.parser_version
+    )
 
 
 class RunSeatRound:

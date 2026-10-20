@@ -87,6 +87,7 @@ def make_web_packet(
 
     from pmstudio.application.context import WEB_SNIPPET_CHARS
     from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+    from pmstudio.infrastructure.tools.tavily import PARSER_VERSION
 
     snippet = text[:WEB_SNIPPET_CHARS]
     return ParsedMaterial(
@@ -105,7 +106,9 @@ def make_web_packet(
             ),
         ),
         parser_id="tavily",
-        parser_version="tavily-rest-v1",
+        # **跟随生产常量**（2026-10-20 批 6c）：联网材料的入库口径换过档位
+        # （query 片段 → 整页），写死一个版本号就会漂。
+        parser_version=PARSER_VERSION,
         truncated=len(text) > len(snippet),
         warnings=("来自检索：这一轮的检索词",),
     )

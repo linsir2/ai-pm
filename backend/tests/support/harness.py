@@ -647,6 +647,9 @@ class Harness:
             evidence=self.evidences,
             evidence_writer=self.evidences,
             materials=self.materials,
+            # 判"这份材料被哪些编号引用过"——用专门的那份（`StaticWorkspaceIndex`
+            # 只有查询投影，没有 `material_references`；`fetch_material` 也用它）
+            index=self.material_index,
             uow=self.uow,
             clock=self.clock,
             events=self.events,
