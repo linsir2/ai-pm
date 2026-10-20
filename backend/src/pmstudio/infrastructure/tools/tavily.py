@@ -18,7 +18,7 @@ from dataclasses import replace
 
 import httpx
 
-from pmstudio.application.dto import ParsedMaterial
+from pmstudio.application.dto import NO_SOURCE_REF, ParsedMaterial
 from pmstudio.harness.errors import ToolCallFailed
 from pmstudio.infrastructure.tools.extract import TRUNCATED_WARNING, chunk_text
 from pmstudio.infrastructure.tools.fetch import _backoff
@@ -213,13 +213,13 @@ def _packet(item: dict, *, query: str) -> ParsedMaterial:
     # 锚点用"第 N 段"而不是 `chunk_text` 给的"第 N–M 行"：联网摘要没有"行号"
     # 这回事，用户跳不到网页的第 5 行。
     chunks = tuple(
-        replace(chunk, anchor=f"网页摘要 · 第 {index} 段")
+        replace(chunk, anchor=f"网页正文 · 第 {index} 段")
         for index, chunk in enumerate(raw_chunks, start=1)
     )
     return ParsedMaterial(
         origin="web_search",
         title=title,
-        source_ref=url or "（没有链接）",
+        source_ref=url or NO_SOURCE_REF,
         media_type="text/html",
         bytes_len=len(body.encode("utf-8")),
         chunks=chunks,

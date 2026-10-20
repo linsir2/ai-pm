@@ -334,7 +334,7 @@ async def test_a_multi_chunk_web_result_gets_one_number_and_the_ledger_matches_t
                 ordinal=index,
                 text=f"第{index}段正文",
                 heading_path=(),
-                anchor=f"网页摘要 · 第 {index + 1} 段",
+                anchor=f"网页正文 · 第 {index + 1} 段",
             )
             for index in range(3)
         ),

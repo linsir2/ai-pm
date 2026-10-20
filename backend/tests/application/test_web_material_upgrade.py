@@ -93,7 +93,7 @@ def _packet(*, url: str, text: str, version: str):  # type: ignore[no-untyped-de
                 ordinal=0,
                 text=text,
                 heading_path=(),
-                anchor="网页摘要",
+                anchor="网页正文",
             ),
         ),
         parser_id="tavily",

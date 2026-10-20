@@ -73,7 +73,7 @@ async def test_search_returns_one_packet_per_result_and_never_leaks_the_key():
     assert all(packet.origin == "web_search" for packet in packets)
     assert all(packet.parser_id == "tavily" for packet in packets)
     # 锚点标明是第几段（联网摘要没有"行号"这回事）
-    assert packets[0].chunks[0].anchor == "网页摘要 · 第 1 段"
+    assert packets[0].chunks[0].anchor == "网页正文 · 第 1 段"
     # **不再截到 300**（2026-10-19 实测：Tavily 实给 568–2302 字，截 300 等于
     # 扔掉 50–78%）。截断是**预算层**该管的事，入库层管它就是职责混淆。
     assert all(len(chunk.text) <= 400 for chunk in packets[0].chunks)
@@ -318,12 +318,12 @@ async def test_a_short_result_stays_one_chunk():
 
 
 async def test_the_anchor_tells_which_part_it_is():
-    """R：锚点标明是第几段（"网页摘要"是块级的东西，多块就分不清了）。"""
+    """R：锚点标明是第几段（"网页正文"是块级的东西，多块就分不清了）。"""
     packets = await _search_content("结论是：先做同步导出。" * 100)
 
     anchors = [chunk.anchor for chunk in packets[0].chunks]
-    assert anchors[0] == "网页摘要 · 第 1 段"
-    assert anchors[1] == "网页摘要 · 第 2 段"
+    assert anchors[0] == "网页正文 · 第 1 段"
+    assert anchors[1] == "网页正文 · 第 2 段"
 
 
 async def test_a_markdown_heading_in_the_content_becomes_the_heading_path():

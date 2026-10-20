@@ -81,19 +81,21 @@ def make_web_packet(
 ):
     """一条 Tavily 结果的**解析草稿**（工具层 C-2b）。
 
-    形状与 `TavilySearchGateway._packet` 对齐：单块、锚点是"网页摘要"、
+    形状与 `TavilySearchGateway._packet` 对齐：单块、锚点是"网页正文"、
     正文已经截到 `WEB_SNIPPET_CHARS`。**没有 material_id**——那要等存储层盖章。
     """
 
     from pmstudio.application.context import WEB_SNIPPET_CHARS
-    from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+    from pmstudio.application.dto import NO_SOURCE_REF, MaterialChunk, ParsedMaterial
     from pmstudio.infrastructure.tools.tavily import PARSER_VERSION
 
     snippet = text[:WEB_SNIPPET_CHARS]
     return ParsedMaterial(
         origin="web_search",
         title=title,
-        source_ref=url,
+        # 与网关同口径：没有链接时用占位符（**不是空串**）——
+        # 空串会让去重键认不出"这条没有出处"，两条无链接结果会共用一把键。
+        source_ref=url or NO_SOURCE_REF,
         media_type="text/html",
         bytes_len=len(text.encode("utf-8")),
         chunks=(
@@ -102,7 +104,7 @@ def make_web_packet(
                 ordinal=0,
                 text=snippet,
                 heading_path=(),
-                anchor="网页摘要",
+                anchor="网页正文",
             ),
         ),
         parser_id="tavily",

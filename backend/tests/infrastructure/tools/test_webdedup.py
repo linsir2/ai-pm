@@ -30,7 +30,7 @@ def _item(text: str, *, url: str = "https://a"):
         bytes_len=len(text.encode("utf-8")),
         chunks=(
             MaterialChunk(chunk_id="tavily#c00", ordinal=0, text=text,
-                          heading_path=(), anchor="网页摘要 · 第 1 段"),
+                          heading_path=(), anchor="网页正文 · 第 1 段"),
         ),
         parser_id="tavily",
         parser_version="1",

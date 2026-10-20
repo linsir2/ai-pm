@@ -1274,7 +1274,7 @@ def _multi_chunk_web(*, url: str = "https://a", title: str = "长文", blocks: i
                 ordinal=index,
                 text=f"第{index}段正文" * 10,
                 heading_path=(),
-                anchor=f"网页摘要 · 第 {index + 1} 段",
+                anchor=f"网页正文 · 第 {index + 1} 段",
             )
             for index in range(blocks)
         ),
@@ -1296,9 +1296,9 @@ def test_a_web_result_costs_its_title_and_url_once():
         media_type="text/html", bytes_len=10,
         chunks=(
             MaterialChunk(chunk_id="tavily#c00", ordinal=0, text="甲" * 100,
-                          heading_path=(), anchor="网页摘要 · 第 1 段"),
+                          heading_path=(), anchor="网页正文 · 第 1 段"),
             MaterialChunk(chunk_id="tavily#c01", ordinal=1, text="乙" * 100,
-                          heading_path=(), anchor="网页摘要 · 第 2 段"),
+                          heading_path=(), anchor="网页正文 · 第 2 段"),
         ),
         parser_id="tavily", parser_version="1",
     )
@@ -1326,9 +1326,9 @@ def test_the_rendered_web_text_contains_every_selected_chunk():
         media_type="text/html", bytes_len=10,
         chunks=(
             MaterialChunk(chunk_id="tavily#c00", ordinal=0, text="第一段正文",
-                          heading_path=(), anchor="网页摘要 · 第 1 段"),
+                          heading_path=(), anchor="网页正文 · 第 1 段"),
             MaterialChunk(chunk_id="tavily#c01", ordinal=1, text="第二段正文",
-                          heading_path=(), anchor="网页摘要 · 第 2 段"),
+                          heading_path=(), anchor="网页正文 · 第 2 段"),
         ),
         parser_id="tavily", parser_version="1",
     )

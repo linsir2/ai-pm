@@ -109,6 +109,7 @@ from pmstudio.application.document_window import (
     visible_eids,
 )
 from pmstudio.application.dto import (
+    NO_SOURCE_REF,
     SEARCH_LIMIT,
     DiffView,
     EvidenceLookupView,
@@ -938,8 +939,8 @@ class SubmitOpening:
         ② 同一档位的**不重写**（重写一遍只是白花 ONNX 推理；真缺向量由幂等回填兜）；
         ③ 升级换了正文 → 旧向量作废，先删后重算。
         """
-        digest = _web_key(draft.source_ref)
         content = "\n".join(chunk.text for chunk in draft.chunks).encode("utf-8")
+        digest = _web_key(draft.source_ref, content)
         existing = self._materials.find_by_sha(project_id, digest)
         if existing is None:
             packet = self._materials.put(
@@ -979,9 +980,18 @@ class SubmitOpening:
         return packet
 
 
-def _web_key(source_ref: str) -> str:
-    """联网材料的去重键：**按 URL**（同一网址不重复入库）。"""
-    return hashlib.sha256(f"web:{source_ref}".encode()).hexdigest()
+def _web_key(source_ref: str, content: bytes) -> str:
+    """联网材料的去重键。
+
+    - **有 URL** → 按 URL（同一网址不重复入库）；
+    - **没有 URL**（`NO_SOURCE_REF`）→ 按**内容指纹**。否则所有无链接结果共用
+      一把键，后一条会被 `_keep` 当成"已存在"**静默丢弃**——2026-10-20 核验
+      实测：两条无链接结果只入库一份（"乙"消失）。
+    """
+    if source_ref and source_ref != NO_SOURCE_REF:
+        return hashlib.sha256(f"web:{source_ref}".encode()).hexdigest()
+    fingerprint = hashlib.sha256(content).hexdigest()
+    return hashlib.sha256(f"web-nourl:{fingerprint}".encode()).hexdigest()
 
 
 def _web_variant_key(source_ref: str, content: bytes) -> str:
@@ -3563,7 +3573,10 @@ class FetchMaterial:
             title=page.title or page.final_url,
             warnings=(*_redirect_note(url, page.final_url), *drafted.warnings),
         )
-        digest = _fetch_key(url)
+        # 去重键用**最终地址**（2026-10-20 核验实测：原来用原地址、而 `source_ref`
+        # 写最终地址 → 同一页（http 跳 https）会存出**两份材料、两个 id、同一个出处**）。
+        # 键与出处必须**同源**：用户下次抓那个最终地址，才找得到同一份。
+        digest = _fetch_key(page.final_url)
         with self._uow:
             existing = self._materials.find_by_sha(project_id, digest)
             if existing is None:
@@ -3586,7 +3599,7 @@ class FetchMaterial:
                 packet = self._materials.put(
                     project_id=project_id,
                     parsed=parsed,
-                    sha256=_refetch_key(url, page.content),
+                    sha256=_refetch_key(page.final_url, page.content),
                     content=page.content,
                     now=self._clock.now(),
                 )
