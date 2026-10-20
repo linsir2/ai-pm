@@ -25,7 +25,6 @@ sys.path.insert(0, str(BACKEND / "src"))
 sys.path.insert(0, str(BACKEND / "scripts"))
 
 from nd_compare import (  # noqa: E402
-    NGRAM,
     _fetch_real,
     _label_real,
     grams,

@@ -5,11 +5,15 @@ import logging
 import sqlite3
 from pathlib import Path
 
-from pmstudio.infrastructure.sqlite.tokenize import index_source
+from pmstudio.infrastructure.sqlite.embedding import EMBED_PROFILE
+from pmstudio.infrastructure.sqlite.tokenize import index_source, index_text
 
 logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+
+#: 向量口径在 `vector_index_meta` 里的键名。
+PROFILE_KEY = "embed_profile"
 #: 11 = 删 observations.sections/features/create
 #:     at（死字段销账）。
 #: 12 = 模板库：`templates` 表（CREATE TABLE IF NOT EXISTS 自建）+
@@ -222,15 +226,37 @@ def _create_vector_table(connection: sqlite3.Connection) -> bool:
     为什么不由 `schema.sql` 建：那张表需要 `sqlite-vec` 扩展先在连接里注册模块，
     而 `executescript` 不带条件——模块不在时整份 schema 执行直接炸，后端起不来。
     这里独立出来，扩展缺失就跳过这一张表，其余形状照常迁移（降级到纯 FTS5）。
+
+    **口径对不上就清表重算**（2026-10-19）：向量口径 = 模型 + 喂进去的文本形态，
+    记在 `vector_index_meta` 表里。口径变了（换模型、或把分词串改成自然语言），
+    **旧向量就是脏的**——留着一半旧口径一半新口径的表，检索结果不可复现。
+    这里 DROP 掉表，随后 `migrate()` 的幂等回填会把全部块重算一遍
+    （ONNX ~20ms/块，单用户几百块 = 几秒，一次性）。
     """
 
     if not load_sqlite_vec(connection):
         return False
     try:
         connection.execute(
+            "CREATE TABLE IF NOT EXISTS vector_index_meta ("
+            " key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        row = connection.execute(
+            "SELECT value FROM vector_index_meta WHERE key = ?", (PROFILE_KEY,)
+        ).fetchone()
+        stored = str(row["value"]) if row is not None else None
+        if stored is not None and stored != EMBED_PROFILE:
+            logger.warning("向量口径变了（%s → %s），清空向量表重算", stored, EMBED_PROFILE)
+            connection.execute("DROP TABLE IF EXISTS material_chunks_vec")
+        connection.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS material_chunks_vec USING vec0("
             " chunk_id TEXT PRIMARY KEY,"
             " embedding FLOAT[512])"
+        )
+        connection.execute(
+            "INSERT INTO vector_index_meta (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (PROFILE_KEY, EMBED_PROFILE),
         )
     except Exception as error:  # noqa: BLE001 —— 建表失败同样降级，不炸启动
         logger.warning("向量索引表建不出来，检索退回纯 FTS5：%s", error)
@@ -369,7 +395,7 @@ def _backfill_chunk_vectors(connection: sqlite3.Connection, *, embedder=None) ->
     from sqlite_vec import serialize_float32
 
     texts = [
-        index_source(
+        index_text(
             title=row["title"],
             heading_path=json.loads(row["heading_path"]),
             text=row["text"],

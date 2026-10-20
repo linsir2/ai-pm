@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class SqliteVectorIndex:
-    """向量索引的 SQLite 实现：读块 → 同一个 `index_source` 分词输入 → 嵌 → 存。"""
+    """向量索引的 SQLite 实现：读块 → **自然语言**输入（`index_text`）→ 嵌 → 存。"""
 
     def __init__(self, connection: sqlite3.Connection, embedder) -> None:
         self._connection = connection
@@ -21,7 +21,7 @@ class SqliteVectorIndex:
 
     def write(self, material_id: str) -> None:
         """给一份材料的所有块算向量并落库。失败只留 warning（降级不判死）。"""
-        from pmstudio.infrastructure.sqlite.tokenize import index_source
+        from pmstudio.infrastructure.sqlite.tokenize import index_text
 
         try:
             rows = self._connection.execute(
@@ -33,8 +33,11 @@ class SqliteVectorIndex:
             ).fetchall()
             if not rows:
                 return
+            # 喂 embedder 的是**自然语言**，不是分词串（口径见
+            # `tokenize.index_text` 的文档：2026-10-19 实测改述类 recall@5
+            # 85% → 95%，假 embedder 对照组不变 → 是口径在削弱真模型）。
             texts = [
-                index_source(
+                index_text(
                     title=row["title"],
                     heading_path=json.loads(row["heading_path"] or "[]"),
                     text=row["text"],

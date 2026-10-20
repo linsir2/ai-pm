@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import subprocess
 import sys
@@ -243,12 +242,10 @@ def main() -> int:
 
     constructed: list[tuple[str, str, bool]] = []
     for url, text in bases:
-        for name, variant in _variants(text).items():
-            truth = name != "截断一半" or len(variant) > 100
+        for name in _variants(text):
             constructed.append((f"{url}#原文", f"{url}#{name}", True))
-            # 硬负例：同一个底稿的**不同**变体之间（都是近重复），不应判成"不同"——
-            # 这里加的是"底稿 vs 别的底稿"作负例
-        for other_url, other_text in bases:
+        # 硬负例：**别的底稿**（同主题不同内容）——阈值太松就会误杀它们
+        for other_url, _ in bases:
             if other_url != url:
                 constructed.append((f"{url}#原文", f"{other_url}#原文", False))
     _log(f"  构造集 {len(constructed)} 对（标签确切）")
@@ -268,8 +265,6 @@ def main() -> int:
         return 1.0 if hashlib.sha256(left.encode()).digest() == \
             hashlib.sha256(right.encode()).digest() else 0.0
 
-    gram_cache: dict[int, set[str]] = {}
-
     def m_jaccard(left: str, right: str) -> float:
         return jaccard(grams(left), grams(right))
 
@@ -278,8 +273,6 @@ def main() -> int:
     except ImportError:
         _log("datasketch 未装（本脚本用 `uv run --with datasketch` 跑）")
         return 2
-
-    mh_cache: dict[int, object] = {}
 
     def _minhash(text: str):
         mh = MinHash(num_perm=MINHASH_PERM)
