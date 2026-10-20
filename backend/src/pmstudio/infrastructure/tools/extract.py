@@ -26,6 +26,7 @@ from pmstudio.application.errors import UnsupportedMaterial
 from pmstudio.infrastructure.tools.limits import (
     CHUNK_CHARS,
     MAX_MATERIAL_CHARS,
+    cap_text,
     part_label,
     parts_of,
 )
@@ -504,14 +505,6 @@ class LocalMaterialParser:
             truncated=truncated,
             warnings=tuple(warnings),
         )
-
-
-def cap_text(text: str) -> tuple[str, bool]:
-    """文字上限：**先截再切块**，所以信息包里永远不会超。"""
-
-    if len(text) <= MAX_MATERIAL_CHARS:
-        return text, False
-    return text[:MAX_MATERIAL_CHARS], True
 
 
 def _cap_pages(pages: list[str]) -> tuple[list[str], bool]:

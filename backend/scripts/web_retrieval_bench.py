@@ -20,7 +20,7 @@ trafilatura 该受**同一把尺子**：它的可测收益是多少？收益是�
 | 查询类 | 从哪取词 | 期望 |
 |---|---|---|
 | **正文查询** | 抽取结果里的词（= 真正文） | 两套索引都该命中该页 |
-| **样板查询** | **被抽取删掉**的词（= 只在样板里） | 现状会**假命中**（那词在全文里）；抽取后不该命中 |
+| **样板查询** | **被抽取删掉**的词（= 只在样板里） | 现状会**假命中**；抽取后不该命中 |
 
 **样板查询的假命中率 = 稀释的规模 = 抽取的收益。**
 
@@ -103,9 +103,9 @@ def _split(text: str) -> list[str]:
 def _build_corpus() -> list[dict]:
     """每个页面切两套块：现状口径 / 主内容抽取。"""
 
-    from pmstudio.infrastructure.tools.extract import html_text
-
     import trafilatura
+
+    from pmstudio.infrastructure.tools.extract import html_text
 
     pages = []
     for html_path in sorted(PAGES_DIR.glob("*.html")):

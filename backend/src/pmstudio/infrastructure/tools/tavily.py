@@ -5,7 +5,10 @@
 
 三条规矩：
 ① key 只进请求体，**绝不进信息包**（也不进 warnings）；
-② 单条 `content` 截到 `WEB_SNIPPET_CHARS`（实测 Tavily 单条 ≈1.1k 字符，不截会撑爆提示词预算）；
+② 入库的是**整页**（`raw_content`），不是 Tavily 按 query 挑的那几段——
+   实测（2026-10-20 真跑）：`content` 是 "chunks_per_source 默认 3、每段约 500 字、
+   **按 query 相关性挑**"，页面主体永远不在库里（目标词只有 19/45 存在于语料，
+   检索命中仅 29%）；整页可能为 null → 回退 `content`；
 ③ 失败抛 `ToolCallFailed`：超时 / 非 2xx / 非 JSON / 缺 results——**不吞、不假装搜过**。
 """
 
@@ -17,15 +20,22 @@ import httpx
 
 from pmstudio.application.dto import ParsedMaterial
 from pmstudio.harness.errors import ToolCallFailed
-from pmstudio.infrastructure.tools.extract import chunk_text
+from pmstudio.infrastructure.tools.extract import TRUNCATED_WARNING, chunk_text
 from pmstudio.infrastructure.tools.fetch import _backoff
-from pmstudio.infrastructure.tools.limits import WEB_CHUNK_CHARS
+from pmstudio.infrastructure.tools.limits import (
+    MAX_MATERIAL_CHARS,
+    WEB_CHUNK_CHARS,
+    cap_text,
+)
 from pmstudio.infrastructure.tools.webclean import normalize_web_text
 from pmstudio.infrastructure.tools.webdedup import dedupe_by_content
 
 TOOL_ID = "tool.web_search"
 PARSER_ID = "tavily"
-PARSER_VERSION = "tavily-rest-v1"
+#: 解析器身份：**换了入库口径就要换档位**，否则老材料不会被判 stale
+#: （`needs_reparse` 比的就是 `(parser_id, parser_version)`）。
+#: v1 = Tavily 按 query 挑的片段；v2 = 整页 markdown。
+PARSER_VERSION = "tavily-rest-v2-raw"
 
 #: Tavily 的 query 长度上限。**真跑实测**（2026-10-17）：2040 字回 400
 #: （`Query is too long. Max query length is 1500 characters.`），1501 字回 200
@@ -74,6 +84,11 @@ class TavilySearchGateway:
             "query": query,
             "max_results": limit,
             "search_depth": "basic",
+            # 要**整页正文**，不是 Tavily 按 query 挑的那几段（实测 2026-10-20：
+            # 现状目标词只有 19/45 存在于语料，检索命中 29%；换整页后 45/45、71%）。
+            # 实测 credits 不加（`usage` 仍是 1）；`true` 与 `"markdown"` 返回同一个
+            # markdown（没有「原始 HTML」这个选项）。
+            "include_raw_content": "markdown",
         }
         if self._client is not None:
             return await self._search_with(self._client, payload, query=query)
@@ -151,6 +166,16 @@ class TavilySearchGateway:
 def _packet(item: dict, *, query: str) -> ParsedMaterial:
     """一条 Tavily 结果 → 一个信息包（**整段清洗后切块**，不截断）。
 
+    ## 入库的是**整页**（2026-10-20 实测定的）
+
+    Tavily 的 `content` 是 "chunks_per_source 默认 3、每段约 500 字、**按 query
+    相关性挑**"——我们实测 5 条结果共 18705 字、平均 1247 字（≈3×420），完全吻合。
+    后果是**页面主体永远不在库里**：真 Tavily + 真生产路径的对照实验里，
+    取自页面真实内容的 45 条查询，目标词只有 **19/45** 存在于现状语料，
+    混合检索命中仅 **29%**。换 `raw_content`（整页 markdown）后是 **45/45、71%**。
+
+    `raw_content` 可能是 null（LangChain 为此专门打过补丁）→ 回退 `content`。
+
     ## 为什么不再截到 300 字（2026-10-19 实测定的）
 
     真跑量过：Tavily 的 `content` 实给 **568–2302 字**（basic / advanced 两档），
@@ -165,14 +190,21 @@ def _packet(item: dict, *, query: str) -> ParsedMaterial:
     实测**尾部对向量完全不可见**（embed(700字) 与 embed(前510字) 余弦 1.000000）。
     按 `WEB_CHUNK_CHARS`（400）切开后，每块的向量都覆盖得到自己那段。
 
-    顺带白捡：`content` 里的 `## 标题` 会被 `chunk_text` 认成标题 →
+    顺带白捡：整页 markdown 里的 `## 标题` 会被 `chunk_text` 认成标题 →
     **`heading_path` 不再恒空**（章节链进索引源，"只在这一节出现的内容"才搜得到）。
     """
 
     title = str(item.get("title") or "（没有标题）").strip()
     url = str(item.get("url") or "").strip()
-    body = str(item.get("content") or "")
+    # `raw_content` 是**整页** markdown（实测 credits 不加、标题层级完整）；
+    # 它可能是 null（LangChain 打过补丁）→ 回退 `content`（按 query 挑的几段）。
+    body = str(item.get("raw_content") or item.get("content") or "")
+    # 联网路径此前**完全没有字数上限**（`cap_text` 只在上传路径调用）→
+    # 整页入库后个别站点能到几十万字，必须补。复用 `MAX_MATERIAL_CHARS`，不新增魔法数。
+    body, truncated = cap_text(body)
     warnings = [f"来自检索：{query}"]
+    if truncated:
+        warnings.append(TRUNCATED_WARNING.format(limit=MAX_MATERIAL_CHARS))
     if not url:
         # 没有链接的结果**照样收**（内容可能有用），但要说清"它没有出处可点"
         warnings.append("这条结果没有链接")
@@ -193,6 +225,6 @@ def _packet(item: dict, *, query: str) -> ParsedMaterial:
         chunks=chunks,
         parser_id=PARSER_ID,
         parser_version=PARSER_VERSION,
-        truncated=False,
+        truncated=truncated,
         warnings=tuple(warnings),
     )

@@ -37,6 +37,21 @@ def part_label(index: int) -> str:
     return "" if index == 0 else f"（第 {index + 1} 部分）"
 
 
+def cap_text(text: str) -> tuple[str, bool]:
+    """把文字截到 `MAX_MATERIAL_CHARS`。返回（截后文字, 截没截）。
+
+    **先截再切块**，所以信息包里永远不会超。
+
+    为什么住这儿（而不是 `extract.py`）：上限常量与保证它的函数必须在同一个地方
+    ——本文档开头那条原则。`extract.py`（上传/抓网页）与 `tavily.py`（联网）
+    两条路径都要用；而联网路径此前**完全没有上限**（整页入库后个别站点能到几十万字）。
+    """
+
+    if len(text) <= MAX_MATERIAL_CHARS:
+        return text, False
+    return text[:MAX_MATERIAL_CHARS], True
+
+
 def parts_of(text: str, *, max_chars: int = CHUNK_CHARS) -> tuple[tuple[str, int], ...]:
     """把一个可能超宽的逻辑片切成 ≤ `CHUNK_CHARS` 的若干片，并报**每片占了几行**。
 

@@ -365,3 +365,80 @@ async def test_the_gateway_drops_duplicate_results():
 
     assert len(packets) == 2, f"重复的应被去掉（留 2 条），实得 {len(packets)}"
     assert packets[0].source_ref == "https://a", "留的应该是第一条（Tavily 的相关序）"
+
+
+async def test_the_whole_page_is_stored_not_only_the_query_relevant_part():
+    """R：入库的是**整页**（`raw_content`），不是 Tavily 按 query 挑的那几段。
+
+    实测（2026-10-20 真跑）：Tavily 的 `content` 是 "chunks_per_source 默认 3、
+    每段约 500 字、**按 query 相关性挑**"——页面主体永远不在库里。冻结语料上
+    目标词只有 19/45 存在于现状语料，混合检索命中仅 29%；换整页后 45/45、71%。
+
+    这里断言两件事：① 请求确实要了整页；② 整页的后半段真的进了库。
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["include_raw_content"] == "markdown", "没要求整页正文"
+        return httpx.Response(200, json={"results": [{
+            "title": "整页",
+            "url": "https://example.com/a",
+            "content": "这是按 query 挑出来的那一段。",
+            "raw_content": "\n".join(
+                f"## 第 {index} 节\n第 {index} 节的正文内容。" for index in range(40)
+            ),
+        }]})
+
+    packets = await gateway(handler).search(query="查询", limit=5)
+
+    text = "\n".join(chunk.text for chunk in packets[0].chunks)
+    assert "第 39 节" in text, "整页的后半段没进库"
+    assert "这是按 query 挑出来的那一段" not in text
+
+
+async def test_the_raw_content_falls_back_to_content_when_it_is_null():
+    """R：`raw_content` 为 null 时回退 `content`——**不能空包**。
+
+    实测 Tavily 会返回 null（LangChain 为此专门打过补丁：langchain#30021）。
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": [{
+            "title": "回退",
+            "url": "https://example.com/a",
+            "content": "只有片段也有用。",
+            "raw_content": None,
+        }]})
+
+    packets = await gateway(handler).search(query="查询", limit=5)
+
+    assert len(packets) == 1
+    assert "只有片段也有用。" in packets[0].chunks[0].text
+
+
+async def test_a_huge_page_is_capped_and_says_so():
+    """R：联网材料**第一次有字数上限**（此前 `cap_text` 只在上传路径调用）。
+
+    raw_content 是个整页，个别站点能到几十万字——没有上限就是几万块。
+    """
+    from pmstudio.infrastructure.tools.limits import MAX_MATERIAL_CHARS
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": [{
+            "title": "超大",
+            "url": "https://example.com/a",
+            "content": "短",
+            "raw_content": "字" * (MAX_MATERIAL_CHARS + 5000),
+        }]})
+
+    packets = await gateway(handler).search(query="查询", limit=5)
+
+    assert packets[0].truncated is True
+    assert any("太长" in warning for warning in packets[0].warnings)
+    total = sum(len(chunk.text) for chunk in packets[0].chunks)
+    assert total <= MAX_MATERIAL_CHARS
+
+
+async def test_the_parser_identity_moved_so_old_web_materials_are_flagged():
+    """R：换了入库口径 → 解析器身份必须跟着动，老材料才会被标 stale。"""
+    from pmstudio.infrastructure.tools.tavily import PARSER_VERSION
+
+    assert PARSER_VERSION == "tavily-rest-v2-raw"
