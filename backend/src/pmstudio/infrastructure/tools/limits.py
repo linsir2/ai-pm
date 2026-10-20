@@ -11,6 +11,14 @@
 #: 一个块的目标宽度（字）。中文按字算，500 字约一屏。
 CHUNK_CHARS = 500
 
+#: **联网结果**的块宽（字）。为什么比 `CHUNK_CHARS` 小（2026-10-19 实测定的）：
+#: 向量模型 `bge-small-zh-v1.5` 的上限是 **512 token**，中文约 1 字 1 token；
+#: 而喂进去的是「标题 + 章节链 + 正文」，标题与章节链也要占 token。
+#: 实测超限的**尾部对向量完全不可见**（embed(700字) 与 embed(前510字) 余弦
+#: 1.000000；尾部加独特标记词，向量完全不变）。
+#: 400 + 标题/路径（~60）≈ 460 token，留得下。
+WEB_CHUNK_CHARS = 400
+
 #: 单份材料抽出的文字上限：超了截断（提示词预算是另一层，这道防线在解析这一步）
 MAX_MATERIAL_CHARS = 200_000
 
@@ -29,7 +37,7 @@ def part_label(index: int) -> str:
     return "" if index == 0 else f"（第 {index + 1} 部分）"
 
 
-def parts_of(text: str) -> tuple[tuple[str, int], ...]:
+def parts_of(text: str, *, max_chars: int = CHUNK_CHARS) -> tuple[tuple[str, int], ...]:
     """把一个可能超宽的逻辑片切成 ≤ `CHUNK_CHARS` 的若干片，并报**每片占了几行**。
 
     为什么报行数：锚点是 `MaterialChunk` 的既有契约（"第 12–40 行"——引用与界面跳转都靠它）。
@@ -54,26 +62,26 @@ def parts_of(text: str) -> tuple[tuple[str, int], ...]:
     用户勾了材料，提示词里写"（这一轮没有外部材料）"。
     """
 
-    if len(text) <= CHUNK_CHARS:
+    if len(text) <= max_chars:
         return ((text, text.count("\n") + 1),)
 
-    parts = _pack(_cut(text))
+    parts = _pack(_cut(text, max_chars), max_chars)
     return tuple((part, part.count("\n") + 1) for part in parts)
 
 
-def _cut(text: str) -> list[str]:
+def _cut(text: str, max_chars: int) -> list[str]:
     """按"行优先、单行内句末优先、最后硬切"把文本拆成原子（每个原子 ≤ `CHUNK_CHARS`）。"""
 
     atoms: list[str] = []
     for line in text.split("\n"):
-        if len(line) <= CHUNK_CHARS:
+        if len(line) <= max_chars:
             atoms.append(line)
         else:
-            atoms.extend(_cut_one_line(line))
+            atoms.extend(_cut_one_line(line, max_chars))
     return atoms
 
 
-def _pack(atoms: list[str]) -> list[str]:
+def _pack(atoms: list[str], max_chars: int) -> list[str]:
     """把原子贪心装进 ≤ `CHUNK_CHARS` 的块，行间用换行接回。"""
 
     blocks: list[str] = []
@@ -81,7 +89,7 @@ def _pack(atoms: list[str]) -> list[str]:
     width = 0
     for atom in atoms:
         cost = len(atom) + (1 if current else 0)  # 1 是行间那个换行
-        if current and width + cost > CHUNK_CHARS:
+        if current and width + cost > max_chars:
             blocks.append("\n".join(current))
             current, width = [], 0
             cost = len(atom)
@@ -92,16 +100,16 @@ def _pack(atoms: list[str]) -> list[str]:
     return blocks
 
 
-def _cut_one_line(line: str) -> tuple[str, ...]:
+def _cut_one_line(line: str, max_chars: int) -> tuple[str, ...]:
     """单行超宽：先在窗口内找**最后一个**句末标点下刀；隔得太远就直接按窗口宽度砍。"""
 
     parts: list[str] = []
     rest = line
-    while len(rest) > CHUNK_CHARS:
-        window = rest[:CHUNK_CHARS]
+    while len(rest) > max_chars:
+        window = rest[:max_chars]
         cut = max(window.rfind(mark) for mark in _SENTENCE_ENDS) + 1
-        if cut <= CHUNK_CHARS // 2:  # 最近的句末在窗口前半段，等它就砍得太碎了
-            cut = CHUNK_CHARS
+        if cut <= max_chars // 2:  # 最近的句末在窗口前半段，等它就砍得太碎了
+            cut = max_chars
         parts.append(rest[:cut])
         rest = rest[cut:]
     if rest:

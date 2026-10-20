@@ -311,3 +311,57 @@ async def test_a_non_tool_error_still_propagates():
         await harness.submit_opening()(
             round_id=round_id, seats=(SEAT,), web_queries=(QUERY,)
         )
+
+
+async def test_a_multi_chunk_web_result_gets_one_number_and_the_ledger_matches_the_prompt():
+    """R：**一条联网结果 = 一个编号**（它切成好几段也是一个来源），且
+    **账本里那条的正文 == 提示词里渲染的那段**（逐字相同）。
+
+    为什么这条要紧：编号发出去却没进提示词 = 账本被污染（`02` 的老账）。
+    切成多段后最容易出这个错——只渲染第一段、却给每段各发一个号。
+    """
+    from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+
+    packet = ParsedMaterial(
+        origin="web_search",
+        title="长文",
+        source_ref="https://multi",
+        media_type="text/html",
+        bytes_len=100,
+        chunks=tuple(
+            MaterialChunk(
+                chunk_id=f"tavily#c{index:02d}",
+                ordinal=index,
+                text=f"第{index}段正文",
+                heading_path=(),
+                anchor=f"网页摘要 · 第 {index + 1} 段",
+            )
+            for index in range(3)
+        ),
+        parser_id="tavily",
+        parser_version="1",
+    )
+    harness = web_harness(packet)
+    round_id = await recap_round(harness)
+
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,), web_queries=(QUERY,))
+
+    round_ = harness.rounds.get(round_id)
+    refs = [ref for ref in round_.materials if ref.material_id == "m1"]
+    assert len(refs) == 3, f"三段都该进这一轮（预算够），实得 {len(refs)}"
+    assert len({str(ref.eid) for ref in refs}) == 1, "一条结果只该有一个编号"
+
+    # 账本里那条的正文 == 提示词里渲染的那段（**真渲染**，不是拼字符串）
+    external = next(
+        item for item in harness.evidences.get(PROJECT).evidences()
+        if item.kind is EvidenceKind.EXTERNAL
+    )
+    body = "\n".join(f"第{index}段正文" for index in range(3))
+    assert external.text == body, f"账本正文与渲染的不一致：{external.text!r}"
+
+    rendered = external_material_text(round_, store=harness.materials)
+    assert body in rendered, "提示词里没有这段正文"
+    assert f"[{external.eid}]" in rendered
+    # 三段都在提示词里（不是只渲染第一段）
+    for index in range(3):
+        assert f"第{index}段正文" in rendered, f"第 {index} 段没进提示词"

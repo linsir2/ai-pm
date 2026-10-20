@@ -11,13 +11,16 @@
 
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 
 import httpx
 
-from pmstudio.application.context import WEB_SNIPPET_CHARS
-from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+from pmstudio.application.dto import ParsedMaterial
 from pmstudio.harness.errors import ToolCallFailed
+from pmstudio.infrastructure.tools.extract import chunk_text
 from pmstudio.infrastructure.tools.fetch import _backoff
+from pmstudio.infrastructure.tools.limits import WEB_CHUNK_CHARS
+from pmstudio.infrastructure.tools.webclean import normalize_web_text
 
 TOOL_ID = "tool.web_search"
 PARSER_ID = "tavily"
@@ -137,36 +140,50 @@ class TavilySearchGateway:
 
 
 def _packet(item: dict, *, query: str) -> ParsedMaterial:
-    """一条 Tavily 结果 → 一个信息包（单块：标题 + URL + 摘要）。"""
+    """一条 Tavily 结果 → 一个信息包（**整段清洗后切块**，不截断）。
+
+    ## 为什么不再截到 300 字（2026-10-19 实测定的）
+
+    真跑量过：Tavily 的 `content` 实给 **568–2302 字**（basic / advanced 两档），
+    而旧实现截到 300 字——**扔掉 50–78% 的内容**。那 300 字本来是想控制"进提示词
+    的量"，但那是**预算层**该管的事（`WEB_BUDGET` + `select_chunks`），
+    入库层管它就是**职责混淆**：库里只有前 300 字，F6 就搜不到后面的，
+    向量也只覆盖前 512 token。
+
+    ## 切块而不是整段一块
+
+    整段一块（1400 字）会超出向量模型的 512-token 上限（中文约 1 字 1 token），
+    实测**尾部对向量完全不可见**（embed(700字) 与 embed(前510字) 余弦 1.000000）。
+    按 `WEB_CHUNK_CHARS`（400）切开后，每块的向量都覆盖得到自己那段。
+
+    顺带白捡：`content` 里的 `## 标题` 会被 `chunk_text` 认成标题 →
+    **`heading_path` 不再恒空**（章节链进索引源，"只在这一节出现的内容"才搜得到）。
+    """
 
     title = str(item.get("title") or "（没有标题）").strip()
     url = str(item.get("url") or "").strip()
-    body = str(item.get("content") or "").strip()
+    body = str(item.get("content") or "")
     warnings = [f"来自检索：{query}"]
     if not url:
         # 没有链接的结果**照样收**（内容可能有用），但要说清"它没有出处可点"
         warnings.append("这条结果没有链接")
-    truncated = len(body) > WEB_SNIPPET_CHARS
-    snippet = body[:WEB_SNIPPET_CHARS]
-    if truncated:
-        warnings.append("摘要过长（已截断）")
+    cleaned = normalize_web_text(body)
+    raw_chunks = chunk_text(cleaned, parser_id=PARSER_ID, max_chars=WEB_CHUNK_CHARS)
+    # 锚点用"第 N 段"而不是 `chunk_text` 给的"第 N–M 行"：联网摘要没有"行号"
+    # 这回事，用户跳不到网页的第 5 行。
+    chunks = tuple(
+        replace(chunk, anchor=f"网页摘要 · 第 {index} 段")
+        for index, chunk in enumerate(raw_chunks, start=1)
+    )
     return ParsedMaterial(
         origin="web_search",
         title=title,
         source_ref=url or "（没有链接）",
         media_type="text/html",
         bytes_len=len(body.encode("utf-8")),
-        chunks=(
-            MaterialChunk(
-                chunk_id=f"{PARSER_ID}#c00",
-                ordinal=0,
-                text=snippet,
-                heading_path=(),
-                anchor="网页摘要",
-            ),
-        ),
+        chunks=chunks,
         parser_id=PARSER_ID,
         parser_version=PARSER_VERSION,
-        truncated=truncated,
+        truncated=False,
         warnings=tuple(warnings),
     )

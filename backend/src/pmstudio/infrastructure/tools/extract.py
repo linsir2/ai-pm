@@ -196,8 +196,14 @@ def _heading_level(line: str) -> int:
     return 1
 
 
-def chunk_text(text: str, *, parser_id: str) -> tuple[MaterialChunk, ...]:
-    """按行切块：标题行起新块，累积到 `CHUNK_CHARS` 也起新块。纯函数。"""
+def chunk_text(
+    text: str, *, parser_id: str, max_chars: int = CHUNK_CHARS
+) -> tuple[MaterialChunk, ...]:
+    """按行切块：标题行起新块，累积到 `max_chars` 也起新块。纯函数。
+
+    `max_chars` 默认 `CHUNK_CHARS`（上传材料那条路）；联网结果那条路传
+    `WEB_CHUNK_CHARS`（400）——理由见 `limits.py` 里那个常量的注释。
+    """
 
     lines = text.splitlines()
     chunks: list[MaterialChunk] = []
@@ -214,7 +220,7 @@ def chunk_text(text: str, *, parser_id: str) -> tuple[MaterialChunk, ...]:
         if body:
             # 一个逻辑片可能超宽（一整个长行、几千字没有小标题的正文）：切，且每片 ≤ 块宽。
             # 行号光标随"每片占几行"推进，所以切完每片仍有自己精确的锚点。
-            for part, consumed in parts_of(body):
+            for part, consumed in parts_of(body, max_chars=max_chars):
                 chunks.append(
                     MaterialChunk(
                         chunk_id=f"{parser_id}#c{len(chunks):02d}",
@@ -229,7 +235,7 @@ def chunk_text(text: str, *, parser_id: str) -> tuple[MaterialChunk, ...]:
 
     for number, line in enumerate(lines, start=1):
         heading = _is_heading(line)
-        if buffer and (heading or width() >= CHUNK_CHARS):
+        if buffer and (heading or width() >= max_chars):
             flush()
         if not buffer:
             start_line = number

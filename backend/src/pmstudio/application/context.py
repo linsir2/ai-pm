@@ -1115,15 +1115,27 @@ def _material_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
 
 
 def web_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
-    """联网检索结果的成本：**与 `render_web_results` 的排版同源**（标题 + URL + 摘要 + 编号位）。
+    """联网检索结果的**块**成本：**标题 + URL 只算一次**（第一块算），其余块只算正文。
 
-    为什么必须同源：选块先发生（决定发哪些号），渲染后发生。两把尺子稍有出入，
-    就会出现"发了号却没进提示词"的编号——那正是账本被污染的样子。
+    为什么必须只算一次（2026-10-19）：一条结果现在可能是**好几段**（切块后）。
+    每段都算一次标题+URL，就是同一段信息重复付费——`WEB_BUDGET` 只够带进
+    一条结果的一两段，剩下的结果全进不来。
+
+    编号位（`WEB_EID_RESERVE`）也算在第一块上：渲染出来是
+    `[E12] 标题\\nURL\\n正文`，编号前缀与换行都在**第一条**那一段里。
+
+    **与渲染同源**（同一把尺子）：渲染出来的那段，标题、URL、编号位各只出现一次，
+    这里也只算一次——所以"选进来的每一条都会被渲染出来"那条不变量还成立。
     """
 
-    snippet = chunk.text[:WEB_SNIPPET_CHARS]
-    block = f"{packet.parsed.title}\n{packet.parsed.source_ref}\n{snippet}"
-    return len(block) + WEB_EID_RESERVE
+    cost = len(chunk.text)
+    if chunk.ordinal == 0:
+        cost += (
+            len(packet.parsed.title)
+            + len(packet.parsed.source_ref)
+            + WEB_EID_RESERVE
+        )
+    return cost
 
 
 @dataclass(frozen=True, slots=True)
@@ -1206,11 +1218,15 @@ FETCH_ORIGIN = "web_fetch"
 
 
 def render_web_results(
-    entries: Sequence[tuple[MaterialPacket, EvidenceId]],
+    entries: Sequence[tuple[MaterialPacket, Sequence[MaterialChunk], EvidenceId]],
     *,
     budget: int = WEB_BUDGET,
 ) -> RenderedMaterial:
-    """检索结果 → 提示词里那一段：一条一段（编号 + 标题 + URL + 摘要）。
+    """检索结果 → 提示词里那一段：一条一段（编号 + 标题 + URL + 正文）。
+
+    `entries` 的每一项是 **(结果包, 这一条结果被选中的块, 编号)**：
+    一条结果现在可能是**好几段**（切块后），渲染要把**选中的每一段**都拼出来——
+    只渲染第一段的话，其余段的编号就在账本里、却从提示词里消失了。
 
     超预算**照实说**（与材料那段同一个口径）：模型得知道"搜到的比这多"，
     不然它会以为自己看到的就是全部。正常路径上这个截断不会发生——
@@ -1226,18 +1242,16 @@ def render_web_results(
     used_ids: list[str] = []
     used = 0
     truncated = False
-    for packet, eid in entries:
+    for packet, chunks, eid in entries:
         parsed = packet.parsed
-        chunk = parsed.chunks[0] if parsed.chunks else None
-        snippet = "" if chunk is None else chunk.text[:WEB_SNIPPET_CHARS]
-        block = f"[{eid}] {parsed.title}\n{parsed.source_ref}\n{snippet}"
+        body = "\n".join(chunk.text for chunk in chunks)
+        block = f"[{eid}] {parsed.title}\n{parsed.source_ref}\n{body}"
         if used + len(block) > budget:
             truncated = True
             break
         lines.append(block)
         used += len(block)
-        if chunk is not None:
-            used_ids.append(chunk.chunk_id)
+        used_ids.extend(chunk.chunk_id for chunk in chunks)
     if truncated:
         lines.append(f"（检索结果太多，只带了前 {len(used_ids)} 条 / 共 {len(entries)} 条）")
     lines.append(

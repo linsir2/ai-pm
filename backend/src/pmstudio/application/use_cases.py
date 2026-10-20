@@ -821,19 +821,31 @@ class SubmitOpening:
                 # 与附件同一条规则：**只给选中的块发号**（没选中的块仍在材料表里，F6 搜得到）
                 ledger = self._evidence.get(project_id)
                 material_refs: list[MaterialRef] = []
+                # **一条联网结果 = 一个编号**（2026-10-19 决策）：结果可能切成好几段，
+                # 但它是一个来源、一个出处——各段共享同一个编号。
+                # 编号的正文 = 这一条结果**被选中的那些段**拼起来
+                # （必须与提示词里渲染的那段**逐字相同**，否则就是"发号却没进提示词"）。
+                picked_by_material: dict[str, list[MaterialChunk]] = {}
+                packets_by_id: dict[str, MaterialPacket] = {}
                 for packet, chunk in picks:
-                    material_refs.append(
-                        MaterialRef(
-                            material_id=packet.material_id,
-                            chunk_id=chunk.chunk_id,
-                            eid=ledger.record(
-                                kind=_material_kind(packet),
-                                text=chunk.text,
-                                source=EvidenceSource(external_ref=_external_ref(packet, chunk)),
-                                now=self._clock.now(),
-                            ),
-                        )
+                    picked_by_material.setdefault(packet.material_id, []).append(chunk)
+                    packets_by_id[packet.material_id] = packet
+                for material_id, chunks in picked_by_material.items():
+                    packet = packets_by_id[material_id]
+                    eid = ledger.record(
+                        kind=_material_kind(packet),
+                        text="\n".join(chunk.text for chunk in chunks),
+                        source=EvidenceSource(external_ref=_external_ref(packet, chunks[0])),
+                        now=self._clock.now(),
                     )
+                    for chunk in chunks:
+                        material_refs.append(
+                            MaterialRef(
+                                material_id=material_id,
+                                chunk_id=chunk.chunk_id,
+                                eid=eid,
+                            )
+                        )
                 round_.add_materials(material_refs)
                 self._evidence_writer.save(ledger)
             round_.note_dropped(failure)
@@ -4185,7 +4197,7 @@ def external_material_text(round_: Round, *, store: MaterialStore) -> str:
     for ref in round_.materials:
         by_material.setdefault(ref.material_id, {})[ref.chunk_id] = ref.eid
     uploads: list[tuple[MaterialPacket, dict[str, EvidenceId]]] = []
-    found: list[tuple[MaterialPacket, list[EvidenceId]]] = []
+    found: list[tuple[MaterialPacket, list[MaterialChunk], EvidenceId]] = []
     missing: list[str] = []
     for material_id, eids in by_material.items():
         packet = store.get(material_id)
@@ -4194,18 +4206,19 @@ def external_material_text(round_: Round, *, store: MaterialStore) -> str:
             missing.append(material_id)
             continue
         if packet.parsed.origin == WEB_ORIGIN:
-            found.append((packet, list(eids.values())))
+            # 联网结果：一条结果 = **一个编号**（多段共享它），渲染时把
+            # **这一条结果被选中的每一段**都拼出来。`eids` 是 {块 id: 编号}——
+            # 一条结果的各段共用同一个编号，所以取任意一个即可。
+            picked = [chunk for chunk in packet.parsed.chunks if chunk.chunk_id in eids]
+            if picked and eids:
+                found.append((packet, picked, next(iter(eids.values()))))
         else:
             uploads.append((packet, eids))
     parts: list[str] = []
     if uploads:
         parts.append(render_materials(uploads).text)
     if found:
-        parts.append(
-            render_web_results(
-                [(packet, eids[0]) for packet, eids in found if eids]
-            ).text
-        )
+        parts.append(render_web_results(found).text)
     if missing:
         parts.append(
             f"（{len(missing)} 份材料已不在库里，未带入：{'、'.join(missing)}）"

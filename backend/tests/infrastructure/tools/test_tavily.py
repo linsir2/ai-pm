@@ -72,11 +72,13 @@ async def test_search_returns_one_packet_per_result_and_never_leaks_the_key():
     ]
     assert all(packet.origin == "web_search" for packet in packets)
     assert all(packet.parser_id == "tavily" for packet in packets)
-    assert packets[0].chunks[0].anchor == "网页摘要"
-    # 单条 content 实测 ≈1.1k 字符 → 截到 300，并且**写明截断**
-    assert len(packets[0].chunks[0].text) <= 300
-    assert packets[0].truncated is True
-    assert any("截断" in warning for warning in packets[0].warnings)
+    # 锚点标明是第几段（联网摘要没有"行号"这回事）
+    assert packets[0].chunks[0].anchor == "网页摘要 · 第 1 段"
+    # **不再截到 300**（2026-10-19 实测：Tavily 实给 568–2302 字，截 300 等于
+    # 扔掉 50–78%）。截断是**预算层**该管的事，入库层管它就是职责混淆。
+    assert all(len(chunk.text) <= 400 for chunk in packets[0].chunks)
+    assert packets[0].truncated is False
+    assert not any("截断" in warning for warning in packets[0].warnings)
     assert packets[1].truncated is False
 
     assert seen["body"]["api_key"] == "tvly-secret"          # 真发出去了
@@ -264,3 +266,81 @@ async def test_an_over_long_query_is_truncated_before_sending():
     assert len(seen["body"]["query"]) == MAX_QUERY_CHARS  # type: ignore[arg-type]
     # 常量必须留在实测墙以内——将来有人往上调过头，这条先红。
     assert MAX_QUERY_CHARS <= 1500
+
+
+# ── 联网结果切块（批 6a Task 4）───────────────────────────────────────────────
+
+
+def _one_result(content: str, *, title: str = "导出方案") -> str:
+    """造一个只含一条结果的 Tavily 回包（JSON 文本）。"""
+
+    return json.dumps({"results": [{"title": title, "url": "https://example.com/a",
+                                    "content": content}]})
+
+
+async def _search_content(content: str, *, title: str = "导出方案"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=json.loads(_one_result(content, title=title)))
+
+    gateway_ = gateway(handler)
+    packets = await gateway_.search(query="导出", limit=5)
+    return packets
+
+
+async def test_a_long_result_is_split_into_several_chunks():
+    """R：超过块宽的结果**切成多块**（今天恒定 1 块，尾部对向量不可见）。
+
+    实测（Tavily 真跑 2026-10-19）：`content` 实给 568–2302 字，而实现截到 300 字
+    ——**扔掉 50–78%**。整段一块也不行：bge 的 512-token 上限会静默截断
+    （实测 embed(700字) 与 embed(前510字) 余弦 1.000000）。
+    """
+    packets = await _search_content("结论是：先做同步导出。" * 100)
+
+    assert len(packets) == 1
+    assert len(packets[0].chunks) > 1, "长结果没有切块"
+
+
+async def test_every_chunk_respects_the_web_chunk_width():
+    """R：每块 ≤ `WEB_CHUNK_CHARS`（400 字，留出标题/路径的 512-token 预算）。"""
+    from pmstudio.infrastructure.tools.limits import WEB_CHUNK_CHARS
+
+    packets = await _search_content("结论是：先做同步导出。" * 100)
+
+    for chunk in packets[0].chunks:
+        assert len(chunk.text) <= WEB_CHUNK_CHARS, f"块 {len(chunk.text)} 字，超了"
+
+
+async def test_a_short_result_stays_one_chunk():
+    """R：短结果仍是 1 块（不要为了"统一"硬切）。"""
+    packets = await _search_content("结论很短。")
+
+    assert len(packets[0].chunks) == 1
+
+
+async def test_the_anchor_tells_which_part_it_is():
+    """R：锚点标明是第几段（"网页摘要"是块级的东西，多块就分不清了）。"""
+    packets = await _search_content("结论是：先做同步导出。" * 100)
+
+    anchors = [chunk.anchor for chunk in packets[0].chunks]
+    assert anchors[0] == "网页摘要 · 第 1 段"
+    assert anchors[1] == "网页摘要 · 第 2 段"
+
+
+async def test_a_markdown_heading_in_the_content_becomes_the_heading_path():
+    """R：content 里的 `## 标题` 变成 `heading_path`。
+
+    白捡的检索信号：章节链进索引源（`index_source` = 标题 + 章节链 + 正文），
+    "只在这一节出现的内容"才搜得到。今天联网材料的 `heading_path` **恒为空**。
+    """
+    packets = await _search_content("## 数据保护与隐私边界\n\n正文说日志要脱敏。")
+
+    # 章节链里**带 `##` 前缀**——这是 `chunk_text` 的既有形状（上传的 .md 也一样，
+    # 同一份代码）。这里跟它保持一致，不为了联网这条路单开一个形状。
+    assert packets[0].chunks[0].heading_path == ("## 数据保护与隐私边界",)
+
+
+async def test_the_content_is_cleaned_before_it_is_chunked():
+    """R：切块前先清洗（Tavily 的 `[...]` 标记不进块）。"""
+    packets = await _search_content("结论是：先做同步导出。 [...] 后半段。")
+
+    assert "..." not in "".join(c.text for c in packets[0].chunks)

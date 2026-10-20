@@ -630,8 +630,8 @@ def test_render_web_results_is_budgeted_and_says_how_many_it_left_out():
         make_web(url="https://b", text="字" * 120),
     )
     entries = [
-        (first, EvidenceId("E9")),
-        (second, EvidenceId("E10")),
+        (first, list(first.parsed.chunks), EvidenceId("E9")),
+        (second, list(second.parsed.chunks), EvidenceId("E10")),
     ]
 
     rendered = context.render_web_results(entries, budget=200)
@@ -660,7 +660,11 @@ def test_the_selection_cost_never_lets_the_renderer_drop_a_numbered_chunk():
     by_id = {packet.material_id: packet for packet in packets}
     rendered = context.render_web_results(
         [
-            (by_id[material_id], EvidenceId(f"E{index + 9}"))
+            (
+                by_id[material_id],
+                [chunk for mid, chunk in picked if mid == material_id],
+                EvidenceId(f"E{index + 9}"),
+            )
             for index, (material_id, _) in enumerate(picked)
         ],
         budget=context.WEB_BUDGET,
@@ -1249,3 +1253,93 @@ def test_placement_text_carve_out_only_with_a_steps_chapter():
 
     assert "单个功能内部" not in text
     assert "散两处" not in text
+
+
+# —— 联网结果：整段落库 + 一个结果一个编号 + 成本/渲染按块（批 6a Task 7）——
+
+
+def _multi_chunk_web(*, url: str = "https://a", title: str = "长文", blocks: int = 3):
+    """一条**多块**的联网结果（今天恒定 1 块；切块后一条结果可能是好几段）。"""
+    from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+
+    return ParsedMaterial(
+        origin="web_search",
+        title=title,
+        source_ref=url,
+        media_type="text/html",
+        bytes_len=100,
+        chunks=tuple(
+            MaterialChunk(
+                chunk_id=f"tavily#c{index:02d}",
+                ordinal=index,
+                text=f"第{index}段正文" * 10,
+                heading_path=(),
+                anchor=f"网页摘要 · 第 {index + 1} 段",
+            )
+            for index in range(blocks)
+        ),
+        parser_id="tavily",
+        parser_version="1",
+    )
+
+
+def test_a_web_result_costs_its_title_and_url_once():
+    """R：标题 + URL **只算一次**（不是每块一次）。
+
+    为什么：一条结果现在可能是好几段（切块后）。每段都算一次标题+URL，
+    同一段信息重复付费，`WEB_BUDGET` 只够带进一条结果的一两段。
+    """
+    from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+
+    packet = ParsedMaterial(
+        origin="web_search", title="很长的标题" * 5, source_ref="https://example.com/a",
+        media_type="text/html", bytes_len=10,
+        chunks=(
+            MaterialChunk(chunk_id="tavily#c00", ordinal=0, text="甲" * 100,
+                          heading_path=(), anchor="网页摘要 · 第 1 段"),
+            MaterialChunk(chunk_id="tavily#c01", ordinal=1, text="乙" * 100,
+                          heading_path=(), anchor="网页摘要 · 第 2 段"),
+        ),
+        parser_id="tavily", parser_version="1",
+    )
+    store = InMemoryMaterialStore()
+    stamped = store.put(project_id=PROJECT, parsed=packet, sha256="web-x", content=b"x", now=NOW)
+
+    first = context.web_block_cost(stamped, stamped.parsed.chunks[0])
+    second = context.web_block_cost(stamped, stamped.parsed.chunks[1])
+
+    assert second == 100, f"第二块只该算正文（100），实得 {second}"
+    assert first == 100 + len(stamped.parsed.title) + len(stamped.parsed.source_ref) \
+        + context.WEB_EID_RESERVE, f"第一块还要算标题+URL+编号位，实得 {first}"
+
+
+def test_the_rendered_web_text_contains_every_selected_chunk():
+    """R：渲染要把**选中的每一段**都拼出来。
+
+    今天只渲染 `chunks[0]`——结果切成多段后，其余段就**从提示词里消失了**
+    （但它们的编号还在账本里 → 账本被污染）。
+    """
+    from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+
+    packet = ParsedMaterial(
+        origin="web_search", title="长文", source_ref="https://example.com/a",
+        media_type="text/html", bytes_len=10,
+        chunks=(
+            MaterialChunk(chunk_id="tavily#c00", ordinal=0, text="第一段正文",
+                          heading_path=(), anchor="网页摘要 · 第 1 段"),
+            MaterialChunk(chunk_id="tavily#c01", ordinal=1, text="第二段正文",
+                          heading_path=(), anchor="网页摘要 · 第 2 段"),
+        ),
+        parser_id="tavily", parser_version="1",
+    )
+    store = InMemoryMaterialStore()
+    stamped = store.put(project_id=PROJECT, parsed=packet, sha256="web-y", content=b"x", now=NOW)
+
+    rendered = context.render_web_results(
+        [(stamped, list(stamped.parsed.chunks), EvidenceId("E12"))], budget=2000
+    )
+
+    assert "第一段正文" in rendered.text
+    assert "第二段正文" in rendered.text
+    # 块 id 入库时被材料仓改写成 `m1#c00`（盖章在那儿）
+    assert rendered.used_chunk_ids == ("m1#c00", "m1#c01")
