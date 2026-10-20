@@ -21,6 +21,7 @@ from pmstudio.infrastructure.tools.extract import chunk_text
 from pmstudio.infrastructure.tools.fetch import _backoff
 from pmstudio.infrastructure.tools.limits import WEB_CHUNK_CHARS
 from pmstudio.infrastructure.tools.webclean import normalize_web_text
+from pmstudio.infrastructure.tools.webdedup import dedupe_by_content
 
 TOOL_ID = "tool.web_search"
 PARSER_ID = "tavily"
@@ -134,9 +135,17 @@ class TavilySearchGateway:
         results = body.get("results")
         if not isinstance(results, list):
             raise ToolCallFailed("联网搜索结果里没有 results", tool_id=TOOL_ID)
-        return tuple(
+        packets = tuple(
             _packet(item, query=query) for item in results if isinstance(item, dict)
         )
+        # **批内去重**（两层：字节级 + 近重复 5-gram Jaccard ≥0.2，阈值是实测定的）。
+        # 为什么在网关这一层：同一批结果里常有几条说的是同一件事（多家站转载同一条
+        # 法条），它们会白占预算与提示词——"这次搜索返回了这些结果"本来就该是去重后的。
+        # 去重保留**第一条**（Tavily 的顺序就是相关序，不能打乱）。
+        # 实测（2026-10-19，50 条真结果）：precision 1.000、recall 0.159——
+        # 它抓的是"抽到了同一段"，不是"同一主题"（同主题不同内容**必须**留着）。
+        # 跨查询的重复由 URL 级去重兜着（`SubmitOpening._keep` 按 `web:{url}` 找已有材料）。
+        return tuple(dedupe_by_content(packets))
 
 
 def _packet(item: dict, *, query: str) -> ParsedMaterial:

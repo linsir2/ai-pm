@@ -344,3 +344,24 @@ async def test_the_content_is_cleaned_before_it_is_chunked():
     packets = await _search_content("结论是：先做同步导出。 [...] 后半段。")
 
     assert "..." not in "".join(c.text for c in packets[0].chunks)
+
+
+async def test_the_gateway_drops_duplicate_results():
+    """R：**这次搜索返回的结果里没有重复的**（同一件事被几家站转载 → 只留一条）。
+
+    为什么在网关这一层做：重复会白占 `WEB_BUDGET` 与提示词——而"这次搜索返回了
+    哪些结果"本来就是网关的事。跨查询的重复由 URL 级去重兜着（按 `web:{url}`）。
+    """
+    body = "个人信息保护法要求处理个人信息应当取得个人同意，并明确处理目的与范围。"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": [
+            {"title": "甲", "url": "https://a", "content": body},
+            {"title": "乙", "url": "https://b", "content": body + "本文转载自网络。"},
+            {"title": "丙", "url": "https://c", "content": "另一部法规，讲的是别的事。"},
+        ]})
+
+    packets = await gateway(handler).search(query="个人信息保护法", limit=5)
+
+    assert len(packets) == 2, f"重复的应被去掉（留 2 条），实得 {len(packets)}"
+    assert packets[0].source_ref == "https://a", "留的应该是第一条（Tavily 的相关序）"

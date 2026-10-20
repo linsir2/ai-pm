@@ -866,6 +866,7 @@ class SubmitOpening:
 
         drops: list[DroppedItem] = []
         packets: list[MaterialPacket] = []
+        drafts: list[ParsedMaterial] = []
         if not chosen or tool is None or self._web_search is None:
             return (), ()
         limit = _declared(tool, "max_results")
@@ -891,8 +892,9 @@ class SubmitOpening:
                 raise result  # 非工具异常照旧**不吞**（gather 只是把它当成了值）
             if not result:
                 drops.append(_tool_drop(f"联网检索 {query}", "没有搜到结果"))
-            for draft in result:
-                packets.append(self._keep(project_id, draft))
+            drafts.extend(result)
+        for draft in drafts:
+            packets.append(self._keep(project_id, draft))
         picked = select_chunks(packets, budget=WEB_BUDGET, cost=web_block_cost)
         if 0 < len(picked) < len(packets):
             missed = len(packets) - len(picked)
