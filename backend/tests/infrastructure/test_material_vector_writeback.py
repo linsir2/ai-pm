@@ -214,3 +214,57 @@ def _seed_project(connection) -> None:
         " VALUES (?, 'x', '2026-10-18T00:00:00+00:00')",
         (str(TEST_OWNER),),
     )
+
+# ── 联网材料也要写向量（批 6a Task 6）──────────────────────────────────────────
+
+
+def test_a_web_result_also_gets_a_vector(tmp_path):
+    """R：**联网搜来的材料也有向量**——今天它没有，所以"F6 搜得到"只对上传的材料成立。
+
+    联网材料是"用户不知道它长什么样"的那一类（外部来源），恰恰最需要语义召回
+    （用户只能用自己的话描述需求）。没有向量 = 换个说法就搜不到它。
+
+    装配是**真的**：真 SQLite 仓 + 真向量索引 + 真用例（`SubmitOpening`）。
+    """
+    from pmstudio.application.use_cases import SubmitOpening
+    from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
+    from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
+    from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
+    from tests.support.builders import PROJECT, make_web_packet
+    from tests.support.doubles import RecordingWebSearch
+    from tests.support.harness import Harness
+
+    harness = Harness(replies={}, web_search=RecordingWebSearch())
+    connection = database.connect(tmp_path / "web.db")
+    connection.execute(
+        "INSERT OR IGNORE INTO users (user_id, password_hash, created_at)"
+        " VALUES (?, 'x', '2026-10-18T00:00:00+00:00')",
+        (str(TEST_OWNER),),
+    )
+    store = SqliteMaterialStore(connection, ids=SeqIds())
+    vectors = SqliteVectorIndex(connection, embedder=FakeEmbedder(dimensions=512))
+
+    opening = SubmitOpening(
+        rounds=harness.rounds,
+        round_writer=harness.rounds,
+        catalog=harness.seats,
+        tools=harness.tools,
+        available_tool_keys=harness.available_tool_keys,
+        web_search=harness.web_search,
+        evidence=harness.evidences,
+        evidence_writer=harness.evidences,
+        materials=store,
+        uow=SqliteUnitOfWork(connection),
+        clock=harness.clock,
+        events=harness.events,
+        vectors=vectors,
+    )
+
+    draft = make_web_packet(url="https://example.com/a", text="机器内部的线要接到背后")
+    packet = opening._keep(PROJECT, draft)
+
+    rows = connection.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0]
+    assert rows == len(packet.parsed.chunks), (
+        f"联网材料应有向量（{len(packet.parsed.chunks)} 块），实得 {rows} 条"
+    )
+    connection.close()

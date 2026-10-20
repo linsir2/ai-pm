@@ -380,6 +380,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         uow=uow,
         clock=clock,
         events=bus,
+        # 联网结果也要有向量（否则"换个说法搜它"搜不到——外部来源恰恰最需要语义召回）
+        vectors=vector_index,
     )
     run_seat_round = RunSeatRound(
         rounds=rounds,

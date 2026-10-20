@@ -766,6 +766,7 @@ class SubmitOpening:
         uow: UnitOfWork,
         clock: Clock,
         events: EventPublisher,
+        vectors: MaterialVectorIndex = NO_VECTORS,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -779,6 +780,8 @@ class SubmitOpening:
         self._uow = uow
         self._clock = clock
         self._events = events
+        # 向量索引（检索阶段 2）：联网结果**也要**有向量，否则"换个说法搜它"搜不到。
+        self._vectors = vectors
 
     async def __call__(
         self,
@@ -922,14 +925,21 @@ class SubmitOpening:
         digest = hashlib.sha256(f"web:{draft.source_ref}".encode()).hexdigest()
         existing = self._materials.find_by_sha(project_id, digest)
         if existing is not None:
+            # 同一网址已经收过：材料与它的向量都已经在库里（向量是入库时写的），
+            # 重写一遍只是白花 ONNX 推理。真缺向量的情况由启动时的幂等回填兜着。
             return existing
-        return self._materials.put(
+        packet = self._materials.put(
             project_id=project_id,
             parsed=draft,
             sha256=digest,
             content="\n".join(chunk.text for chunk in draft.chunks).encode("utf-8"),
             now=self._clock.now(),
         )
+        # 写向量（检索阶段 2）：**联网结果也要能被语义召回**。
+        # 这里是**事务外**（`_search` 整段都在 `with self._uow:` 之前），
+        # 所以推理不占着写锁——与上传路径"主事务提交后再写"是同一条纪律。
+        self._vectors.write(packet.material_id)
+        return packet
 
 
 class RunSeatRound:
