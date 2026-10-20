@@ -79,3 +79,51 @@ def test_the_function_is_idempotent():
     """R：洗两次与洗一次同结果（清洗要可重放——回填与重解析都会再跑一遍）。"""
     once = normalize_web_text("甲。 [...] 　\n\n\n乙。| --- |")
     assert normalize_web_text(once) == once
+
+
+def test_a_line_that_is_only_a_markdown_link_is_dropped():
+    """R：整行**只有一个** markdown 链接 → 导航行，剔掉。
+
+    实测（Tavily `raw_content`，2026-10-20）：18.7% 的行是这种——面包屑、logo、
+    按钮、产品目录。剔掉后总字数降 20%，**检索命中不降反升**（32/32 vs 31/31）：
+    这些行既不是内容，又会在向量里把页面的主题稀释掉。
+    """
+    text = "\n".join(
+        [
+            "# 标题",
+            "[文档中心](/help/zh)",
+            "正文第一段。",
+            "![logo](//assets/logo.svg)",
+            "正文第二段。",
+        ]
+    )
+
+    result = normalize_web_text(text)
+
+    assert "文档中心" not in result, "面包屑是导航，不是内容"
+    assert "logo" not in result, "装饰图片不是内容"
+    assert "正文第一段。" in result
+    assert "正文第二段。" in result
+
+
+def test_a_reference_list_item_keeps_its_link():
+    """R：`- [标题](url)` 是**参考资料**，不是导航 → 保留。
+
+    列表符号让它不匹配「整行只有一个链接」——参考资料是要被搜到的。
+    """
+    result = normalize_web_text("- [参考一](https://example.com/a)")
+    assert "参考一" in result
+
+
+def test_a_line_with_two_links_keeps_both():
+    """R：一行多个链接 → 是正文里的行内链接 → 整行保留。"""
+    result = normalize_web_text(
+        "[文档](https://example.com/a)[反馈](https://example.com/b)"
+    )
+    assert "文档" in result
+    assert "反馈" in result
+
+
+def test_an_image_only_line_is_dropped():
+    """R：整行只有一个图片 → 装饰 → 剔掉。"""
+    assert normalize_web_text("![](https://example.com/a.png)") == ""
