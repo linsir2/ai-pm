@@ -779,7 +779,17 @@ def search_hits(
 
     # 第五类来源：材料块（`P18` C-2c-1）。排在最后——它是外部事实、不算权威；
     # 顺序就用检索器给的顺序（`MaterialHit.score` 的消费者在这一处，不再重排）。
+    #
+    # **一份材料只出一行**（2026-10-19）：联网材料切成多段后，同一份材料的每一段
+    # 都是一条命中 → 搜索结果里会出现 4–6 行同一篇文档，把 top5 的位置全占了，
+    # 别的材料挤不出去（实测：材料级 recall@5 比纯 FTS5 少 1–2 条）。
+    # 用户也不想看 5 行同一篇文档。落点用**第一次命中的那块**（检索器按相关度给的
+    # 顺序），点它照样能滚到那一段。
+    seen_materials: set[str] = set()
     for material in materials:
+        if material.material_id in seen_materials:
+            continue
+        seen_materials.add(material.material_id)
         add(
             SearchHitView(
                 kind="material",

@@ -1343,3 +1343,39 @@ def test_the_rendered_web_text_contains_every_selected_chunk():
     assert "第二段正文" in rendered.text
     # 块 id 入库时被材料仓改写成 `m1#c00`（盖章在那儿）
     assert rendered.used_chunk_ids == ("m1#c00", "m1#c01")
+
+
+def test_search_results_show_one_row_per_material_not_one_per_chunk():
+    """R：**一份材料只出一行**（不是它的每一段各出一行）。
+
+    为什么：联网材料切成多段后（批 6a），同一篇文档的每一段都是一条命中 →
+    搜索结果里 4–6 行同一篇文档，把 top5 的位置全占了，别的材料挤不出去
+    （实测材料级 recall@5 比纯 FTS5 少 1–2 条）。用户也不想看 5 行同一篇文档。
+    """
+    from pmstudio.application.dto import MaterialHit
+
+    hits = [
+        MaterialHit(material_id="m1", chunk_id="m1#c00", score=0.9, excerpt="第一段",
+                    anchor="第 1 段", source_ref="a", title="长文"),
+        MaterialHit(material_id="m1", chunk_id="m1#c01", score=0.8, excerpt="第二段",
+                    anchor="第 2 段", source_ref="a", title="长文"),
+        MaterialHit(material_id="m2", chunk_id="m2#c00", score=0.7, excerpt="别家",
+                    anchor="第 1 段", source_ref="b", title="另一篇"),
+    ]
+
+    from pmstudio.domain.authoring.views import DocumentView
+
+    from pmstudio.application import dto
+
+    view = dto.search_hits(
+        query="退货",
+        document=DocumentView(
+            document_id="d1", project_id="p1", title="t", version_no=1, sections=()
+        ),
+        evidence=(), opinions=(), materials=hits
+    )
+
+    material_rows = [hit for hit in view.hits if hit.kind == "material"]
+    assert len(material_rows) == 2, f"两份材料应出两行，实得 {len(material_rows)}"
+    # 落点是**第一次命中的那块**（检索器按相关度给的顺序）
+    assert material_rows[0].ref == "m1#c00"
