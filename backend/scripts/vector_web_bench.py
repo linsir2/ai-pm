@@ -215,9 +215,14 @@ def main() -> int:
     project, owner = "p-bench", "u-bench"
     set_owner_scope(UserId(owner))
 
+    frozen = BACKEND.parent / ".codex" / "runs" / "2026-10-19" / "web_corpus.json"
     for depth in ("basic", "advanced"):
         _log(f"\n=== Tavily search_depth={depth} ===")
-        raw = asyncio.run(_fetch(depth))
+        if frozen.is_file():
+            raw = json.loads(frozen.read_text(encoding="utf-8"))
+            _log(f"  用**冻结语料**（{frozen.name}，{len(raw)} 条）")
+        else:
+            raw = asyncio.run(_fetch(depth))
         _log(f"  真结果 {len(raw)} 条")
         if not raw:
             continue
@@ -266,7 +271,16 @@ def main() -> int:
                 vectors.write(item.material_id)
                 stamped.append(item)
 
-            # 造三类查询（逐字 / 换序 取自正文；改述由真模型写）
+            # 造三类查询。
+            #
+            # **配对按语料条号**（冻结语料与手写改述都按条号索引）：材料入库后
+            # id 变了、又被去重打乱顺序，按"列表下标"配对会**配错块**，
+            # 量出来的是"语义无关"的查询，结论全错。用 URL 反查语料条号。
+            url_to_index = {item["url"]: index for index, item in enumerate(raw)}
+            index_of = {
+                item.material_id: url_to_index.get(item.parsed.source_ref, -1)
+                for item in stamped
+            }
             literal_pairs: list[tuple[str, object]] = []
             for item in stamped:
                 segment = _literal_segment(item.parsed.chunks[0].text)
@@ -277,30 +291,23 @@ def main() -> int:
                 ("".join(reversed(query_tokens(query))), item)
                 for query, item in literal_pairs
             ]
-            paraphrases = _make_paraphrases(
-                [item.parsed.chunks[0].text for _, item in literal_pairs]
-            )
-            # 改述与正文**按序配对**（模型是按输入顺序返回的）。
-            # `strict=False`：模型少给几条时截断（前缀仍对齐），不该整批崩掉。
-            #
-            # **只收词面脱开的改述**（与原文共享 ≤1 个 2-gram）：不脱开的话它就不是
-            # "改述"，纯 FTS5 也能命中（实测 8/19），"改前"这个基线就没意义了；
-            # 而且目标块 cov 落在 tier 2，会被 cov≥0.5 的干扰块挤下去——
-            # 那是**语料脏**造成的假象，不是融合的真问题。批 5 的 lab 就是这么筛的。
-            def _bigrams(text: str) -> set[str]:
-                cleaned = re.sub(r"\s+", "", text)
-                return {cleaned[i : i + 2] for i in range(len(cleaned) - 1)}
-
-            para_pairs = []
-            rejected = 0
-            for text, (_, item) in zip(paraphrases, literal_pairs, strict=False):
-                source = item.parsed.chunks[0].text
-                if len(_bigrams(text) & _bigrams(source)) > 1:
-                    rejected += 1
-                    continue
-                para_pairs.append((text, item))
-            _log(f"  改述：模型给了 {len(paraphrases)} 条，词面脱开留下 {len(para_pairs)} 条"
-                 f"（弃 {rejected} 条）")
+            hand = BACKEND.parent / ".codex" / "runs" / "2026-10-19" / "web_paraphrases.json"
+            if hand.is_file():
+                mapping = json.loads(hand.read_text(encoding="utf-8"))["paraphrases"]
+                para_pairs = [
+                    (mapping[str(index_of[item.material_id])], item)
+                    for _, item in literal_pairs
+                    if str(index_of[item.material_id]) in mapping
+                ]
+                _log(f"  改述：用手写的 {len(para_pairs)} 条（按语料条号配对）")
+            else:
+                paraphrases = _make_paraphrases(
+                    [item.parsed.chunks[0].text for _, item in literal_pairs]
+                )
+                para_pairs = [
+                    (text, item)
+                    for text, (_, item) in zip(paraphrases, literal_pairs, strict=False)
+                ]
 
             hybrid = SqliteHybridRetriever(connection, embedder=FastEmbedEmbedder())
             fts = SqliteFtsRetriever(connection)
@@ -318,7 +325,8 @@ def main() -> int:
                     hits = retriever.search(
                         project_id=project, query=query, limit=5, owner=owner
                     )
-                    ids = [h.material_id for h in hits]
+                    # 按**材料**去重后取前 5 份材料（F6 现在就是按材料出行的）
+                    ids = list(dict.fromkeys(h.material_id for h in hits))
                     if ids and ids[0] == item.material_id:
                         top1 += 1
                     if item.material_id in ids:

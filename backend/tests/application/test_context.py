@@ -1363,9 +1363,8 @@ def test_search_results_show_one_row_per_material_not_one_per_chunk():
                     anchor="第 1 段", source_ref="b", title="另一篇"),
     ]
 
-    from pmstudio.domain.authoring.views import DocumentView
-
     from pmstudio.application import dto
+    from pmstudio.domain.authoring.views import DocumentView
 
     view = dto.search_hits(
         query="退货",
