@@ -386,10 +386,26 @@ def _backfill_chunk_vectors(connection: sqlite3.Connection, *, embedder=None) ->
     if has_table is None or has_vec is None:
         return
     missing = connection.execute(
-        "SELECT c.chunk_id, c.material_id, c.text, c.heading_path, m.title AS title"
+        "SELECT c.chunk_id, c.material_id, c.text, c.heading_path, c.ordinal,"
+        " m.title AS title, m.origin AS origin"
         " FROM material_chunks c JOIN materials m ON m.material_id = c.material_id"
         " WHERE c.chunk_id NOT IN (SELECT chunk_id FROM material_chunks_vec)"
     ).fetchall()
+    if not missing:
+        return
+    # **与 `SqliteVectorIndex.write` 同一套预算规则**（否则启动回填会把预算外的块
+    # 全补上，预算形同虚设）。判据用**绝对 ordinal**，不是"缺的那些里的第几个"——
+    # 一份 12 块的联网材料若前 8 块已有向量，缺的是 9–12，它们**不该**被补。
+    from pmstudio.infrastructure.sqlite.vector_index import vector_block_budget
+
+    missing = [
+        row
+        for row in missing
+        if (
+            (budget := vector_block_budget(str(row["origin"]))) is None
+            or int(row["ordinal"]) < budget
+        )
+    ]
     if not missing:
         return
     from sqlite_vec import serialize_float32

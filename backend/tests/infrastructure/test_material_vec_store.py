@@ -136,3 +136,35 @@ def test_backfill_fills_missing_vectors_idempotently(tmp_path):
     database.migrate(connection, embedder=FakeEmbedder(dimensions=512))  # 幂等：再跑不重复
     assert connection.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0] == 2
     connection.close()
+
+
+def test_the_backfill_respects_the_same_vector_budget(tmp_path):
+    """R：回填与写入用**同一套**预算规则——否则启动回填会把预算外的块补上，预算形同虚设。
+
+    判据用**绝对 ordinal**：一份 12 块的联网材料，回填只补前 `WEB_VECTOR_BLOCKS` 块。
+    """
+    from pmstudio.infrastructure.tools.limits import WEB_VECTOR_BLOCKS
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    connection = database.connect(tmp_path / "t.db")
+    connection.execute(
+        "INSERT INTO materials (material_id, project_id, owner_id, origin, title, source_ref,"
+        " media_type, bytes_len, sha256, parser_id, parser_version, schema_version, truncated,"
+        " warnings, content, created_at) VALUES ('m0', ?, ?, 'web_search', 't', 'r', 'text/x',"
+        " 1, 'sha', 'p', 'v', 1, 0, '[]', X'00', '2026-10-18T00:00:00+00:00')",
+        (str(PROJECT), str(TEST_OWNER)),
+    )
+    for index in range(12):
+        connection.execute(
+            "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
+            " heading_path, anchor) VALUES (?, 'm0', ?, ?, ?, '[]', ?)",
+            (f"m0#c{index:02d}", str(TEST_OWNER), index, f"第 {index} 段", f"第{index}段"),
+        )
+
+    database.migrate(connection, embedder=FakeEmbedder(dimensions=512))
+
+    assert connection.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0] == (
+        WEB_VECTOR_BLOCKS
+    )
+    connection.close()

@@ -9,7 +9,24 @@ import json
 import logging
 import sqlite3
 
+from pmstudio.infrastructure.tools.limits import WEB_VECTOR_BLOCKS
+
 logger = logging.getLogger(__name__)
+
+
+def vector_block_budget(origin: str) -> int | None:
+    """一份材料**最多写多少块**的向量。`None` = 不限。
+
+    规则只有一条：**联网材料（`web_search`）限前 `WEB_VECTOR_BLOCKS` 块**。
+    上传（`upload`）与抓网页（`web_fetch`）不限——它们是用户精挑要精读的材料。
+
+    **为什么写入与回填必须共用这一个函数**：回填（`database._backfill_chunk_vectors`）
+    是在启动时补"缺向量的块"，若它不认这条规则，就会把预算外的块全补上——
+    预算当场形同虚设，而**症状要等几十秒后的向量推理才显形**，极难归因。
+    """
+    if origin == "web_search":
+        return WEB_VECTOR_BLOCKS
+    return None
 
 
 class SqliteVectorIndex:
@@ -19,20 +36,32 @@ class SqliteVectorIndex:
         self._connection = connection
         self._embedder = embedder
 
-    def write(self, material_id: str) -> None:
-        """给一份材料的所有块算向量并落库。失败只留 warning（降级不判死）。"""
+    def write(self, material_id: str, *, max_blocks: int | None = None) -> None:
+        """给一份材料的块算向量并落库。失败只留 warning（降级不判死）。
+
+        `max_blocks` 显式给上限时按它走；不给则按材料来源走 `vector_block_budget`
+        （联网材料限前 N 块——见那个函数的说明）。
+        """
         from pmstudio.infrastructure.sqlite.tokenize import index_text
 
         try:
             rows = self._connection.execute(
-                "SELECT c.chunk_id, c.text, c.heading_path, m.title AS title"
+                "SELECT c.chunk_id, c.text, c.heading_path, c.ordinal,"
+                " m.title AS title, m.origin AS origin"
                 " FROM material_chunks c JOIN materials m"
                 " ON m.material_id = c.material_id"
-                " WHERE c.material_id = ?",
+                " WHERE c.material_id = ? ORDER BY c.ordinal",
                 (material_id,),
             ).fetchall()
             if not rows:
                 return
+            budget = (
+                max_blocks
+                if max_blocks is not None
+                else vector_block_budget(str(rows[0]["origin"]))
+            )
+            if budget is not None:
+                rows = rows[:budget]
             # 喂 embedder 的是**自然语言**，不是分词串（口径见
             # `tokenize.index_text` 的文档：2026-10-19 实测改述类 recall@5
             # 85% → 95%，假 embedder 对照组不变 → 是口径在削弱真模型）。
