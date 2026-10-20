@@ -364,3 +364,89 @@ def test_a_rare_lexical_hit_survives_the_semantic_branch(conn):
     assert hits[0].chunk_id == "m1#c00", (
         f"罕见词命中的块被压到第 {[h.chunk_id for h in hits]}"
     )
+
+
+def test_a_query_the_lexer_misses_still_finds_the_material_by_substring(conn):
+    """R：词面路零命中时，**子串兜底**把材料捞回来。
+
+    为什么要有这条：用户搜的字串与索引里的 token **不一定对得上**——
+    搜 "vecto"（英文词没打完），材料里写的是 "vector"（索引成 `vector` 这个 token）
+    → 词面**零命中**，可 "vecto" 确实在那段正文里。
+
+    实测（2026-10-20，冻结语料 15 份 + 10 条手写查询）：子串这条路能补上
+    词面与语义**都没**找到的材料（子串 10 条 / 单字 AND 13 条 / 词级 AND 9 条；
+    取最严的子串版——捞回来的片段里真的出现用户搜的字串，读得通）。
+
+    这里的 embedder **故意坏掉**：假 embedder 按字符分桶，"vecto" 与 "vector"
+    有共同字符 → 向量路也会找到它 → 那样就分不清是谁捞回来的。坏掉之后混合检索
+    退化成纯 FTS5，**多出来的结果只可能来自兜底**。
+    """
+    from pmstudio.infrastructure.sqlite.materials import (
+        SqliteFtsRetriever,
+        SqliteHybridRetriever,
+    )
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    _put_material(conn, chunks=(("c1", "向量检索依赖 vector 数据库的选型"),))
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
+
+    class Broken(FakeEmbedder):
+        def embed_many(self, texts):
+            raise RuntimeError("模型下载失败")
+
+    lexical = SqliteFtsRetriever(conn).search(
+        project_id=PROJECT, query="vecto", owner=TEST_OWNER)
+    assert lexical == (), "词面命中了就没有兜底可测了（测试没有鉴别力）"
+
+    hits = SqliteHybridRetriever(conn, embedder=Broken()).search(
+        project_id=PROJECT, query="vecto", owner=TEST_OWNER)
+
+    assert [h.chunk_id for h in hits] == ["c1"]
+    assert "vecto" in hits[0].excerpt, "片段要能让人看见自己搜的字串"
+
+
+def test_the_substring_fallback_only_fills_empty_slots(conn):
+    """R：兜底**只补空槽**——已有的好结果一个都不许被挤掉。"""
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    _put_material(conn, "m-1", title="词面能命中",
+                  chunks=(("c1", "vecto 存储选型规范"),))
+    _put_material(conn, "m-2", title="只能子串命中",
+                  chunks=(("c2", "向量检索依赖 vector 数据库的选型"),))
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-2")
+
+    class Broken(FakeEmbedder):
+        def embed_many(self, texts):
+            raise RuntimeError("模型下载失败")
+
+    hits = SqliteHybridRetriever(conn, embedder=Broken()).search(
+        project_id=PROJECT, query="vecto", owner=TEST_OWNER)
+
+    assert [h.chunk_id for h in hits] == ["c1", "c2"], (
+        "词面命中的那份必须在前面，兜底的在后面补上"
+    )
+
+
+def test_a_search_that_is_already_full_does_not_use_the_fallback(conn):
+    """R：结果已经找满时**不跑兜底**（不往结果里塞弱匹配的噪音）。"""
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    _put_material(conn, "m-1", chunks=(("c1", "vecto 存储选型规范"),))
+    _put_material(conn, "m-2", chunks=(("c2", "vecto 归档规范"),))
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-2")
+
+    class Broken(FakeEmbedder):
+        def embed_many(self, texts):
+            raise RuntimeError("模型下载失败")
+
+    hits = SqliteHybridRetriever(conn, embedder=Broken()).search(
+        project_id=PROJECT, query="vecto", limit=2, owner=TEST_OWNER)
+
+    assert len(hits) == 2

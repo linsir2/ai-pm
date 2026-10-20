@@ -552,6 +552,19 @@ class SqliteHybridRetriever:
         by_id = {hit.chunk_id: hit for hit in fts_hits}
         knn_only = [chunk_id for chunk_id in ordered if chunk_id not in by_id]
         by_id.update(self._hits_for(knn_only, str(project_id), str(resolved), tokens))
+        # **子串兜底**：词面与语义都没找满时，用「用户搜的连续字串」补空槽。
+        # **只补空槽、绝不挤占已有结果**——那是兜底的底线（挤占等于把好结果换掉）。
+        if len(ordered) < limit:
+            filler = self._substring_candidates(
+                project_id=str(project_id),
+                owner=str(resolved),
+                query=query,
+                limit=limit - len(ordered),
+                exclude=set(ordered),
+            )
+            if filler:
+                by_id.update(self._hits_for(filler, str(project_id), str(resolved), tokens))
+                ordered = ordered + list(filler)
         # `score` 越大越好（与顺序同向）：用**最终次序**的倒数排名，与旧约定一致。
         # 2026-10-19 修：原先写的是 `1.0/(total-position)`，于是**第一名拿最小分**
         # （`total` 是候选总数，`position` 从 0 起 → 第一名 1/total、末名 1.0），
@@ -560,6 +573,54 @@ class SqliteHybridRetriever:
             replace(by_id[chunk_id], score=1.0 / (position + 1))
             for position, chunk_id in enumerate(ordered[:limit])
         )
+
+    def _substring_candidates(
+        self, *, project_id: str, owner: str, query: str, limit: int, exclude: set[str]
+    ) -> tuple[str, ...]:
+        """按「用户搜的连续字串」找块 —— **只填空槽的兜底**。
+
+        ## 为什么要有这条
+
+        jieba 的 `cut_for_search` 切出来的 token 与用户输入的连续字串**不一定对得上**：
+        "数库"是词典里的整词（索引里有 `数库`），而材料里写的是"知识库"
+        （索引成 `知识`/`知识库`）→ 搜"数库"**词面零命中**，可"数库"确实在正文里。
+        这类缺口词面与语义都补不上（实测里"数库""准率""排重"都是词面零命中）。
+
+        实测（2026-10-20，冻结语料 15 份 + 10 条手写查询）：子串这条路能补上
+        词面与语义**都没**找到的材料（子串 10 条 / 单字 AND 13 条 / 词级 AND 9 条；
+        取**最严的子串版**——它捞回来的片段里真的出现用户搜的字串，读得通；
+        单字 AND 虽然捞得多，但捞出的片段读起来莫名其妙）。
+
+        ## 两条纪律
+
+        ① **一份材料只占一个槽**：同一材料的多个块都含该字串时只取第一个——
+           否则一份材料会占满 top5，而界面（`dto.search_hits`）一份材料只出一行。
+        ② **只填空槽**：调用方只在结果没找满时调它，绝不挤占已有结果。
+        """
+        needle = query.strip()
+        if not needle or limit <= 0:
+            return ()
+        # LIKE 的通配符要转义，否则用户搜 "50%" 会变成通配（`%`/`_` 是通配符）
+        escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = self._connection.execute(
+            "SELECT c.chunk_id, c.material_id"
+            " FROM material_chunks c JOIN materials m ON m.material_id = c.material_id"
+            " WHERE m.project_id = ? AND c.owner_id = ? AND c.text LIKE ? ESCAPE '\\'"
+            " ORDER BY m.created_at DESC, c.material_id, c.ordinal",
+            (project_id, owner, f"%{escaped}%"),
+        ).fetchall()
+        picked: list[str] = []
+        seen_materials: set[str] = set()
+        for row in rows:
+            chunk_id = str(row["chunk_id"])
+            material_id = str(row["material_id"])
+            if chunk_id in exclude or material_id in seen_materials:
+                continue
+            seen_materials.add(material_id)
+            picked.append(chunk_id)
+            if len(picked) >= limit:
+                break
+        return tuple(picked)
 
     def _fuse_by_score(
         self, fts_hits, vec_scores: dict[str, float], query: str
