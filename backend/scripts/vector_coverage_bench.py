@@ -33,6 +33,7 @@
 
 import hashlib
 import json
+import os
 import re
 import sys
 from datetime import UTC, datetime
@@ -67,6 +68,10 @@ GRID = (
     (200, 9600),
     (200, 16000),
     (200, None),
+    (300, 4800),
+    (300, 9600),
+    (300, 16000),
+    (300, None),
     (400, 4800),
     (400, 9600),
     (400, 16000),
@@ -194,7 +199,12 @@ def main() -> None:
         "块宽  字数预算  块/份  覆盖    向量块  嵌入  │ FTS5 命中/名次  │"
         " 混合 命中/名次 │ 改述命中(混合)"
     )
-    for width, char_cap in GRID:
+    grid = GRID
+    only = os.environ.get("PMSTUDIO_BENCH_WIDTHS")
+    if only:
+        wanted = {int(item) for item in only.split(",")}
+        grid = tuple(row for row in GRID if row[0] in wanted)
+    for width, char_cap in grid:
         conn, url2mid, stats = build(items, embedder, width, char_cap)
         have = {
             mid: set(tokens(item["text"]))
