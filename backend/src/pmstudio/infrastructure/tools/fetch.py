@@ -167,13 +167,21 @@ class HttpxWebFetcher:
     ) -> "_Attempt":
         """一个 target 最多试 `FETCH_ATTEMPTS` 次；连不上就**当次转译**，不重试。
 
-        重试集合只有两个：`ReadTimeout`（我们的 5MB 边下边数恰好在这儿超时，是真抖动）
-        与 `RemoteProtocolError`；加上状态码 `{429, 502, 503, 504}`。
+        重试集合三个：`ReadTimeout`（我们的 5MB 边下边数恰好在这儿超时，是真抖动）、
+        `RemoteProtocolError`（对端在传输中断开，重连有意义）、
+        `ConnectTimeout`（**连得太慢**）；加上状态码 `{429, 502, 503, 504}`。
 
-        **不重试**连接类错误（`ConnectError`/`ConnectTimeout`，含证书错——httpx 把证书错
-        也 map 成 `ConnectError`）：用户粘来的 URL 连不上就是连不上，不是抖动；而要把它
-        分辨出来得走整条异常链（实测 `SSLCertVerificationError` → `httpcore.ConnectError`
-        → `httpx.ConnectError`），为省几次无效握手赔 15 行不值得。
+        **不重试**连接类错误（`ConnectError`：DNS 失败 / 连接被拒 / **证书错**——
+        httpx 把证书错也 map 成 `ConnectError`）：用户粘来的 URL 连不上就是连不上，
+        不是抖动；而要把它分辨出来得走整条异常链（实测 `SSLCertVerificationError`
+        → `httpcore.ConnectError` → `httpx.ConnectError`），为省几次无效握手赔
+        15 行不值得。
+
+        **`ConnectTimeout` 不在这个"不重试"里**（2026-10-21 核验查出的错）：它看着像
+        连接类错误，其实是 `TimeoutException`——
+        `ConnectTimeout → TimeoutException`、`ConnectError → NetworkError`，
+        两者是**兄弟**不是父子。实测同一公网地址十次里约四五次是 `ConnectTimeout`
+        （握手慢），直接失败等于把可用页面判死。
 
         任何 httpx 异常都在这里转成 `ToolCallFailed`——不许漏到 HTTP 层变成 500。
         """
@@ -184,7 +192,10 @@ class HttpxWebFetcher:
                     client, target, headers=headers, extensions=extensions
                 )
             except httpx.HTTPError as error:
-                retryable = isinstance(error, (httpx.ReadTimeout, httpx.RemoteProtocolError))
+                retryable = isinstance(
+                    error,
+                    (httpx.ReadTimeout, httpx.RemoteProtocolError, httpx.ConnectTimeout),
+                )
                 if not retryable:
                     raise ToolCallFailed(
                         f"抓这个网址失败：{type(error).__name__}", tool_id=TOOL_ID

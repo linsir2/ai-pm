@@ -271,6 +271,35 @@ async def test_a_connection_error_is_not_retried():
     assert len(calls) == 1
 
 
+async def test_a_connect_timeout_is_retried_because_it_is_too_slow_not_refused():
+    """R：`ConnectTimeout` **要重试**——它是"连得太慢"，不是"连不上"。
+
+    2026-10-21 核验查出的错：旧实现把 `ConnectTimeout` 和 `ConnectError` 归为一类
+    （"连接类错误不重试"），但 httpx 的异常层次里——
+
+        ConnectTimeout → TimeoutException → TransportError
+        ConnectError   → NetworkError     → TransportError
+
+    `ConnectTimeout` **不是** `ConnectError`。实测同一公网地址十次里约四五次是它
+    （公网抖动、握手慢），直接失败等于把可用页面判死。
+    证书错仍走 `ConnectError`（见下一个用例）——那条**不重试**。
+    """
+    calls: list[str] = []
+    state = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        state["n"] += 1
+        if state["n"] == 1:
+            raise httpx.ConnectTimeout("timed out while connecting")
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=b"<p>ok</p>")
+
+    fetched = await fetcher(handler).fetch(url="https://example.com/spec")
+
+    assert b"ok" in fetched.content
+    assert len(calls) == 2, "没有重试——连得太慢被当成连不上了"
+
+
 async def test_a_retryable_status_is_retried_but_a_404_is_not():
     calls: list[str] = []
     state = {"n": 0}
