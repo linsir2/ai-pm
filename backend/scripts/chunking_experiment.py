@@ -39,7 +39,6 @@ sys.path.insert(0, "src")
 import jieba
 
 sys.path.insert(0, str(Path(__file__).parent))
-from chunking_variants import chunk_by_sentence  # noqa: E402
 
 from pmstudio.application.context import (
     MATERIAL_BUDGET,
@@ -66,10 +65,8 @@ PROJECT, OWNER = "p1", "o1"
 #: (切法, 细块上限, 父块上限)。父块 0 = 单粒度。
 #: 切法 "行优先" = 现状；"标点优先" = 作者要的（在预算周围找句末标点，块贴近预算）。
 VARIANTS = [
-    ("行优先", 200, 0), ("行优先", 300, 0), ("行优先", 400, 0),
-    ("标点优先", 200, 0), ("标点优先", 300, 0), ("标点优先", 400, 0),
-    ("标点优先", 400, 1600), ("标点优先", 400, 1200),
-    ("标点优先", 300, 1200),
+    ("生产", 200, 0), ("生产", 300, 0), ("生产", 400, 0),
+    ("生产", 400, 1600), ("生产", 400, 1200), ("生产", 300, 1200),
 ]
 
 
@@ -102,17 +99,9 @@ def build(items, embedder, child_chars, parent_chars, style="行优先"):
     mid2chunks = {}
     for item in items:
         clean = normalize_web_text(item["text"])
-        if style == "标点优先":
-            texts = chunk_by_sentence(clean, max_chars=child_chars)
-            chunks = [
-                type(chunk_text("x", parser_id="tavily", max_chars=child_chars)[0])(
-                    chunk_id=f"c{i:02d}", ordinal=i, text=txt, heading_path=(),
-                    anchor=f"网页正文 · 第 {i + 1} 段",
-                )
-                for i, txt in enumerate(texts)
-            ]
-        else:
-            chunks = chunk_text(clean, parser_id="tavily", max_chars=child_chars)
+        # 2026-10-21（批 10 已实现）：**生产实现本身就是标点优先** →
+        # bench 直接用它量真实行为，不再用实验变体。
+        chunks = chunk_text(clean, parser_id="tavily", max_chars=child_chars)
         parsed = ParsedMaterial(
             origin="web_search", title=item["title"], source_ref=item["url"],
             media_type="text/html", bytes_len=len(item["text"].encode()),
