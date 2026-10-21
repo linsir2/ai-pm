@@ -1108,43 +1108,12 @@ def _query_grams(query: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(kept[index : index + 2] for index in range(len(kept) - 1)))
 
 
-#: **父块 = 相邻 N 个子块**（2026-10-21 批 10）。父键 = `ordinal // N`。
-#: 为什么要父块：子块常常只有几十个字（标题下就一两句），给模型看的应该是
-#: **完整上下文**——「小子块检索、大父块回喂」（small-to-big）。
-#: 实测（真 Tavily 语料 + 真模型）：跨块证据完整率 0.357 → 0.500（父块 1600 字）。
-PARENT_BLOCKS = 4
-
-#: 块是「**原文连续片段**」的解析器 —— 父子拼接**只在这些路上成立**。
-#: docx（每段/每表一块）、xlsx（每表一块）、pdf（每页每段一块）的块**不是**连续片段
-#: → 拼接会把表格与下一段正文串在一起、锚点含义错位 → 那三条路不做父子。
-_CONTINUOUS_PARSERS = frozenset({"plain", "bs4-html", "tavily"})
-
-
-def parent_text(packet: MaterialPacket, chunk: MaterialChunk) -> str:
-    """命中子块 → 它所在的**父块**文本（相邻 `PARENT_BLOCKS` 个子块拼接）。
-
-    不是连续片段的路（docx/xlsx/pdf）→ 原样返回子块文本。
-    编号与锚点**仍指子块** → 引用链不变（用户点编号滚到的是子块的位置）。
-    """
-    parsed = packet.parsed
-    if parsed.parser_id not in _CONTINUOUS_PARSERS:
-        return chunk.text
-    siblings = parsed.chunks
-    low = (chunk.ordinal // PARENT_BLOCKS) * PARENT_BLOCKS
-    high = min(len(siblings), low + PARENT_BLOCKS)
-    if high - low <= 1:
-        return chunk.text
-    return "\n".join(sibling.text for sibling in siblings[low:high])
-
-
 def _material_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
     """上传材料那条路的成本：正文 + 一行「[E12] 第 3 页」。
 
-    2026-10-21（批 10）：正文按**父块**算（与渲染同源）——否则父块回喂时
-    成本会少算 N 倍，预算形同虚设（实测上下文字数会从 3906 涨到 13187）。
     """
 
-    return len(parent_text(packet, chunk)) + CHUNK_OVERHEAD
+    return len(chunk.text) + CHUNK_OVERHEAD
 
 
 def web_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
@@ -1217,9 +1186,7 @@ def render_materials(
             if eid is None:
                 continue
             lines.append(f"[{eid}] {chunk.anchor}")
-            # 正文给**父块**（相邻几个子块）——子块常常只有几十个字，
-            # 给模型看的应该是完整上下文（编号与锚点仍指子块 → 引用链不变）。
-            lines.append(parent_text(packet, chunk))
+            lines.append(chunk.text)
             used_ids.append(chunk.chunk_id)
             kept += 1
         for warning in parsed.warnings:

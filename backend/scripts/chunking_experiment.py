@@ -183,6 +183,13 @@ def main() -> None:
             wanted = {f"{mid}#c{i:02d}" for i, c in enumerate(mid2chunks[mid]) if query in c.text}
             if wanted and any(h.chunk_id in wanted for h in hits):
                 block_hits += 1
+        # 改述召回（块宽 × 向量预算 = 语义覆盖的字数 → 改述是这块的探针）
+        para_hits = 0
+        for query, url in queries["改述"]:
+            mid = url2mid.get(url)
+            hits = retriever.search(project_id=PROJECT, query=query, limit=5, owner=OWNER)
+            if any(h.material_id == mid for h in hits):
+                para_hits += 1
         # 跨块：展示单元（父子时把细块映射到父块）
         complete = 0
         for query, url, wanted in queries["跨块"]:
@@ -245,6 +252,7 @@ def main() -> None:
         print(f"  {label:20} 块r5 {block_hits/max(1,len(queries['词面'])):.3f}"
               f" · 材料r5 {material_hits/max(1,len(queries['词面'])):.3f}"
               f" · MRR {sum(rrs)/max(1,len(rrs)):.3f}"
+              f" · 改述r5 {para_hits/max(1,len(queries['改述'])):.3f}"
               f" · 跨块(检索) {complete/max(1,len(queries['跨块'])):.3f}"
               f" · 跨块(上下文同框) {together/max(1,len(queries['跨块'])):.3f}"
               f" · {nblocks:>4} 块"
