@@ -50,8 +50,10 @@ MAX_MATERIAL_CHARS = 200_000
 #: 一刀切会改掉批 5/6a 已交付的语义召回能力——那是越界。
 WEB_VECTOR_BLOCKS = 24
 
-#: 句末标点：单行超宽时，宁可在这儿下刀也不从句子中间砍
-_SENTENCE_ENDS = "。！？；!?;"
+#: 句末标点：单行超宽时，宁可在这儿下刀也不从句子中间砍。
+#: **公开**（2026-10-21 批 10）：现在有两个消费方——`limits._cut_one_line`（补救切分）
+#: 与 `extract.chunk_text`（块内按句累积，主路径）。
+SENTENCE_ENDS = "。！？；!?;"
 
 
 def part_label(index: int) -> str:
@@ -150,7 +152,7 @@ def _cut_one_line(line: str, max_chars: int) -> tuple[str, ...]:
     rest = line
     while len(rest) > max_chars:
         window = rest[:max_chars]
-        cut = max(window.rfind(mark) for mark in _SENTENCE_ENDS) + 1
+        cut = max(window.rfind(mark) for mark in SENTENCE_ENDS) + 1
         if cut <= max_chars // 2:  # 最近的句末在窗口前半段，等它就砍得太碎了
             cut = max_chars
         parts.append(rest[:cut])

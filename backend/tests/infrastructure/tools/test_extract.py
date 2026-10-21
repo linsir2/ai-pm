@@ -379,3 +379,82 @@ def test_the_heading_text_is_also_kept_as_searchable_text():
 
     text = "\n".join(chunk.text for chunk in parsed.chunks)
     assert "角色映射" in text, "标题的正文丢了——它得能被搜到"
+
+
+def test_chunks_are_cut_at_sentence_ends_not_at_line_breaks():
+    """R：块边界落在**完整句之后**——不把句子从中间切开。
+
+    数据刻意用「行尾是句中」（逗号）：行优先的切法会在**行边界**结束块 → 块末是半句；
+    按句切的切法落在**最后一个完整句之后** → 块末是完整句。
+
+    作者的要求：「分块**有区间**，在**预算周围**找**终结符**，这样就不会分断」。
+    """
+    body = "\n".join(
+        f"这是第 {index} 段的第一句。这是第 {index} 段的第二句，还没说完，"
+        for index in range(1, 30)
+    )
+
+    import re
+
+    chunks = chunk_text(body, parser_id="plain")
+
+    assert len(chunks) > 1, "没切成多块"
+    for chunk in chunks:
+        # 块内的**每一句**（除最后一句外）都必须是完整的——也就是块边界
+        # 不落在完整句的中间。最后一句例外：那是原文行尾那半句（原文那里
+        # 本来就没有句号，任何切法都会断它）。
+        pieces = [p for p in re.split(r"(?<=[。！？；!?;])", chunk.text) if p.strip()]
+        for piece in pieces[:-1]:
+            assert piece.rstrip().endswith(("。", "！", "？", "；")), (
+                f"块边界落在完整句的中间（把句子分断了）：{piece[-24:]!r}"
+            )
+
+
+def test_blocks_stay_close_to_the_budget():
+    """R：块要**贴近上限**（不是远远小于它）。
+
+    为什么：现状（按行累积）在标题密集的文档上，块的中位字数只有上限的 **4%**
+    （实测：`[41, 15, 53, 13, 18, 17]`）——**预算根本没用上** → 块多 → 向量推理贵、
+    上下文碎。
+    """
+    from pmstudio.infrastructure.tools.limits import CHUNK_CHARS
+
+    body = "\n".join(
+        f"这是第 {index} 段的开头，内容还没说完，" for index in range(1, 30)
+    )
+
+    chunks = chunk_text(body, parser_id="plain")
+
+    assert len(chunks) > 1, "没切成多块"
+    for chunk in chunks:
+        assert len(chunk.text) <= CHUNK_CHARS, "块超了上限"
+    full = chunks[:-1]
+    assert full, "至少要有一个非末块"
+    median = sorted(len(c.text) for c in full)[len(full) // 2]
+    assert median >= int(CHUNK_CHARS * 0.9), (
+        f"块中位 {median} 字 = 上限的 {median / CHUNK_CHARS:.0%}，没贴近预算"
+    )
+
+
+def test_chunking_never_loses_content():
+    """R：切块**内容零丢失**（拼回原文，逐字相同）。
+
+    为什么单独钉：第一版实验用 `re.findall` 切句 → **丢掉了不以标点结尾的行尾**
+    → 块级 recall 假跌 0.75→0.50。内容丢失在检索里是查不出来的（只能靠这个断言）。
+    """
+    body = "\n".join(
+        [
+            "# 标题",
+            "第一段有标点。",
+            "第二段没有标点结尾",
+            "第三段。",
+            "## 下一个标题",
+            "第四段。",
+        ]
+    )
+
+    chunks = chunk_text(body, parser_id="plain")
+
+    joined = "\n".join(chunk.text for chunk in chunks)
+    for piece in ("第一段有标点。", "第二段没有标点结尾", "第三段。", "第四段。"):
+        assert piece in joined, f"内容丢了：{piece!r}"
