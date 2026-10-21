@@ -38,6 +38,9 @@ sys.path.insert(0, "src")
 
 import jieba
 
+sys.path.insert(0, str(Path(__file__).parent))
+from chunking_variants import chunk_by_sentence  # noqa: E402
+
 from pmstudio.application.context import (
     MATERIAL_BUDGET,
     select_chunks,
@@ -59,11 +62,14 @@ OUT = Path("../.codex/runs/2026-10-19/tavily_raw")
 PROJECT, OWNER = "p1", "o1"
 
 #: 变体：(标签, 细块宽, 父块宽)。父块宽 = 0 表示单粒度。
+#: (细块宽, 父块宽)。父块宽 0 = 单粒度。父块宽必须是细块宽的整数倍。
+#: (切法, 细块上限, 父块上限)。父块 0 = 单粒度。
+#: 切法 "行优先" = 现状；"标点优先" = 作者要的（在预算周围找句末标点，块贴近预算）。
 VARIANTS = [
-    ("单粒度 200", 200, 0),
-    ("单粒度 400（现状）", 400, 0),
-    ("单粒度 800", 800, 0),
-    ("父子 200→800", 200, 800),
+    ("行优先", 200, 0), ("行优先", 300, 0), ("行优先", 400, 0),
+    ("标点优先", 200, 0), ("标点优先", 300, 0), ("标点优先", 400, 0),
+    ("标点优先", 300, 1200), ("标点优先", 300, 600),
+    ("标点优先", 200, 800),
 ]
 
 
@@ -85,7 +91,7 @@ def parent_key(material_id: str, ordinal: int, per_parent: int) -> str:
     return f"{material_id}#P{ordinal // per_parent:03d}"
 
 
-def build(items, embedder, child_chars, parent_chars):
+def build(items, embedder, child_chars, parent_chars, style="行优先"):
     path = OUT / f"chunk_{child_chars}_{parent_chars}.db"
     if path.exists():
         path.unlink()
@@ -96,7 +102,17 @@ def build(items, embedder, child_chars, parent_chars):
     mid2chunks = {}
     for item in items:
         clean = normalize_web_text(item["text"])
-        chunks = chunk_text(clean, parser_id="tavily", max_chars=child_chars)
+        if style == "标点优先":
+            texts = chunk_by_sentence(clean, max_chars=child_chars)
+            chunks = [
+                type(chunk_text("x", parser_id="tavily", max_chars=child_chars)[0])(
+                    chunk_id=f"c{i:02d}", ordinal=i, text=txt, heading_path=(),
+                    anchor=f"网页正文 · 第 {i + 1} 段",
+                )
+                for i, txt in enumerate(texts)
+            ]
+        else:
+            chunks = chunk_text(clean, parser_id="tavily", max_chars=child_chars)
         parsed = ParsedMaterial(
             origin="web_search", title=item["title"], source_ref=item["url"],
             media_type="text/html", bytes_len=len(item["text"].encode()),
@@ -157,8 +173,10 @@ def main() -> None:
     embedder = FastEmbedEmbedder()
     print("=== 分块粒度实验（真 Tavily 语料 / 真模型）===")
     print("  指标：块级r5 · MRR · 跨块完整率 · 上下文层(块/份/字) · 块数")
-    for label, child, parent in VARIANTS:
-        connection, url2mid, mid2chunks = build(items, embedder, child, parent)
+    for style, child, parent in VARIANTS:
+        label = (f"{style} 父子 {child}→{parent}" if parent
+                 else f"{style} 单粒度 {child}")
+        connection, url2mid, mid2chunks = build(items, embedder, child, parent, style)
         queries = make_queries(items, url2mid, mid2chunks)
         retriever = SqliteHybridRetriever(connection, embedder=embedder)
         per_parent = max(1, parent // child) if parent else 1
@@ -194,19 +212,55 @@ def main() -> None:
                 need = set(wanted)
             if need <= units:
                 complete += 1
-        # 上下文层：喂进去多少
+        # 上下文层：**回喂父块**（父块 = 相邻细块拼起来，不需要新增存储）后的
+        # 块数 / 份数 / 字数，以及**跨块两处证据是否同框**（进同一个父块）
+        packets = packets_of(connection)
         picked = select_chunks(
-            [store_packet for store_packet in packets_of(connection)],
-            budget=MATERIAL_BUDGET, cost=web_block_cost, query="向量检索 召回效果",
+            packets, budget=MATERIAL_BUDGET, cost=web_block_cost, query="向量检索 召回效果"
         )
+        if parent:
+            per_parent = max(1, parent // child)
+            fed_texts = []
+            fed_parents = set()
+            for material_id, chunk in picked:
+                siblings = mid2chunks[material_id]
+                lo = (chunk.ordinal // per_parent) * per_parent
+                hi = min(len(siblings), lo + per_parent)
+                fed_texts.append("".join(s.text for s in siblings[lo:hi]))
+                fed_parents.add((material_id, lo // per_parent))
+        else:
+            fed_texts = [chunk.text for _m, chunk in picked]
+            fed_parents = {(m, chunk.ordinal) for m, chunk in picked}
+        # 跨块两处证据在**上下文层**是否同框（同一个父块）
+        together = 0
+        for _query, url, wanted in queries["跨块"]:
+            mid = url2mid.get(url)
+            siblings = mid2chunks[mid]
+            if parent:
+                per_parent = max(1, parent // child)
+                units = {
+                    (material_id, (chunk.ordinal // per_parent))
+                    for material_id, chunk in picked
+                }
+                need = {
+                    (mid, int(c.split("#c")[1]) // per_parent) for c in wanted
+                }
+                if len(need) == 1 and need <= units:
+                    together += 1
+            else:
+                units = {(material_id, chunk.ordinal) for material_id, chunk in picked}
+                need = {(mid, int(c.split("#c")[1])) for c in wanted}
+                if need <= units:
+                    together += 1
         nblocks = connection.execute("SELECT count(*) FROM material_chunks").fetchone()[0]
         print(f"  {label:20} 块r5 {block_hits/max(1,len(queries['词面'])):.3f}"
               f" · 材料r5 {material_hits/max(1,len(queries['词面'])):.3f}"
               f" · MRR {sum(rrs)/max(1,len(rrs)):.3f}"
-              f" · 跨块 {complete/max(1,len(queries['跨块'])):.3f}"
+              f" · 跨块(检索) {complete/max(1,len(queries['跨块'])):.3f}"
+              f" · 跨块(上下文同框) {together/max(1,len(queries['跨块'])):.3f}"
               f" · {nblocks:>4} 块"
-              f" · 上下文 {len(picked)} 块/{len({m for m,_ in picked})} 份"
-              f"/{sum(len(c.text) for _,c in picked)} 字")
+              f" · 上下文 {len(fed_texts)} 块/{len(fed_parents)} 份"
+              f"/{sum(len(x) for x in fed_texts)} 字")
         connection.close()
 
 

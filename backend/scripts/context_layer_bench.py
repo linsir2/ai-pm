@@ -27,7 +27,6 @@ from pmstudio.bootstrap.container import UuidIdGenerator
 from pmstudio.infrastructure.sqlite.database import connect
 from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
 from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
 from pmstudio.infrastructure.tools.extract import chunk_text
 from pmstudio.infrastructure.tools.webclean import normalize_web_text
 
@@ -48,7 +47,6 @@ def main() -> None:
         db.unlink()
     connection = connect(db, embedder=embedder)
     store = SqliteMaterialStore(connection, ids=UuidIdGenerator())
-    vector_index = SqliteVectorIndex(connection, embedder=embedder)
     packets = []
     for item in items:
         clean = normalize_web_text(item["text"])
