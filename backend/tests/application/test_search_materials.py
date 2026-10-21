@@ -5,6 +5,8 @@
 2. 材料命中排最后（前面四类装满就没有它），且它带锚点与片段——不是一段裸文本。
 """
 
+import logging
+
 from pmstudio.application.dto import MaterialHit
 from tests.support.builders import PROJECT
 from tests.support.harness import Harness
@@ -68,3 +70,58 @@ async def test_a_blank_query_never_reaches_the_retriever():
 
     assert results.hits == ()
     assert harness.material_retriever.calls == []
+
+
+# ── 零命中观测（批 12，R8）────────────────────────────────────────────
+
+
+async def test_a_zero_hit_material_search_is_logged(caplog):
+    """R：非空查询**一个材料都没命中** → 打一行结构化日志。
+
+    为什么要有（这是检索侧最大的缺口）：现在的检索判据**全是「从文档反推」的合成
+    查询**——真实的用户查询分布是**空的** → 语义召回的价值没法证明（R9：真数据
+    r@5 9/11 与纯 FTS5 持平，"改述增量"一直是 0）。要看到增量，得先有**真查询**。
+
+    I：一条查不到任何材料的查询；
+    P：日志里出现一行 `material_search_zero_hit`，带着项目与**查询原文**；
+    R：那行能被 grep 出来（`scripts/collect_zero_hit_queries.py` 靠它攒样本）。
+    """
+    harness = harness_with(())
+
+    with caplog.at_level(logging.INFO):
+        await harness.search()(project_id=PROJECT, query="导出权限谁来定")
+
+    lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "material_search_zero_hit" in record.getMessage()
+    ]
+    assert len(lines) == 1, caplog.records
+    assert "导出权限谁来定" in lines[0], lines[0]
+    assert str(PROJECT) in lines[0], lines[0]
+
+
+async def test_a_hit_material_search_is_not_logged(caplog):
+    """材料**有**命中 → 不记零命中日志（否则正常查询会把日志淹掉）。"""
+
+    harness = harness_with((hit(),))
+
+    with caplog.at_level(logging.INFO):
+        await harness.search()(project_id=PROJECT, query="异步队列")
+
+    assert not [
+        record for record in caplog.records if "material_search_zero_hit" in record.getMessage()
+    ]
+
+
+async def test_an_empty_query_is_not_logged(caplog):
+    """空查询 → 不记（它连检索器都不问，记下来纯是噪音）。"""
+
+    harness = harness_with(())
+
+    with caplog.at_level(logging.INFO):
+        await harness.search()(project_id=PROJECT, query="")
+
+    assert not [
+        record for record in caplog.records if "material_search_zero_hit" in record.getMessage()
+    ]

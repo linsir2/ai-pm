@@ -85,11 +85,11 @@ def make_web_packet(
     正文已经截到 `WEB_SNIPPET_CHARS`。**没有 material_id**——那要等存储层盖章。
     """
 
-    from pmstudio.application.context import WEB_SNIPPET_CHARS
     from pmstudio.application.dto import NO_SOURCE_REF, MaterialChunk, ParsedMaterial
     from pmstudio.infrastructure.tools.tavily import PARSER_VERSION
 
-    snippet = text[:WEB_SNIPPET_CHARS]
+    # 夹具自己的截断长度（**与生产无关**：生产的联网截断在 `tools/tavily.py` 那条路）
+    snippet = text[:300]
     return ParsedMaterial(
         origin="web_search",
         title=title,

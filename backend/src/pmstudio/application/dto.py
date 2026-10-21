@@ -545,7 +545,9 @@ class MaterialChunk:
     chunk_id: str
     ordinal: int
     text: str
-    #: 章节链（("2 目标", "2.1 非目标")）；抽不出层级就是 ()
+    #: 章节链：**标题行原文**（带 markdown 前缀，如 `("# 需求", "## 2 目标")`）；
+    #: 抽不出层级就是 ()。2026-10-21 订正：旧文档写的是 `("2 目标", "2.1 非目标")`
+    #: ——那不是实际形状（`extract.chunk_text` 存的是标题行原文）。
     heading_path: tuple[str, ...]
     #: 人话锚点："第 3 页" / "第 12–40 行"——引用与跳转都靠它
     anchor: str
