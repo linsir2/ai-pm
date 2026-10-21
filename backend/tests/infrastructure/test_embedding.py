@@ -300,6 +300,6 @@ def test_the_real_model_gate_cuts_an_oversized_input(caplog):
         vectors = embedder.embed_many(["向量检索" * 500])
 
     assert len(vectors[0]) == 512
-    assert any("裁掉尾部" in record.message for record in caplog.records), (
+    assert any("被裁" in record.message for record in caplog.records), (
         f"裁了却没告警（静默降级比失败更贵）；上限 {EMBED_INPUT_MAX_TOKENS}"
     )

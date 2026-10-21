@@ -53,6 +53,9 @@ class FastEmbedEmbedder:
         self.dimensions = DIMENSIONS
         self._model = None
         self._model_name, self._lazy = model_name, lazy_load
+        #: 本批里被裁掉的 token 数与条数（**按批聚合后告警一次**，不逐条刷屏）
+        self._dropped_tokens = 0
+        self._dropped_count = 0
         if not self._lazy:
             self._ensure()
 
@@ -66,10 +69,17 @@ class FastEmbedEmbedder:
 
     def embed_many(self, texts):
         model = self._ensure()
-        return [
-            tuple(float(x) for x in vector)
-            for vector in model.embed([self._fit_to_window(text) for text in texts])
-        ]
+        fitted = [self._fit_to_window(text) for text in texts]
+        if self._dropped_count:
+            logger.warning(
+                "向量输入超出模型窗口（%d token）：本批 %d 条被裁，合计裁掉 %d token",
+                MODEL_MAX_TOKENS,
+                self._dropped_count,
+                self._dropped_tokens,
+            )
+            self._dropped_tokens = 0
+            self._dropped_count = 0
+        return [tuple(float(x) for x in vector) for vector in model.embed(fitted)]
 
     def _fit_to_window(self, text: str) -> str:
         """把输入裁到模型窗口内（**这是唯一真正把文本送进模型的地方**）。
@@ -79,7 +89,8 @@ class FastEmbedEmbedder:
         "这段是关于什么的"（定位信号）——细节还能靠词面检索兜底
         （与 "The Power of Noise" 同向：语义侧保主题，词面兜细节）。
 
-        **不静默**：裁了要留 warning（静默降级比失败更贵）。
+        **不静默**：裁了要留 warning（静默降级比失败更贵）——但**按批聚合**，
+        否则一轮几百块的向量写入会刷出几百行一样的告警（告警一多就等于没有）。
         """
         tokenizer = self._tokenizer()
         if tokenizer is None:
@@ -88,9 +99,8 @@ class FastEmbedEmbedder:
             return text
         trimmed, dropped = fit_to_window(text, tokenizer)
         if dropped:
-            logger.warning(
-                "向量输入超出模型窗口（%d token），已裁掉尾部 %d token", MODEL_MAX_TOKENS, dropped
-            )
+            self._dropped_tokens += dropped
+            self._dropped_count += 1
         return trimmed
 
     def _tokenizer(self):  # type: ignore[no-untyped-def]
