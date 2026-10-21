@@ -48,6 +48,12 @@ ALLOWED_TEST_FAKES: dict[str, str] = {
         "这条决定它能不能当 RRF/KNN 测试的**可信**替身——只会算确定性但完全不近似的向量，"
         "验出来的排序毫无意义。"
     ),
+    "_FakeTokenizer": (
+        "token 闸门的**逻辑**替身（批 7）：按字符当 token，好让「裁掉尾部」这件事"
+        "**可断言**而不必下载真模型。真的分词行为由 `slow` marker 的真模型用例守着"
+        "（块尾部对向量可见、超窗被裁且告警）。它只实现 `encode/decode` 两个方法，"
+        "不冒充任何业务组件。"
+    ),
     "FakeTransaction": (
         "内存 UnitOfWork：测领域服务与整条闭环时不碰 SQLite（真库留给仓储自己的测试）。"
         "它实现的是 `pmstudio.domain.services` 用的那个协议，不是业务组件。"

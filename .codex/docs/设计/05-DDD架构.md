@@ -209,6 +209,7 @@ backend/src/pmstudio/
 │   └── errors.py
 └── bootstrap/
     ├── container.py
+    ├── maintenance.py
     └── settings.py
 
 frontend/             React + Vite：文档区 / 闭环区 / 弹出层

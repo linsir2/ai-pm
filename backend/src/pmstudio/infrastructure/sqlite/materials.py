@@ -273,6 +273,26 @@ class SqliteMaterialStore:
         ).fetchone()
         return int(row["total"])
 
+    def list_materials_for_reparse(self) -> tuple[tuple[str, str, str, str], ...]:
+        """**维护任务用**：列出全部材料的 `(material_id, owner_id, project_id, origin)`。
+
+        **跨 owner 且不带 owner 过滤**——维护任务天生跨账号（每个 owner 的材料
+        都要按新块宽重切）；与 `optional_owner` 的"查询本身就要包含全局行"
+        同一性质（templates 是先例）。**只读**：写仍然按 owner 盖章。
+        """
+        rows = self._connection.execute(
+            "SELECT material_id, owner_id, project_id, origin FROM materials"
+        ).fetchall()
+        return tuple(
+            (
+                str(row["material_id"]),
+                str(row["owner_id"]),
+                str(row["project_id"]),
+                str(row["origin"]),
+            )
+            for row in rows
+        )
+
     def list_for_project(
         self,
         project_id: ProjectId,

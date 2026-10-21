@@ -156,8 +156,14 @@ def create_app(
     services: ApiServices,
     *,
     background: BackgroundResource | None = None,
+    maintenance: BackgroundResource | None = None,
 ) -> FastAPI:
     """`background` 是有生命周期的后台资源（当前只有 Redis 扇出总线）。
+
+    `maintenance` 是**第二个**同类资源（材料维护：把块结构已过时的材料重切重算）——
+    单独一个参数而不是合成一个，是因为它们的**生命周期不同**：总线要跟着进程走，
+    维护任务跑完一遍就结束（`start()` 里只起一个后台任务）。
+    默认 `None` → 测试那 9 个 `create_app(services)` 调用点一行都不用改。
 
     **全仓原本零 lifespan**，P4 加它是因为：没有它，`--reload` 每热重载一次就泄漏
     一个 reader 任务 + 一组 Redis 连接，`uvicorn --workers` 关停时也一样。
@@ -169,9 +175,13 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if background is not None:
             await background.start()
+        if maintenance is not None:
+            await maintenance.start()
         try:
             yield
         finally:
+            if maintenance is not None:
+                await maintenance.stop()
             if background is not None:
                 await background.stop()
 

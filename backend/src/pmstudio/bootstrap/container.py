@@ -85,6 +85,7 @@ from pmstudio.application.use_cases import (
     UploadMaterial,
     web_search_tool,
 )
+from pmstudio.bootstrap.maintenance import MaterialMaintenance
 from pmstudio.bootstrap.settings import Settings
 from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.null_repos import NoOpVectorIndex
@@ -803,7 +804,17 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     # "谁创建谁负责关"——进程内总线没有可关的东西，它本来就不是；照传会让 lifespan
     # 去 `await bus.start()`（不存在）而把服务整个带崩。
     background = bus if isinstance(bus, BackgroundResource) else None
-    app = create_app(services, background=background)
+    # **材料维护**（批 7）：把块结构已过时的材料按新块宽重切、重算向量。
+    # 原始字节在库 → 不需要网络；后台跑 → 不阻塞启动。
+    maintenance = MaterialMaintenance(
+        connection=connection,
+        parser=parser,
+        store=materials,
+        vectors=vector_index,
+        owner_scope=owner_scope,
+        index=index,
+    )
+    app = create_app(services, background=background, maintenance=maintenance)
     app.state.auth = auth_services
     # owner 上下文由 api 层（`require_user` / SSE 归属过滤）经 `app.state` 取用：
     # api 不许 import infrastructure（分层守卫），装配点把实现注进去（依赖倒置）。
