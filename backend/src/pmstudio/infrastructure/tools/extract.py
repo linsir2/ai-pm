@@ -240,7 +240,7 @@ def chunk_text(
     """按行切块：标题行起新块，累积到 `max_chars` 也起新块。纯函数。
 
     `max_chars` 默认 `CHUNK_CHARS`（上传材料那条路）；联网结果那条路传
-    `WEB_CHUNK_CHARS`（400）——理由见 `limits.py` 里那个常量的注释。
+    `CHUNK_CHARS`（400）——理由见 `limits.py` 里那个常量的注释。
     """
 
     lines = text.splitlines()

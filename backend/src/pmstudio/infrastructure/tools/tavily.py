@@ -23,8 +23,8 @@ from pmstudio.harness.errors import ToolCallFailed
 from pmstudio.infrastructure.tools.extract import TRUNCATED_WARNING, chunk_text
 from pmstudio.infrastructure.tools.fetch import _backoff
 from pmstudio.infrastructure.tools.limits import (
+    CHUNK_CHARS,
     MAX_MATERIAL_CHARS,
-    WEB_CHUNK_CHARS,
     cap_text,
 )
 from pmstudio.infrastructure.tools.webclean import normalize_web_text
@@ -188,7 +188,7 @@ def _packet(item: dict, *, query: str) -> ParsedMaterial:
 
     整段一块（1400 字）会超出向量模型的 512-token 上限（中文约 1 字 1 token），
     实测**尾部对向量完全不可见**（embed(700字) 与 embed(前510字) 余弦 1.000000）。
-    按 `WEB_CHUNK_CHARS`（400）切开后，每块的向量都覆盖得到自己那段。
+    按 `CHUNK_CHARS`（400）切开后，每块的向量都覆盖得到自己那段。
 
     顺带白捡：整页 markdown 里的 `## 标题` 会被 `chunk_text` 认成标题 →
     **`heading_path` 不再恒空**（章节链进索引源，"只在这一节出现的内容"才搜得到）。
@@ -209,7 +209,7 @@ def _packet(item: dict, *, query: str) -> ParsedMaterial:
         # 没有链接的结果**照样收**（内容可能有用），但要说清"它没有出处可点"
         warnings.append("这条结果没有链接")
     cleaned = normalize_web_text(body)
-    raw_chunks = chunk_text(cleaned, parser_id=PARSER_ID, max_chars=WEB_CHUNK_CHARS)
+    raw_chunks = chunk_text(cleaned, parser_id=PARSER_ID, max_chars=CHUNK_CHARS)
     # 锚点用"第 N 段"而不是 `chunk_text` 给的"第 N–M 行"：联网摘要没有"行号"
     # 这回事，用户跳不到网页的第 5 行。
     chunks = tuple(

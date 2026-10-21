@@ -228,7 +228,13 @@ def test_the_remaining_documented_limits():
     from pmstudio.infrastructure.tools import fetch as fetch_module
     from pmstudio.infrastructure.tools import limits as tools_limits
 
-    assert tools_limits.CHUNK_CHARS == 500
+    # 块宽 500 → 400（2026-10-21 批 7）：喂给嵌入模型的是「标题 + 章节链 + 正文」，
+    # 而 bge-small-zh-v1.5 的上限是 **512 token**（模型契约，超了**静默**截断）。
+    # 实测块宽 500 时块尾部对向量**完全不可见**（cos=1.000000）。联网那条路早就是 400，
+    # 现在两条路共用这一个数字。
+    assert tools_limits.CHUNK_CHARS == 400
+    # **只有一个块宽常量**：同值的两个常量就是第二个真相源（改一处忘另一处）。
+    assert not hasattr(tools_limits, "WEB_CHUNK_CHARS"), "块宽常量又长出第二个来"
     assert tools_limits.MAX_MATERIAL_CHARS == 200_000
     assert fetch_module.MAX_FETCH_BYTES == 5 * 1024 * 1024
     assert fetch_module.MAX_REDIRECTS == 3

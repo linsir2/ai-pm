@@ -301,13 +301,13 @@ async def test_a_long_result_is_split_into_several_chunks():
 
 
 async def test_every_chunk_respects_the_web_chunk_width():
-    """R：每块 ≤ `WEB_CHUNK_CHARS`（400 字，留出标题/路径的 512-token 预算）。"""
-    from pmstudio.infrastructure.tools.limits import WEB_CHUNK_CHARS
+    """R：每块 ≤ `CHUNK_CHARS`（400 字，留出标题/路径的 512-token 预算）。"""
+    from pmstudio.infrastructure.tools.limits import CHUNK_CHARS
 
     packets = await _search_content("结论是：先做同步导出。" * 100)
 
     for chunk in packets[0].chunks:
-        assert len(chunk.text) <= WEB_CHUNK_CHARS, f"块 {len(chunk.text)} 字，超了"
+        assert len(chunk.text) <= CHUNK_CHARS, f"块 {len(chunk.text)} 字，超了"
 
 
 async def test_a_short_result_stays_one_chunk():
