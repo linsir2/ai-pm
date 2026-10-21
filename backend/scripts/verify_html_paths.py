@@ -40,7 +40,6 @@ from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
 from pmstudio.infrastructure.tools.limits import (
     CHUNK_CHARS,
     MAX_MATERIAL_CHARS,
-    WEB_CHUNK_CHARS,
     WEB_VECTOR_BLOCKS,
 )
 
@@ -374,18 +373,17 @@ def section_e_limits() -> dict:
 
     return {
         "CHUNK_CHARS": CHUNK_CHARS,
-        "WEB_CHUNK_CHARS": WEB_CHUNK_CHARS,
         "MAX_MATERIAL_CHARS": MAX_MATERIAL_CHARS,
         "WEB_VECTOR_BLOCKS": WEB_VECTOR_BLOCKS,
         "note": "上传/抓网页 → CHUNK_CHARS + MAX_MATERIAL_CHARS + 向量不限；"
-        "联网检索 → WEB_CHUNK_CHARS + MAX_MATERIAL_CHARS + 前 N 块向量",
+        "联网检索 → CHUNK_CHARS + MAX_MATERIAL_CHARS + 前 N 块向量",
     }
 
 
 def section_f_embed_ceiling(embedder) -> dict:
     """F：上传那条路（`CHUNK_CHARS=500`）会不会**超过嵌入模型的 512 token 上限**？
 
-    `limits.WEB_CHUNK_CHARS=400` 的理由（`limits.py:14-20`）是：向量模型上限 512 token，
+    `limits.CHUNK_CHARS=400` 的理由（`limits.py:14-20`）是：向量模型上限 512 token，
     中文约 1 字 1 token，喂进去的是「标题 + 章节链 + 正文」→ 超出部分**对向量完全不可见**。
     本节量同一件事在**上传/抓网页**那条路（块宽 500）上的表现：往块尾加一个独特标记词，
     看向量变不变（cos = 1.000000 → 尾部对向量不可见）。
@@ -413,7 +411,7 @@ def section_f_embed_ceiling(embedder) -> dict:
     return {
         "rows": rows,
         "upload_chunk_limit": CHUNK_CHARS,
-        "web_chunk_limit": WEB_CHUNK_CHARS,
+        "web_chunk_limit": CHUNK_CHARS,
         "note": "上传/抓网页那条路块宽 500 —— 加上标题与章节链后超过 512 token 的部分"
         "**对向量完全不可见**（cos=1.000000）；联网那条路用 400 就是为了避开这件事",
     }

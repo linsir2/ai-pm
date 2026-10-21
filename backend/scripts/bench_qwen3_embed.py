@@ -66,7 +66,7 @@ def main() -> None:
     print(f"维度 {dims}")
 
     samples = []
-    for index, text in enumerate(texts):
+    for text in texts:
         start = time.perf_counter()
         model.embed([text])
         samples.append((time.perf_counter() - start) * 1000)
@@ -74,8 +74,11 @@ def main() -> None:
     print(f"\n单块耗时：中位 {median:.0f} ms · 均值 {statistics.mean(samples):.0f} ms"
           f" · 最慢 {max(samples):.0f} ms")
     per_round = median * 120
-    print(f"每轮 120 块（联网路的向量预算）→ {per_round / 1000:.1f} 秒")
-    print(f"判据（≤ {BUDGET_MS:.0f} ms/块）→ {'**通过，值得继续谈**' if median <= BUDGET_MS else '**不通过 → 归档**'}")
+    print(
+        f"每轮 120 块（联网路的向量预算）→ {per_round / 1000:.1f} 秒"
+    )
+    verdict = "**通过，值得继续谈**" if median <= BUDGET_MS else "**不通过 → 归档**"
+    print(f"判据（≤ {BUDGET_MS:.0f} ms/块）→ {verdict}")
     (OUT / "qwen3_embed_bench.json").write_text(
         json.dumps(
             {
