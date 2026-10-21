@@ -54,13 +54,24 @@ DOCX_MEDIA_TYPE = (
 )
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-#: 标题行：Markdown `#`、`一、`、`1.2 `、`第 3 章` 都算（认错了最多多切一块，无害）
+#: 标题行：Markdown `#`、`一、`、`1.2 `、`第 3 章` 都算。
+#:
+#: 编号形式（`1. ` / `1.2 `）要求编号后**有空白**——`1.标题` 不是标题，是正文。
 _HEADING = re.compile(
     r"^(#{1,6}\s+\S.*"
-    r"|\d+(?:\.\d+)*[.、]\s*\S.*"
+    r"|\d+(?:\.\d+)*[.、]\s+\S.*"
     r"|[一二三四五六七八九十]+、\s*\S.*"
     r"|第[一二三四五六七八九十百\d]+[章节][、.．]?\s*\S.*)$"
 )
+
+#: 编号形式的标题行**最长多少字**（超了就是列表项/正文，不是章节标题）。
+#:
+#: 2026-10-21 批 11 的实测（C 口径 15 份真实网页，2631 个有效行）：旧判据把
+#: **10.8% 的行**当成标题，绝大多数是**有序列表项**——「1. 进入[知识库](…)」
+#: 「2. 点击页面上…」这种。后果：每个列表项都起一个新块 → **块被切碎**
+#: （实测块的中位字数只有上限的 4%）→ 向量多、上下文碎。
+#: 所以编号形式的标题要**像标题**：短、不以句末标点结尾。
+NUMBERED_HEADING_MAX_CHARS = 40
 
 #: HTML 正文抽取的算法档位。**换算法就 +1**：`html_parser_version` 会跟着变，
 #: 既有 HTML 与抓取材料因此被判"该重解析"——否则新旧两种质量在界面上分不出来。
@@ -221,7 +232,21 @@ def _flatten_with_headings(soup) -> str:  # type: ignore[no-untyped-def]
 
 
 def _is_heading(line: str) -> bool:
-    return bool(_HEADING.match(line.strip()))
+    """这一行是不是标题。
+
+    Markdown `#` 开头的是**形态明确**的标题，直接认。编号/中文序号/「第 N 章」
+    这些是**猜**的——要额外过两道：行要**短**、**不以句末标点结尾**
+    （否则有序列表项会被当成标题，理由见 `NUMBERED_HEADING_MAX_CHARS`）。
+    """
+
+    text = line.strip()
+    if not _HEADING.match(text):
+        return False
+    if text.startswith("#"):
+        return True
+    return len(text) <= NUMBERED_HEADING_MAX_CHARS and not text.endswith(
+        tuple(SENTENCE_ENDS)
+    )
 
 
 def _line_anchor(start: int, end: int) -> str:

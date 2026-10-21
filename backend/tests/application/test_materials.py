@@ -12,11 +12,11 @@ import pytest
 
 from pmstudio.application.dto import MaterialChunk, MaterialPacket, ParsedMaterial
 from pmstudio.application.errors import UnsupportedMaterial  # noqa: F401  (接口存在性)
-from pmstudio.application.use_cases import _unreferenced_materials_for
+from pmstudio.application.use_cases import _unreferenced_materials_for, external_material_text
 from pmstudio.domain.authoring.instruction import WriteInstruction  # noqa: F401
 from pmstudio.domain.provenance.evidence import EvidenceKind
 from pmstudio.domain.round.draft import Origin, OriginType, Proposal
-from pmstudio.domain.round.round import MaterialRef, Round
+from pmstudio.domain.round.round import DropSource, MaterialRef, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, RoundId
@@ -431,3 +431,33 @@ async def test_the_opening_card_shows_what_the_analyzer_read():
     view = round_view(harness.rounds.get(RoundId(round_id)))
 
     assert view.analysis_basis == "读了 s5 与 s11"
+
+
+async def test_materials_the_budget_cannot_fit_are_said_out():
+    """R：用户勾了多份材料、预算只带得下几份 → **没带进来的要留痕 + 写进提示词**。
+
+    为什么（2026-10-21 批 11 的实测）：整份材料一块都没进来时，提示词与界面上
+    **都看不出**它被预算挤掉了——模型会以为自己看到的就是全部，
+    回答里就会说"材料里没有相关内容"，而那份材料其实在库里。
+    """
+
+    harness = Harness(replies={"claims": claims_reply()})
+    harness.seed_project()
+    for index in range(3):
+        harness.materials.seed(
+            make_material("字" * 3000, material_id=f"m{index + 1}", title=f"材料{index + 1}.md")
+        )
+
+    round_id = await started_round(
+        harness, material_ids=("m1", "m2", "m3")
+    )
+
+    round_ = harness.rounds.get(RoundId(round_id))
+    drops = [item for item in round_.dropped if item.source == DropSource.MATERIAL]
+    assert len(drops) == 1, f"预算挤掉的材料要留一条痕：{round_.dropped}"
+    assert "2 份材料一块都没带进来" in drops[0].reason, drops[0].reason
+
+    # 提示词里也要说给模型听（模型得知道"还有材料没带进来"）
+    prompt = external_material_text(round_, store=harness.materials)
+    assert "另有 1 份材料因预算没带进来" in prompt, prompt
+    assert "在材料表里，查得到，但这一轮没读" in prompt, prompt

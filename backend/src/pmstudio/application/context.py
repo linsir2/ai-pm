@@ -968,8 +968,15 @@ MATERIAL_BUDGET = 4000
 WEB_BUDGET = 2000
 #: 单条检索结果截到多少字（截了就在那段末尾说明）
 WEB_SNIPPET_CHARS = 300
-#: 每个块渲染时除了正文还会多一行「[E12] 第 3 页」——算预算时把它算进去，别超太多
-CHUNK_OVERHEAD = 24
+#: 每个块渲染时前面还有一行「[E12] 第 3 页」——算预算时把它算进去。
+#: 编号的长度在选块时**还定不下来**（发号在选块之后）→ 取一个**上限**：
+#: 「[E1234] 」+ 换行 = 9。
+EID_RESERVE = 9
+#: 材料节/检索节固定的收尾（那句"不是用户说的话"的提醒）**一定会渲染出来** →
+#: 选块时先给它留出位置，否则渲染就会超预算（"预算"是假的）。
+SECTION_OVERHEAD = 96
+#: 「（材料较长，只带了 N 块 / 共 M 块）」只在截断时出现，选块时不知道截不截 → 留上限。
+TRUNCATION_NOTE_RESERVE = 30
 #: 联网结果渲染时每条还会多一个「[E123] 」编号位：选块的成本要把这个位子也算上，
 #: 否则"选进来的最后一条"可能刚好在渲染时被挤掉（账本里就多一个模型看不到的编号）。
 WEB_EID_RESERVE = 12
@@ -983,6 +990,7 @@ def select_chunks(
     budget: int = MATERIAL_BUDGET,
     cost: Callable[[MaterialPacket, MaterialChunk], int] | None = None,
     query: str = "",
+    section_overhead: int = 0,
 ) -> tuple[tuple[str, MaterialChunk], ...]:
     """**唯一**决定"哪些块进这一轮"的地方。
 
@@ -994,12 +1002,18 @@ def select_chunks(
     `query` 给空就是老行为（按材料顺序、块顺序取到预算为止）——联网检索那条路**必须**
     走这一支：Tavily 返回的顺序本身就是相关序，我们自己的粗排只会把它搅乱。
     给了 query（本轮输入）才走粗排，见 `_select_ranked`。
+
+    `section_overhead` 是**这一节固定要渲染的开销**（收尾那句提醒 + 可能有的截断说明）：
+    从预算里先扣掉，否则渲染出来会比预算多（"预算"是假的）。
     """
 
     weigh = cost or _material_block_cost
+    # 预算里有固定的一段是**这一节的收尾**（那句"不是用户说的话"的提醒）：
+    # 它一定会渲染出来 → 选块时先给它留出位置，否则渲染就会超预算（"预算"是假的）。
+    usable = max(0, budget - section_overhead)
     if not query.strip():
-        return _select_in_order(packets, budget=budget, weigh=weigh)
-    return _select_ranked(packets, budget=budget, weigh=weigh, query=query)
+        return _select_in_order(packets, budget=usable, weigh=weigh)
+    return _select_ranked(packets, budget=usable, weigh=weigh, query=query)
 
 
 def _select_in_order(
@@ -1108,12 +1122,47 @@ def _query_grams(query: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(kept[index : index + 2] for index in range(len(kept) - 1)))
 
 
-def _material_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
-    """上传材料那条路的成本：正文 + 一行「[E12] 第 3 页」。
+def material_head_line(packet: MaterialPacket) -> str:
+    """材料渲染时那行抬头。**成本与渲染共用它** → 同一把尺子（不许各写一份）。"""
 
+    parsed = packet.parsed
+    head = (
+        f"【{ORIGIN_TITLES.get(parsed.origin, parsed.origin)}】{parsed.title}"
+        f"（{parsed.media_type} · 由 {parsed.parser_id} 抽出）"
+    )
+    if parsed.origin != UPLOAD_ORIGIN:
+        # 非上传来源（抓来的网页…）把**出处**写出来：模型该知道自己读的是哪一页，
+        # 点编号时账本里的外部指称也是它。上传材料的 `attachment:标题` 与标题重复，
+        # 不占这份预算。
+        head += f"\n来源：{parsed.source_ref}"
+    return head
+
+
+def material_number_line(eid: EvidenceId, chunk: MaterialChunk) -> str:
+    """块渲染时那行「[E12] 第 3 页」。"""
+
+    return f"[{eid}] {chunk.anchor}"
+
+
+def _material_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
+    """上传材料那条路的成本：**渲染出来的那几行**（与渲染同源）。
+
+    2026-10-21（批 11）：原来是 `len(chunk.text) + CHUNK_OVERHEAD`——
+    `CHUNK_OVERHEAD=24` 是拍脑袋的常数（实际随锚点长度变 15–25），
+    而**抬头行、编号行、结尾说明完全没进成本** → 渲染实测 4116 字 > 预算 4000，
+    "预算"是假的。现在按渲染真正写出去的每一行算。
+
+    **抬头与结尾说明每份材料只渲染一次** → 由第一块承担（与联网路 `web_block_cost`
+    同一个办法），不许每块都算一遍（那是同一段信息重复付费）。
     """
 
-    return len(chunk.text) + CHUNK_OVERHEAD
+    cost = len(chunk.text) + 1  # 正文 + 换行
+    cost += EID_RESERVE + len(chunk.anchor) + 1  # 编号行 + 换行
+    if chunk.ordinal == 0:
+        cost += len(material_head_line(packet)) + 1  # 抬头（每份材料只渲染一次）
+        cost += TRUNCATION_NOTE_RESERVE  # 结尾说明的预留（只在截断时出现）
+        cost += sum(len(warning) + 3 for warning in packet.parsed.warnings)  # 警告行
+    return cost
 
 
 def web_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
@@ -1151,13 +1200,16 @@ class RenderedMaterial:
 
 def render_materials(
     entries: Sequence[tuple[MaterialPacket, Mapping[str, EvidenceId]]],
-    *,
-    budget: int = MATERIAL_BUDGET,
 ) -> RenderedMaterial:
     """材料 → 提示词里那一段。**只渲染有编号的块**（没编号的进不了提示词）。
 
     `entries` 里的块应当来自 `select_chunks`；若包的块数多于带编号的块数，
     就写「（材料较长，只带了 N 块 / 共 M 块）」，界面与提示词都不许假装完整。
+
+    **没有 budget 参数**（2026-10-21 批 11）：它以前是**死参数**（声明了从不引用）
+    → 渲染实测 4116 字 > 预算 4000，"预算"是假的。现在预算由**选块**保证：
+    成本模型与渲染**同源**（`material_head_line` / `material_number_line` 两处共用），
+    选进来的渲染出来就不会超。
     """
 
     if not entries:
@@ -1168,16 +1220,7 @@ def render_materials(
     truncated = False
     for packet, eids in entries:
         parsed = packet.parsed
-        head = (
-            f"【{ORIGIN_TITLES.get(parsed.origin, parsed.origin)}】{parsed.title}"
-            f"（{parsed.media_type} · 由 {parsed.parser_id} 抽出）"
-        )
-        if parsed.origin != UPLOAD_ORIGIN:
-            # 非上传来源（抓来的网页…）把**出处**写出来：模型该知道自己读的是哪一页，
-            # 点编号时账本里的外部指称也是它。上传材料的 `attachment:标题` 与标题重复，
-            # 不占这份预算。
-            head += f"\n来源：{parsed.source_ref}"
-        lines.append(head)
+        lines.append(material_head_line(packet))
         # 按**文档序**渲染（`select_chunks` 只决定挑哪些块，不决定怎么摆）：
         # 编号也按文档序发，所以提示词里号码顺序走，用户对着材料卡找得到。
         kept = 0
@@ -1185,7 +1228,7 @@ def render_materials(
             eid = eids.get(chunk.chunk_id)
             if eid is None:
                 continue
-            lines.append(f"[{eid}] {chunk.anchor}")
+            lines.append(material_number_line(eid, chunk))
             lines.append(chunk.text)
             used_ids.append(chunk.chunk_id)
             kept += 1
@@ -1258,7 +1301,10 @@ def render_web_results(
         used += len(block)
         used_ids.extend(chunk.chunk_id for chunk in chunks)
     if truncated:
-        lines.append(f"（检索结果太多，只带了前 {len(used_ids)} 条 / 共 {len(entries)} 条）")
+        # 单位是**结果条数**，不是块数（2026-10-21 修）：`used_ids` 数的是块，
+        # 一条结果可能好几段 → 写出来会变成"只带了前 7 条 / 共 5 条"这种反直觉的话。
+        shown = len(lines)
+        lines.append(f"（检索结果太多，只带了前 {shown} 条 / 共 {len(entries)} 条）")
     lines.append(
         "（以上是联网检索结果，不是用户说的话；不要再把它说成用户说的话。"
         "要引就引方括号里的编号）"

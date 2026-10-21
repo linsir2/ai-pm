@@ -109,34 +109,58 @@ def test_the_vector_budget_only_applies_to_web_materials():
 
     一刀切会改掉批 5/6a 已交付的语义召回能力（那是越界）。
     """
-    from pmstudio.infrastructure.sqlite.vector_index import vector_block_budget
-    from pmstudio.infrastructure.tools.limits import WEB_VECTOR_BLOCKS
+    from pmstudio.infrastructure.sqlite.vector_index import vector_char_budget
+    from pmstudio.infrastructure.tools.limits import WEB_VECTOR_CHARS
 
-    assert vector_block_budget("web_search") == WEB_VECTOR_BLOCKS
-    assert vector_block_budget("upload") is None, "上传材料不该限"
-    assert vector_block_budget("web_fetch") is None, "抓网页材料不该限"
+    assert vector_char_budget("web_search") == WEB_VECTOR_CHARS
+    assert vector_char_budget("upload") is None, "上传材料不该限"
+    assert vector_char_budget("web_fetch") is None, "抓网页材料不该限"
 
 
-def test_a_web_material_only_gets_vectors_for_its_first_blocks(conn):
-    """R：联网材料只写前 `WEB_VECTOR_BLOCKS` 块的向量（**FTS 仍覆盖全部块**）。
+def test_the_block_budget_is_measured_in_characters_not_blocks():
+    """R：预算的量纲是**字**（`blocks_within_budget`），不是块数。
+
+    为什么（2026-10-21 批 11 的实测）：「前 N 块」是实现细节，块宽一改，
+    它覆盖的**字数**就跟着腰斩——块宽 400 时前 24 块覆盖 41% 的网页正文，
+    块宽 200 时只覆盖 27%；而网页尾部是实质内容（55–85% 区间全是段落）
+    → **覆盖不足 = 检索漏**。所以预算必须与块宽解耦。
+    """
+    from pmstudio.infrastructure.sqlite.vector_index import blocks_within_budget
+
+    # 行的形状与 sqlite3.Row 一样（可下标取 "text"）
+    rows = [{"text": "字" * 400} for _ in range(30)]  # 共 12000 字
+
+    assert blocks_within_budget(rows, 9600) == 24, "9600 字 = 24 个 400 字的块"
+    assert blocks_within_budget(rows, 400) == 1
+    assert blocks_within_budget(rows, None) == 30, "不限 = 全要"
+    # 块的大小变了，覆盖的**字数**不变——这正是量纲换成字的目的
+    smaller = [{"text": "字" * 200} for _ in range(60)]
+    assert blocks_within_budget(smaller, 9600) == 48
+    covered = sum(len(row["text"]) for row in smaller[: blocks_within_budget(smaller, 9600)])
+    assert covered == 9600
+
+
+def test_a_web_material_only_gets_vectors_within_its_char_budget(conn):
+    """R：联网材料只写**字数预算内**的块的向量（**FTS 仍覆盖全部块**）。
 
     理由（实测 2026-10-20）：整页入库让单份联网材料从 4 块涨到 21–167 块，
-    全量向量化一要 263 秒；而两个独立判据（词面查询 32/32、手写改述 9/14）
-    **都在前 8 块饱和**，加到全量一分钱收益没有。
+    全量向量化一要 263 秒；预算就是为这件事存在的。
+    量纲是**字**（批 11）：所以这里用「每块 400 字」的材料，让预算落在块中间。
     """
     from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
-    from pmstudio.infrastructure.tools.limits import WEB_VECTOR_BLOCKS
+    from pmstudio.infrastructure.tools.limits import WEB_VECTOR_CHARS
 
+    body = "字" * 400
     _put_material(
         conn,
-        chunks=tuple((f"c{index}", f"第 {index} 段正文") for index in range(30)),
+        chunks=tuple((f"c{index}", body) for index in range(30)),
         origin="web_search",
     )
 
     SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
 
     written = conn.execute("SELECT chunk_id FROM material_chunks_vec").fetchall()
-    assert len(written) == WEB_VECTOR_BLOCKS
+    assert len(written) == WEB_VECTOR_CHARS // 400
     assert conn.execute("SELECT count(*) FROM material_chunks").fetchone()[0] == 30, (
         "块不该被删——FTS 还要覆盖全部块"
     )

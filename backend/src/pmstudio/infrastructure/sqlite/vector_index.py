@@ -9,24 +9,50 @@ import json
 import logging
 import sqlite3
 
-from pmstudio.infrastructure.tools.limits import WEB_VECTOR_BLOCKS
+from pmstudio.infrastructure.tools.limits import WEB_VECTOR_CHARS
 
 logger = logging.getLogger(__name__)
 
 
-def vector_block_budget(origin: str) -> int | None:
-    """一份材料**最多写多少块**的向量。`None` = 不限。
+def vector_char_budget(origin: str) -> int | None:
+    """一份材料**最多索引多少字的正文**。`None` = 不限。
 
-    规则只有一条：**联网材料（`web_search`）限前 `WEB_VECTOR_BLOCKS` 块**。
+    规则只有一条：**联网材料（`web_search`）限 `WEB_VECTOR_CHARS` 字**。
     上传（`upload`）与抓网页（`web_fetch`）不限——它们是用户精挑要精读的材料。
+
+    **为什么是「字」不是「块」**：块数是实现细节，块宽一改，"前 N 块"覆盖的**字数**
+    就跟着腰斩（批 10：块宽 400 → 200，联网材料的语义覆盖从 41% 掉到 27%）。
+    详见 `limits.WEB_VECTOR_CHARS` 的注释。
 
     **为什么写入与回填必须共用这一个函数**：回填（`database._backfill_chunk_vectors`）
     是在启动时补"缺向量的块"，若它不认这条规则，就会把预算外的块全补上——
     预算当场形同虚设，而**症状要等几十秒后的向量推理才显形**，极难归因。
     """
     if origin == "web_search":
-        return WEB_VECTOR_BLOCKS
+        return WEB_VECTOR_CHARS
     return None
+
+
+def blocks_within_budget(rows, char_budget: int | None) -> int:
+    """前多少个块落在字数预算内。`rows` 须**按 ordinal 排好**，元素要有 `text`。
+
+    判据是**累计字数**：`rows[:k]` 的字数和 ≤ 预算的最大 `k`。
+    `char_budget is None` → 全要（返回 `len(rows)`）。
+
+    标题与章节链**不另计**：它们是每块都带的上下文，按块重复计会让预算失真；
+    只计正文是**偏保守**的一侧（实际嵌进去的字更多）。
+    """
+    if char_budget is None:
+        return len(rows)
+    used = 0
+    count = 0
+    for row in rows:
+        size = len(str(row["text"]))
+        if used + size > char_budget:
+            break
+        used += size
+        count += 1
+    return count
 
 
 class SqliteVectorIndex:
@@ -39,8 +65,8 @@ class SqliteVectorIndex:
     def write(self, material_id: str, *, max_blocks: int | None = None) -> None:
         """给一份材料的块算向量并落库。失败只留 warning（降级不判死）。
 
-        `max_blocks` 显式给上限时按它走；不给则按材料来源走 `vector_block_budget`
-        （联网材料限前 N 块——见那个函数的说明）。
+        `max_blocks` 显式给上限时按它走（**块数**，只给测试与量化脚本用）；
+        不给则按材料来源走 `vector_char_budget`（联网材料限**字数**——见那个函数的说明）。
         """
         from pmstudio.infrastructure.sqlite.tokenize import index_text
 
@@ -55,13 +81,11 @@ class SqliteVectorIndex:
             ).fetchall()
             if not rows:
                 return
-            budget = (
-                max_blocks
-                if max_blocks is not None
-                else vector_block_budget(str(rows[0]["origin"]))
-            )
-            if budget is not None:
-                rows = rows[:budget]
+            if max_blocks is not None:
+                rows = rows[:max_blocks]
+            else:
+                char_budget = vector_char_budget(str(rows[0]["origin"]))
+                rows = rows[: blocks_within_budget(rows, char_budget)]
             # 喂 embedder 的是**自然语言**，不是分词串（口径见
             # `tokenize.index_text` 的文档：2026-10-19 实测改述类 recall@5
             # 85% → 95%，假 embedder 对照组不变 → 是口径在削弱真模型）。

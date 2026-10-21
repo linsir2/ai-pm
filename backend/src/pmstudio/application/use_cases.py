@@ -471,6 +471,32 @@ class StartRound:
                     ]
                 )
                 self._evidence_writer.save(ledger)
+            # **预算装不下的材料要说出来**（2026-10-21 批 11）：用户勾了 N 份材料，
+            # 预算只带得下 K 份 → 剩下的**整份缺席**。不记这一笔，提示词与界面上
+            # 都看不出"材料被预算挤掉了"，模型会以为自己看到的就是全部
+            # （这正是缺陷 ② 的用户体感：勾了材料、提示词说没材料）。
+            picked_materials = {material_id for material_id, _ in picked}
+            missed = [
+                packet
+                for material_id, packet in packets.items()
+                if material_id not in picked_materials
+            ]
+            if missed:
+                round_.note_dropped(
+                    [
+                        DroppedItem(
+                            handle=f"材料 {len(packets)} 份",
+                            reason=(
+                                f"预算只带得下 {len(picked_materials)} 份，"
+                                f"还有 {len(missed)} 份材料一块都没带进来"
+                                "（材料表里留着，搜得到）"
+                            ),
+                            source=DropSource.MATERIAL,
+                            seat_id=None,
+                            pass_index=1,
+                        )
+                    ]
+                )
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
         return round_id
@@ -4311,6 +4337,17 @@ def external_material_text(round_: Round, *, store: MaterialStore) -> str:
     if missing:
         parts.append(
             f"（{len(missing)} 份材料已不在库里，未带入：{'、'.join(missing)}）"
+        )
+    # **被预算挤掉的材料也要说给模型听**（2026-10-21 批 11）：不写这一句，
+    # 模型会以为自己看到的就是全部材料 → 回答里会说"材料里没有相关内容"，
+    # 而那份材料其实在库里（只是预算没带进来）。
+    budget_drops = [
+        item for item in round_.dropped if item.source == DropSource.MATERIAL
+    ]
+    if budget_drops:
+        parts.append(
+            f"（另有 {len(budget_drops)} 份材料因预算没带进来；"
+            "它们在材料表里，查得到，但这一轮没读）"
         )
     return "\n\n".join(parts) if parts else NO_MATERIAL_TEXT
 

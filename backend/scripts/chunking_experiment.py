@@ -29,6 +29,7 @@ cd backend && HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 \\
 """
 import hashlib
 import json
+import os
 import re
 import sys
 from datetime import UTC, datetime
@@ -65,8 +66,8 @@ PROJECT, OWNER = "p1", "o1"
 #: (切法, 细块上限, 父块上限)。父块 0 = 单粒度。
 #: 切法 "行优先" = 现状；"标点优先" = 作者要的（在预算周围找句末标点，块贴近预算）。
 VARIANTS = [
+    # 父子那几行在批 11 撤回了（被"更细的块"取代），这里只留单粒度。
     ("生产", 200, 0), ("生产", 300, 0), ("生产", 400, 0),
-    ("生产", 400, 1600), ("生产", 400, 1200), ("生产", 300, 1200),
 ]
 
 
@@ -146,15 +147,53 @@ def make_queries(items, url2mid, mid2chunks):
         chunks = mid2chunks[mid]
         if len(chunks) < 16:
             continue
-        first = [w for w in tokens(chunks[6].text) if w not in common]
-        second = [w for w in tokens(chunks[10].text) if w not in common]
+        # **证据按「字符偏移」取，不按块序号**（2026-10-21 批 11 修）：
+        # 块序号会随切法变 → 查询集跟着变 → 两次切法的「跨块」指标根本不是
+        # 同一把尺子（测出来 0.571 → 0.333 有一半是这个原因，不是真的退步）。
+        # 现在查询词只由**语料原文**决定 → 切法怎么变，查询集不变 ✓。
+        # 用**清洗后**的文本取偏移：原文里有 URL / 图片链接，取到的"稀有词"
+        # 根本不在任何块里 → 用例会被全滤掉（判据写错，不是数据问题）。
+        text = normalize_web_text(item["text"])
+        span_a = text[int(len(text) * 0.30) : int(len(text) * 0.30) + 200]
+        span_b = text[int(len(text) * 0.35) : int(len(text) * 0.35) + 200]
+        first = [w for w in tokens(span_a) if w not in common]
+        second = [w for w in tokens(span_b) if w not in common]
         if not first or not second:
             continue
         first.sort(key=lambda w: freq.get(w, 0))
         second.sort(key=lambda w: freq.get(w, 0))
-        cross.append((f"{first[0]} {second[0]}", item["url"],
-                      (f"{mid}#c06", f"{mid}#c10")))
+        # 目标 = **包含那个词的块**（切法变 → 块变，但词不变 ✓）
+        wanted: list[str] = []
+        for word in (first[0], second[0]):
+            holder = next((chunk for chunk in chunks if word in chunk.text), None)
+            if holder is None:
+                wanted = []
+                break
+            # 块 id 在库里是 `{material_id}#c{ordinal}`（store 重编的），
+            # 原始 chunk_text 给的 id 对不上 → 判据要自己拼。
+            wanted.append(f"{mid}#c{holder.ordinal:02d}")
+        if len(wanted) != 2 or wanted[0] == wanted[1]:
+            continue  # 两处证据落进同一块 → 这一条测不出"跨块"，跳过
+        cross.append((f"{first[0]} {second[0]}", item["url"], tuple(wanted)))
     return {"词面": lexical, "改述": paraphrase, "跨块": cross}
+
+
+#: 对照开关：把标题判据换回**批 11 之前**的版本（有序列表项也当标题）。
+#: 只给这个脚本用——用来回答"收紧判据到底换来了什么、赔上了什么"：
+#: 跨块指标的查询集已改成**按字符偏移取固定文本**（不随切法变），
+#: 所以两次跑的数字**可比** ✓。
+_OLD_HEADING = re.compile(
+    r"^(#{1,6}\s+\S.*"
+    r"|\d+(?:\.\d+)*[.、]\s*\S.*"
+    r"|[一二三四五六七八九十]+、\s*\S.*"
+    r"|第[一二三四五六七八九十百\d]+[章节][、.．]?\s*\S.*)$"
+)
+
+
+def _use_old_heading_rule() -> None:
+    from pmstudio.infrastructure.tools import extract
+
+    extract._is_heading = lambda line: bool(_OLD_HEADING.match(line.strip()))
 
 
 def main() -> None:
@@ -162,6 +201,9 @@ def main() -> None:
     embedder = FastEmbedEmbedder()
     print("=== 分块粒度实验（真 Tavily 语料 / 真模型）===")
     print("  指标：块级r5 · MRR · 跨块完整率 · 上下文层(块/份/字) · 块数")
+    if os.environ.get("PMSTUDIO_BENCH_OLD_HEADING") == "1":
+        _use_old_heading_rule()
+        print("（对照：标题判据用批 11 之前的版本）\n")
     for style, child, parent in VARIANTS:
         label = (f"{style} 父子 {child}→{parent}" if parent
                  else f"{style} 单粒度 {child}")

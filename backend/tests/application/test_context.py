@@ -440,7 +440,16 @@ def test_a_block_always_fits_the_material_budget():
     **测试不构成生产依赖**，所以不违反分层。
     """
 
-    assert CHUNK_CHARS + context.CHUNK_OVERHEAD < context.MATERIAL_BUDGET
+    # 成本模型（批 11）：最贵的一块 = 正文（CHUNK_CHARS）+ 编号行 + 抬头 + 截断说明预留。
+    # 抬头是**每份材料一次**的，材料预算也是每份材料的 → 放进同一个不等式里。
+    worst_block = (
+        CHUNK_CHARS
+        + context.EID_RESERVE
+        + 10  # 锚点（"第 12–40 行"那个量级）
+        + 60  # 抬头（标题 + 来源）
+        + context.TRUNCATION_NOTE_RESERVE
+    )
+    assert worst_block < context.MATERIAL_BUDGET
 
 
 # ── 选块粗排（`02 §11.0.53`）───────────────────────────────────────────
@@ -454,7 +463,10 @@ def test_without_a_query_selection_keeps_document_order():
 
     packet = make_packet("甲" * 300, "导出权限" * 100, "乙" * 300)
 
-    picked = context.select_chunks([packet], budget=800)
+    # 预算 850：成本模型现在**把渲染写出去的每一行都算进去**（正文 + 编号行 +
+    # 抬头 + 截断说明预留），两块的成本是 392 + 416 = 808（批 11 之前是 624 + 400 = 1024，
+    # 旧模型没算抬头与编号行 → 渲染会超预算）。**断言的意图一字不改**。
+    picked = context.select_chunks([packet], budget=850)
 
     assert [chunk.ordinal for _, chunk in picked] == [0, 1]
 
@@ -462,7 +474,7 @@ def test_without_a_query_selection_keeps_document_order():
 def test_a_query_pulls_the_blocks_that_mention_it_forward():
     packet = make_packet("甲" * 300, "导出权限" * 100, "乙" * 300)
 
-    picked = context.select_chunks([packet], budget=800, query="导出权限怎么定")
+    picked = context.select_chunks([packet], budget=850, query="导出权限怎么定")
 
     assert [chunk.ordinal for _, chunk in picked] == [1, 0]
 
@@ -478,7 +490,7 @@ def test_ties_keep_document_order_so_the_result_is_reproducible():
 def test_a_query_no_block_mentions_falls_back_to_document_order():
     packet = make_packet("甲" * 300, "乙" * 300, "丙" * 300)
 
-    picked = context.select_chunks([packet], budget=700, query="完全不搭的词")
+    picked = context.select_chunks([packet], budget=850, query="完全不搭的词")
 
     assert [chunk.ordinal for _, chunk in picked] == [0, 1]
 
@@ -1384,3 +1396,66 @@ def test_search_results_show_at_most_two_rows_per_material():
     assert material_rows[0].ref == "m1#c00"
     assert material_rows[1].ref == "m1#c01"
     assert material_rows[2].ref == "m2#c00"
+
+
+# ── 批 11：预算成硬上限 + 装不下要说出来 + 单位不混用 ──────────────────────
+
+
+def test_the_rendered_materials_never_exceed_the_budget():
+    """R：渲染出来的材料**不超过预算**——预算是**硬上限**，不是软目标。
+
+    为什么（2026-10-21 批 11 的实测）：旧的成本模型是 `len(text) + 24`，
+    **抬头行、编号行、结尾说明完全没进成本** → 渲染实测 4116 字 > 预算 4000
+    （"预算"是假的，模型收到的提示词比预算说的多）。现在成本与渲染**同源**
+    （`material_head_line` / `material_number_line` 两处共用同一个函数）。
+    """
+
+    packets = [
+        make_packet(
+            *["字" * 200 for _ in range(20)],
+            material_id=f"m{index}",
+            title=f"材料{index}.md",
+        )
+        for index in range(12)
+    ]
+    budget = 4000
+
+    picked = context.select_chunks(
+        packets, budget=budget, section_overhead=context.SECTION_OVERHEAD
+    )
+    eids: dict[str, dict[str, str]] = {}
+    for index, (material_id, chunk) in enumerate(picked):
+        eids.setdefault(material_id, {})[chunk.chunk_id] = f"E{index + 1}"
+    entries = [
+        (packet, eids[packet.material_id])
+        for packet in packets
+        if packet.material_id in eids
+    ]
+
+    rendered = context.render_materials(entries)
+
+    assert len(rendered.text) <= budget, (
+        f"渲染 {len(rendered.text)} 字 > 预算 {budget} 字 → 预算是假的"
+    )
+    assert entries, "至少要选进来一些材料（否则这条断言是空的）"
+
+
+def test_the_web_truncation_note_counts_results_not_blocks():
+    """R：联网结果的截断说明里，两头的单位都是**结果条数**，不是块数。
+
+    2026-10-21 修：原来写的是「只带了前 {len(used_ids)} 条」，而 `used_ids` 数的是**块**
+    ——一条结果可能好几段 → 会写出「只带了前 7 条 / 共 5 条」这种反直觉的话。
+    """
+
+    packet = make_packet("甲" * 300, "乙" * 300, material_id="m1", title="结果.md")
+    other = make_packet("丙" * 300, material_id="m2", title="结果2.md")
+    entries = [
+        (packet, [packet.parsed.chunks[0], packet.parsed.chunks[1]], EvidenceId("E1")),
+        (other, [other.parsed.chunks[0]], EvidenceId("E2")),
+    ]
+
+    # 预算只够第一条（一条结果 = 标题 + URL + 两段正文 ≈ 650 字）
+    rendered = context.render_web_results(entries, budget=700)
+
+    assert "只带了前 1 条 / 共 2 条" in rendered.text, rendered.text
+    assert "前 2 条 / 共 2 条" not in rendered.text, "块数不该写进条数的位置"

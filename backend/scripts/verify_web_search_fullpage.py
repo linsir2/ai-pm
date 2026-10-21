@@ -42,7 +42,7 @@ from pmstudio.infrastructure.sqlite.materials import (
 )
 from pmstudio.infrastructure.sqlite.tokenize import index_tokens
 from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
-from pmstudio.infrastructure.tools.limits import WEB_VECTOR_BLOCKS
+from pmstudio.infrastructure.tools.limits import WEB_VECTOR_CHARS
 from pmstudio.infrastructure.tools.tavily import PARSER_VERSION, TavilySearchGateway
 
 OUT = Path("../.codex/runs/2026-10-20/verify")
@@ -176,7 +176,7 @@ async def main() -> None:  # type: ignore[no-untyped-def]
     report: dict[str, object] = {
         "query": QUERY,
         "parser_version": PARSER_VERSION,
-        "web_vector_blocks": WEB_VECTOR_BLOCKS,
+        "web_vector_chars": WEB_VECTOR_CHARS,
         "materials": [],
         "summary": {},
     }
@@ -204,6 +204,12 @@ async def main() -> None:  # type: ignore[no-untyped-def]
             "SELECT count(*) FROM material_chunks WHERE material_id = ?",
             (packet_id.material_id,),
         ).fetchone()[0]
+        vec_chars = connection.execute(
+            "SELECT coalesce(sum(length(c.text)), 0) FROM material_chunks_vec v"
+            " JOIN material_chunks c ON c.chunk_id = v.chunk_id"
+            " WHERE c.material_id = ?",
+            (packet_id.material_id,),
+        ).fetchone()[0]
         entry: dict[str, object] = {
             "url": packet.source_ref,
             "title": packet.title,
@@ -212,7 +218,8 @@ async def main() -> None:  # type: ignore[no-untyped-def]
             "fragment_chars": len(fragment),
             "chunks": chunk_rows,
             "vectors": int(vec_rows),
-            "vector_budget_ok": int(vec_rows) <= min(WEB_VECTOR_BLOCKS, chunk_rows),
+            # 预算是**字数**（批 11）→ 判据看"被索引了多少字"，不是"多少块"
+            "vector_budget_ok": int(vec_chars) <= WEB_VECTOR_CHARS,
             "truncated": packet.truncated,
             "warnings": list(packet.warnings),
             "anchor_head": packet.chunks[0].anchor if packet.chunks else "",

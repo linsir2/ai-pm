@@ -33,14 +33,15 @@ from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
 from pmstudio.infrastructure.sqlite.tokenize import index_source, index_text
 from pmstudio.infrastructure.sqlite.vector_index import (
     SqliteVectorIndex,
-    vector_block_budget,
+    blocks_within_budget,
+    vector_char_budget,
 )
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser, html_text
 from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
 from pmstudio.infrastructure.tools.limits import (
     CHUNK_CHARS,
     MAX_MATERIAL_CHARS,
-    WEB_VECTOR_BLOCKS,
+    WEB_VECTOR_CHARS,
 )
 
 OUT = Path("../.codex/runs/2026-10-20/verify")
@@ -237,9 +238,9 @@ def _make_parsed(origin: str, *, title: str, source_ref: str, count: int) -> Par
 def section_c_vector_budget(connection, store, vectors) -> dict:  # type: ignore[no-untyped-def]
     """C：向量预算——`upload`/`web_fetch` 不限，`web_search` 限前 N 块。"""
 
-    result = {"WEB_VECTOR_BLOCKS": WEB_VECTOR_BLOCKS, "budget_rule": {}, "materials": {}}
+    result = {"WEB_VECTOR_CHARS": WEB_VECTOR_CHARS, "budget_rule": {}, "materials": {}}
     for origin in ("upload", "web_fetch", "web_search"):
-        result["budget_rule"][origin] = vector_block_budget(origin)
+        result["budget_rule"][origin] = vector_char_budget(origin)
     for origin in ("upload", "web_fetch", "web_search"):
         parsed = _make_parsed(
             origin,
@@ -261,12 +262,18 @@ def section_c_vector_budget(connection, store, vectors) -> dict:  # type: ignore
             " ON c.chunk_id = v.chunk_id WHERE c.material_id = ?",
             (packet.material_id,),
         ).fetchone()[0]
+        # 预算是**字数**（批 11）：联网材料只索引"字数预算内"的那些块
+        if origin == "web_search":
+            expected = blocks_within_budget(
+                [{"text": chunk.text} for chunk in parsed.chunks], WEB_VECTOR_CHARS
+            )
+        else:
+            expected = len(parsed.chunks)
         result["materials"][origin] = {
             "chunks": len(parsed.chunks),
             "vectors": int(rows),
-            "expected": WEB_VECTOR_BLOCKS if origin == "web_search" else 30,
-            "ok": int(rows)
-            == (WEB_VECTOR_BLOCKS if origin == "web_search" else 30),
+            "expected": expected,
+            "ok": int(rows) == expected,
         }
     return result
 
@@ -374,7 +381,7 @@ def section_e_limits() -> dict:
     return {
         "CHUNK_CHARS": CHUNK_CHARS,
         "MAX_MATERIAL_CHARS": MAX_MATERIAL_CHARS,
-        "WEB_VECTOR_BLOCKS": WEB_VECTOR_BLOCKS,
+        "WEB_VECTOR_CHARS": WEB_VECTOR_CHARS,
         "note": "上传/抓网页 → CHUNK_CHARS + MAX_MATERIAL_CHARS + 向量不限；"
         "联网检索 → CHUNK_CHARS + MAX_MATERIAL_CHARS + 前 N 块向量",
     }

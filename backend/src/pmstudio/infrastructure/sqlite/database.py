@@ -396,15 +396,31 @@ def _backfill_chunk_vectors(connection: sqlite3.Connection, *, embedder=None) ->
     # **与 `SqliteVectorIndex.write` 同一套预算规则**（否则启动回填会把预算外的块
     # 全补上，预算形同虚设）。判据用**绝对 ordinal**，不是"缺的那些里的第几个"——
     # 一份 12 块的联网材料若前 8 块已有向量，缺的是 9–12，它们**不该**被补。
-    from pmstudio.infrastructure.sqlite.vector_index import vector_block_budget
+    #
+    # 预算的量纲是**字数**（2026-10-21 批 11），所以边界要按材料把**全部块**查出来
+    # 算累计字数（`blocks_within_budget`）——只看"缺的那些"算不出边界。
+    from pmstudio.infrastructure.sqlite.vector_index import (
+        blocks_within_budget,
+        vector_char_budget,
+    )
 
+    origin_of = {str(row["material_id"]): str(row["origin"]) for row in missing}
+    limits: dict[str, int | None] = {}
+    for material_id, origin in origin_of.items():
+        char_budget = vector_char_budget(origin)
+        if char_budget is None:
+            limits[material_id] = None
+            continue
+        all_rows = connection.execute(
+            "SELECT ordinal, text FROM material_chunks WHERE material_id = ? ORDER BY ordinal",
+            (material_id,),
+        ).fetchall()
+        limits[material_id] = blocks_within_budget(all_rows, char_budget)
     missing = [
         row
         for row in missing
-        if (
-            (budget := vector_block_budget(str(row["origin"]))) is None
-            or int(row["ordinal"]) < budget
-        )
+        if limits[str(row["material_id"])] is None
+        or int(row["ordinal"]) < int(limits[str(row["material_id"])])
     ]
     if not missing:
         return

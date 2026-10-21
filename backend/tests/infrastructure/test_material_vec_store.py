@@ -141,9 +141,10 @@ def test_backfill_fills_missing_vectors_idempotently(tmp_path):
 def test_the_backfill_respects_the_same_vector_budget(tmp_path):
     """R：回填与写入用**同一套**预算规则——否则启动回填会把预算外的块补上，预算形同虚设。
 
-    判据用**绝对 ordinal**：一份 12 块的联网材料，回填只补前 `WEB_VECTOR_BLOCKS` 块。
+    判据用**绝对 ordinal**：一份联网材料，回填只补**字数预算内**的那些块
+    （量纲是字，批 11）——边界要按材料的**全部块**算累计字数。
     """
-    from pmstudio.infrastructure.tools.limits import WEB_VECTOR_BLOCKS
+    from pmstudio.infrastructure.tools.limits import WEB_VECTOR_CHARS
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -159,12 +160,13 @@ def test_the_backfill_respects_the_same_vector_budget(tmp_path):
         connection.execute(
             "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
             " heading_path, anchor) VALUES (?, 'm0', ?, ?, ?, '[]', ?)",
-            (f"m0#c{index:02d}", str(TEST_OWNER), index, f"第 {index} 段", f"第{index}段"),
+            # 每块 400 字 → 30 块共 12000 字 → 字数预算切在中间
+            (f"m0#c{index:02d}", str(TEST_OWNER), index, "字" * 400, f"第{index}段"),
         )
 
     database.migrate(connection, embedder=FakeEmbedder(dimensions=512))
 
     assert connection.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0] == (
-        WEB_VECTOR_BLOCKS
+        WEB_VECTOR_CHARS // 400
     )
     connection.close()
