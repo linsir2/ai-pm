@@ -1,5 +1,6 @@
 """向量适配层：**不联网**也能测的只有协议与假实现；真模型一条单独打标。"""
 
+import logging
 import math
 
 import pytest
@@ -203,3 +204,102 @@ def test_an_unchanged_profile_keeps_the_existing_vectors(tmp_path):
     ).fetchone()[0]
     assert kept == first, "口径没变却把向量重算了——每次启动都白烧一次 ONNX"
     again.close()
+
+
+# ── token 闸门：喂模型前把输入裁到模型窗口内（批 7，2026-10-21）───────────────
+
+
+class _FakeTokenizer:
+    """**按字符当 token** 的假 tokenizer（只测闸门的逻辑，不测真分词）。
+
+    真 tokenizer 在 `fastembed` 里（`tokenizer.encode(text).ids` / `tokenizer.decode(ids)`），
+    它带 `[CLS]`/`[SEP]` 两个特殊 token；这里照做，好让"裁掉尾部"这件事可断言。
+    """
+
+    def __init__(self) -> None:
+        self.cls, self.sep = 101, 102
+
+    def encode(self, text):  # type: ignore[no-untyped-def]
+        return _Encoding([self.cls] + [ord(c) for c in text] + [self.sep])
+
+    def decode(self, ids):  # type: ignore[no-untyped-def]
+        return "".join(chr(i) for i in ids if i not in (self.cls, self.sep))
+
+
+class _Encoding:
+    """真 `tokenizers.Encoding` 的最小形状：只带 `.ids`。"""
+
+    def __init__(self, ids: list[int]) -> None:
+        self.ids = ids
+
+
+def test_a_text_inside_the_window_is_untouched():
+    """R：装得下的输入**一个字都不动**（闸门不该改变正常输入）。"""
+    from pmstudio.infrastructure.sqlite.embedding import fit_to_window
+
+    text = "向量检索在企业知识库里的召回效果"
+
+    trimmed, dropped = fit_to_window(text, _FakeTokenizer(), limit=100)
+
+    assert trimmed == text
+    assert dropped == 0
+
+
+def test_a_text_over_the_window_is_cut_at_a_token_boundary():
+    """R：超窗的输入被裁到窗内，**按 token 边界**（不切碎词），并报出裁了多少。"""
+    from pmstudio.infrastructure.sqlite.embedding import fit_to_window
+
+    text = "向量检索" * 100        # 400 字 + 2 个特殊 token
+
+    trimmed, dropped = fit_to_window(text, _FakeTokenizer(), limit=50)
+
+    assert len(_FakeTokenizer().encode(trimmed).ids) <= 50, "裁完还超窗"
+    assert dropped > 0, "没报裁了多少——裁剪必须是可观测的"
+    assert text.startswith(trimmed), "裁的应该是**尾部**（标题/章节链在前，优先保住）"
+
+
+def test_the_window_limit_comes_from_the_model_contract():
+    """R：上限是**模型契约**（512），不是随手写的数——它与 `MODEL_NAME` 同处一个文件。"""
+    from pmstudio.infrastructure.sqlite import embedding
+
+    assert embedding.MODEL_MAX_TOKENS == 512
+    assert embedding.EMBED_INPUT_MAX_TOKENS < embedding.MODEL_MAX_TOKENS
+
+
+@pytest.mark.slow
+def test_the_real_model_sees_the_tail_of_a_normal_block():
+    """R：**正常块**的尾部对向量是**可见的**（2026-10-21 批 7 的根问题）。
+
+    实测过的反例：块宽 500 时，尾部加独特标记词 → 向量余弦 **1.000000**（尾部完全
+    不可见）。现在块宽 400 + token 闸门，尾部必须**看得见**。
+    """
+    from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
+
+    body = "企业知识库里的向量检索要同时兼顾召回率与精度。" * 12   # ≈360 字
+    marker = "尾部独特标记词：紫貂氢氯"
+    embedder = FastEmbedEmbedder()
+
+    plain = embedder.embed_many([body])[0]
+    marked = embedder.embed_many([body + marker])[0]
+
+    assert _cos(plain, marked) < 0.999, (
+        "尾部对向量完全不可见（余弦 1.000000）——块宽或闸门没生效"
+    )
+
+
+@pytest.mark.slow
+def test_the_real_model_gate_cuts_an_oversized_input(caplog):
+    """R：超窗的输入被**裁**（而不是静默截断），且裁后仍能算出向量。"""
+    from pmstudio.infrastructure.sqlite.embedding import (
+        EMBED_INPUT_MAX_TOKENS,
+        FastEmbedEmbedder,
+    )
+
+    embedder = FastEmbedEmbedder()
+    with caplog.at_level(logging.WARNING):
+        vectors = embedder.embed_many(["向量检索" * 500])
+
+    assert len(vectors[0]) == 512
+    assert any("裁掉尾部" in record.message for record in caplog.records), (
+        f"裁了却没告警（静默降级比失败更贵）；上限 {EMBED_INPUT_MAX_TOKENS}"
+    )
