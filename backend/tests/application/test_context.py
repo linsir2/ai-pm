@@ -1345,12 +1345,16 @@ def test_the_rendered_web_text_contains_every_selected_chunk():
     assert rendered.used_chunk_ids == ("m1#c00", "m1#c01")
 
 
-def test_search_results_show_one_row_per_material_not_one_per_chunk():
-    """R：**一份材料只出一行**（不是它的每一段各出一行）。
+def test_search_results_show_at_most_two_rows_per_material():
+    """R：**一份材料最多出 2 行**（2026-10-21 批 8 从 1 行改成 2 行）。
 
-    为什么：联网材料切成多段后（批 6a），同一篇文档的每一段都是一条命中 →
-    搜索结果里 4–6 行同一篇文档，把 top5 的位置全占了，别的材料挤不出去
-    （实测材料级 recall@5 比纯 FTS5 少 1–2 条）。用户也不想看 5 行同一篇文档。
+    为什么从 1 改成 2：检索层给每份材料 2 个槽（实测跨块证据完整率 0 → 0.429、
+    块级 recall@5 0.867 → 0.933），这里若还只出 1 行，第二个槽就白给了；
+    而**答案散在文档两处**时，用户要能看见两处（两行的锚点与片段都不同）。
+
+    为什么**不是每段一行**：联网材料切成多段后（批 6a），同一篇文档的每一段都是
+    一条命中 → 4–6 行同一篇文档把位置全占了，别的材料挤不出去
+    （实测材料级 recall@5 比纯 FTS5 少 1–2 条）。
     """
     from pmstudio.application.dto import MaterialHit
 
@@ -1375,6 +1379,8 @@ def test_search_results_show_one_row_per_material_not_one_per_chunk():
     )
 
     material_rows = [hit for hit in view.hits if hit.kind == "material"]
-    assert len(material_rows) == 2, f"两份材料应出两行，实得 {len(material_rows)}"
-    # 落点是**第一次命中的那块**（检索器按相关度给的顺序）
+    assert len(material_rows) == 3, f"m1 出两行 + m2 一行 = 3 行，实得 {len(material_rows)}"
+    # 前两行是同一份材料的**两处**（落点是**第一次命中的那块**，检索器按相关度给的顺序）
     assert material_rows[0].ref == "m1#c00"
+    assert material_rows[1].ref == "m1#c01"
+    assert material_rows[2].ref == "m2#c00"

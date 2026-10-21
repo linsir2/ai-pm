@@ -791,11 +791,17 @@ def search_hits(
     # 别的材料挤不出去（实测：材料级 recall@5 比纯 FTS5 少 1–2 条）。
     # 用户也不想看 5 行同一篇文档。落点用**第一次命中的那块**（检索器按相关度给的
     # 顺序），点它照样能滚到那一段。
-    seen_materials: set[str] = set()
+    # **每份材料最多出 2 行**（2026-10-21 批 8）：检索层给每份材料 2 个槽，
+    # 这里若还只出 1 行，那第二个槽就白给了。
+    # 为什么 2 行不是 5 行：一份文档 4–6 行会把结果位全占住、别的材料挤不出去
+    # （实测材料级 recall@5 比纯 FTS5 少 1–2 条）——上面的注释记着那个教训。
+    # **2 行的价值**：答案散在文档两处时，两处都能看见（实测跨块证据完整率 0 → 0.429）。
+    seen_materials: dict[str, int] = {}
     for material in materials:
-        if material.material_id in seen_materials:
+        used = seen_materials.get(material.material_id, 0)
+        if used >= 2:
             continue
-        seen_materials.add(material.material_id)
+        seen_materials[material.material_id] = used + 1
         add(
             SearchHitView(
                 kind="material",

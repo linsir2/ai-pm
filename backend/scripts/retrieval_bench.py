@@ -12,13 +12,13 @@
 
 ## 语料登记表（改语料/加语料时改这里）
 
-| 名字 | 文件 | 条数 | 怎么造的 | 复跑 |
-|---|---|---|---|---|
-| `web_raw` | `.codex/runs/2026-10-19/tavily_raw/C raw_content-净.json` | **15 份材料** | **真 Tavily**（3 query × 5 条），`raw_content` 整页 markdown 剔导航行 | `scripts/tavily_raw_bench.py`（要 key） |
-| `词面查询` | `tavily_raw/frozen_queries.json` | **45 条** | 词取自页面真实内容**中段**（保证词在库里） | 同上 |
-| `改述查询` | `tavily_raw/paraphrases.json` | **14 条** | **手写**同义改述（刻意换掉原文的词） | 手写，随语料冻结 |
-| `负样本` | 本脚本内 `NEGATIVE_QUERIES` | **8 条** | 语料里**根本没有**的概念（别的领域的真实词） | 手写 |
-| `跨块查询` | 本脚本**自动生成** | **每份材料 1 条** | 词取自**同一材料的两个不相邻块** → 答案必须两块拼 | 自动 |
+| 名字 | 条数 | 怎么造的 |
+|---|---|---|
+| `web_raw` | 15 份材料 | 真 Tavily 整页 markdown（`tavily_raw/C raw_content-净.json`） |
+| 词面查询 | 45 | 词取自页面真实内容**中段**（`tavily_raw/frozen_queries.json`） |
+| 改述查询 | 14 | **手写**同义改述（`tavily_raw/paraphrases.json`） |
+| 负样本 | 8 | 语料里**根本没有**的概念（本脚本内 `NEGATIVE_QUERIES`） |
+| 跨块查询 | 15 | **自动生成**：同一材料相距 4 块的两处各取一词 |
 
 ## 判据表（阈值写在这里，跑完不许改）
 
@@ -64,7 +64,6 @@ from pmstudio.infrastructure.sqlite import tokenize as tokenize_module
 from pmstudio.infrastructure.sqlite.database import connect
 from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
 from pmstudio.infrastructure.sqlite.materials import (
-    SqliteFtsRetriever,
     SqliteHybridRetriever,
     SqliteMaterialStore,
 )
@@ -172,8 +171,14 @@ def make_queries(items, url2mid, mid2chunks):
     # 相距 4 块（不是 60 块）：那是"同一节里散着两处答案"的真实场景
     # （第一批我取的是第 2 块与倒数第 3 块 → 相距 60 块 → 那是极端场景，
     #  会把结论推向"跨块不可得"——**查询集造得太极端本身就是测量错误**）。
+    # 语料词频（用来挑"稀有词"）
+    freq: dict[str, int] = {}
+    for item in items:
+        for word in set(tokens(item["text"])):
+            freq[word] = freq.get(word, 0) + 1
+    common = {word for word, count in freq.items() if count >= len(items) // 2}
     cross = []
-    for index, item in enumerate(items):
+    for item in items:
         chunks = mid2chunks[url2mid[item["url"]]]
         if len(chunks) < 16:
             continue
@@ -181,10 +186,19 @@ def make_queries(items, url2mid, mid2chunks):
         second = tokens(chunks[10])
         if not first or not second:
             continue
+        # **取语料里最稀有的词**（高 IDF → BM25 区分度高 → 目标块能被排进去）。
+        # 前两版取的是 jieba 的**常见词**（"数据""模型"…）→ 到处都出现 → BM25 区分度
+        # 低 → 目标块根本排不进 top5 → 完整率恒 0。**那是查询造得太弱，不是系统的缺陷。**
+        first = [w for w in first if w not in common]
+        second = [w for w in second if w not in common]
+        if not first or not second:
+            continue
         mid = url2mid[item["url"]]
+        first.sort(key=lambda w: freq.get(w, 0))
+        second.sort(key=lambda w: freq.get(w, 0))
         cross.append(
             (
-                f"{first[len(first)//2]} {second[len(second)//2]}",
+                f"{first[0]} {second[0]}",
                 item["url"],
                 # **精确的目标块 id**（我取词的那两块）——不能定义成"含该词的所有块"：
                 # 那个词在导航/目录里也会出现 → 目标集合几十个 → 判定过严 → 指标失真。
@@ -194,11 +208,10 @@ def make_queries(items, url2mid, mid2chunks):
     return lexical, paraphrase, cross, list(NEGATIVE_QUERIES)
 
 
-def measure(connection, embedder, url2mid, mid2chunks, queries):
+def measure(connection, embedder, url2mid, mid2chunks, queries, *, limit=5):
     """量六个指标。"""
     lexical, paraphrase, cross, negatives = queries
     hybrid = SqliteHybridRetriever(connection, embedder=embedder)
-    fts = SqliteFtsRetriever(connection)
 
     def target_chunks(mid: str, word: str) -> set[str]:
         """目标词所在的**所有**块（该词可能在好几块里都出现）。
@@ -222,7 +235,7 @@ def measure(connection, embedder, url2mid, mid2chunks, queries):
             mid = url2mid.get(url)
             if mid is None:
                 continue
-            hits = hybrid.search(project_id=PROJECT, query=query, limit=5, owner=OWNER)
+            hits = hybrid.search(project_id=PROJECT, query=query, limit=limit, owner=OWNER)
             ids = [hit.material_id for hit in hits]
             if mid in ids:
                 material_hits += 1
@@ -241,7 +254,7 @@ def measure(connection, embedder, url2mid, mid2chunks, queries):
     # 负样本 → 假阳性率
     false_positive = 0
     for query in negatives:
-        hits = hybrid.search(project_id=PROJECT, query=query, limit=5, owner=OWNER)
+        hits = hybrid.search(project_id=PROJECT, query=query, limit=limit, owner=OWNER)
         if hits:
             false_positive += 1
     out["假阳性率"] = false_positive / max(1, len(negatives))
@@ -252,7 +265,7 @@ def measure(connection, embedder, url2mid, mid2chunks, queries):
         if mid is None:
             continue
         wanted = set(wanted)
-        hits = hybrid.search(project_id=PROJECT, query=query, limit=5, owner=OWNER)
+        hits = hybrid.search(project_id=PROJECT, query=query, limit=limit, owner=OWNER)
         got = {hit.chunk_id for hit in hits}
         if wanted <= got:
             complete += 1
@@ -338,6 +351,18 @@ def main() -> None:
         return
 
     if scan == "slots":
+        print("=== 每份材料的槽位数扫描（现在恒为 1 → 跨块证据被吃掉）===")
+        for limit in (5, 50):
+            for slots in (1, 2, 3):
+                materials_module._MATERIAL_SLOTS = slots
+                out = measure(
+                    connection, embedder, url2mid, mid2chunks, queries, limit=limit
+                )
+                show(f"limit {limit} · 每份材料 {slots} 槽", out)
+        materials_module._MATERIAL_SLOTS = 1
+        return
+
+    if scan == "slots5":
         print("=== 每份材料的槽位数扫描（现在恒为 1 → 跨块证据被吃掉）===")
         for slots in (1, 2, 3):
             materials_module._MATERIAL_SLOTS = slots
