@@ -1384,3 +1384,70 @@ def test_search_results_show_at_most_two_rows_per_material():
     assert material_rows[0].ref == "m1#c00"
     assert material_rows[1].ref == "m1#c01"
     assert material_rows[2].ref == "m2#c00"
+
+
+def test_a_hit_is_rendered_with_its_parent_block():
+    """R：命中**子块**时，提示词里给的是它所在的**父块**（相邻 4 个子块）。
+
+    为什么：子块常常只有几十个字（标题下就一两句），给模型看的应该是**完整上下文**
+    ——「小子块检索、大父块回喂」（small-to-big）。
+
+    编号与锚点**仍指子块** → 引用链不变（用户点编号滚到的是子块的位置）。
+    """
+    from pmstudio.application.context import render_materials
+    from pmstudio.application.dto import MaterialChunk, MaterialPacket, ParsedMaterial
+
+    chunks = tuple(
+        MaterialChunk(
+            chunk_id=f"m1#c{index:02d}", ordinal=index,
+            text=f"第 {index} 段的内容。", heading_path=(), anchor=f"第 {index} 段",
+        )
+        for index in range(6)
+    )
+    packet = MaterialPacket(
+        material_id="m1", project_id="p1", created_at="2026-10-20T00:00:00+00:00",
+        parsed=ParsedMaterial(
+            origin="upload", title="手册", source_ref="attachment:手册",
+            media_type="text/markdown", bytes_len=100, chunks=chunks,
+            parser_id="plain", parser_version="plain",
+        ),
+    )
+
+    rendered = render_materials([(packet, {"m1#c01": "E1"})])
+
+    # 父块 = 相邻 4 个子块（ordinal 0–3，命中的是第 1 块）
+    assert "第 0 段的内容。" in rendered.text, "父块没有带上前一个子块"
+    assert "第 1 段的内容。" in rendered.text
+    assert "第 3 段的内容。" in rendered.text, "父块应含 4 个子块"
+    assert "[E1] 第 1 段" in rendered.text, "编号与锚点必须仍指子块"
+    assert "第 4 段的内容。" not in rendered.text, "父块不该越过 4 个子块"
+
+
+def test_a_docx_material_is_not_rendered_with_a_parent():
+    """R：Word/Excel/PDF 的块**不是原文连续片段** → 不做父子（拼接会串表格与正文）。
+
+    父块只对「块是原文连续片段」的三条路成立：文本 / HTML / 抓来的网页。
+    """
+    from pmstudio.application.context import render_materials
+    from pmstudio.application.dto import MaterialChunk, MaterialPacket, ParsedMaterial
+
+    chunks = tuple(
+        MaterialChunk(
+            chunk_id=f"m1#c{index:02d}", ordinal=index,
+            text=f"表格 {index} 的内容。", heading_path=(), anchor=f"表格 {index}",
+        )
+        for index in range(4)
+    )
+    packet = MaterialPacket(
+        material_id="m1", project_id="p1", created_at="2026-10-20T00:00:00+00:00",
+        parsed=ParsedMaterial(
+            origin="upload", title="手册.docx", source_ref="attachment:手册.docx",
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            bytes_len=100, chunks=chunks, parser_id="python-docx", parser_version="python-docx",
+        ),
+    )
+
+    rendered = render_materials([(packet, {"m1#c01": "E1"})])
+
+    assert "表格 0 的内容。" not in rendered.text, "docx 的块不是连续片段，不该拼父块"
+    assert "表格 1 的内容。" in rendered.text
