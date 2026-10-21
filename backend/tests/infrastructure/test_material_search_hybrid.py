@@ -479,3 +479,60 @@ def test_one_material_takes_only_one_slot_in_the_results(conn):
 
     materials = [hit.material_id for hit in hits]
     assert len(materials) == len(set(materials)), f"同一份材料占了多个槽：{materials}"
+
+
+def test_a_target_ranked_beyond_the_first_twenty_by_bm25_is_still_found(conn):
+    """R：BM25 排在 **20 名开外**的目标也能被找到（词面候选 ≥ 50）。
+
+    为什么：词面查询的词往往在**很多**块里出现（导航、目录、正文都提到），
+    目标块常常排在 BM25 的第 21–50 名。候选只取 20 时这类查询**必然召不回**。
+    实测（2026-10-21 统一基线）：FTS 候选 20 → 50，词面材料级 recall@5
+    **0.822 → 0.867**（+4.5%），改述不变。
+
+    造法：60 个块，前 20 个都含查询词（它们 BM25 更高），目标块排第 30。
+    """
+    from pmstudio.infrastructure.sqlite import materials as materials_module
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    # 40 个**短**诱饵（都含查询词）→ BM25 长度归一让它们排在前面
+    for index in range(40):
+        _put_material(conn, f"m-{index}", chunks=((f"c{index}", "机柜布线规范"),))
+    # 目标是**长**文档 → 同 tf/df 下长度归一让它排到最后（第 41 名）
+    _put_material(
+        conn,
+        "m-target",
+        chunks=(("c-target", "机柜布线规范" + "另外还有一些别的内容。" * 40),),
+    )
+
+    class Broken(FakeEmbedder):
+        """**故意坏掉**：让混合检索退化成纯 FTS5。
+
+        为什么必须坏掉：假 embedder 按字符分桶，"机柜布线规范"与目标块字符完全相同
+        → KNN 路会直接把它排第一 → 测不出 FTS 候选数的作用（没有鉴别力）。
+        """
+
+        def embed_many(self, texts):
+            raise RuntimeError("模型下载失败")
+
+    broken = Broken(dimensions=512)
+    original = materials_module._FTS_CANDIDATES
+    try:
+        materials_module._FTS_CANDIDATES = 20
+        few = SqliteHybridRetriever(conn, embedder=broken).search(
+            project_id=PROJECT, query="机柜布线规范", limit=5, owner=TEST_OWNER
+        )
+        materials_module._FTS_CANDIDATES = 50
+        many = SqliteHybridRetriever(conn, embedder=broken).search(
+            project_id=PROJECT, query="机柜布线规范", limit=5, owner=TEST_OWNER
+        )
+    finally:
+        materials_module._FTS_CANDIDATES = original
+
+    assert not any(hit.material_id == "m-target" for hit in few), (
+        "候选 20 时本该召不回（目标排第 30）——测试没有鉴别力"
+    )
+    assert any(hit.material_id == "m-target" for hit in many), (
+        f"候选 50 时该召得回：{[h.material_id for h in many]}"
+    )

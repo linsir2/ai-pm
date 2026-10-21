@@ -509,6 +509,19 @@ COVERAGE_MAJORITY = 0.5
 #: 不低于纯 FTS5，改述类高于纯 FTS5）。**换个语料要重量**。
 FUSION_ALPHA = 0.5
 
+#: **每份材料最多占几个槽**（top5 里的位置）。
+#:
+#: 现状是 **1**（一份材料只出一行）——这既符合界面（`dto.search_hits` 也是一份材料一行），
+#: 也避免了"一份材料占满 top5、别的材料被挤出去"。但它有个**代价**（2026-10-21 实测）：
+#: **答案跨两块时，第二块证据永远进不来**（跨块证据完整率 0/15）——因为同一份材料
+#: 只能占一个位置。真实场景就是"这份文档里两处都写了答案"。
+#:
+#: 调大它之前要一起看两件事：① 界面会不会因此少显示几份别的材料；
+#: ② 每轮喂进提示词的块变多 → 噪声块的伤害（"The Power of Noise"：语义近但无用的块
+#: 比完全无关的块更伤）。
+#: 数字见 `scripts/retrieval_bench.py --scan slots`。
+_MATERIAL_SLOTS = 1
+
 #: 语义分用**名次归一化**（vec#1 → 1.0，vec#N → 1/N），不用距离绝对值：
 #: 距离的绝对值随语料/模型变，名次归一化后跨语料可比。
 def _semantic_score(rank: int | None, total: int) -> float:
@@ -592,13 +605,14 @@ class SqliteHybridRetriever:
         # ② 它同时治了"部分向量索引"的偏置传导：KNN 的候选都来自前 N 块
         # （同一份材料的标题/导言），不按材料去重的话它们会占满 top5，
         # 把词面命中的真块挤掉——实测改述召回从 10/14 掉到 4/14（比不用向量还差）。
-        seen_materials: set[str] = set()
+        seen_materials: dict[str, int] = {}
         final: list[str] = []
         for chunk_id in ordered:
             material_id = by_id[chunk_id].material_id
-            if material_id in seen_materials:
+            used = seen_materials.get(material_id, 0)
+            if used >= _MATERIAL_SLOTS:
                 continue
-            seen_materials.add(material_id)
+            seen_materials[material_id] = used + 1
             final.append(chunk_id)
             if len(final) >= limit:
                 break

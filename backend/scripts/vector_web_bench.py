@@ -310,6 +310,11 @@ def main() -> int:
                 ]
 
             hybrid = SqliteHybridRetriever(connection, embedder=FastEmbedEmbedder())
+            # 允许用环境变量扫「FTS 候选数」（批 8：稳定性检验）
+            import os as _os
+            if _os.environ.get("BENCH_FTS_CANDIDATES"):
+                from pmstudio.infrastructure.sqlite import materials as _m
+                _m._FTS_CANDIDATES = int(_os.environ["BENCH_FTS_CANDIDATES"])
             fts = SqliteFtsRetriever(connection)
             # **α 扫描**：真数据才是决定性的（合成语料上 0.4–0.7 全过）。
             # `FUSION_ALPHA` 是**调用时**读的，所以改模块常量就能换档。
