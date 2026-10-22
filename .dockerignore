@@ -1,0 +1,20 @@
+# 仓库根的 .dockerignore —— **前端镜像的 build context 是仓库根**（见 compose），
+# 所以这里的每一条都直接决定"什么东西会被送进构建上下文"。
+#
+# **为什么必须有**：没有它，`COPY frontend/ ./` 会把 `backend/.env`（含模型 key）
+# 与 `backend/data`（整个 SQLite 库）一起送进上下文，前端镜像层里就带上了密钥与用户数据
+# ——而前端镜像没有任何理由拥有它们。**这是密钥泄漏通道**，且不会报错。
+#
+# 条目含义：
+.git
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+backend/.env
+frontend/.env
+backend/data
+**/*.db
+**/*.db-wal
+**/*.db-shm

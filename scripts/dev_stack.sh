@@ -31,8 +31,11 @@ FRONTEND_PORT="${PMSTUDIO_WEB_PORT:-5173}"
 export PMSTUDIO_DB="${PMSTUDIO_DB:-data/pmstudio.db}"
 export PMSTUDIO_PORT="$BACKEND_PORT"
 export PMSTUDIO_WEB_PORT="$FRONTEND_PORT"
-export PMSTUDIO_API_TARGET="${PMSTUDIO_API_TARGET:-127.0.0.1:$BACKEND_PORT}"
-export PMSTUDIO_WEB_ROOT="${PMSTUDIO_WEB_ROOT:-./frontend/dist}"
+# 代理目标**带协议前缀**：vite 的 proxy target 与 `frontend/.env` 的
+# `PMSTUDIO_API_TARGET` 要同口径（不带 `http://` 时部分版本会被当成路径）。
+export PMSTUDIO_API_TARGET="${PMSTUDIO_API_TARGET:-http://127.0.0.1:$BACKEND_PORT}"
+# **不导出 `PMSTUDIO_WEB_ROOT`**：那是 compose 的 Caddy 用的静态根目录；
+# 本机跑的是 vite dev server，它自己伺服，没有消费者（导出了就是死变量）。
 # 同机反代：源 IP 就是本机，信任 127.0.0.1 即可（**无条件信任转发头
 # 等于让任何人伪造源 IP**，那限流就形同虚设）。
 export PMSTUDIO_FORWARDED_ALLOW_IPS="${PMSTUDIO_FORWARDED_ALLOW_IPS:-127.0.0.1}"
@@ -49,15 +52,24 @@ check_keys() {
   # 只比 compose **environment 段**里的键：`env_file` 段里的那些
   # （PMSTUDIO_MODEL / PMSTUDIO_API_KEY …）由 backend/.env 提供，
   # 两边读的是**同一个文件**，不必在本脚本里重写一遍。
+  # **两个服务的 environment 段都要**（前端有 PMSTUDIO_API_TARGET / PMSTUDIO_WEB_ROOT）。
   local compose_keys
-  compose_keys="$(sed -n '/^[[:space:]]*environment:/,/^[[:space:]]*depends_on:/p' "$compose" \
-    | grep -oE 'PMSTUDIO_[A-Z_]+' | sort -u)"
+  compose_keys="$(grep -oE '^[[:space:]]+(PMSTUDIO|FASTEMBED|PUBLIC)_[A-Z_]+:' "$compose" \
+    | grep -oE '(PMSTUDIO|FASTEMBED|PUBLIC)_[A-Z_]+' | sort -u)"
+  # 脚本侧只认**真的被赋值**的键（注释里提到不算——提到是解释，赋值才是事实）。
   local script_keys
-  script_keys="$(grep -oE 'PMSTUDIO_[A-Z_]+' "${BASH_SOURCE[0]}" | sort -u)"
+  script_keys="$(grep -oE 'PMSTUDIO_[A-Z_]+[[:space:]]*=' "${BASH_SOURCE[0]}" \
+    | sed 's/[[:space:]]*=$//' | sort -u)"
+  # compose 独有、脚本**故意**没有的键：
+  #   · PMSTUDIO_WEB_ROOT  —— Caddy 的静态根；本机跑 vite，自己伺服。
+  #   · FASTEMBED_CACHE_PATH —— compose 要指到挂卷目录；本机用 fastembed 默认缓存。
+  #   · PUBLIC_DOMAIN —— compose 的 Caddy 站点地址；本机没有 Caddy。
+  local compose_only="PMSTUDIO_WEB_ROOT FASTEMBED_CACHE_PATH PUBLIC_DOMAIN"
   local missing=""
   while read -r key; do
     [ -z "$key" ] && continue
-    grep -q "$key" "${BASH_SOURCE[0]}" || missing="$missing $key"
+    case " $compose_only " in *" $key "*) continue ;; esac
+    grep -qxF "$key" <<< "$script_keys" || missing="$missing $key"
   done <<< "$compose_keys"
   if [ -n "$missing" ]; then
     die "compose 里的这些键 dev_stack.sh 没覆盖：$missing"

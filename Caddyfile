@@ -1,10 +1,15 @@
-{$DOMAIN} {
+{$PUBLIC_DOMAIN:http://localhost} {
     encode gzip
     handle /api/* {
         # 反代目标**可配**：同机部署是 `127.0.0.1:8000`，
         # compose 部署是 `backend:8000`（容器里的 127.0.0.1 是 Caddy 自己）。
         # 两种形态共用这一份 Caddyfile——不新增第二份配置（那会漂）。
-        reverse_proxy {$PMSTUDIO_API_TARGET:127.0.0.1:{$PMSTUDIO_PORT:8000}}
+        #
+        # ⚠️ **占位符只能有一层**：Caddy 的环境变量替换是**单遍扫描**，
+        # 默认值里再写一个 `{$...}` 不会被二次展开（会原样留在配置里 → 启动即挂）。
+        # 端口不在这里配——`PMSTUDIO_API_TARGET` 已经含端口了（compose 是
+        # `backend:8000`，本机是 `127.0.0.1:8000`）。
+        reverse_proxy {$PMSTUDIO_API_TARGET:127.0.0.1:8000}
     }
     handle {
         # 静态资源根目录**可配**：同机是 `./frontend/dist`，

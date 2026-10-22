@@ -56,8 +56,12 @@ jobs:
       - name: 接口零差
         # 前后端接口清单必须逐字一致（`scripts/check_api_parity.py`）。
         # 它**拒绝**在工作库上跑，所以给它一个临时库。
+        # ⚠️ **模型配置也要给**（假值即可）：`Settings.from_env()` 缺 key 或模型名
+        # 会**直接起不来**（`ConfigError`）——不给的话这一步在 CI 上必红。
         env:
           PMSTUDIO_DB: ${{ runner.temp }}/parity.db
+          PMSTUDIO_MODEL: openai/x
+          PMSTUDIO_API_KEY: k
         run: uv run python scripts/check_api_parity.py
 
   frontend:
@@ -82,3 +86,20 @@ jobs:
 
       - name: 测试
         run: npx vitest run
+
+  # **真的构建镜像**：Dockerfile 里的错（COPY 路径不在 context 内、缺依赖、
+  # alpine 装不上 onnxruntime、`.dockerignore` 漏掉密钥）**没有一条会自己报错**——
+  # 不构建一次，它们要等到部署时才炸。
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # compose 的 backend 服务 `env_file: ./backend/.env` —— 文件不存在会让
+      # `docker compose build` 直接失败（与"镜像能不能构建"无关）。造一个占位：
+      # 构建阶段不读值，只是要文件在。
+      - name: 造占位 .env
+        run: cp backend/.env.example backend/.env
+
+      - name: 构建镜像
+        run: docker compose build

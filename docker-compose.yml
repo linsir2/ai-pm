@@ -26,10 +26,14 @@ services:
       # Redis 连不上会自动降级成进程内计数（**不 fail-open 也不 fail-closed**），
       # 但多 worker 的 SSE 扇出会静默退化成进程内 —— 所以给了 redis。
       PMSTUDIO_REDIS_URL: "redis://redis:6379/0"
+      # fastembed 的 ONNX 模型缓存（约 90MB）**必须**指到下面挂的卷上。
+      # fastembed 的默认缓存目录是 `${TMPDIR}/fastembed_cache`（可用
+      # `FASTEMBED_CACHE_PATH` 覆盖）——不显式给的话，容器里它落在 `/tmp` 下，
+      # **不挂卷**：每次重建容器都要重下 90MB 模型。
+      FASTEMBED_CACHE_PATH: "/root/.cache/fastembed"
     volumes:
       - pmstudio-data:/data
-      # ONNX 模型缓存（约 90MB）：不挂卷每次重建容器都要重下。
-      - hf-cache:/root/.cache/huggingface
+      - fastembed-cache:/root/.cache/fastembed
     depends_on:
       redis:
         condition: service_started
@@ -48,14 +52,22 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
     environment:
+      # 站点地址**有真实来源**：Caddyfile 的 `{$PUBLIC_DOMAIN:...}` 从这里读。
+      # 默认 `http://localhost` —— 以 `http://` 开头，Caddy 就**不会**对这个站点
+      # 自动签发 HTTPS（本地没有证书，自动 HTTPS 只会把 80 的请求 301 到 443）。
+      # 换成真域名时：`PUBLIC_DOMAIN=example.com docker compose up -d`。
+      PUBLIC_DOMAIN: "http://localhost"
       # 容器内的反代目标是**服务名**，不是 127.0.0.1（那是 Caddy 自己）。
       PMSTUDIO_API_TARGET: "backend:8000"
       PMSTUDIO_WEB_ROOT: /srv
     ports:
       - "80:80"
+    # **等后端真的健康**再收流量：Caddy 反代到一个还没起来的后端 → 用户看到 502，
+    # 而不是"页面开了但点什么都失败"。这也让 backend 的 healthcheck 有了消费者
+    # （否则它是个**没有消费者的装饰**）。
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
@@ -68,4 +80,4 @@ services:
 
 volumes:
   pmstudio-data:
-  hf-cache:
+  fastembed-cache:
