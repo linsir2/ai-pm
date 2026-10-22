@@ -20,7 +20,7 @@ MCP SDK 落不进来。执行方由 `bootstrap` 注入一个 `ToolInvoker` 实�
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from pmstudio.harness.errors import ToolCallFailed
@@ -40,6 +40,20 @@ from pmstudio.harness.tools.spec import ToolCall, ToolSpec, as_mapping
 #: `02-编排与数据.md §11.0.90` 的上限登记表里，`tests/contracts/test_limits.py` 盯着。
 AGENTIC_MAX_TURNS = 6
 
+#: 单轮内**执行**的工具调用数上限。
+#:
+#: **为什么需要它**：模型一轮里要调几个就调几个，没有上限时一个"执着"的模型
+#: 可以在一轮里发几十次调用——每次都是一次真实的外部请求（联网 / 子进程）。
+#: **登记在 `02-编排与数据.md §11.0.90` 的上限登记表里。**
+MAX_TOOL_CALLS_PER_TURN = 5
+
+#: 全程工具调用数上限。
+#:
+#: **为什么需要它**：`AGENTIC_MAX_TURNS` 只管**轮数**，管不了**次数**——
+#: 最坏情况是 6 轮 × N 次。这一条把总次数钉死。
+#: **登记在 `02-编排与数据.md §11.0.90` 的上限登记表里。**
+MAX_TOOL_CALLS_PER_LOOP = 12
+
 #: 工具失败时回灌给模型的那句话的**前缀**。为什么要回灌而不是直接抛：
 #: `ToolCallFailed` 的语义是"工具失败**不判死整轮**（留痕继续跑）"——
 #: 模型换个工具、或者自己收尾，比整轮判死更有用。
@@ -56,10 +70,13 @@ class ToolTurn:
     index: int
     #: 模型这轮要调的工具。
     calls: tuple[ToolCall, ...] = ()
-    #: 每个工具调用的结果（文本）。与 `calls` 一一对应。
+    #: 每个工具调用的结果（文本）。与 `calls` **按序号**一一对应。
     results: tuple[str, ...] = ()
-    #: 这一轮里失败的工具（名字 → 原因）。
-    failures: Mapping[str, str] = field(default_factory=dict)
+    #: 失败的条目：`(序号, 工具名, 原因)`。
+    #:
+    #: **按序号不按工具名**：同一轮里对同一工具调两次失败时，
+    #: 按名字做 key 会让第二条覆盖第一条——留痕就少了一条。
+    failures: tuple[tuple[int, str, str], ...] = ()
     #: 模型这轮的最终文本。
     text: str = ""
 
@@ -102,6 +119,7 @@ async def run_tool_loop(
     turns: list[ToolTurn] = []
     hit_limit = False
     final_text = ""
+    calls_used = 0
 
     for index in range(1, max_turns + 1):
         reply = await gateway.complete(
@@ -121,41 +139,86 @@ async def run_tool_loop(
             turns.append(ToolTurn(index=index, text=reply.text))
             break
 
+        # **助手轮必须先回灌**：协议要求"带 tool_calls 的助手轮"出现在工具结果之前。
+        # 少了它，工具结果就没有可对应的上文（实测：开思考模式时模型会重复要同一个工具）。
+        conversation.append(
+            ModelMessage(role="assistant", content=reply.text, tool_calls=reply.tool_calls)
+        )
+
         results: list[str] = []
-        failures: dict[str, str] = {}
-        for call in reply.tool_calls:
+        # 按**序号**记，不按工具名：同一轮里对同一工具调两次失败时，
+        # 按名字做 key 会让第二条覆盖第一条。
+        failures: list[tuple[int, str, str]] = []
+        skipped = 0
+        for position, call in enumerate(reply.tool_calls):
+            if calls_used + skipped >= MAX_TOOL_CALLS_PER_LOOP:
+                # 全程调用数到顶：超出的一律不执行，**但照实记下来**——
+                # 静默截断会让模型以为那些工具成功了。
+                reason = f"已达全程工具调用上限（{MAX_TOOL_CALLS_PER_LOOP} 次），本轮剩余不再执行"
+                failures.append((position, call.name, reason))
+                output = TOOL_FAILURE_PREFIX.format(name=call.name, message=reason)
+                results.append(output)
+                skipped += 1
+                conversation.append(
+                    ModelMessage(role="tool", content=output, tool_call_id=call.call_id)
+                )
+                continue
+            if len(results) >= MAX_TOOL_CALLS_PER_TURN:
+                # 单轮到顶：同上，不执行、照实记、回灌。
+                reason = f"已达单轮工具调用上限（{MAX_TOOL_CALLS_PER_TURN} 次），本轮剩余不再执行"
+                failures.append((position, call.name, reason))
+                output = TOOL_FAILURE_PREFIX.format(name=call.name, message=reason)
+                results.append(output)
+                skipped += 1
+                conversation.append(
+                    ModelMessage(role="tool", content=output, tool_call_id=call.call_id)
+                )
+                continue
             spec = by_name.get(call.name)
             if spec is None:
                 # 模型要了一个我们没给的工具——**也要回灌**：不告诉它，
                 # 它下一轮还会要同一个（它不知道这次没成）。
                 reason = f"没有这个工具：{call.name}"
-                failures[call.name] = reason
+                failures.append((position, call.name, reason))
                 output = TOOL_FAILURE_PREFIX.format(name=call.name, message=reason)
                 results.append(output)
-                conversation.append(ModelMessage(role="tool", content=output))
+                conversation.append(
+                    ModelMessage(role="tool", content=output, tool_call_id=call.call_id)
+                )
                 continue
             try:
                 output = await invoker.invoke(spec, call)
+                calls_used += 1
             except ToolCallFailed as error:
                 reason = error.message
-                failures[call.name] = reason
+                failures.append((position, call.name, reason))
                 output = TOOL_FAILURE_PREFIX.format(name=call.name, message=reason)
             results.append(output)
-            # 工具结果回灌：role="tool" 是**事实标准**的形状，模型认得。
-            conversation.append(ModelMessage(role="tool", content=output))
+            # 工具结果回灌：role="tool" + tool_call_id 是**协议要求**的形状。
+            conversation.append(
+                ModelMessage(role="tool", content=output, tool_call_id=call.call_id)
+            )
 
         turns.append(
             ToolTurn(
                 index=index,
                 calls=tuple(reply.tool_calls),
                 results=tuple(results),
-                failures=dict(failures),
+                failures=tuple(failures),
                 text=reply.text,
             )
         )
-        if index == max_turns:
+        if index == max_turns or calls_used >= MAX_TOOL_CALLS_PER_LOOP:
             hit_limit = True
-            final_text = reply.text
+            # **照实说**：把"为什么停"放进给调用方的文本里——不只留一个布尔标志。
+            # 调用方（`mcp_probe.py` 等）不该自己拼这句话。
+            final_text = (
+                reply.text
+                + f"\n\n（已达上限：{MAX_TOOL_CALLS_PER_LOOP} 次工具调用，剩余未执行）"
+            )
+            # **到顶就停**：再问下去模型只会继续要那些我们必然拒绝的工具，
+            # 每一次都是**真实的付费模型调用**。停下不是"放弃"，是不再烧钱。
+            break
 
     return ToolLoopResult(
         text=final_text,
@@ -178,14 +241,23 @@ def tool_call_from_payload(payload: Mapping[str, Any]) -> ToolCall:
     import json
 
     function = as_mapping(payload.get("function") or {})
-    raw_arguments = function.get("arguments") or "{}"
-    if isinstance(raw_arguments, str):
+    raw_arguments = function.get("arguments")
+    if raw_arguments is None or raw_arguments == "":
+        # 没有参数 → 空映射。**不许给 `None`**：`ToolCall.arguments` 声明是
+        # `Mapping[str, object]`，给 None 会让后面的 `dict(arguments)` 抛
+        # TypeError，失败信息指向"'NoneType' object is not iterable"——
+        # 完全指错方向（真实原因是供应商没给参数）。
+        arguments = {}
+    elif isinstance(raw_arguments, str):
         try:
-            arguments = json.loads(raw_arguments)
+            parsed = json.loads(raw_arguments)
         except json.JSONDecodeError:
             # 解不动就当空参数——**不是**编一个：空参数会让工具自己报参数不对，
             # 那比塞一个假参数让它"看起来正常"安全。
             arguments = {}
+        else:
+            # `null` 解析出来是 None → 同样归一成空映射（类型契约要成立）。
+            arguments = dict(parsed) if isinstance(parsed, Mapping) else {}
     elif isinstance(raw_arguments, Mapping):
         arguments = dict(raw_arguments)
     else:

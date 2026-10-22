@@ -16,6 +16,7 @@ from pmstudio.harness.model.resilience import (
     BulkheadConfig,
     RetryBudgetConfig,
 )
+from pmstudio.harness.tools.spec import ToolSpec
 
 
 class _Timeout(Exception):
@@ -23,6 +24,15 @@ class _Timeout(Exception):
 
     def __init__(self) -> None:
         super().__init__("litellm.Timeout: APITimeoutError - Request timed out")
+
+
+class _StructuredOutputRefusal(Exception):
+    """供应商**稳定**拒收 `json_schema`（`failure.STRUCTURED_OUTPUT_REFUSAL_HINT`）。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "BadRequestError: response_format type is unavailable for this model"
+        )
 
 
 def _request() -> ModelRequest:
@@ -261,3 +271,41 @@ async def test_熔断开闸时抛的是_ModelShed(monkeypatch):
 
     # Retry-After 就是熔断的恢复窗口：客户端照这个数等，别硬重试
     assert caught.value.retry_after == 45
+
+
+async def test_带tools的请求经过降级分支后仍不带_response_format(monkeypatch):
+    """带 `tools` 的请求**永不带** `response_format`（B8）。
+
+    一部分供应商同时收到两者会拒收（"json_schema and tools are mutually exclusive"）。
+    这条在**降级分支上同样成立**：`json_schema` 被稳定拒收后重发时若把它加回去，
+    请求就回到了那个会被拒收的组合，而且 agentic 路径会收到一段 JSON 文本被当成最终答复。
+    """
+
+    seen: list[dict] = []
+
+    async def fake(**kwargs):
+        seen.append(kwargs)
+        if len(seen) == 1:
+            raise _StructuredOutputRefusal()
+        return _fake_response()
+
+    monkeypatch.setattr(provider, "acompletion", fake)
+    gateway = provider.LiteLLMGateway(model="m", api_key="k", max_attempts=1)
+
+    spec = ToolSpec(
+        name="search", description="搜", parameters={"type": "object", "properties": {}}
+    )
+    request = ModelRequest(
+        purpose="tool_loop",
+        messages=(ModelMessage(role="user", content="查一下"),),
+        schema_name="tool_loop",
+        response_schema={},
+        tools=(spec,),
+    )
+    await gateway.complete(request)
+
+    assert len(seen) == 2, "降级分支没有重发"
+    assert all("tools" in call for call in seen)
+    assert all("response_format" not in call for call in seen), (
+        "带 tools 的请求不该有 response_format（两者互斥，且 agentic 要的是自由文本）"
+    )

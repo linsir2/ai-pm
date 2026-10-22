@@ -54,27 +54,28 @@ class McpToolManager:
     async def start(self) -> tuple[ToolSpec, ...]:
         """连上所有 server，返回聚合后的工具清单。
 
-        **逐个连，一个坏了不拖累别人**。
+        **逐个连，一个坏了不拖累别人**；并且**三处出口给出同一个答案**
+        （这里的返回值、`tools()`、以及实际发出去的 `tools=`）。
         """
         self._routes.clear()
-        available: list[ToolSpec] = []
         for client in self._clients:
             try:
                 tools = await client.start()
-            except ToolCallFailed as error:
+            except Exception as error:  # noqa: BLE001 —— **任何**异常都只影响这一个 server
+                # 只接 `ToolCallFailed` 是不够的：别的异常（配置类 `ValueError`、
+                # 关闭时的清理异常…）会中断整个启动，把本来完好的其他 server 也拖下水。
                 logger.warning(
                     "MCP server %s 不可用，其余 server 不受影响：%s",
                     client.spec.name,
-                    error.message,
+                    error,
                 )
                 continue
-            available.extend(tools)
             for spec in tools:
                 # 记住"这个工具归谁管"——路由要用。
                 self._routes[spec.name] = _Route(
                     client, _bare_name(spec.name, client.spec.name), spec
                 )
-        return tuple(available)
+        return self.tools()
 
     async def stop(self) -> None:
         """关掉所有 server。**幂等**。"""
@@ -84,7 +85,7 @@ class McpToolManager:
         self._routes.clear()
 
     def tools(self) -> tuple[ToolSpec, ...]:
-        """当前可用的工具。"""
+        """当前可用的工具。**这是唯一的聚合口径。**"""
 
         return tuple(route.spec for route in self._routes.values())
 

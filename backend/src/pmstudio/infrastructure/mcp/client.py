@@ -12,14 +12,15 @@ session 初始化与传输生命周期（`async with client:`），我们要做�
 
 from __future__ import annotations
 
+import json
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any
 
 from pmstudio.harness.errors import ToolCallFailed
-from pmstudio.harness.tools.spec import ToolSpec
+from pmstudio.harness.tools.spec import NAME_SEPARATOR, ToolSpec
 from pmstudio.infrastructure.mcp.projector import project_tools, source_label
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,13 @@ class McpServerSpec:
     command: str = ""
     args: tuple[str, ...] = ()
     env: Mapping[str, str] = field(default_factory=dict)
+    #: stdio：**子进程的工作目录**。缺省 = 继承本进程的 CWD。
+    #:
+    #: **为什么要有**：SDK 的 `StdioServerParameters.cwd` 留空时子进程继承
+    #: **本进程**的 CWD。而配置示例里写的是相对路径（`scripts/mcp_demo_server.py`），
+    #: 只有 CWD 恰好是 `backend/` 时才成立——从别处启动就找不到 server。
+    #: 显式给一个 cwd（通常是 `backend/`）才不依赖调用者站在哪。
+    cwd: str = ""
     #: http：server 地址
     url: str = ""
 
@@ -100,15 +108,24 @@ class McpClient:
         return self._tools
 
     async def start(self) -> tuple[ToolSpec, ...]:
-        """连上并取工具列表。**失败抛 `ToolCallFailed`**。"""
+        """连上并取工具列表。**失败抛 `ToolCallFailed`**。
+
+        **重复调用是安全的**：先把上一次的连接关掉再开新的。
+        不这么做的话，"重启一次 manager" = 泄漏上一轮的全部 transport
+        与 stdio 子进程（子进程还活着，stdin/stdout 挂着）。
+        """
+
+        # 先关掉旧的：**清理时的异常不许顶替真实错因**。
+        await self.stop()
 
         stack = AsyncExitStack()
+        client: Any
         try:
             client = self._client_factory(self._spec)
             await stack.enter_async_context(client)
             listed = await client.list_tools()
         except Exception as error:  # noqa: BLE001 —— SDK 抛什么我们都得转译
-            await stack.aclose()
+            await _close_quietly(stack)
             raise ToolCallFailed(
                 f"连不上 MCP server {self._spec.name!r}：{error}",
                 tool_id=self._spec.source,
@@ -141,13 +158,14 @@ class McpClient:
         except Exception as error:  # noqa: BLE001
             raise ToolCallFailed(
                 f"MCP 工具 {tool_name} 调用失败：{error}",
-                tool_id=tool_name,
+                # **带来源**：两个 server 有同名工具时，光看裸名字分不出是谁的。
+                tool_id=self._spec.source + NAME_SEPARATOR + tool_name,
             ) from error
 
         if getattr(result, "is_error", False):
             raise ToolCallFailed(
                 f"MCP 工具 {tool_name} 返回了错误：{_text_of(result)}",
-                tool_id=tool_name,
+                tool_id=self._spec.source + NAME_SEPARATOR + tool_name,
             )
         return _text_of(result)
 
@@ -159,7 +177,22 @@ class McpClient:
         self._client = None
         self._tools = ()
         if stack is not None:
-            await stack.aclose()
+            await _close_quietly(stack)
+
+
+async def _close_quietly(stack: AsyncExitStack) -> None:
+    """关掉一个 exit stack，**失败只记 warning**。
+
+    **为什么吞掉清理异常**：清理发生在两个地方——`start()` 的失败路径
+    （此时正要抛 `ToolCallFailed`）与 `stop()`。若让 `aclose()` 的异常冒出去，
+    它会**顶替掉**原本那个真实错因（"连不上 server X"变成"关闭时出错"），
+    排查方向直接跑偏。清理失败本身也确实不值得盖过真实问题。
+    """
+
+    try:
+        await stack.aclose()
+    except Exception as error:  # noqa: BLE001
+        logger.warning("关闭 MCP 连接时出错（不影响主流程）：%s", error)
 
 
 def _default_client(spec: McpServerSpec) -> Any:
@@ -175,6 +208,7 @@ def _default_client(spec: McpServerSpec) -> Any:
                 command=spec.command,
                 args=list(spec.args),
                 env=dict(spec.env) or None,
+                cwd=spec.cwd or None,
             )
         )
     return Client(spec.url)
@@ -186,6 +220,12 @@ def _text_of(result: object) -> str:
     `content` 是内容块的列表（文本/图片/…）。我们只取文本——
     **图片给模型看**要走多模态那条路，本项目还没有那条路，
     所以这里照实说"有一块不是文本"，而不是假装它是文本。
+
+    **`structured_content` 不能丢**（MCP 批次实测）：2026-07 的协议允许 server
+    **只**回结构化内容（`content` 为空、`structured_content` 有值）。
+    只读 `content` 会让模型收到一个**空串**——那既不是失败（`is_error` 为假、
+    不抛错）也不是内容，是最典型的"把失败伪装成正常结果"。
+    所以：有结构化内容就把它序列化成 JSON 回灌。
     """
     chunks: list[str] = []
     for block in getattr(result, "content", []) or []:
@@ -194,26 +234,14 @@ def _text_of(result: object) -> str:
             chunks.append(text)
         else:
             chunks.append(f"[{type(block).__name__}，本项目暂不处理非文本内容]")
+
+    structured = getattr(result, "structured_content", None)
+    if structured is not None and not chunks:
+        try:
+            chunks.append(json.dumps(structured, ensure_ascii=False))
+        except (TypeError, ValueError):
+            chunks.append(str(structured))
     return "\n".join(chunks)
-
-
-def tool_name_for(source: str, tool_name: str) -> str:
-    """`mcp__<server>__<tool>` 里的工具名部分还原。"""
-
-    prefix = f"{source}__"
-    if tool_name.startswith(prefix):
-        return tool_name[len(prefix) :]
-    return tool_name
-
-
-def specs_of(clients: Sequence[McpClient]) -> tuple[ToolSpec, ...]:
-    """把多个 client 的工具合成一份（去重按名字，**先来的赢**）。"""
-
-    seen: dict[str, ToolSpec] = {}
-    for client in clients:
-        for spec in client.tools:
-            seen.setdefault(spec.name, spec)
-    return tuple(seen.values())
 
 
 __all__ = [
@@ -222,6 +250,4 @@ __all__ = [
     "TRANSPORT_STDIO",
     "McpClient",
     "McpServerSpec",
-    "specs_of",
-    "tool_name_for",
 ]

@@ -6,6 +6,8 @@
 
 import asyncio
 import hashlib
+import json
+import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
@@ -34,6 +36,8 @@ from pmstudio.harness.tools.spec import ToolCall, as_mapping, tool_payload
 JSON_SCHEMA = "json_schema"
 JSON_OBJECT = "json_object"
 
+logger = logging.getLogger(__name__)
+
 def response_format_for(mode: str, *, schema_name: str, schema: Mapping[str, object]) -> dict:
     """这一次请求的 `response_format` 怎么写。
 
@@ -49,6 +53,36 @@ def response_format_for(mode: str, *, schema_name: str, schema: Mapping[str, obj
     return {"type": "json_object"}
 
 
+def _message_payload(message: object) -> dict[str, object]:
+    """一条消息发给供应商时的形状。
+
+    **为什么不能只吐 `role` + `content`**（MCP 批次实测）：
+    OpenAI 兼容的 function-calling 协议要求 `role="tool"` 的消息**带 `tool_call_id`**，
+    且前面要有一条带 `tool_calls` 的助手轮。缺了它们，严格实现（OpenAI / vLLM / Ollama）
+    直接 400；宽松实现（DashScope）不拒收，但模型认不出工具结果是给谁的——
+    实测开思考模式时会**重复要同一个工具**（3/3）。
+
+    **只在非空时吐**：普通消息（user 角色）多带一个空字段可能被部分供应商拒收。
+    """
+
+    payload: dict[str, object] = {"role": message.role, "content": message.content}
+    if message.tool_call_id:
+        payload["tool_call_id"] = message.tool_call_id
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": call.call_id,
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    "arguments": json.dumps(dict(call.arguments), ensure_ascii=False),
+                },
+            }
+            for call in message.tool_calls
+        ]
+    return payload
+
+
 def _tool_calls_of(message: object) -> tuple[ToolCall, ...]:
     """从供应商回包里摘出 `tool_calls`。
 
@@ -57,8 +91,12 @@ def _tool_calls_of(message: object) -> tuple[ToolCall, ...]:
     **不猜**：猜一个工具名会让模型收到一份对不上的结果。
 
     ⚠️ 元素是 **pydantic 对象**而不是 dict（litellm 的形状）——
-    `as_mapping` 统一处理（见 `harness/tools/spec.py` 里那个函数的说明，
-    那里记着这个坑的来龙去脉）。
+    `as_mapping` 统一处理（就在本文件上面）。
+
+    **缺 `id` 的条目会被丢掉**，而不是硬造一个空 id：
+    空 id 会让后面的 `ToolCall.__post_init__` 抛**裸 `ValueError`**，
+    绕过网关的失败分类（API 层会把它当 500，而不是 `tool_call_failed`）。
+    供应商给了 `tool_calls` 却不给 id 是**上游的错**，按上游错处理。
     """
     raw = getattr(message, "tool_calls", None) or ()
     calls: list[ToolCall] = []
@@ -67,8 +105,18 @@ def _tool_calls_of(message: object) -> tuple[ToolCall, ...]:
         function = as_mapping(payload.get("function") or {})
         if not function.get("name"):
             continue
+        call_id = str(payload.get("id") or "")
+        if not call_id:
+            logger.warning(
+                "供应商的 tool_call 缺 id（工具名 %r），丢弃该条——"
+                "没有 id 就无法把工具结果对应回它",
+                function.get("name"),
+            )
+            continue
         calls.append(tool_call_from_payload(payload))
     return tuple(calls)
+
+
 #: ── 控制平面的三个上限（**不是**产品上限）─────────────────────────────────
 #:
 #: 这三个属于"怎么调模型"这一层，所以归 harness。产品上限（问几轮席位、分几批问卷、
@@ -145,10 +193,7 @@ class LiteLLMGateway:
         kwargs: dict[str, object] = {
             **self._model_params,
             "model": self._model,
-            "messages": [
-                {"role": message.role, "content": message.content}
-                for message in request.messages
-            ],
+            "messages": [_message_payload(message) for message in request.messages],
             "response_format": response_format_for(
                 self._structured_output,
                 schema_name=request.schema_name,
@@ -244,11 +289,18 @@ class LiteLLMGateway:
                     and is_structured_output_refusal(error)
                 ):
                     self._structured_output = JSON_OBJECT
-                    kwargs["response_format"] = response_format_for(
-                        JSON_OBJECT,
-                        schema_name=request.schema_name,
-                        schema=request.response_schema,
-                    )
+                    # **带 tools 的请求不许带 `response_format`**——同文件上面写着
+                    # "一部分供应商同时收到两者会拒收"。这一条在**降级路径上同样成立**：
+                    # 重发时若把它加回去，请求就又回到了那个会被拒收的组合，
+                    # 而且 agentic 路径会收到一段 JSON 文本被当成最终答复。
+                    if not request.tools:
+                        kwargs["response_format"] = response_format_for(
+                            JSON_OBJECT,
+                            schema_name=request.schema_name,
+                            schema=request.response_schema,
+                        )
+                    else:
+                        kwargs.pop("response_format", None)
                     try:
                         response = await acompletion(**kwargs)
                         break

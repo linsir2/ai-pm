@@ -23,6 +23,19 @@ from pmstudio.harness.tools.spec import ToolCall, ToolSpec
 class ModelMessage:
     role: str
     content: str
+    #: 这一条工具结果**对应**模型哪一次调用。
+    #:
+    #: **为什么必须有**（MCP 批次实测）：OpenAI 兼容的 function-calling 协议要求
+    #: `role="tool"` 的消息带 `tool_call_id`，且**前面要有一条** `role="assistant"`
+    #: 的消息带着 `tool_calls`。缺了它，严格实现（OpenAI / vLLM / Ollama）会以
+    #: "tool message must be a response to a previous message with tool_calls" 拒收；
+    #: 宽松实现（DashScope）不拒收，但**模型认不出这条结果是给谁的**——
+    #: 实测开启思考模式时它会**重复要同一个工具**（3/3 复现）。
+    #:
+    #: **可选、默认空**：5 个现有 agent 的消息全是 user 角色，构造点一行不改。
+    tool_call_id: str | None = None
+    #: 模型这一轮请求调用的工具。**只有 `role="assistant"` 时非空**。
+    tool_calls: tuple[ToolCall, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,6 +14,8 @@ import pytest
 from pmstudio.harness.errors import ToolCallFailed
 from pmstudio.harness.model.agentic import (
     AGENTIC_MAX_TURNS,
+    MAX_TOOL_CALLS_PER_LOOP,
+    MAX_TOOL_CALLS_PER_TURN,
     run_tool_loop,
     tool_call_from_payload,
 )
@@ -155,7 +157,7 @@ async def test_a_failing_tool_is_fed_back_as_text_not_raised() -> None:
     )
 
     assert result.text == "换个办法"
-    assert result.turns[0].failures["search"] == "上游 500"
+    assert result.turns[0].failures[0][1] == "search"
     fed_back = gateway.requests[1].messages
     assert any(m.role == "tool" and "失败" in m.content for m in fed_back)
 
@@ -175,8 +177,54 @@ async def test_an_unknown_tool_is_reported_to_the_model() -> None:
         purpose="probe",
     )
 
-    assert "nope" in result.turns[0].failures
+    assert result.turns[0].failures[0][1] == "nope"
     assert any("失败" in m.content for m in gateway.requests[1].messages if m.role == "tool")
+
+
+@pytest.mark.asyncio
+async def test_the_second_request_carries_the_assistant_turn() -> None:
+    """**协议合规的根**：第二轮请求里必须先有带 `tool_calls` 的助手轮。
+
+    少了它，工具结果就没有可对应的上文——严格实现（OpenAI / vLLM / Ollama）直接 400，
+    宽松实现下模型会**重复要同一个工具**（实测 DashScope 开思考模式时 3/3 复现）。
+    """
+
+    call = ToolCall(call_id="c1", name="search", arguments={"q": "工单"})
+    gateway = _ScriptedGateway([_reply(calls=(call,)), _reply(text="找到了")])
+    invoker = _RecordingInvoker({"search": "三条结果"})
+
+    await run_tool_loop(
+        gateway=gateway,
+        invoker=invoker,
+        specs=(_spec(),),
+        messages=(ModelMessage(role="user", content="查一下"),),
+        purpose="probe",
+    )
+
+    second = gateway.requests[1].messages
+    roles = [m.role for m in second]
+    assert "assistant" in roles, "第二轮必须先有带 tool_calls 的助手轮"
+    assistant = next(m for m in second if m.role == "assistant")
+    assert assistant.tool_calls and assistant.tool_calls[0].name == "search"
+
+
+@pytest.mark.asyncio
+async def test_the_tool_result_is_linked_to_its_call_id() -> None:
+    """工具轮必须带 `tool_call_id`，与模型那次调用对应上。"""
+
+    call = ToolCall(call_id="call_abc", name="search", arguments={})
+    gateway = _ScriptedGateway([_reply(calls=(call,)), _reply(text="找到了")])
+
+    await run_tool_loop(
+        gateway=gateway,
+        invoker=_RecordingInvoker(),
+        specs=(_spec(),),
+        messages=(ModelMessage(role="user", content="查一下"),),
+        purpose="probe",
+    )
+
+    tool_msg = next(m for m in gateway.requests[1].messages if m.role == "tool")
+    assert tool_msg.tool_call_id == "call_abc"
 
 
 @pytest.mark.asyncio
@@ -196,6 +244,57 @@ async def test_the_loop_stops_at_the_turn_limit() -> None:
 
     assert result.turns_used == AGENTIC_MAX_TURNS
     assert result.hit_turn_limit is True
+
+
+@pytest.mark.asyncio
+async def test_the_per_turn_call_limit_is_enforced_and_reported() -> None:
+    """单轮内调用数有上限（B7）：超出的**不执行**，且**照实记**进该轮的 failures。
+
+    静默截断会让模型以为那些工具成功了——所以超出的一律回灌"没执行"。
+    """
+
+    calls = tuple(
+        ToolCall(call_id=f"c{i}", name="search", arguments={}) for i in range(7)
+    )
+    gateway = _ScriptedGateway([_reply(calls=calls), _reply(text="收尾")])
+    invoker = _RecordingInvoker()
+
+    result = await run_tool_loop(
+        gateway=gateway,
+        invoker=invoker,
+        specs=(_spec(),),
+        messages=(ModelMessage(role="user", content="查一下"),),
+        purpose="probe",
+    )
+
+    assert len(invoker.calls) == MAX_TOOL_CALLS_PER_TURN
+    assert len(result.turns[0].failures) == 7 - MAX_TOOL_CALLS_PER_TURN
+    # 超出的那几条也回灌给了模型（否则它下一轮还会要同一个）
+    assert sum(1 for m in gateway.requests[1].messages if m.role == "tool") == 7
+
+
+@pytest.mark.asyncio
+async def test_the_whole_loop_call_limit_is_reported_in_the_text() -> None:
+    """全程调用数有上限（B7）：到限时 `ToolLoopResult.text` **带**"已达上限"的说明
+    ——不只留一个布尔标志（调用方不该自己拼这句话）。
+    """
+
+    calls = tuple(
+        ToolCall(call_id=f"c{i}", name="search", arguments={}) for i in range(5)
+    )
+    gateway = _ScriptedGateway([_reply(calls=calls)] * (AGENTIC_MAX_TURNS + 3))
+    invoker = _RecordingInvoker()
+
+    result = await run_tool_loop(
+        gateway=gateway,
+        invoker=invoker,
+        specs=(_spec(),),
+        messages=(ModelMessage(role="user", content="查一下"),),
+        purpose="probe",
+    )
+
+    assert len(invoker.calls) == MAX_TOOL_CALLS_PER_LOOP
+    assert "已达上限" in result.text
 
 
 @pytest.mark.asyncio

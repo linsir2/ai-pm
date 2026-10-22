@@ -21,7 +21,21 @@ def field_names(cls) -> tuple[str, ...]:
 
 
 def test_model_message_is_role_and_content():
-    assert field_names(ModelMessage) == ("role", "content")
+    """`role` + `content` 是**必有**的两个字段。
+
+    `tool_call_id` / `tool_calls`（MCP 批次）是**可选**字段，默认空：
+    OpenAI 兼容的 function-calling 协议要求 `role="tool"` 的消息带 `tool_call_id`、
+    且前面要有一条带 `tool_calls` 的助手轮——少了它们，严格实现（OpenAI / vLLM /
+    Ollama）直接 400，宽松实现（DashScope）下模型认不出工具结果是给谁的
+    （实测开思考模式时**重复要同一个工具**）。可选字段让 5 个现有 agent 一行不改。
+    """
+
+    assert field_names(ModelMessage) == (
+        "role",
+        "content",
+        "tool_call_id",
+        "tool_calls",
+    )
 
 
 def test_model_request_carries_schema_and_metadata():

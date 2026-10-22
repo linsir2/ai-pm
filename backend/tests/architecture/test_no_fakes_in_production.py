@@ -18,6 +18,9 @@
 `ALLOWED_TEST_FAKES` 里登记一句理由——登记是一次显式决定，不登记是隐形的事实。
 """
 
+import ast
+import re
+
 from tests.architecture.guards import (
     SRC,
     forbidden_names,
@@ -183,3 +186,34 @@ def test_every_test_side_fake_is_registered():
 
     for name, why in ALLOWED_TEST_FAKES.items():
         assert why.strip(), f"{name} 必须写清它为什么该留在测试里"
+
+
+def test_every_referenced_test_name_exists():
+    """登记文案里引用的用例名（函数或文件）**必须真实存在**（C3）。
+
+    登记文案会写"真协议由 `test_mcp_client.py::test_a_real_stdio_server_round_trips` 守着"
+    这类引用——用例改名/删除后，文案就成了**指向空气的指针**：读的人以为有覆盖，
+    其实没有。这条守卫把"提到的名字"与"实际存在的用例"机械比对。
+    """
+
+    referenced = {
+        name
+        for why in ALLOWED_TEST_FAKES.values()
+        for name in re.findall(r"\btest_[A-Za-z0-9_]+", why)
+    }
+    assert referenced, "登记文案里一条用例引用都没有——这张表就没起到作用"
+
+    functions = {
+        node.name
+        for _, source in iter_sources(TESTS)
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    files = {path.stem for path in TESTS.rglob("test_*.py")}
+    defined = functions | files
+
+    missing = sorted(referenced - defined)
+    assert missing == [], (
+        f"登记文案引用了不存在的用例：{missing}——"
+        "改名了就同步文案，否则它指向空气（读的人以为有覆盖）"
+    )

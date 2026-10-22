@@ -98,6 +98,7 @@ def _specs_from_settings(settings: Settings) -> list[McpServerSpec]:
                 args=tuple(str(a) for a in item.get("args", []) or []),
                 env=dict(item.get("env", {}) or {}),
                 url=str(item.get("url", "")),
+                cwd=str(item.get("cwd", "") or ""),
             )
         )
     return out
@@ -177,8 +178,10 @@ async def _run(args: argparse.Namespace) -> int:
             for call in turn.calls:
                 args = json.dumps(dict(call.arguments), ensure_ascii=False)
                 print(f"  [第 {turn.index} 轮] 模型要调 {call.name}({args})")
-            for name, reason in turn.failures.items():
-                print(f"      失败：{name} — {reason}")
+            # `failures` 是 `(序号, 工具名, 原因)` 的元组——**按序号不按名字**
+            # （同一轮里对同一工具调两次失败时，按名字做 key 会少记一条）。
+            for position, name, reason in turn.failures:
+                print(f"      失败：第 {position} 次 {name} — {reason}")
             for (call, output) in zip(turn.calls, turn.results, strict=False):
                 print(f"      {call.name} → {output[:200]}")
         else:

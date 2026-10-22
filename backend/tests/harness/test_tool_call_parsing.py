@@ -87,6 +87,35 @@ def test_a_tool_call_without_a_name_is_skipped() -> None:
     assert _tool_calls_of(message) == ()
 
 
+def test_a_tool_call_without_an_id_is_dropped() -> None:
+    """供应商给了 `tool_calls` 却不给 `id` → **丢弃该条**，不是硬造一个空 id（B6）。
+
+    空 id 会让后面的 `ToolCall.__post_init__` 抛**裸 `ValueError`**，
+    绕过网关的失败分类（API 层会把它当 500，而不是 `tool_call_failed`）。
+    供应商的错按上游错处理。
+    """
+
+    message = _Message([_ToolCall("mcp__demo__power", "{}", call_id="")])
+    assert _tool_calls_of(message) == ()
+
+
+def test_null_arguments_become_an_empty_mapping() -> None:
+    """`arguments` 是 JSON `null` → 归一化成空映射（B6）。
+
+    `ToolCall.arguments` 声明是 `Mapping[str, object]`；给 `None` 会让后面的
+    `dict(arguments)` 抛 TypeError，失败信息指向"'NoneType' object is not iterable"
+    ——**完全指错方向**（真实原因是供应商没给参数）。
+    """
+
+    from pmstudio.harness.model.agentic import tool_call_from_payload
+
+    call = tool_call_from_payload(
+        {"id": "c1", "function": {"name": "search", "arguments": "null"}}
+    )
+    assert call.arguments == {}
+    assert dict(call.arguments) == {}  # 类型契约成立：真的能 dict()
+
+
 def test_as_mapping_handles_dicts_objects_and_nothing() -> None:
     assert as_mapping({"a": 1}) == {"a": 1}
     assert as_mapping(_Function("n", "{}")) == {"name": "n", "arguments": "{}"}

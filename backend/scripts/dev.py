@@ -143,6 +143,11 @@ def main() -> int:
 
     loaded = load_env_file(ENV_FILE)
 
+    # **尽早**把 `src` 放进模块搜索路径：下面那行 MCP 状态要 import
+    # `pmstudio.bootstrap.settings`（配置写错了得在起服务前说清楚），
+    # 而 `import uvicorn` 也要它。放在这里，两处都成立。
+    sys.path.insert(0, str(SRC))
+
     venv = BACKEND_ROOT / ".venv"
     if venv.is_dir() and Path(sys.prefix) != venv:
         print(
@@ -187,9 +192,27 @@ def main() -> int:
         print(f"向量模型源：镜像 {endpoint}{'（已禁 Xet）' if no_xet else ''}")
     else:
         print("向量模型源：huggingface.co 默认源——连不上就退回纯 FTS5（无语义召回）")
+    # MCP 是**只读旁路**（`04-未决.md` 的裁决）：不进主闭环、不进 API 层、不写库，
+    # 目前只有 `scripts/mcp_probe.py` 真的去连它。所以这里报的是**配置状态**，
+    # 不是连接状态——把"配了没配、配了哪几个"打出来，配置写错（JSON 不合法、
+    # server 重名）由 `Settings.from_env()` 判，早说早好。
+    try:
+        from pmstudio.bootstrap.settings import Settings
+
+        configured = Settings.from_env().mcp_servers
+    except Exception as error:  # noqa: BLE001 —— 配置类错误在这里说清，别等 probe
+        print(f"MCP：配置有问题——{type(error).__name__}: {error}", file=sys.stderr)
+    else:
+        if not configured:
+            print("MCP：没配（PMSTUDIO_MCP_SERVERS 留空 = 不启用）")
+        else:
+            names = "、".join(str(item.get("name")) for item in configured)
+            print(
+                f"MCP：配了 {len(configured)} 个 server（{names}）"
+                "——由 scripts/mcp_probe.py 连接（只读旁路，不进主闭环）"
+            )
     print(f"起在 http://{args.host}:{port} · 健康检查 /api/health")
 
-    sys.path.insert(0, str(SRC))
     import uvicorn  # 放在 sys.path 之后导入，免得 src 还没进路径
 
     # **多 worker 的三条约束（P4 之后的状态）**：

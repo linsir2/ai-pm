@@ -127,6 +127,7 @@ def _parse_mcp_servers(raw: str) -> tuple[Mapping[str, object], ...]:
             f"{MCP_SERVERS_ENV} 要是 JSON 数组，现在给的是 {type(parsed).__name__}"
         )
     servers: list[Mapping[str, object]] = []
+    seen: set[str] = set()
     for index, item in enumerate(parsed):
         if not isinstance(item, dict):
             raise ConfigError(
@@ -136,6 +137,15 @@ def _parse_mcp_servers(raw: str) -> tuple[Mapping[str, object], ...]:
         name = str(item.get("name", "")).strip()
         if not name:
             raise ConfigError(f"{MCP_SERVERS_ENV} 的第 {index + 1} 项缺 name")
+        # **同名 server 必须在这里就报错**：工具名带来源前缀（`mcp__<server>__<tool>`），
+        # 两个同名 server 会产出**同名工具**——重复的 function name 让整个请求 400，
+        # 而且运行时路由只会命中后写的那一个，静默。配置期拦住比运行时猜强。
+        if name in seen:
+            raise ConfigError(
+                f"{MCP_SERVERS_ENV} 里 server 名重复：{name!r}"
+                f"（第 {index + 1} 项）——工具名会撞"
+            )
+        seen.add(name)
         args = item.get("args", [])
         if not isinstance(args, list):
             raise ConfigError(f"{MCP_SERVERS_ENV} 的第 {index + 1} 项的 args 要是数组")
@@ -149,6 +159,7 @@ def _parse_mcp_servers(raw: str) -> tuple[Mapping[str, object], ...]:
                 "command": str(item.get("command", "")),
                 "args": [str(a) for a in args],
                 "env": {str(k): str(v) for k, v in env.items()},
+                "cwd": str(item.get("cwd", "")),
                 "url": str(item.get("url", "")),
             }
         )

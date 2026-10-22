@@ -24,11 +24,6 @@ from dataclasses import dataclass, field
 #: 而 function name 的合法字符集比标识符宽——双下划线在任何供应商那边都是安全的。
 NAME_SEPARATOR = "__"
 
-#: MCP 工具名前缀。**必须与来源标识一起用**：多个 server 可能有同名工具
-#: （都叫 `search` 是常事），不加前缀就会撞——撞了模型只能看到一个，
-#: 另一个静默消失。所以"来源 + 名字"合成一个全局唯一的 function name。
-MCP_NAME_PREFIX = "mcp" + NAME_SEPARATOR
-
 
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
