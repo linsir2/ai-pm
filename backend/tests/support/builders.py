@@ -82,7 +82,7 @@ def make_web_packet(
     """一条 Tavily 结果的**解析草稿**（工具层 C-2b）。
 
     形状与 `TavilySearchGateway._packet` 对齐：单块、锚点是"网页正文"、
-    正文已经截到 `WEB_SNIPPET_CHARS`。**没有 material_id**——那要等存储层盖章。
+    正文由夹具自己截断（见下面的 `snippet`）。**没有 material_id**——那要等存储层盖章。
     """
 
     from pmstudio.application.dto import NO_SOURCE_REF, MaterialChunk, ParsedMaterial

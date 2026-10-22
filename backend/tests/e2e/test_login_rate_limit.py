@@ -11,6 +11,8 @@
 状态码与响应体。
 """
 
+import re
+
 from tests.e2e.test_auth_hardening import _seed_active_user
 from tests.support.api_client import async_client
 
@@ -80,7 +82,12 @@ async def test_429_不泄露账号是否存在(make_app):
 
     R：429 若是按"库里有这个账号"打的，就成了枚举侧信道。
     I：per-username 上限 2；P：分别对存在的 `alice` 与不存在的 `ghost`
-    各打满；R：两者状态码与 body 逐字节相同。"""
+    各打满；R：两者状态码与 body 相同（**倒计时数字掩掉**——见下）。
+
+    **为什么掩掉倒计时**：`_rate_limited` 的文案带"请 N 秒后重试"，N 是**每个
+    账号自己的计数器剩余 TTL**。两个计数器不是同毫秒启动的，N 天然会差一两秒——
+    那是计时器相位，**与账号存不存在无关**。原先断言 body 逐字节相等，等于在断言
+    "两个计时器同秒启动"，实测 1/8 概率红（2026-10-22 抓到真因；不是脏 Redis）。"""
 
     app = _app(make_app, ip_max=10_000, user_max=2)
     async with async_client(app) as client:
@@ -94,7 +101,16 @@ async def test_429_不泄露账号是否存在(make_app):
         alice_body = (await _login(client, "alice", "wrong")).json()
         ghost_body = (await _login(client, "ghost", "wrong")).json()
 
-        assert alice_body == ghost_body
+        assert _mask_seconds(alice_body) == _mask_seconds(ghost_body)
+
+
+def _mask_seconds(body: dict) -> dict:
+    """把文案里的倒计时数字掩成 `#`：剩下的部分（码、措辞、结构）必须逐字节相同。"""
+
+    return {
+        **body,
+        "message": re.sub(r"\d+", "#", str(body.get("message", ""))),
+    }
 
 
 async def test_不存在账号的_401_仍与错密码逐字节相同(make_app):
