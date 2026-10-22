@@ -525,6 +525,27 @@ FUSION_ALPHA = 0.5
 #: 不存在这个代价。数字见 `scripts/retrieval_bench.py --scan slots`。
 _MATERIAL_SLOTS = 2
 
+
+def dedup_by_material(hits, limit: int, *, slots: int = _MATERIAL_SLOTS) -> list:
+    """按「一份材料最多 `slots` 个槽」去重，取前 `limit` 个。
+
+    **为什么公开**：混合路有这份去重，**词面基线也必须有**（否则拿"占满 5 个槽的
+    同一份材料"去比"一份材料一行"的混合路 → **增量被高估**）。
+    量化脚本（`scripts/retrieval_bench.py`）与检索器的观测行都用它 → 同一把尺子 ✓
+    （2026-10-22 批 13，R9）。
+    """
+    seen: dict[str, int] = {}
+    out = []
+    for hit in hits:
+        used = seen.get(hit.material_id, 0)
+        if used >= slots:
+            continue
+        seen[hit.material_id] = used + 1
+        out.append(hit)
+        if len(out) >= limit:
+            break
+    return out
+
 #: 语义分用**名次归一化**（vec#1 → 1.0，vec#N → 1/N），不用距离绝对值：
 #: 距离的绝对值随语料/模型变，名次归一化后跨语料可比。
 def _semantic_score(rank: int | None, total: int) -> float:
@@ -619,6 +640,28 @@ class SqliteHybridRetriever:
             final.append(chunk_id)
             if len(final) >= limit:
                 break
+        # **检索观测**（2026-10-22 批 13：R8 扩到每次检索 + R9 的配对增量）。
+        #
+        # 记一行**分解**：词面/语义各出了多少候选、**纯词面按同样口径**会命中几个、
+        # 最终混合命中几个。
+        #
+        # 为什么记在**检索器**里（用例层拿不到分解）：只有这里知道两路各出了什么。
+        # 而且全仓只有 `SearchProject` 一个调用方 → 记到的全是**用户发起的**检索
+        # （席位轮走的是另一条路），不会把模型生成的检索词混进样本。
+        #
+        # **只打日志**：不上报、不入库（本地单用户应用）。两个用途：
+        # ① 攒**真实查询分布**（现在的检索判据全是「从文档反推」的合成查询 → R9）；
+        # ② 现场诊断「为什么没命中」（词面没召回？语义没召回？都没有？）。
+        logger.info(
+            "material_search project=%s query=%r fts_candidates=%d vec_candidates=%d"
+            " fts_hits=%d hybrid_hits=%d",
+            project_id,
+            query,
+            len(fts_hits),
+            len(vec_scores),
+            len(dedup_by_material(fts_hits, limit)),
+            len(final),
+        )
         # `score` 越大越好（与顺序同向）：用**最终次序**的倒数排名，与旧约定一致。
         # 2026-10-19 修：原先写的是 `1.0/(total-position)`，于是**第一名拿最小分**
         # （`total` 是候选总数，`position` 从 0 起 → 第一名 1/total、末名 1.0），

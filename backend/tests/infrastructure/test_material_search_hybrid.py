@@ -4,6 +4,8 @@
 `FakeEmbedder` 必须是 512 维：vec 表是 `FLOAT[512]`，维度错配会被 sqlite-vec 拒绝。
 """
 
+import logging
+
 import pytest
 
 from pmstudio.infrastructure.sqlite import database
@@ -553,4 +555,72 @@ def test_a_target_ranked_beyond_the_first_twenty_by_bm25_is_still_found(conn):
     assert any(hit.material_id == "m-target" for hit in many), (
         f"候选 50 时词面候选里该有它（融合后仍被 limit=5 截掉，属正常）："
         f"{[h.material_id for h in many]}"
+    )
+
+
+def test_every_search_is_observed_with_its_breakdown(conn, caplog):
+    """R：每次材料检索都记一行**分解**。
+
+    分解 = 词面候选数 / 语义候选数 / **纯词面按同样口径**命中几个 / 混合命中几个。
+
+    为什么（批 13，R8 扩到每次检索 + R9）：现在的检索判据**全是「从文档反推」的
+    合成查询** → 真实用户查询分布是**空的** → 语义召回的增量没法证明（R9）；
+    而有了分解，「为什么没命中」当场可诊断（词面没召回？语义没召回？都没有？）。
+    """
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    _put_material(conn, "m-1", chunks=(("c1", "退货时限是七天"),))
+    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
+
+    with caplog.at_level(logging.INFO):
+        SqliteHybridRetriever(conn, embedder=FakeEmbedder(dimensions=512)).search(
+            project_id=PROJECT, query="退货时限", owner=TEST_OWNER
+        )
+
+    lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "material_search " in record.getMessage()
+    ]
+    assert len(lines) == 1, caplog.records
+    for field in ("fts_candidates=", "vec_candidates=", "fts_hits=", "hybrid_hits="):
+        assert field in lines[0], f"{field} 缺了：{lines[0]}"
+    assert "退货时限" in lines[0], lines[0]
+
+
+def test_the_lexical_baseline_uses_the_same_material_dedup():
+    """R：词面基线按**同样的**「一份材料最多 2 槽」口径去重。
+
+    为什么（2026-10-22 批 13，R9）：混合路一份材料只占 1–2 个槽（界面上一份材料
+    一行），而词面基线若不这样去重，同一份材料的 5 个块会占满 top5
+    → **增量被高估** → 结论会错。两边必须同一把尺子。
+    """
+    from pmstudio.application.dto import MaterialHit
+    from pmstudio.infrastructure.sqlite.materials import dedup_by_material
+
+    def hit(chunk_id: str, material_id: str) -> MaterialHit:
+        return MaterialHit(
+            material_id=material_id,
+            chunk_id=chunk_id,
+            score=1.0,
+            excerpt="…",
+            anchor="第 1 页",
+            source_ref="attachment:x.md",
+            title="x.md",
+        )
+
+    hits = [
+        hit("c1", "m1"),
+        hit("c2", "m1"),
+        hit("c3", "m1"),
+        hit("c4", "m2"),
+        hit("c5", "m2"),
+    ]
+
+    kept = dedup_by_material(hits, limit=5)
+
+    assert [item.chunk_id for item in kept] == ["c1", "c2", "c4", "c5"], (
+        "同一份材料最多 2 个槽"
     )

@@ -6,7 +6,6 @@
 
 import asyncio
 import hashlib
-import logging
 import math
 import secrets
 import uuid
@@ -707,9 +706,6 @@ WEB_SEARCH_KIND = "web_search"
 #: 联网结果在信息包里的 origin（`TavilySearchGateway` 盖的就是它）
 WEB_ORIGIN = "web_search"
 
-
-#: 日志（本模块的第一个 logger）：零命中观测用（见 `SearchProject`）
-logger = logging.getLogger(__name__)
 
 
 def _tool_drop(handle: str, reason: str) -> DroppedItem:
@@ -3891,26 +3887,9 @@ class SearchProject:
             opinions=self._index.recent_opinions(project_id),
             materials=material_hits,
         )
-        # **零命中观测**（2026-10-21 批 12，R8）：非空查询却一个材料都没命中 →
-        # 打一行结构化日志。
-        #
-        # 为什么（这是检索侧最大的缺口）：现在的检索判据**全是「从文档反推」的合成查询**
-        # ——真实的用户查询分布是**空的** → 语义召回的价值没法证明（R9：
-        # 真数据 r@5 9/11 与纯 FTS5 持平，"改述增量"一直是 0）。要看到增量，
-        # 得先有**真查询**。
-        #
-        # 为什么放在**这里**（而不是检索器里）：`MaterialRetriever.search` 全仓只有
-        # 这一个调用方 → 记到的全是**用户发起的**检索（席位轮走的是另一条路），
-        # 不会把模型生成的检索词混进样本。
-        #
-        # **只打日志**：不上报、不入库（这是本地单用户应用）。
-        if query.strip() and not material_hits:
-            logger.info(
-                "material_search_zero_hit project=%s query=%r total_hits=%d",
-                project_id,
-                query,
-                len(results.hits),
-            )
+        # **检索观测不在这里**：分解（词面/语义各出了多少候选、纯词面命中几个）
+        # 只有检索器知道 → 观测行挪到了 `SqliteHybridRetriever.search`
+        # （2026-10-22 批 13，R8 扩到每次检索 + R9）。
         return results
 
 

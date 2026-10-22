@@ -64,8 +64,10 @@ from pmstudio.infrastructure.sqlite import tokenize as tokenize_module
 from pmstudio.infrastructure.sqlite.database import connect
 from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
 from pmstudio.infrastructure.sqlite.materials import (
+    SqliteFtsRetriever,
     SqliteHybridRetriever,
     SqliteMaterialStore,
+    dedup_by_material,
 )
 from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
 from pmstudio.infrastructure.tools.extract import chunk_text
@@ -208,10 +210,100 @@ def make_queries(items, url2mid, mid2chunks):
     return lexical, paraphrase, cross, list(NEGATIVE_QUERIES)
 
 
-def measure(connection, embedder, url2mid, mid2chunks, queries, *, limit=5):
-    """量六个指标。"""
+def p_sign_test(wins: int, losses: int) -> float:
+    """**精确二项检验（双侧）**：混合赢 `wins` 条、词面赢 `losses` 条时的 p 值。
+
+    为什么用符号检验（而不是 t 检验）：配对差是**二值的**（命中/没命中），
+    n 小时 t 检验不靠谱（n=14 的正态近似会给出假显著）；符号检验只看**方向**，
+    对小样本是稳的。
+
+    p = 2 · Σ_{k≤min(wins,losses)} C(wins+losses, k) / 2^(wins+losses)
+    （**下尾** × 2 = 双侧；超过 1 截到 1。两边都不一致时 p = 1.0：没有方向性证据。）
+
+    纯函数：不依赖模型、不依赖语料 → 可单测 ✓（2026-10-22 批 13，R9）。
+    """
+    from math import comb
+
+    if wins <= 0 and losses <= 0:
+        return 1.0
+    total = wins + losses
+    tail = sum(comb(total, k) for k in range(min(wins, losses) + 1))
+    return min(1.0, 2 * tail / (2**total))
+
+
+def paired_increment(lexical_ok: list[bool], hybrid_ok: list[bool]) -> dict[str, float]:
+    """配对增量：同一批查询上，混合相对词面的**净变化**。
+
+    `lexical_ok[i]` / `hybrid_ok[i]` = 第 i 条查询在**词面** / **混合**下是否命中目标。
+    返回：Δ（净增）、wins（混合赢）、losses（词面赢）、p（符号检验的 p 值）、n。
+
+    为什么必须是**配对**：同一批查询、同一个语料、同一个切法 → 唯一的差别是融合
+    → 增量归因干净。分开算两个命中率再相减，会把语料/查询的方差混进去 ✗
+    （2026-10-22 批 13，R9）。
+    """
+    if len(lexical_ok) != len(hybrid_ok):
+        raise ValueError("两组结果必须逐条配对")
+    wins = sum(1 for lex, hyb in zip(lexical_ok, hybrid_ok, strict=True) if hyb and not lex)
+    losses = sum(1 for lex, hyb in zip(lexical_ok, hybrid_ok, strict=True) if lex and not hyb)
+    delta = sum(
+        (1 if hyb else 0) - (1 if lex else 0)
+        for lex, hyb in zip(lexical_ok, hybrid_ok, strict=True)
+    )
+    return {
+        "Δ": delta,
+        "wins": wins,
+        "losses": losses,
+        "p": p_sign_test(wins, losses),
+        "n": len(lexical_ok),
+    }
+
+
+def rescue_rate_from_samples(samples: list[dict]) -> dict[str, float]:
+    """从**真实检索样本**算救回率与挤掉率（没有 ground truth 也能算）。
+
+    样本来自检索器的观测行（`material_search … fts_hits=… hybrid_hits=…`）：
+    - **救回**：词面一个都没命中，混合命中了 → 语义把它捞了回来 ✓
+    - **挤掉**：词面命中了，混合一个都没命中 → 融合把好结果掀翻了 ✗（倒退风险）
+
+    注意：救回**不等于**捞对了（可能捞回的是无关材料）→ 精确率那一侧由**负样本集**
+    与**合成查询的配对增量**负责（2026-10-22 批 13，R9）。
+    """
+    total = len(samples)
+    rescued = sum(1 for item in samples if item["fts_hits"] == 0 and item["hybrid_hits"] > 0)
+    pushed_out = sum(
+        1 for item in samples if item["fts_hits"] > 0 and item["hybrid_hits"] == 0
+    )
+    return {
+        "n": total,
+        "救回率": rescued / total if total else 0.0,
+        "挤掉率": pushed_out / total if total else 0.0,
+    }
+
+
+def load_samples() -> list[dict]:
+    """读最新一份**真实检索样本**（R8 攒的）。没有就空列表（不影响基线）。
+
+    样本是检索器的观测行（`material_search …`）→ 里面有**词面命中数**与
+    **混合命中数** → 能算救回率/挤掉率（`rescue_rate_from_samples`）。
+    位置：`.codex/runs/<日期>/search_samples.json`（**gitignored**，不入库）。
+    """
+    files = sorted(Path("../.codex/runs").glob("*/search_samples.json"))
+    if not files:
+        return []
+    payload = json.loads(files[-1].read_text(encoding="utf-8"))
+    return list(payload.get("samples", []))
+
+
+def measure(connection, embedder, url2mid, mid2chunks, queries, *, limit=5, samples=None):
+    """量六个指标 + 配对增量（R9）。
+
+    **词面基线按同样的材料去重口径算**（`dedup_by_material`）：混合路一份材料只占
+    1–2 个槽，词面基线若不这样去重，同一份材料的 5 个块会占满 top5
+    → **增量被高估** → 结论会错（2026-10-22 批 13）。
+    """
     lexical, paraphrase, cross, negatives = queries
     hybrid = SqliteHybridRetriever(connection, embedder=embedder)
+    fts_only = SqliteFtsRetriever(connection)
 
     def target_chunks(mid: str, word: str) -> set[str]:
         """目标词所在的**所有**块（该词可能在好几块里都出现）。
@@ -231,12 +323,26 @@ def measure(connection, embedder, url2mid, mid2chunks, queries, *, limit=5):
         material_hits = chunk_hits = 0
         block_total = 0
         rrs: list[float] = []
+        lexical_ok: list[bool] = []
+        hybrid_ok: list[bool] = []
         for query, url in group:
             mid = url2mid.get(url)
             if mid is None:
                 continue
             hits = hybrid.search(project_id=PROJECT, query=query, limit=limit, owner=OWNER)
             ids = [hit.material_id for hit in hits]
+            # 词面基线：**同口径**（同样的材料去重）→ 增量归因干净
+            base_ids = [
+                hit.material_id
+                for hit in dedup_by_material(
+                    fts_only.search(
+                        project_id=PROJECT, query=query, limit=limit, owner=OWNER
+                    ),
+                    limit,
+                )
+            ]
+            lexical_ok.append(mid in base_ids)
+            hybrid_ok.append(mid in ids)
             if mid in ids:
                 material_hits += 1
                 rrs.append(1.0 / (ids.index(mid) + 1))
@@ -251,6 +357,11 @@ def measure(connection, embedder, url2mid, mid2chunks, queries, *, limit=5):
         out[f"{name}_块r5"] = chunk_hits / max(1, block_total)
         out[f"{name}_块r5n"] = block_total
         out[f"{name}_MRR"] = sum(rrs) / max(1, len(rrs))
+        increment = paired_increment(lexical_ok, hybrid_ok)
+        out[f"{name}_增量Δ"] = increment["Δ"]
+        out[f"{name}_增量赢"] = increment["wins"]
+        out[f"{name}_增量输"] = increment["losses"]
+        out[f"{name}_增量p"] = increment["p"]
     # 负样本 → 假阳性率
     false_positive = 0
     for query in negatives:
@@ -270,6 +381,13 @@ def measure(connection, embedder, url2mid, mid2chunks, queries, *, limit=5):
         if wanted <= got:
             complete += 1
     out["跨块证据完整率"] = complete / max(1, len(cross))
+    # **真实检索样本**（R8 攒的）：没有 ground truth → 只能算救回率/挤掉率
+    rescue = rescue_rate_from_samples(
+        list(samples) if samples is not None else load_samples()
+    )
+    out["真查询n"] = rescue["n"]
+    out["真查询救回率"] = rescue["救回率"]
+    out["真查询挤掉率"] = rescue["挤掉率"]
     out["_词面n"] = len(lexical)
     out["_改述n"] = len(paraphrase)
     out["_跨块n"] = len(cross)
@@ -296,6 +414,17 @@ def show(title: str, out: dict[str, float], *, extra: str = "") -> None:
         f"  跨块证据完整率 {out['跨块证据完整率']:.3f} (n={out['_跨块n']})"
         f" · 假阳性率 {out['假阳性率']:.3f} (n={out['_负样本n']})"
     )
+    for name in ("词面", "改述"):
+        print(
+            f"  {name}配对增量: Δ {out[f'{name}_增量Δ']:+.0f}"
+            f" · 混合赢 {out[f'{name}_增量赢']:.0f} / 词面赢 {out[f'{name}_增量输']:.0f}"
+            f" · p={out[f'{name}_增量p']:.3f}"
+        )
+    if out.get("真查询n"):
+        print(
+            f"  真查询样本: n={out['真查询n']:.0f}"
+            f" · 救回率 {out['真查询救回率']:.3f} · 挤掉率 {out['真查询挤掉率']:.3f}"
+        )
 
 
 def main() -> None:
