@@ -1,10 +1,15 @@
 {$DOMAIN} {
     encode gzip
     handle /api/* {
-        reverse_proxy 127.0.0.1:{$PMSTUDIO_PORT:8000}
+        # 反代目标**可配**：同机部署是 `127.0.0.1:8000`，
+        # compose 部署是 `backend:8000`（容器里的 127.0.0.1 是 Caddy 自己）。
+        # 两种形态共用这一份 Caddyfile——不新增第二份配置（那会漂）。
+        reverse_proxy {$PMSTUDIO_API_TARGET:127.0.0.1:{$PMSTUDIO_PORT:8000}}
     }
     handle {
-        root * ./frontend/dist
+        # 静态资源根目录**可配**：同机是 `./frontend/dist`，
+        # 容器里是 `/srv`（COPY 进去的绝对路径）。
+        root * {$PMSTUDIO_WEB_ROOT:./frontend/dist}
         file_server
     }
 }

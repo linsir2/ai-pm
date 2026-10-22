@@ -1,0 +1,84 @@
+name: CI
+
+# 每次 push / PR 跑一遍：后端测试 + lint、前端类型 + 测试、接口零差。
+#
+# **为什么值得有**：这个仓有 250+ 个测试文件、684 次提交，但**没有 CI**——
+# 于是"这些测试谁在跑"没有答案。补上它，是"工程化"最便宜的一步。
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # **必须**：pytest 的 `pythonpath = ["src", "."]` 依赖工作目录是 `backend/`
+        # （`tests/test_dev_script.py` 用 `from scripts.dev import ...`，
+        #  `tests/architecture/guards.py` 用 `from tests.architecture.guards import ...`）。
+        # 工作目录不对 → 一批用例直接 ImportError。
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⚠️ **必须用 setup-python 的解释器**，不能用 uv 自己下载的那个：
+      # 有些 Python 构建**没有** `sqlite3.Connection.enable_load_extension`
+      # （`sqlite-vec` 靠它加载扩展）→ 扩展装不上 → 检索静默降级成纯 FTS5
+      # → 一批向量相关的用例红。setup-python 装的是发行版/官方构建，**带扩展加载**。
+      # `UV_PYTHON` 是为了显式钉住它（`backend/.python-version` 已经写了 3.13，
+      # 但那只是"要哪个版本"，不保证"哪个构建"）。
+      - name: 装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 装依赖
+        run: uv sync --frozen --dev
+        env:
+          UV_PYTHON: "3.13"
+
+      - name: lint
+        run: uv run ruff check --no-cache .
+
+      - name: 测试
+        # ⚠️ **`-m "not slow"` 必须显式给**：`markers` 只是**注册**标记，
+        # pytest 默认**会跑** slow 用例 → CI 会去下 90MB 的 ONNX 模型并调真模型 API
+        # （慢、贵、还会因为网络抖而红）。
+        run: uv run pytest -m "not slow" -q -p no:cacheprovider
+
+      - name: 接口零差
+        # 前后端接口清单必须逐字一致（`scripts/check_api_parity.py`）。
+        # 它**拒绝**在工作库上跑，所以给它一个临时库。
+        env:
+          PMSTUDIO_DB: ${{ runner.temp }}/parity.db
+        run: uv run python scripts/check_api_parity.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npx tsc --noEmit
+
+      - name: 测试
+        run: npx vitest run

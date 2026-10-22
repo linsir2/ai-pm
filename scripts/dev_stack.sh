@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# 没有 Docker 时，用原生进程复现 compose 的启动序列。
+#
+# **它证明什么**：compose 里写的环境变量、端口、代理目标、启动顺序是**对的**
+# ——因为原生跑通了。**它不证明**镜像本身能构建（那要 Docker）。
+#
+# **它与 compose 用同一套环境变量名**——那是两者"等价"的根据，
+# `tests/architecture/test_container_assets.py::test_the_dev_stack_script_uses_the_same_env_keys_as_compose`
+# 盯着这件事。
+#
+# 用法：
+#   scripts/dev_stack.sh            # 起（前台等 Ctrl-C）
+#   scripts/dev_stack.sh --stop     # 收
+#   scripts/dev_stack.sh --check    # 只检查配置一致性，不起
+
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BACKEND="$ROOT/backend"
+FRONTEND="$ROOT/frontend"
+
+#: 与 `docker-compose.yml` 一致的端口。
+BACKEND_PORT="${PMSTUDIO_PORT:-8000}"
+FRONTEND_PORT="${PMSTUDIO_WEB_PORT:-5173}"
+
+# ── 与 compose **完全相同**的环境变量（键名与取值口径一致）─────────────
+# 这一段是"compose 与本脚本等价"的**可核对凭据**：
+# `tests/architecture/test_container_assets.py` 盯着两边的键名不许漂。
+# 值不同是**故意的**：容器里库在 /data、反代目标是服务名；
+# 本机是相对路径、反代目标是 127.0.0.1（同机 Caddy）。
+export PMSTUDIO_DB="${PMSTUDIO_DB:-data/pmstudio.db}"
+export PMSTUDIO_PORT="$BACKEND_PORT"
+export PMSTUDIO_WEB_PORT="$FRONTEND_PORT"
+export PMSTUDIO_API_TARGET="${PMSTUDIO_API_TARGET:-127.0.0.1:$BACKEND_PORT}"
+export PMSTUDIO_WEB_ROOT="${PMSTUDIO_WEB_ROOT:-./frontend/dist}"
+# 同机反代：源 IP 就是本机，信任 127.0.0.1 即可（**无条件信任转发头
+# 等于让任何人伪造源 IP**，那限流就形同虚设）。
+export PMSTUDIO_FORWARDED_ALLOW_IPS="${PMSTUDIO_FORWARDED_ALLOW_IPS:-127.0.0.1}"
+# Redis：留空 = 只用进程内计数（单机单 worker 够用）。
+export PMSTUDIO_REDIS_URL="${PMSTUDIO_REDIS_URL:-}"
+
+log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31m!!!\033[0m %s\n' "$*" >&2; exit 1; }
+
+# ── 配置一致性检查：compose 与本脚本的键名必须一致 ──
+check_keys() {
+  local compose="$ROOT/docker-compose.yml"
+  [ -f "$compose" ] || die "找不到 docker-compose.yml"
+  # 只比 compose **environment 段**里的键：`env_file` 段里的那些
+  # （PMSTUDIO_MODEL / PMSTUDIO_API_KEY …）由 backend/.env 提供，
+  # 两边读的是**同一个文件**，不必在本脚本里重写一遍。
+  local compose_keys
+  compose_keys="$(sed -n '/^[[:space:]]*environment:/,/^[[:space:]]*depends_on:/p' "$compose" \
+    | grep -oE 'PMSTUDIO_[A-Z_]+' | sort -u)"
+  local script_keys
+  script_keys="$(grep -oE 'PMSTUDIO_[A-Z_]+' "${BASH_SOURCE[0]}" | sort -u)"
+  local missing=""
+  while read -r key; do
+    [ -z "$key" ] && continue
+    grep -q "$key" "${BASH_SOURCE[0]}" || missing="$missing $key"
+  done <<< "$compose_keys"
+  if [ -n "$missing" ]; then
+    die "compose 里的这些键 dev_stack.sh 没覆盖：$missing"
+  fi
+  log "配置键名一致（$(echo "$compose_keys" | grep -c . ) 个 PMSTUDIO_* 键）"
+}
+
+wait_for() {
+  local url="$1" name="$2" tries="${3:-40}"
+  for _ in $(seq 1 "$tries"); do
+    if curl -fsS -o /dev/null -m 3 "$url"; then
+      log "$name 就绪：$url"
+      return 0
+    fi
+    sleep 1
+  done
+  die "$name 没起来：$url（看上面的日志）"
+}
+
+stop_all() {
+  log "收尾…"
+  [ -f /tmp/pmstudio-devstack.pids ] && while read -r pid; do
+    kill "$pid" 2>/dev/null && log "停掉 $pid"
+  done < /tmp/pmstudio-devstack.pids
+  rm -f /tmp/pmstudio-devstack.pids
+  log "收干净了"
+}
+
+case "${1:-start}" in
+  --check)
+    check_keys
+    exit 0
+    ;;
+  --stop)
+    stop_all
+    exit 0
+    ;;
+esac
+
+check_keys
+
+[ -f "$BACKEND/.env" ] || die "没有 backend/.env —— 先 cp backend/.env.example backend/.env 并填 key"
+command -v uv >/dev/null || die "没有 uv"
+[ -d "$FRONTEND/node_modules" ] || die "前端依赖没装 —— 先 cd frontend && npm install"
+
+stop_all
+: > /tmp/pmstudio-devstack.pids
+
+log "起后端（端口 $BACKEND_PORT）"
+(
+  cd "$BACKEND"
+  # 与 Dockerfile 的 CMD 一致：`--host 0.0.0.0` 在容器里是必须的；
+  # 本机用 127.0.0.1 就够（且更安全）。
+  exec ./.venv/bin/python scripts/dev.py --host 127.0.0.1 --port "$BACKEND_PORT" --no-reload
+) > /tmp/pmstudio-backend.log 2>&1 &
+echo $! >> /tmp/pmstudio-devstack.pids
+
+wait_for "http://127.0.0.1:$BACKEND_PORT/api/health" "后端"
+
+log "起前端（端口 $FRONTEND_PORT）"
+(
+  cd "$FRONTEND"
+  exec npx vite --host 127.0.0.1 --port "$FRONTEND_PORT"
+) > /tmp/pmstudio-frontend.log 2>&1 &
+echo $! >> /tmp/pmstudio-devstack.pids
+
+wait_for "http://127.0.0.1:$FRONTEND_PORT/" "前端"
+
+cat <<EOF
+
+两个服务都起来了：
+  前端   http://127.0.0.1:$FRONTEND_PORT
+  后端   http://127.0.0.1:$BACKEND_PORT/api/health
+  日志   /tmp/pmstudio-backend.log · /tmp/pmstudio-frontend.log
+
+收尾：scripts/dev_stack.sh --stop
+EOF
+
+wait

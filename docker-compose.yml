@@ -1,0 +1,71 @@
+# PM Studio 的 compose 形态：后端 + 前端（Caddy）+ Redis。
+#
+# **用法**：
+#   cp backend/.env.example backend/.env   # 填 PMSTUDIO_MODEL / PMSTUDIO_API_KEY
+#   docker compose up -d
+#   打开 http://localhost
+#
+# **这份 compose 与 `scripts/dev_stack.sh` 用同一套环境变量名**
+# ——那是它们"等价"的根据（`tests/architecture/test_container_assets.py` 盯着）。
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    environment:
+      # 容器里的库放绝对路径并挂卷（相对路径按 `backend/` 解析，容器里会落到别处）。
+      PMSTUDIO_DB: /data/pmstudio.db
+      PMSTUDIO_PORT: "8000"
+      # **跨容器反代必须给**：Caddy 在另一个容器里，源 IP 是 Caddy 的。
+      # 不给这个 → "每 IP 限流"退化成"全站限流"，**正常用户会互相锁死**
+      # （`scripts/dev.py` 的注释点名了这条）。
+      PMSTUDIO_FORWARDED_ALLOW_IPS: "172.16.0.0/12"
+      # Redis 连不上会自动降级成进程内计数（**不 fail-open 也不 fail-closed**），
+      # 但多 worker 的 SSE 扇出会静默退化成进程内 —— 所以给了 redis。
+      PMSTUDIO_REDIS_URL: "redis://redis:6379/0"
+    volumes:
+      - pmstudio-data:/data
+      # ONNX 模型缓存（约 90MB）：不挂卷每次重建容器都要重下。
+      - hf-cache:/root/.cache/huggingface
+    depends_on:
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "uv", "run", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    # SSE 是长期未完成的响应：关停时必须给够宽限期，
+    # 否则 `docker stop` 会把长连接 SIGKILL（`timeout_graceful_shutdown=5` 在 dev.py 里）。
+    stop_grace_period: 15s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      # 容器内的反代目标是**服务名**，不是 127.0.0.1（那是 Caddy 自己）。
+      PMSTUDIO_API_TARGET: "backend:8000"
+      PMSTUDIO_WEB_ROOT: /srv
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_started
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  pmstudio-data:
+  hf-cache:
