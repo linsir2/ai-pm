@@ -78,6 +78,21 @@ MCP 读/写侧。
 | **前端开发** | `cd frontend && npm run dev`（5173，`/api` 代理到 `frontend/.env` 里的后端地址） |
 | 前端类型检查 | `npx tsc --noEmit` |
 | 前端单测（纯函数） | `npx vitest run`（在 `frontend/`） |
+| **Docker 一键起** | `docker compose up -d`（后端 + Caddy + Redis；`.env` 读 `backend/.env`） |
+| **无 Docker 时起** | `scripts/dev_stack.sh`（原生进程复现 compose 的启动序列；`--check` 只核对配置键名、`--stop` 收尾） |
+| **MCP 真跑验证** | `cd backend && uv run python scripts/mcp_probe.py --builtin`（真模型 + 真 MCP server） |
+| 混沌矩阵 | `cd backend && uv run python scripts/chaos_matrix.py`（真注入 5 类故障） |
+
+**部署形态**（两套，一份 Caddyfile）：
+
+| 形态 | 怎么起 | 反代目标 | 库 |
+|---|---|---|---|
+| 本机 | `scripts/dev_stack.sh` | `127.0.0.1:8000` | `backend/data/pmstudio.db` |
+| Docker | `docker compose up -d` | `backend:8000`（**服务名**，容器里的 127.0.0.1 是 Caddy 自己） | 挂卷 `/data/pmstudio.db` |
+
+⚠️ **跨容器反代必须给 `PMSTUDIO_FORWARDED_ALLOW_IPS`**——它在 `scripts/dev.py` 里
+（**不在 `settings.py`**，照着 settings 抄会漏）。不给 → Caddy 后面所有请求的源 IP
+都是 Caddy 的 →「每 IP 限流」退化成「全站限流」，**正常用户互相锁死**。
 
 `scripts/dev.py` 起服务前会打一行"模型 / key / 库在哪"，配置缺了直接退出码 2——
 省得等到第一次调模型才发现 key 没填；它还会提醒你"现在用的是系统 Python 还是 `.venv`"。
@@ -108,10 +123,18 @@ find . -path ./.git -prune -o -type d \
 ```
 frontend/  React + Vite：文档区（约 70%）+ 闭环区（约 30%）+ 弹出层（问卷 / 草案）
 api/       FastAPI：HTTP 动作入口 + SSE 推送口
-infrastructure/  LangGraph 图 · LiteLLM 网关 · SQLite 仓储 · 席位定义
+infrastructure/  LangGraph 图 · LiteLLM 网关 · SQLite 仓储 · 席位定义 · MCP 客户端
 application/     用例（StartRound / RunSeatRound / Integrate / SubmitAnswers / ConfirmDraft）
 domain/          authoring（文档与版本）· provenance（出处账本）· round（回合）
+harness/         运行时控制平面（最内层）：统一信封 · 结构化输出归一化 · 失败分类 ·
+                 熔断/隔离舱/重试预算 · **agentic 循环**（模型自主调工具）
 ```
+
+**MCP 是只读旁路**（2026-10-22）：模型可以自主调外部 MCP server 的工具，
+但它**不进主闭环、不进 API 层、不写库**。SDK 只允许出现在 `infrastructure/mcp/`，
+`harness` 那边只认 `ToolInvoker` **协议**（`harness` 只许依赖
+pydantic/litellm/pybreaker，见 `tests/architecture/test_harness_imports.py`）。
+写侧要动"写入路径唯一"那条红线，明确不做。详见 `02-编排与数据.md §4.9`。
 
 DDD 分层，详细设计见 `.codex/docs/设计/05-DDD架构.md`。三条硬规矩（违反即设计错误）：
 
