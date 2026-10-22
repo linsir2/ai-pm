@@ -143,6 +143,12 @@ class LandedAnswers:
 
     proposals: tuple[Proposal, ...] = ()
     notes: tuple[str, ...] = ()
+    #: **留痕**：本轮输入没被整合者引用（被系统机械落地了）→ 记一笔
+    #: （`04-未决.md` C1）。
+    #:
+    #: 与 `notes` 的分工：`notes` 是**给用户看的话**（进提示词的缺口行），
+    #: `dropped` 是**结构化留痕**（进 `Round.dropped`，闭环区按来源分组显示）。
+    dropped: tuple[DroppedItem, ...] = ()
 
 
 def normalize(text: str) -> str:
@@ -494,6 +500,19 @@ def unaccounted_drops(
                 )
             )
     return tuple(items)
+
+
+#: 留痕里引原文引到多少字为止（留痕是给人看的，不是把整句抄进去）
+CLAIM_HEAD_CHARS = 40
+
+
+def _claim_head(text: str) -> str:
+    """主张原文的头（留痕里引到多少字为止——留痕是给人看的，不是抄全文）。"""
+
+    head = " ".join(text.split())
+    if len(head) > CLAIM_HEAD_CHARS:
+        return head[:CLAIM_HEAD_CHARS] + "…"
+    return head
 
 
 def _opinion_head(opinion: Opinion) -> str:
@@ -1157,6 +1176,7 @@ def landed_claim_proposals(
 
     landed: list[Proposal] = []
     notes: list[str] = []
+    drops: list[DroppedItem] = []
     index = start_index
     for claim in round_.claims:
         if claim.eid is None:
@@ -1196,8 +1216,27 @@ def landed_claim_proposals(
                 kind=kind,
             )
         )
+        # **留痕**（2026-10-21，批 15，`04-未决.md` C1）：这条输入没被整合者引用 →
+        # 是系统替它机械落地的。这件事**必须留痕**，否则用户在闭环区看不出
+        # 哪条输入是"系统替它落地的"（现场：E6「必须 9 月 20 号之前办完」）。
+        # 只给**落地成功**的记：没落地的（去处不合法 / 功能未授权）已经在
+        # `notes`（提示词的缺口行）里说过了，不重复报。
+        drops.append(
+            DroppedItem(
+                handle=claim.eid,
+                reason=(
+                    "这条输入没被整合者引用，是系统替它机械落地的："
+                    f"{_claim_head(claim.text)}"
+                ),
+                source=DropSource.CLAIM,
+                seat_id=None,
+                pass_index=1,
+            )
+        )
         index += 1
-    return LandedAnswers(proposals=tuple(landed), notes=tuple(notes))
+    return LandedAnswers(
+        proposals=tuple(landed), notes=tuple(notes), dropped=tuple(drops)
+    )
 
 
 def _answer_detail(question: Question, answer: object) -> str:

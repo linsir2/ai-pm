@@ -2061,6 +2061,11 @@ class IntegrateRound:
                 )
                 proposals += list(landed_claims.proposals)
                 gaps += list(landed_claims.notes)
+                # **留痕**（2026-10-21，批 15，`04-未决.md` C1）：这条输入没被整合者
+                # 引用、是被系统机械落地的 → 记进 `Round.dropped`，闭环区按来源分组显示，
+                # 用户看得见哪条是"系统替它落地的"。
+                if landed_claims.dropped:
+                    round_.note_dropped(landed_claims.dropped)
                 # 清单项的去向（A2）：没人处理的那些落 s11——非阻塞、带去处，
                 # 下一轮的 carried 才问得回原章节，不会"轮一结束就没了"。
                 unhandled = _unhandled_list_items(

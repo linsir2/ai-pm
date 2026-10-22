@@ -134,8 +134,12 @@ async def test_draft_path_keeps_the_drop_trace():
 
     round_ = harness.rounds.get(round_id)
     assert round_.draft is not None  # 确认走的确实是"出草案"那条路
+    # 2026-10-21（批 15，C1）：多一条 **CLAIM** 留痕——本轮输入 E1（"导出要快"）
+    # 没被整合者引用（报文只引用了 E2），是系统替它**机械落地**的 → 记一笔。
+    # 这条留痕是本次规格变更带来的（之前主张落地了但留痕里看不见）。
     assert [(item.handle, item.reason, item.source) for item in round_.dropped] == [
-        (f"{SEAT}:O1", "与文档已有内容重复", DropSource.INTEGRATOR)
+        ("E1", "这条输入没被整合者引用，是系统替它机械落地的：导出要快", DropSource.CLAIM),
+        (f"{SEAT}:O1", "与文档已有内容重复", DropSource.INTEGRATOR),
     ]
 
 
@@ -164,8 +168,11 @@ async def test_judgment_accounted_by_a_proposal_still_leaves_the_question_report
     round_id = await run_to_integrated(harness)
 
     round_ = harness.rounds.get(round_id)
+    # 2026-10-21（批 15，C1）：多一条 **CLAIM** 留痕——本轮输入 E1 没被引用
+    # （报文只引用了 E2 那条判断），系统替它机械落地了。
     assert [(item.handle, item.source) for item in round_.dropped] == [
-        (f"{SEAT}:O1", DropSource.UNACCOUNTED)
+        ("E1", DropSource.CLAIM),
+        (f"{SEAT}:O1", DropSource.UNACCOUNTED),
     ]
 
 
@@ -515,13 +522,17 @@ async def test_degraded_questions_count_as_accounted_but_judgments_do_not():
     """整合失败时，疑问原样落 s11（算交代过），没落地的判断仍然报"没交代"。"""
 
     # 报文故意引用不存在的编号（E9）：两次都过不了校验 → 走降级出口
+    # 2026-10-21（批 15，C1）：报文只引用 E9 → 本轮输入 E1 没被引用 → 多一条 CLAIM 留痕
     harness = harness_with(integration=draft_reply(refs=["E9"], dropped=[]))
 
     round_id = await run_to_integrated(harness)
 
     round_ = harness.rounds.get(round_id)
+    # 2026-10-21（批 15，C1）：多一条 CLAIM 留痕——本轮输入 E1 没被引用
+    # （报文只引用了 E9），系统替它机械落地了。
     assert [(item.handle, item.source) for item in round_.dropped] == [
-        (f"{SEAT}:O2", DropSource.UNACCOUNTED)
+        ("E1", DropSource.CLAIM),
+        (f"{SEAT}:O2", DropSource.UNACCOUNTED),
     ]
 
 
@@ -640,7 +651,11 @@ async def test_a_placeholder_proposal_is_repacked_and_can_be_saved():
 
     round_ = harness.rounds.get(round_id)
     assert integration_calls(harness) == 2
-    assert [item.source for item in round_.dropped] == [DropSource.INTEGRATOR]
+    # 2026-10-21（批 15，C1）：多一条 CLAIM 留痕（本轮输入 E1 没被引用 → 系统机械落地）
+    assert [item.source for item in round_.dropped] == [
+        DropSource.CLAIM,
+        DropSource.INTEGRATOR,
+    ]
     assert not any("形状不对" in gap for gap in round_.draft.gaps)
 
 
@@ -694,3 +709,42 @@ async def test_skipped_seat_is_named_in_draft_gaps():
     round_ = harness.rounds.get(round_id)
     assert round_.draft is not None
     assert any("权限与角色" in gap and "跳过" in gap for gap in round_.draft.gaps)
+
+
+async def test_a_claim_the_integrator_did_not_use_is_reported():
+    """R：**本轮输入没被整合者引用** → 留痕（`04-未决.md` C1）。
+
+    现场：E6「必须 9 月 20 号之前办完」这条约束在整合阶段没被任何提案引用 →
+    **它消失了，没有任何痕迹**（`04-未决.md` §N1）。
+
+    现状（批 15 之前）：主张要么被引用、要么**机械落地**
+    （`assembly.landed_claim_proposals`，D3 向 claims 延伸）→ **不再消失** ✓，
+    但"整合者没引用它"这件事**留痕里看不到** → 用户以为系统无视了它。
+    → 补一笔 `DropSource.CLAIM` 的留痕。
+    """
+
+    harness = harness_with(integration=draft_reply(refs=["E2"], dropped=[]))
+
+    round_id = await run_to_integrated(harness)
+
+    round_ = harness.rounds.get(round_id)
+    claims = [item for item in round_.dropped if item.source is DropSource.CLAIM]
+    assert claims, "未被整合者引用的主张没有留痕"
+    assert claims[0].handle == "E1", f"留痕的 handle 应该是那条主张的编号：{claims}"
+    assert "没被整合者引用" in claims[0].reason
+    assert "导出要快" in claims[0].reason, "留痕要引原文，用户才知道丢的是哪句话"
+
+
+async def test_a_claim_the_integrator_used_is_not_reported():
+    """R：被引用了的主张**不留痕**（整合者交代过了，没什么要报的）。
+
+    与 `UNACCOUNTED`（席位意见）**不重复**：那一条审的是席位意见，
+    这一条审的是**本轮输入**——两类事故不能混成一行。
+    """
+
+    harness = harness_with(integration=draft_reply(refs=["E1", "E2"], dropped=[]))
+
+    round_id = await run_to_integrated(harness)
+
+    round_ = harness.rounds.get(round_id)
+    assert not [item for item in round_.dropped if item.source is DropSource.CLAIM]

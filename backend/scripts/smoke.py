@@ -37,6 +37,22 @@ def show(step: str, detail: str) -> None:
 
 
 async def run(client: httpx.AsyncClient) -> int:
+    # **先登录**（2026-10-21 补：这个脚本直连 ASGI、不带会话 → 首个请求就 401）。
+    # 凭据从 `PMSTUDIO_FIRST_ADMIN_USER` / `PMSTUDIO_FIRST_ADMIN_PASSWORD` 读（与
+    # 首管理员种子同一份，不新增配置项）。
+    username = os.environ.get("PMSTUDIO_FIRST_ADMIN_USER", "")
+    password = os.environ.get("PMSTUDIO_FIRST_ADMIN_PASSWORD", "")
+    if not username or not password:
+        show("login", "没设首管理员凭据（PMSTUDIO_FIRST_ADMIN_USER / _PASSWORD）→ 跳过")
+        return 1
+    logged = await client.post(
+        "/api/auth/login", json={"username": username, "password": password}
+    )
+    if logged.status_code != 200:
+        show("login", f"失败 {logged.status_code} {logged.text[:200]}")
+        return 1
+    show("login", f"已登录 {logged.json().get('username', username)}")
+
     created = await client.post("/api/projects", json={"title": "订单中台（冒烟）"})
     if created.status_code != 201:
         show("project", f"建项目失败 {created.status_code} {created.text[:200]}")
@@ -121,6 +137,9 @@ async def run(client: httpx.AsyncClient) -> int:
         show("gaps", "；".join(body["draft"]["gaps"][:3]))
     if body["advisories"]:
         show("advisories", "；".join(body["advisories"][:3]))
+    # **留痕**（2026-10-21 批 15）：闭环区看得见的那些"没进卡片的东西"。
+    for item in (body.get("dropped") or [])[:8]:
+        show("  留痕", f"[{item.get('source')}] {item.get('handle')}：{item.get('reason')[:70]}")
 
     accepted = [
         proposal["proposal_id"]
