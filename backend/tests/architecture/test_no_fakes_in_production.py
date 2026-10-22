@@ -33,6 +33,13 @@ TESTS = SRC.parent / "tests"
 #: **显式欠账**，每条都要写清为什么。新增一条等于公开承认"这里需要一个替身"，
 #: 评审时一眼可见；而不登记就意味着守卫会红，藏不住。
 ALLOWED_TEST_FAKES: dict[str, str] = {
+    "_FakeTool": (
+        "MCP 工具声明的**形状替身**（MCP 批次）：`project_tools` 只读 `name` / `description` / "
+        "`input_schema` 三个属性，所以测试边界输入时不必真的起一个 MCP server——"
+        "**真协议的往返由 `test_mcp_client.py::test_a_real_in_process_server_round_trips` "
+        "与 `test_a_real_stdio_server_round_trips` 守着**。这个替身只覆盖投影器的"
+        "**边界判据**（非 object 形状 / 无描述 / 无名字要跳过），不冒充任何业务组件。"
+    ),
     "FakeEmbedder": (
         "向量检索的确定性 embedder（批 5）：把字符 n-gram 哈希成固定维单位向量。"
         "**真模型下不下来**（HuggingFace/GCS 均不可达），而 KNN 与 RRF 的判据是"

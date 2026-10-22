@@ -29,6 +29,12 @@ def test_model_request_carries_schema_and_metadata():
 
     `max_tokens`（2026-10-22，批 14）：**输出 token 上限**——不给就不设（供应商用
     自己的默认），给了就真的发给供应商（`providers/litellm.py`）。
+
+    `tools`（2026-10-22，MCP 批次）：**本次调用可供模型调用的工具**。
+    加它而不是另立一个请求类型，是因为**默认值就是空**——现有 5 个 agent
+    （Analyzer / 席位 / 整合者 / 讨论 / 记忆）走 `call_structured`，
+    它们一个字都不用改，行为逐字不变。带工具的那条路在 `model/agentic.py`，
+    与它是**并列**的两条，不是把现有路径改成多态。
     """
 
     assert field_names(ModelRequest) == (
@@ -38,11 +44,18 @@ def test_model_request_carries_schema_and_metadata():
         "response_schema",
         "metadata",
         "max_tokens",
+        "tools",
     )
 
 
 def test_model_reply_carries_text_model_and_usage():
-    assert field_names(ModelReply) == ("text", "model", "usage")
+    """`tool_calls`（2026-10-22，MCP 批次）：**模型请求调用工具**。
+
+    现有全部回复都是空——所以加它，5 个 agent 的行为一字不变。
+    空的含义是"模型这次没要调工具"，**不是**"没调成功"。
+    """
+
+    assert field_names(ModelReply) == ("text", "model", "usage", "tool_calls")
 
 
 def test_request_defaults_are_empty_not_guessing():
@@ -53,7 +66,9 @@ def test_request_defaults_are_empty_not_guessing():
         response_schema={},
     )
     assert request.metadata == {}
+    assert request.tools == ()
     assert ModelReply(text="{}", model="m").usage == {}
+    assert ModelReply(text="{}", model="m").tool_calls == ()
 
 
 def test_gateway_is_a_runtime_checkable_protocol():

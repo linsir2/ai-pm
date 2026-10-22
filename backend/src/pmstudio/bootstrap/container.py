@@ -163,6 +163,26 @@ class Container:
     def __init__(self, *, settings: Settings, app: FastAPI) -> None:
         self.settings = settings
         self.app = app
+def _model_gateway(
+    settings: Settings, *, recorder: SqliteModelCallRecorder | None = None
+) -> LiteLLMGateway:
+    """造生产用的模型网关。
+
+    **为什么抽成函数**：`build_container` 里原来内联这一段，
+    而 `scripts/mcp_probe.py` 需要**同一个**网关（不能自己再造一个——
+    那样留样、韧性参数、供应商参数会各走各的，测出来的不是生产行为）。
+    一处实现、两处调用。
+    """
+    return LiteLLMGateway(
+        model=settings.model,
+        api_key=settings.api_key,
+        api_base=settings.api_base,
+        timeout=settings.model_timeout,
+        recorder=recorder,
+        model_params=settings.model_params,
+    )
+
+
 def _web_search_gateway(
     settings: Settings, *, tools: TomlToolCatalog, keys: frozenset[str]
 ) -> TavilySearchGateway | None:
@@ -325,14 +345,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     if gateway is None:
         # 留样默认关（`PMSTUDIO_TRACE_MODEL=1` 才接）：库会长，且它是排查材料不是业务事实
         recorder = SqliteModelCallRecorder(connection) if settings.trace_model else None
-        gateway = LiteLLMGateway(
-            model=settings.model,
-            api_key=settings.api_key,
-            api_base=settings.api_base,
-            timeout=settings.model_timeout,
-            recorder=recorder,
-            model_params=settings.model_params,
-        )
+        gateway = _model_gateway(settings, recorder=recorder)
     catalog = TomlSeatCatalog(SEATS_DIR)
     discussion_roles = load_discussion_roles()
     personas = load_personas()

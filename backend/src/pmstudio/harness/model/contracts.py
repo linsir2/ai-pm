@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
+from pmstudio.harness.tools.spec import ToolCall, ToolSpec
+
 
 @dataclass(frozen=True, slots=True)
 class ModelMessage:
@@ -38,6 +40,13 @@ class ModelRequest:
     #:
     #: **给了就真的发给供应商**（`providers/litellm.py`），不给就不发（保持现状）。
     max_tokens: int | None = None
+    #: 本次调用可供模型调用的工具。**空 = 不给模型工具**。
+    #:
+    #: 为什么是"可选字段"而不是"另一种请求类型"：现有 5 个 agent 走的是
+    #: "单发单 JSON"（`model/structured.py` 的 `call_structured`），它们**一行都不用改**
+    #: ——默认值就是空，行为逐字不变。带工具的那条路在 `model/agentic.py`，
+    #: 是**并列**的另一条，不是把现有路径改成多态。
+    tools: tuple[ToolSpec, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +54,10 @@ class ModelReply:
     text: str
     model: str
     usage: Mapping[str, object] = field(default_factory=dict)
+    #: 模型请求调用工具。**空 = 模型这次没要调工具**。
+    #:
+    #: 现有全部回复都是空——所以加了它，5 个 agent 的行为一字不变。
+    tool_calls: tuple[ToolCall, ...] = ()
 
 
 @runtime_checkable

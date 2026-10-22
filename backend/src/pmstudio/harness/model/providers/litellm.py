@@ -14,6 +14,7 @@ from litellm import acompletion  # noqa: E402
 
 from pmstudio.harness.errors import ModelCallFailed, ModelShed
 from pmstudio.harness.model import failure
+from pmstudio.harness.model.agentic import tool_call_from_payload
 from pmstudio.harness.model.contracts import ModelCallRecorder, ModelReply, ModelRequest
 from pmstudio.harness.model.jsonio import is_json, strip_fence
 from pmstudio.harness.model.resilience import (  # noqa: E402
@@ -27,6 +28,7 @@ from pmstudio.harness.model.resilience import (  # noqa: E402
     RetryBudgetConfig,
     jittered_backoff,
 )
+from pmstudio.harness.tools.spec import ToolCall, as_mapping, tool_payload
 
 #: 结构化输出的两种写法。`json_schema`（默认）能帮模型守规；供应商不吃它时退到 `json_object`。
 JSON_SCHEMA = "json_schema"
@@ -45,6 +47,28 @@ def response_format_for(mode: str, *, schema_name: str, schema: Mapping[str, obj
             "json_schema": {"name": schema_name, "schema": dict(schema)},
         }
     return {"type": "json_object"}
+
+
+def _tool_calls_of(message: object) -> tuple[ToolCall, ...]:
+    """从供应商回包里摘出 `tool_calls`。
+
+    供应商给的是 `{"id":..., "type":"function", "function":{"name":..., "arguments":"{...}"}}`
+    的列表（`arguments` 是**字符串**）。摘不出来就当没有——
+    **不猜**：猜一个工具名会让模型收到一份对不上的结果。
+
+    ⚠️ 元素是 **pydantic 对象**而不是 dict（litellm 的形状）——
+    `as_mapping` 统一处理（见 `harness/tools/spec.py` 里那个函数的说明，
+    那里记着这个坑的来龙去脉）。
+    """
+    raw = getattr(message, "tool_calls", None) or ()
+    calls: list[ToolCall] = []
+    for item in raw:
+        payload = as_mapping(item)
+        function = as_mapping(payload.get("function") or {})
+        if not function.get("name"):
+            continue
+        calls.append(tool_call_from_payload(payload))
+    return tuple(calls)
 #: ── 控制平面的三个上限（**不是**产品上限）─────────────────────────────────
 #:
 #: 这三个属于"怎么调模型"这一层，所以归 harness。产品上限（问几轮席位、分几批问卷、
@@ -136,6 +160,13 @@ class LiteLLMGateway:
             "timeout": self._timeout,
             "num_retries": 0,
         }
+        if request.tools:
+            # **带工具**是 agentic 那条路（`model/agentic.py`）。给 tools 的时候
+            # **不能给 response_format**：一部分供应商同时收到两者会拒收
+            # （"json_schema and tools are mutually exclusive"）。agentic 路径要的是
+            # "自由文本 + tool_calls"，本来也不该要 JSON schema。
+            kwargs["tools"] = tool_payload(request.tools)
+            kwargs.pop("response_format", None)
         if request.max_tokens is not None:
             # **显式给上限时真的要发出去**（2026-10-22，批 14）：不设就撞供应商默认，
             # 而"按预算限条数"这件事只有在**上限真的生效**时才成立。
@@ -252,8 +283,12 @@ class LiteLLMGateway:
                     timeout_seconds=self._timeout,
                 ) from error
         assert response is not None
-        raw = (response.choices[0].message.content or "").strip()
-        if not raw:
+        message = response.choices[0].message
+        raw = (message.content or "").strip()
+        # **模型要调工具时，正文是空的**——那不是"空回包"，那是"它在要工具"。
+        # 所以先把 tool_calls 摘出来：有 tool_calls 时空正文是**正常**的。
+        tool_calls = _tool_calls_of(message)
+        if not raw and not tool_calls:
             # 空回包也留痕（P35）：原来这两条"回包本身有问题"的路**一行都不落库**，
             # 于是复盘时只剩一句"模型返回了空内容"，原文永远补不回来（真踩到过两次）。
             self._record(
@@ -272,8 +307,8 @@ class LiteLLMGateway:
                 model=self._model,
                 hint="上一次你什么都没返回。请只输出那个 JSON 对象，不要空回复。",
             )
-        text = strip_fence(raw)
-        if request.response_schema and not is_json(text):
+        text = strip_fence(raw) if raw else ""
+        if request.response_schema and not tool_calls and not is_json(text):
             # `usage` 与 `finish_reason` 一起记：回包是**截断的 JSON**时（P35 真踩到：
             # 21.7K 字符断在半句上），只有 finish_reason=length 能一眼说明"是输出被截断"，
             # 而不是"模型没按格式答"。
@@ -306,6 +341,7 @@ class LiteLLMGateway:
             text=text,
             model=getattr(response, "model", self._model),
             usage=dict(getattr(response, "usage", {}) or {}),
+            tool_calls=tool_calls,
         )
         self._record(
             request,

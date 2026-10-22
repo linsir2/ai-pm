@@ -196,6 +196,7 @@ backend/src/pmstudio/
 │   ├── seats/
 │   ├── personas/
 │   ├── tools/
+│   ├── mcp/             协议客户端（SDK只落在这里；harness只认协议）
 │   ├── graph/
 │   ├── discussion/
 │   └── templates/       模板库 TOML（`02` §11.0.68，切片 1）
@@ -227,12 +228,12 @@ tests/                architecture / contracts / domain / application / infrastr
 与 12+ 个真实模块）：
 
 ```
-harness/model/        contracts.py envelope.py structured.py normalize.py failure.py jsonio.py prompt_log.py resilience.py
+harness/model/        contracts.py envelope.py structured.py normalize.py failure.py jsonio.py prompt_log.py resilience.py agentic.py
 harness/agents/       agent.py
 harness/events/       schemas.py bus.py
 harness/prompts/      analyzer.md inquiry.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md discussion_say.md discussion_cards.md
 harness/providers/    litellm.py
-harness/tools/        registry.py definitions/*.toml
+harness/tools/        registry.py spec.py invoker.py definitions/*.toml
 domain/authoring/     document.py blocks.py schema.py version.py instruction.py views.py diff.py readiness.py
 domain/provenance/    ledger.py evidence.py
 domain/round/         round.py step.py claim.py opinion.py questionnaire.py draft.py web_query.py
@@ -249,6 +250,7 @@ infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work
 infrastructure/seats/ catalog.py definitions/*.toml
 infrastructure/personas/ catalog.py personas.toml
 infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py webclean.py webdedup.py
+infrastructure/mcp/    client.py projector.py manager.py
 infrastructure/graph/ graph.py exploration_runner.py
 infrastructure/discussion/ roles.py
 ```

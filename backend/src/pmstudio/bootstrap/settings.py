@@ -29,6 +29,9 @@ LOGIN_USER_MAX_ENV = "PMSTUDIO_LOGIN_USER_MAX_ATTEMPTS"
 LOGIN_ATTEMPT_WINDOW_ENV = "PMSTUDIO_LOGIN_ATTEMPT_WINDOW_SECONDS"
 WORKERS_ENV = "PMSTUDIO_WORKERS"
 
+#: MCP server 列表（JSON 数组）。**空 = 不启用 MCP**。
+MCP_SERVERS_ENV = "PMSTUDIO_MCP_SERVERS"
+
 #: 会话滑动 / 绝对上限（天）与登录防爆阈值。多用户改造 §0.10/§0.11。
 SESSION_TTL_DAYS = 30
 SESSION_ABSOLUTE_DAYS = 90
@@ -104,6 +107,54 @@ def _positive_int(source: Mapping[str, str], name: str, default: int) -> int:
     return value
 
 
+def _parse_mcp_servers(raw: str) -> tuple[Mapping[str, object], ...]:
+    """解析 `PMSTUDIO_MCP_SERVERS`（JSON 数组）。
+
+    **空 = 不启用 MCP**（不是错误）。非空但不是数组、或者元素缺 `name` → `ConfigError`：
+    配置写错了就该在起服务前说清楚，而不是连上了才出怪事。
+
+    元素里的 `args` 必须是数组、`env` 必须是对象——**不自动纠正**：
+    自动把字符串转成单元素数组看着聪明，但那是替用户猜。
+    """
+    if not raw:
+        return ()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ConfigError(f"{MCP_SERVERS_ENV} 要是 JSON 数组：{error.msg}") from error
+    if not isinstance(parsed, list):
+        raise ConfigError(
+            f"{MCP_SERVERS_ENV} 要是 JSON 数组，现在给的是 {type(parsed).__name__}"
+        )
+    servers: list[Mapping[str, object]] = []
+    for index, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            raise ConfigError(
+                f"{MCP_SERVERS_ENV} 的第 {index + 1} 项要是对象，"
+                f"现在给的是 {type(item).__name__}"
+            )
+        name = str(item.get("name", "")).strip()
+        if not name:
+            raise ConfigError(f"{MCP_SERVERS_ENV} 的第 {index + 1} 项缺 name")
+        args = item.get("args", [])
+        if not isinstance(args, list):
+            raise ConfigError(f"{MCP_SERVERS_ENV} 的第 {index + 1} 项的 args 要是数组")
+        env = item.get("env", {})
+        if not isinstance(env, dict):
+            raise ConfigError(f"{MCP_SERVERS_ENV} 的第 {index + 1} 项的 env 要是对象")
+        servers.append(
+            {
+                "name": name,
+                "transport": str(item.get("transport", "stdio")),
+                "command": str(item.get("command", "")),
+                "args": [str(a) for a in args],
+                "env": {str(k): str(v) for k, v in env.items()},
+                "url": str(item.get("url", "")),
+            }
+        )
+    return tuple(servers)
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     db_path: Path
@@ -141,6 +192,16 @@ class Settings:
     redis_max_connections: int = REDIS_MAX_CONNECTIONS
     #: worker 进程数（高并发 P4）。
     workers: int = WORKERS
+    #: MCP server 列表（JSON 数组）。**空 = 不启用 MCP**。
+    #:
+    #: **存 dict 不存 SDK 对象**：`settings` 是最外层的配置读取处，
+    #: 不该认识 `infrastructure/mcp` 的类型（那是依赖方向的事）。
+    #: 装配时（`bootstrap/container.py`）才把 dict 变成 `McpServerSpec`。
+    #:
+    #: **为什么 MCP 配置不是必填**：`PMSTUDIO_MODEL` 缺了就起不来（那是我们干活的
+    #: 唯一依赖）；MCP 缺了只是"没有 MCP 工具"——**不影响启动**。
+    #: 两者的差别是"缺了能不能干活"，不是"缺了算不算错"。
+    mcp_servers: tuple[Mapping[str, object], ...] = ()
 
     def available_tool_keys(self) -> frozenset[str]:
         """当前环境**配好**了哪些工具的依赖（工具目录按它过滤）。"""
@@ -187,6 +248,7 @@ class Settings:
                     f"{PARAMS_ENV} 要是 JSON 对象，现在给的是 {type(parsed).__name__}"
                 )
             model_params = parsed
+        mcp_servers = _parse_mcp_servers(source.get(MCP_SERVERS_ENV, "").strip())
         return cls(
             db_path=db_path,
             model=model,
@@ -224,6 +286,7 @@ class Settings:
                 source, REDIS_MAX_CONNECTIONS_ENV, REDIS_MAX_CONNECTIONS
             ),
             workers=_positive_int(source, WORKERS_ENV, WORKERS),
+            mcp_servers=mcp_servers,
             redis_timeout=_positive_float(
                 source, REDIS_TIMEOUT_ENV, REDIS_TIMEOUT, minimum=0.001
             ),
