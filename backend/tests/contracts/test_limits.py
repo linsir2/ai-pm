@@ -402,3 +402,50 @@ def test_限流上限不许进_harness():
         if hits:
             offenders[path.relative_to(harness).as_posix()] = hits
     assert offenders == {}, f"这些限流上限出现在 harness 里：{offenders}"
+
+
+def test_the_upper_limit_registry_matches_the_code():
+    """R：`02` 的「**上限登记表**」与代码**一致**（防表漂移）。
+
+    为什么（2026-10-22，批 14，M6 第一步）：那张表是 M6 后续的**工作清单**
+    （"与谁对过账"那一列）——表里的数一旦和代码对不上，它就从"账"变成"传说"。
+
+    I：读 `02-编排与数据.md` 的登记表；
+    P：逐行把「位置」里的模块与常量取出来，比对**值**；
+    R：全对得上（表里多一个代码里没有的常量 → 也红）。
+    """
+    import importlib
+    import re
+    from pathlib import Path
+
+    doc = Path(__file__).resolve().parents[3] / ".codex/docs/设计/02-编排与数据.md"
+    text = doc.read_text(encoding="utf-8")
+    start = text.index("### 11.0.90 上限登记表")
+    block = text[start : text.index("**防漂移**", start)]
+    rows = [
+        line
+        for line in block.splitlines()
+        if line.startswith("| `") and "`" in line and "位置" not in line
+    ]
+    assert rows, "登记表没解析出行 —— 表的格式变了？"
+
+    pattern = re.compile(
+        r"^\| `(?P<name>[A-Z0-9_/]+)` \| (?P<value>[^|]+) \| `(?P<where>[^`]+)` \|"
+    )
+    checked = 0
+    for row in rows:
+        match = pattern.match(row)
+        assert match, f"行没解析出来：{row}"
+        where = match.group("where")
+        module_name, name = where.rsplit(".", 1)
+        module = importlib.import_module(f"pmstudio.{module_name}")
+        if not hasattr(module, name):
+            # 表里有、代码里没有 → **表漂了**（那个上限被删了或改名了）
+            raise AssertionError(f"表里的 {where} 在代码里不存在 —— 表漂了")
+        expected = match.group("value").strip()
+        actual = getattr(module, name)
+        assert str(actual) == expected, (
+            f"{where} 在代码里是 {actual}，表里写的是 {expected} —— 表漂了"
+        )
+        checked += 1
+    assert checked >= 20, f"只核到 {checked} 个 —— 表的格式或范围变了？"

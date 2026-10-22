@@ -111,8 +111,13 @@ class Agent[Output, P: BaseModel]:
         packet_id: str,
         run_id: str,
         produced_by: str,
+        max_tokens: int | None = None,
     ) -> Envelope:
-        """统一的模型调用路径。从 self.definition 构造 StructuredCall，走 call_structured。"""
+        """统一的模型调用路径。从 self.definition 构造 StructuredCall，走 call_structured。
+
+        `max_tokens` 是**输出 token 上限**（`None` = 不设，保持供应商默认）——
+        只有需要"按预算限条数"的调用方才给（2026-10-22，批 14）。
+        """
         defn = self.definition
         call = StructuredCall(
             purpose=defn.purpose,
@@ -129,6 +134,7 @@ class Agent[Output, P: BaseModel]:
             packet_id=packet_id,
             run_id=run_id,
             produced_by=produced_by,
+            max_tokens=max_tokens,
         )
 
     def _make_packet_id(self, run_id: str, kind_suffix: str, slot: str = "") -> str:

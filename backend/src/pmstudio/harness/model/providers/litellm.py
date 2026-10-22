@@ -136,6 +136,10 @@ class LiteLLMGateway:
             "timeout": self._timeout,
             "num_retries": 0,
         }
+        if request.max_tokens is not None:
+            # **显式给上限时真的要发出去**（2026-10-22，批 14）：不设就撞供应商默认，
+            # 而"按预算限条数"这件事只有在**上限真的生效**时才成立。
+            kwargs["max_tokens"] = request.max_tokens
         if self._api_key:
             kwargs["api_key"] = self._api_key
         if self._api_base:

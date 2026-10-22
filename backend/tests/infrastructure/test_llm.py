@@ -290,8 +290,10 @@ def test_integrator_limits_tell_how_to_write_the_end_to_end_flow():
 def test_integrator_limits_bound_the_output_per_call_and_keep_the_reasoning_out_of_the_text():
     """输出侧口径两件事（P37 · 量出来的）。
 
-    ① **60 条是"一次整合"的上限，不是"一轮"**。真跑一轮会整合 2–3 次，累计 93–103 条提案
+    ① **条数上限是"一次整合"的，不是一轮的**。真跑一轮会整合 2–3 次，累计 93–103 条提案
        （M4 两轮真跑实测），所以原来那句"一轮最多 60 条"跟实际执行对不上。
+       （2026-10-22 批 14：那个 60 已按**输出预算**改成 21——`max_tokens` 之前**根本没设**
+       → 撞供应商默认 → 60 条装不下 → 17% 的调用事后被截断、最多丢 16 条提案。）
     ② 超限的**后果**要说清：真跑 201 次成功整合里 **17% 的调用写了 >60 条**（最多 90），
        系统先让模型精简一次（约 59% 能修好），其余**真截断**——真跑里最多一次丢掉 16 条提案
        （有留痕，但用户拿不到）。
@@ -304,8 +306,10 @@ def test_integrator_limits_bound_the_output_per_call_and_keep_the_reasoning_out_
 
     LIMITS_TEXT = limits_text(STD)
 
-    assert "一次整合最多 60 条" in LIMITS_TEXT
-    assert "一轮最多 60 条" not in LIMITS_TEXT
+    from pmstudio.application.agents.integrator import INTEGRATION_MAX_PROPOSALS
+
+    assert f"一次整合最多 {INTEGRATION_MAX_PROPOSALS} 条" in LIMITS_TEXT
+    assert f"一轮最多 {INTEGRATION_MAX_PROPOSALS} 条" not in LIMITS_TEXT
     assert "截断" in LIMITS_TEXT  # 超了会发生什么，得让模型知道
     assert "rationale" in LIMITS_TEXT  # 解释去哪儿
 
@@ -1408,8 +1412,10 @@ def test_the_rewrite_keeps_every_hard_number_and_consequence():
 
     LIMITS_TEXT = limits_text(STD)
 
+    from pmstudio.application.agents.integrator import INTEGRATION_MAX_PROPOSALS
+
     assert "5 道题" in LIMITS_TEXT        # 每批题数上限
-    assert "60 条" in LIMITS_TEXT         # 提案上限
+    assert f"{INTEGRATION_MAX_PROPOSALS} 条" in LIMITS_TEXT   # 提案上限
     assert "84 条" in LIMITS_TEXT         # 留痕上限
     assert "替你留着" in LIMITS_TEXT       # 超出名额的后果
     assert "悄悄丢掉" in LIMITS_TEXT       # 重复题的后果（这条理由正是规则的价值）
@@ -1482,3 +1488,64 @@ def test_the_analyzer_wording_matches_where_the_sections_actually_are():
 
     assert "当前文档" in text and ("上面「当前文档」" in text or "「当前文档」那节" in text)
     assert "本轮的外部材料" in text
+
+
+async def test_the_gateway_passes_max_tokens_when_the_request_asks_for_it(monkeypatch):
+    """R：请求里给了 `max_tokens` → **真的发给供应商**。
+
+    为什么（批 14，M5）：`max_tokens` 之前**根本没设** → 撞的是**供应商默认**输出上限；
+    而 60 条常常装不下（实测 17% 的整合调用写了 >60 条 → 事后截断 → 最多丢 16 条提案，
+    用户拿不到）。要**显式**给一个算好的上限，参数就得真的到得了供应商 ✓
+
+    I：带 `max_tokens=8457` 的请求；
+    P：网关构造 kwargs；
+    R：供应商收到的 kwargs 里有 `max_tokens=8457`。
+    """
+    seen: list[dict] = []
+
+    async def provider(**kwargs):
+        seen.append(dict(kwargs))
+        return _ok_response()
+
+    monkeypatch.setattr(provider_module, "acompletion", provider)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+
+    await gateway.complete(
+        ModelRequest(
+            purpose="integration",
+            messages=(ModelMessage(role="user", content="x"),),
+            schema_name="IntegrationPacket",
+            response_schema={"type": "object"},
+            max_tokens=8457,
+        )
+    )
+
+    assert seen[0].get("max_tokens") == 8457, seen[0]
+
+
+async def test_the_gateway_does_not_send_max_tokens_when_nobody_asked(monkeypatch):
+    """R：没给 `max_tokens` → **不往供应商发这个参数**（保持现状，不替别人做主）。
+
+    I：不带 `max_tokens` 的请求；
+    P：网关构造 kwargs；
+    R：kwargs 里**没有** `max_tokens`（供应商继续用它自己的默认）。
+    """
+    seen: list[dict] = []
+
+    async def provider(**kwargs):
+        seen.append(dict(kwargs))
+        return _ok_response()
+
+    monkeypatch.setattr(provider_module, "acompletion", provider)
+    gateway = LiteLLMGateway(model="m", api_key="k", api_base=None)
+
+    await gateway.complete(
+        ModelRequest(
+            purpose="integration",
+            messages=(ModelMessage(role="user", content="x"),),
+            schema_name="IntegrationPacket",
+            response_schema={"type": "object"},
+        )
+    )
+
+    assert "max_tokens" not in seen[0], seen[0]

@@ -59,7 +59,7 @@ def main() -> None:
     per_call_tokens: list[float] = []
     counts: list[int] = []
     used = 0
-    for purpose, reply_text, usage_json in rows:
+    for _purpose, reply_text, usage_json in rows:
         if '"proposals"' not in reply_text:
             continue
         try:

@@ -122,6 +122,7 @@ async def call_structured[P: BaseModel](
     packet_id: str,
     run_id: str,
     produced_by: str,
+    max_tokens: int | None = None,
 ) -> "Envelope":
     """跑一次结构化调用。
 
@@ -149,6 +150,7 @@ async def call_structured[P: BaseModel](
             #（`round_id` / `exploration_id` / `discussion_id`…），每加一种调用就得补一次
             #（讨论那一种就漏过一次，留样记成 NULL）。
             metadata={**metadata, "trace_id": run_id},
+            max_tokens=max_tokens,
         )
     )
     # 补壳只做一次，而且要拿**补壳之后**那个对象当 payload：模型把整包回成数组时

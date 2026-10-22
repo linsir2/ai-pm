@@ -179,7 +179,10 @@ async def test_integrator_returns_parsed_packet_and_all_slots():
     assert slots["validation_error"] == ""  # 第一次不给错误
     assert "最多 5" in slots["limits"]
     assert "功能子树" in slots["limits"]
-    assert "60" in slots["limits"]  # 提案上限与 schema 对齐
+    from pmstudio.application.agents.integrator import INTEGRATION_MAX_PROPOSALS
+
+    # 提案上限（2026-10-22 批 14：按输出预算算出来 = 21，schema 的硬天花板仍是 60）
+    assert f"{INTEGRATION_MAX_PROPOSALS} 条" in slots["limits"]
 
 
 async def test_integrator_passes_validation_error_on_repair():
@@ -469,3 +472,39 @@ def test_limits_text_uses_the_templates_own_chapter_count():
     )
 
     assert "target 必须落在 3 章内" in limits_text(adapter)
+
+
+def test_the_proposal_limit_is_derived_from_the_output_budget():
+    """R：提示词里说的条数上限 = **按 token 预算算出来的那个数**，不是拍脑袋的 60。
+
+    为什么（批 14，M5）：`max_tokens` 之前**根本没设** → 撞供应商默认输出上限；
+    而 60 条常常装不下（实测 17% 的整合调用写了 >60 条 → 事后截断 → **最多丢 16 条
+    提案，用户拿不到**，`02` §11.0.42）→ 改成**事前告知**装得下的条数 ✓
+
+    I：读 `limits_text`；
+    P：提示词里的那句；
+    R：它写的是算出来的 N（21），不是 60。
+    """
+    from pmstudio.application.agents.integrator import INTEGRATION_MAX_PROPOSALS
+
+    assert f"一次整合最多 {INTEGRATION_MAX_PROPOSALS} 条" in LIMITS_TEXT
+    assert INTEGRATION_MAX_PROPOSALS != 60, "那说明还没按预算算"
+
+
+def test_the_proposal_limit_fits_the_output_budget():
+    """R：N × 单条 P95 ≤ `max_tokens`——**装得下**才算数（装不下就又会事后截断）。
+
+    I：三个常数；
+    P：乘一下；
+    R：装得下，且 N 不破 schema 的硬上限 60。
+    """
+    from pmstudio.application.agents.integrator import (
+        INTEGRATION_MAX_PROPOSALS,
+        INTEGRATION_MAX_TOKENS,
+        INTEGRATION_PROPOSAL_TOKEN_P95,
+    )
+
+    assert (
+        INTEGRATION_MAX_PROPOSALS * INTEGRATION_PROPOSAL_TOKEN_P95 <= INTEGRATION_MAX_TOKENS
+    ), "条数上限与输出预算对不上 → 又会事后截断"
+    assert INTEGRATION_MAX_PROPOSALS <= 60, "schema 的硬上限是 60，不许破"

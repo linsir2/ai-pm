@@ -30,6 +30,14 @@ class ModelRequest:
     schema_name: str
     response_schema: Mapping[str, object]
     metadata: Mapping[str, str] = field(default_factory=dict)
+    #: **输出 token 上限**（`None` = 不设，供应商用它自己的默认）。
+    #:
+    #: 为什么加（2026-10-22，批 14）：**不设**就撞**供应商默认**输出上限，
+    #: 而调用方（整合器）需要按**算好的预算**限制条数 → 两把尺子对不上，
+    #: 结果是模型写的条数装不下 → **事后截断**（用户拿不到那几条）。
+    #:
+    #: **给了就真的发给供应商**（`providers/litellm.py`），不给就不发（保持现状）。
+    max_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

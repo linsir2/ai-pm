@@ -25,7 +25,11 @@ def test_model_message_is_role_and_content():
 
 
 def test_model_request_carries_schema_and_metadata():
-    """`schema_name` + `response_schema` 是结构化输出的全部依据；`metadata` 供留样归堆。"""
+    """`schema_name` + `response_schema` 是结构化输出的全部依据；`metadata` 供留样归堆。
+
+    `max_tokens`（2026-10-22，批 14）：**输出 token 上限**——不给就不设（供应商用
+    自己的默认），给了就真的发给供应商（`providers/litellm.py`）。
+    """
 
     assert field_names(ModelRequest) == (
         "purpose",
@@ -33,6 +37,7 @@ def test_model_request_carries_schema_and_metadata():
         "schema_name",
         "response_schema",
         "metadata",
+        "max_tokens",
     )
 
 

@@ -64,6 +64,33 @@ class DispositionOutcome:
         return self.envelope.discarded
 
 
+#: 一次整合的**输出预算**（token）——发给供应商的 `max_tokens`。
+#:
+#: **为什么显式设**（2026-10-22，批 14，M5）：之前**根本没设** → 撞的是**供应商默认**
+#: 输出上限；而 60 条常常装不下（实测 **17% 的整合调用写了 >60 条** → 事后真截断 →
+#: **最多一次丢 16 条提案，用户拿不到**，只在留痕里——`02` §11.0.42）→
+#: 改成「**按算好的预算限条数，并事前告知模型**」。
+#:
+#: **这个数怎么来的**（`scripts/measure_integration_output.py`，读应用自己的库
+#: `backend/data/pmstudio.db` 的 27 次**真实**整合调用，用**供应商报的实际 token 数**，
+#: 不是估的）：回包 token 的 **P99 = 7048** → × 1.2 = **8457**。
+#: **什么时候重量**：真跑的分布变了就重跑那个脚本（`python
+#: scripts/measure_integration_output.py`）。
+INTEGRATION_MAX_TOKENS = 8457
+
+#: 单条提案占多少 token（**P95**：实测单条 418 字 × 0.936 token/字 ≈ 391）。
+#: 用来算「这次最多能带几条」。
+INTEGRATION_PROPOSAL_TOKEN_P95 = 391
+
+#: 一次整合**最多给几条**内容候选 = min(60, 输出预算 ÷ 单条 P95)。
+#:
+#: 60 是 **schema 的硬天花板**（`agents/schemas.py` 的 `max_length=60`）→ 不许破 ✓
+#: （破了就回到"模型写 60 条、事后截断、用户拿不到"的老路）。
+#: 算出来是 **21**：就算每条都按 P95 算，21 × 391 = 8,211 ≤ 8,457 → **装得下** ✓
+#: （实测条数中位 13、最大 29 → 21 高于中位，多数调用不受影响 ✓）。
+INTEGRATION_MAX_PROPOSALS = min(60, INTEGRATION_MAX_TOKENS // INTEGRATION_PROPOSAL_TOKEN_P95)
+
+
 def limits_text(adapter: TemplateAdapter) -> str:
     """硬规矩（`$limits` 槽）：限额、去处写法、判重口径。
 
@@ -88,7 +115,8 @@ def limits_text(adapter: TemplateAdapter) -> str:
         "「本轮已出题」「题位已满」"
         "「（open12）」是系统自己的台账，写进标题读者看不懂，而且系统靠标题认「这其实是同一件事」。"
         "行首的条目地址只在出 `remove` 时填进 `entry_id`，出处编号只有 `E…` 这一种",
-        "- 内容候选（proposals）**一次整合最多 60 条**（这一轮可能整合好几次，每次都守这 60）；"
+        f"- 内容候选（proposals）**一次整合最多 {INTEGRATION_MAX_PROPOSALS} 条**"
+        "（这一轮可能整合好几次，每次都守这个数）；"
         f"同一件事只说一次，优先保留 {home} 功能字段与验收标准。"
         "超了系统会先让你精简一次、再**截断**丢掉多余的——那几条用户拿不到（只留在留痕里），"
         "所以装不下就先出题，或者放进 list_items 下一趟再说",
@@ -271,6 +299,9 @@ class Integrator(Agent[IntegrationOutcome, schemas.IntegrationPacket]):
             ),
             run_id=str(round_id or "new"),
             produced_by="integrator",
+            # **输出上限显式给**（批 14）：提示词里说的条数上限要真的装得下 →
+            # 上限必须到得了供应商，不设就撞它的默认（`02` §11.0.42）。
+            max_tokens=INTEGRATION_MAX_TOKENS,
         )
         packet = outcome.packet
         discarded = outcome.discarded
