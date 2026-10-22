@@ -79,8 +79,10 @@ MCP 读/写侧。
 | 前端类型检查 | `npx tsc --noEmit` |
 | 前端单测（纯函数） | `npx vitest run`（在 `frontend/`） |
 | **Docker 一键起** | `docker compose up -d`（后端 + Caddy + Redis；`.env` 读 `backend/.env`） |
+| **镜像构建** | `docker compose build`（CI 也跑这一步——Dockerfile 的错**不构建一次发现不了**） |
 | **无 Docker 时起** | `scripts/dev_stack.sh`（原生进程复现 compose 的启动序列；`--check` 只核对配置键名、`--stop` 收尾） |
 | **MCP 真跑验证** | `cd backend && uv run python scripts/mcp_probe.py --builtin`（真模型 + 真 MCP server） |
+| **MCP stdio 用例** | `cd backend && uv run pytest tests/infrastructure/test_mcp_client.py -k stdio`（**真子进程**，不是进程内替身） |
 | 混沌矩阵 | `cd backend && uv run python scripts/chaos_matrix.py`（真注入 5 类故障） |
 
 **部署形态**（两套，一份 Caddyfile）：
@@ -135,6 +137,14 @@ harness/         运行时控制平面（最内层）：统一信封 · 结构�
 `harness` 那边只认 `ToolInvoker` **协议**（`harness` 只许依赖
 pydantic/litellm/pybreaker，见 `tests/architecture/test_harness_imports.py`）。
 写侧要动"写入路径唯一"那条红线，明确不做。详见 `02-编排与数据.md §4.9`。
+
+**三条容易踩的**（2026-10-22 审查）：
+- **生产路径没有消费者**：`PMSTUDIO_MCP_SERVERS` 目前**只有 `scripts/mcp_probe.py` 读**。
+  主服务起起来**不连 MCP**——`scripts/dev.py` 只打一行配置状态，不建连接。
+- **`tools` 与 `response_format` 互斥**：agentic 路径**永不带** `response_format`
+  （降级重试分支里也一样，见 `test_gateway_resilience.py`）。
+- **调用数有上限**：`MAX_TOOL_CALLS_PER_TURN=5` / `MAX_TOOL_CALLS_PER_LOOP=12`，
+  超限**照实说**（不静默截断）；`MCP_CALL_TIMEOUT` 是**每次 `tools/call`** 的上限。
 
 DDD 分层，详细设计见 `.codex/docs/设计/05-DDD架构.md`。三条硬规矩（违反即设计错误）：
 

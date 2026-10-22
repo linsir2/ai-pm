@@ -50,16 +50,33 @@
 
 ### 方式一：Docker（推荐）
 
+**前置条件**——`backend/.env` 是唯一的配置来源（模板 `backend/.env.example`）：
+
+| 变量 | 必填 | 说明 |
+|---|---|---|
+| `PMSTUDIO_MODEL` | ✅ | LiteLLM 模型名，如 `openai/qwen3.7-flash` |
+| `PMSTUDIO_API_KEY` | ✅ | 供应商密钥 |
+| `PMSTUDIO_API_BASE` | 视供应商 | 非 OpenAI 官方端点时给 |
+| `PMSTUDIO_MODEL_PARAMS` | 可选 | JSON，如关思考 `{"extra_body":{"enable_thinking":false}}` |
+| `PMSTUDIO_MCP_SERVERS` | 可选 | MCP server 列表（JSON 数组），留空 = 不启用 |
+| `PMSTUDIO_SECRET_KEY` | 多用户时 | 会话签名密钥 |
+
+compose 还会注入几个**容器专属**变量（`PMSTUDIO_DB=/data/...`、`PMSTUDIO_FORWARDED_ALLOW_IPS`
+等），**不用手写**——写在 `.env` 里也只对源码形态生效。
+
 ```bash
 cp backend/.env.example backend/.env     # 填 PMSTUDIO_MODEL / PMSTUDIO_API_KEY
 docker compose up -d
-open http://localhost
+# 打开 http://localhost（站点地址以 http:// 开头，Caddy 不会强制跳 https）
 ```
 
+换域名：`PUBLIC_DOMAIN=example.com docker compose up -d`。
+
 > ⚠️ **镜像尚未在构建机上验证过**：`docker compose config` 与全部启动参数已由
-> `tests/architecture/test_container_assets.py` 钉住，但镜像本身没在本机构建过
-> （构建环境缺 `CAP_SYS_ADMIN`）。**首次 `docker compose up` 请照着上面的日志看**——
-> 若容器起不来，多半是 `.env` 里的 key 或 SQLite 版本（见下方"已知边界"）。
+> `tests/architecture/test_container_assets.py` 钉住（含前端 COPY 路径、Caddy 占位符来源、
+> `.dockerignore` 挡密钥），但镜像本身没在本机构建过（构建环境缺 `CAP_SYS_ADMIN`）。
+> **首次 `docker compose up` 请照着上面的日志看**——若容器起不来，多半是 `.env` 里的 key
+> 或 SQLite 版本（见下方"已知边界"）。
 
 ### 方式二：本地源码
 
@@ -79,6 +96,12 @@ scripts/dev_stack.sh          # 起（两个服务都健康才往下走）
 scripts/dev_stack.sh --check  # 只核对与 compose 的配置键名是否一致
 scripts/dev_stack.sh --stop   # 收
 ```
+
+> **它和 compose 不是同一种形态**，只是**同一套环境变量键名**（那是"等价"的根据，
+> `tests/architecture/test_container_assets.py` 做**双向**比对，两边各自独有的键都显式登记）：
+> 本机跑 vite dev server、反代目标是 `127.0.0.1`；compose 跑 Caddy、反代目标是服务名 `backend`。
+> 所以本机形态没有 `PMSTUDIO_WEB_ROOT`（vite 自己伺服），compose 形态没有 `PMSTUDIO_WEB_PORT`
+> （Caddy 的端口由镜像 `EXPOSE` 固定）。
 
 ---
 
@@ -225,7 +248,9 @@ cd backend && uv run python scripts/mcp_probe.py --list      # 只列工具
   发行版的 python3.12 有）。**CI 因此显式用 `actions/setup-python` 装解释器**，
   不吃 uv 下载的那个。
 - **SQLite WAL-reset bug**：链接的 SQLite 落在受影响区间（3.7.0–3.51.2，修复在 3.51.3）。
-  本仓改不了（解释器自带的 libsqlite3），**真修要换一个捆绑 ≥3.51.3 的解释器**（生产镜像里 pin 住）。
+  本仓改不了（Python 的 `sqlite3` 链接的是**解释器自带的** libsqlite3，加依赖无效）。
+  **镜像没有 pin 解释器**（用 `python:3.13-slim`），所以运行时**启动会打印一条告警**；
+  要真正消除只能换一个捆绑 ≥3.51.3 的解释器。
 - **Docker 镜像未在构建机验证过**（见"快速开始"）。
 
 ---
@@ -245,11 +270,11 @@ cd backend && uv run python scripts/mcp_probe.py --list      # 只列工具
 ## 开发
 
 ```bash
-# 后端
+# 后端（PYTHONDONTWRITEBYTECODE / no:cacheprovider：不在磁盘上留 __pycache__ / .pytest_cache）
 cd backend
 uv sync
-uv run pytest                        # 全量测试
-uv run pytest -m "not slow"          # CI 用的（排掉要真模型的）
+uv run pytest -q -p no:cacheprovider                                  # 全量测试
+uv run pytest -m "not slow" -q -p no:cacheprovider                     # CI 用的（排掉要真模型的）
 uv run ruff check --no-cache .
 
 # 前端
@@ -261,7 +286,7 @@ npx vitest run
 # 混沌矩阵（真注入：上游 5xx / 慢响应 / Redis 强断 / 写锁 / 磁盘满）
 cd backend && uv run python scripts/chaos_matrix.py
 
-# 接口零差（后端 OpenAPI ↔ 前端 client.ts）
+# 接口零差（后端 OpenAPI ↔ 前端 client.ts；默认用完即删的临时库，不碰真库）
 cd backend && uv run python scripts/check_api_parity.py
 ```
 
