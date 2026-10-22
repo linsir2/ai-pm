@@ -21,7 +21,10 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from pdfminer.high_level import extract_text as pdf_extract_text
 
-from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+from pmstudio.application.dto import (
+    MaterialChunk,
+    ParsedMaterial,
+)
 from pmstudio.application.errors import UnsupportedMaterial
 from pmstudio.infrastructure.tools.limits import (
     CHUNK_CHARS,

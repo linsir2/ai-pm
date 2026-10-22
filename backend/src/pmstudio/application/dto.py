@@ -3,6 +3,7 @@
 这里不做任何业务判断——"要不要出问卷""能不能写"全由领域决定，这里只是把结论摆出来。
 """
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -536,6 +537,24 @@ SEARCH_LIMIT = 50
 
 
 # ── 材料信息包（工具层 C-2）：解析器产出、存储层盖章、渲染器消费 ─────────────
+
+
+#: PDF 块的锚点形状：「第 N 页（第 M 段）」。
+#:
+#: **为什么解析放在应用层**（2026-10-21，批 16）：锚点是**应用层自己的格式**
+#: （用户看的就是它），而 `application` **不许 import `infrastructure`**（架构守卫）
+#: → 生成它的地方（`tools/extract.py`）与解析它的地方（这里）必须共用**同一份**知识，
+#: 否则就成了两处真相源（格式一改，解析就悄悄失配）。
+PDF_PAGE_ANCHOR = re.compile(r"^第 (\d+) 页")
+
+
+def page_of(anchor: str) -> int | None:
+    """锚点里的**页号**；不是 PDF 的锚点就 `None`。
+
+    PDF 的块按段落切 → 同一页的段落合起来才是「一段完整的话」（父块）。
+    """
+    match = PDF_PAGE_ANCHOR.match(anchor)
+    return int(match.group(1)) if match else None
 
 
 @dataclass(frozen=True, slots=True)

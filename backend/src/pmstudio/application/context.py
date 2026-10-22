@@ -7,10 +7,11 @@
 不是新的真相源（计划 §3.13）。
 """
 
+from collections import defaultdict
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
-from pmstudio.application.dto import MaterialChunk, MaterialPacket
+from pmstudio.application.dto import MaterialChunk, MaterialPacket, page_of
 from pmstudio.application.ports import SeatDefinition
 from pmstudio.domain.authoring.blocks import Entry
 from pmstudio.domain.authoring.document import Document
@@ -1136,10 +1137,59 @@ def material_head_line(packet: MaterialPacket) -> str:
     return head
 
 
-def material_number_line(eid: EvidenceId, chunk: MaterialChunk) -> str:
-    """块渲染时那行「[E12] 第 3 页」。"""
+def material_number_line(eids: Sequence[EvidenceId], chunk: MaterialChunk) -> str:
+    """块渲染时那行「[E12] 第 3 页」。
 
-    return f"[{eid}] {chunk.anchor}"
+    **可以有多个编号**（`[E13][E20][E21] 第 1 页`）：同一父块（PDF 的同一页）
+    只渲染一次，但那些编号**都还在**——账本里有编号、提示词里没出现，
+    "每个编号都有消费者"那条不变量就破了（`02` §11.0.30）。
+    """
+
+    return "".join(f"[{eid}]" for eid in eids) + f" {chunk.anchor}"
+
+
+def _parent_key(packet: MaterialPacket, chunk: MaterialChunk) -> str:
+    """这个块的**父块键**（同一父块的块归一组）。非 PDF 的块 = 自己。"""
+    page = page_of(chunk.anchor)
+    return f"page-{page}" if page is not None else chunk.chunk_id
+
+
+def parent_text(packet: MaterialPacket, chunk: MaterialChunk) -> str:
+    """命中子块 → 它所在的**父块**文本（**只对 PDF 做**）。
+
+    ## 为什么只对 PDF
+
+    PDF 的块是**按段落**切的：实测真 PDF（11 页）中位块只有 **34 字**，
+    **完整句只占 24%**（10/42）→ 喂给模型的证据是一堆残片。
+    同一页的段落合起来才是**一段完整的话**（10 个父块 / 中位 105 字 / 完整句 **100%**）。
+
+    **docx / xlsx 不做**：它们的块**已经是结构单元**（一节一块 / 一表一块），
+    父块=自己（实测体积比 1.00×）→ 零增量，还多一套复杂度。
+
+    ## 代价：没有
+
+    父块**替代**碎片、不是追加 → 同样预算下**覆盖同样的页数、字数一样**，
+    只是每段从残片变成完整的话（2026-10-21 实测：42 个碎片/998 字 →
+    10 段完整的话/同样字数）。
+
+    ## 不参与检索
+
+    父块**不进索引、不参与打分**（子块检索、父块返回 = small-to-big 的标准形态）
+    → **检索指标一个字都不变**。
+    """
+    # **锚点带页号的只有 PDF**（docx 是「第 N–M 段」、xlsx 是「工作表「T」第 N–M 行」、
+    # 联网是「网页正文 · 第 N 段」、文本是「第 N–M 行」）→ 不看 parser_id
+    # （那是基础设施的字，**应用层不许 import 基础设施**——架构守卫）。
+    page = page_of(chunk.anchor)
+    if page is None:
+        return chunk.text
+    siblings = [item for item in packet.parsed.chunks if page_of(item.anchor) == page]
+    if len(siblings) <= 1:
+        return chunk.text
+    # PDF 的块是**行**（pdfminer 按行宽折行，块中位只 34 字）→ 父块就是
+    # **整页的连续文本**（按原顺序用换行接回去，**不加空行**——那会让每行之间
+    # 都断开，更难读）。片段边界（子块之间）不加标记：读者要的是连续的一段。
+    return "\n".join(item.text for item in siblings)
 
 
 def _material_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
@@ -1154,7 +1204,9 @@ def _material_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
     同一个办法），不许每块都算一遍（那是同一段信息重复付费）。
     """
 
-    cost = len(chunk.text) + 1  # 正文 + 换行
+    # 正文按**父块**算（与渲染同源）——否则父块回喂时成本少算 3 倍，预算失真。
+    cost = len(parent_text(packet, chunk)) + 1  # 正文 + 换行
+    # 编号行：每个编号一行前缀（同一父块合并成一行，但**每个编号都占位**）
     cost += EID_RESERVE + len(chunk.anchor) + 1  # 编号行 + 换行
     if chunk.ordinal == 0:
         cost += len(material_head_line(packet)) + 1  # 抬头（每份材料只渲染一次）
@@ -1222,14 +1274,23 @@ def render_materials(
         # 按**文档序**渲染（`select_chunks` 只决定挑哪些块，不决定怎么摆）：
         # 编号也按文档序发，所以提示词里号码顺序走，用户对着材料卡找得到。
         kept = 0
+        # **同一父块只渲染一次，编号合并写在一行**（`[E13][E20][E21] 第 1 页`）。
+        # 为什么：① 不合并的话，同一页被选中 3 次 → 整页渲染 3 次 → 上下文全是同一段；
+        # ② 合并后只出一次，但**每个编号都还在**（账本里有编号、提示词里没出现 →
+        # "每个编号都有消费者"那条不变量就破了）。
+        by_parent: dict[str, list[MaterialChunk]] = defaultdict(list)
         for chunk in parsed.chunks:
-            eid = eids.get(chunk.chunk_id)
-            if eid is None:
+            if eids.get(chunk.chunk_id) is None:
                 continue
-            lines.append(material_number_line(eid, chunk))
-            lines.append(chunk.text)
-            used_ids.append(chunk.chunk_id)
-            kept += 1
+            by_parent[_parent_key(packet, chunk)].append(chunk)
+        for group in by_parent.values():
+            numbers = [eids[chunk.chunk_id] for chunk in group]
+            lines.append(material_number_line(numbers, group[0]))
+            # 正文给**父块**（PDF：同一页的完整内容）；编号与锚点仍指子块
+            lines.append(parent_text(packet, group[0]))
+            for chunk in group:
+                used_ids.append(chunk.chunk_id)
+            kept += len(group)
         for warning in parsed.warnings:
             lines.append(f"（{warning}）")
         # `kept` 必须**按材料**计（2026-10-21 修）：原来是 `len(used_ids)`——
