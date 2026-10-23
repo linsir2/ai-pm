@@ -52,8 +52,13 @@ jobs:
       # 那条用例**故意**把"env_file 缺失"当红灯（那正是它要抓的真问题，
       # 见其文档串），所以这里给它一个占位：构建阶段不读值，只是要文件在
       # （与下面的 build job 同一口径）。
+      #
+      # ⚠ 路径是 `.env.example` 而不是 `backend/.env.example`：**这个 job 的
+      # `working-directory` 就是 `backend/`**（见文件顶部 defaults）。
+      # 2026-10-23 修：写成 `backend/.env.example` → `cp: cannot stat ...`，
+      # 这一步自己红了（build job 没有那个 working-directory，所以它那边是对的）。
       - name: 造占位 .env
-        run: cp backend/.env.example backend/.env
+        run: cp .env.example .env
 
       - name: 测试
         # ⚠️ **`-m "not slow"` 必须显式给**：`markers` 只是**注册**标记，
