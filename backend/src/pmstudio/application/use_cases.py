@@ -6,6 +6,7 @@
 
 import asyncio
 import hashlib
+import logging
 import math
 import secrets
 import time
@@ -61,7 +62,9 @@ from pmstudio.application.assembly import (
 from pmstudio.application.context import (
     DIGEST_LIMIT,
     FETCH_ORIGIN,
+    MATERIAL_BUDGET,
     NO_MATERIAL_TEXT,
+    SECTION_OVERHEAD,
     WEB_BUDGET,
     answer_eids,
     build_project_context,
@@ -368,6 +371,20 @@ class AnswerInput:
     selected: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class _Picked:
+    """`_pick_materials` 交出来的东西：块 + 材料包 + 次序。
+
+    三个字段都是调用方**已经在用**的：`picked` 去发号，`packets` 查 `kind`/`external_ref`，
+    `order` 定 `position`（同分/同序时的先后）。两段式之后，**`packets` 与 `order` 都含
+    自动检索进来的材料**——`create()` 会拿它们直接下标，只交手勾的那份就会 `KeyError`。
+    """
+
+    picked: tuple[tuple[str, MaterialChunk], ...]
+    packets: dict[str, MaterialPacket]
+    order: tuple[str, ...]
+
+
 class StartRound:
     """建轮 → Analyzer 切分定性归位。
 
@@ -394,6 +411,7 @@ class StartRound:
         explorations: ExplorationReader,
         discussions: DiscussionReader,
         memory: MemoryReader | None = None,
+        retriever: MaterialRetriever | None = None,
     ) -> None:
         self._documents = documents
         self._rounds = rounds
@@ -411,6 +429,8 @@ class StartRound:
         self._explorations = explorations
         self._discussions = discussions
         self._memory = memory
+        # 库级检索是**增强项**：不给就只用手勾的材料（与改前逐字一致）。
+        self._retriever = retriever
 
     async def create(
         self,
@@ -424,9 +444,10 @@ class StartRound:
         # 但这道存在性闸得留着——后面的轮次要挂在这个项目上。
         self._documents.get(project_id)
         # 材料在**事务外**读（只读查询），选块是纯函数——所以下面那个事务里只有写入。
-        picked, packets = self._pick_materials(
+        selection = self._pick_materials(
             material_ids, query=user_input, project_id=project_id
         )
+        picked, packets, order = selection.picked, selection.packets, selection.order
         # 种子同样是事务外的只读校验：必须存在、同项目、跑完了、且被收下为「下一轮输入」
         seeds = self._resolve_seeds(project_id, seed_ids)
         with self._uow:
@@ -448,9 +469,10 @@ class StartRound:
                 # 见 02 §11.0.54 的撤回注）。`select_chunks` 只决定"挑哪些块进预算"，
                 # 不决定怎么摆——所以呈现、存储、编号现在是同一个序。
                 ledger = self._evidence.get(project_id)
+                # `order` 是**手勾序 + 自动检索序**：自动进来的材料也要有位次，
+                # 否则下面 `position[item[0]]` 直接 KeyError（v2 的崩点）。
                 position = {
-                    material_id: index
-                    for index, material_id in enumerate(dict.fromkeys(material_ids))
+                    material_id: index for index, material_id in enumerate(order)
                 }
                 eid_of = {
                     (material_id, chunk.chunk_id): ledger.record(
@@ -480,23 +502,50 @@ class StartRound:
             # 预算只带得下 K 份 → 剩下的**整份缺席**。不记这一笔，提示词与界面上
             # 都看不出"材料被预算挤掉了"，模型会以为自己看到的就是全部
             # （这正是缺陷 ② 的用户体感：勾了材料、提示词说没材料）。
-            picked_materials = {material_id for material_id, _ in picked}
+            #
+            # **只数手勾的**：自动检索进来的材料是"加料"，不是"勾了没带进来"——
+            # 把它算进 missed 会让界面说"你勾的材料被挤掉了"，而用户根本没勾它。
+            selected_ids = {material_id for material_id, _ in picked}
+            handpicked = list(dict.fromkeys(material_ids))
             missed = [
-                packet
-                for material_id, packet in packets.items()
-                if material_id not in picked_materials
+                packets[material_id]
+                for material_id in handpicked
+                if material_id not in selected_ids
             ]
             if missed:
+                kept = len(set(handpicked) & selected_ids)
                 round_.note_dropped(
                     [
                         DroppedItem(
-                            handle=f"材料 {len(packets)} 份",
+                            handle=f"材料 {len(handpicked)} 份",
                             reason=(
-                                f"预算只带得下 {len(picked_materials)} 份，"
+                                f"预算只带得下 {kept} 份，"
                                 f"还有 {len(missed)} 份材料一块都没带进来"
                                 "（材料表里留着，搜得到）"
                             ),
                             source=DropSource.MATERIAL,
+                            seat_id=None,
+                            pass_index=1,
+                        )
+                    ]
+                )
+            # 自动检索进来的材料**单独说一句**：用户没勾它们，但这一轮确实用了——
+            # 不记的话模型的上下文里会凭空多出几份"没勾过的材料"，人看不出从哪来。
+            auto_ids = [
+                material_id
+                for material_id in order
+                if material_id not in set(handpicked) and material_id in selected_ids
+            ]
+            if auto_ids:
+                round_.note_dropped(
+                    [
+                        DroppedItem(
+                            handle=f"自动检索 {len(auto_ids)} 份",
+                            reason=(
+                                "这一轮还从材料库里按本轮输入检索并收敛了"
+                                f" {len(auto_ids)} 份（不是你勾的，块已带进来）"
+                            ),
+                            source=DropSource.MATERIAL_AUTO,
                             seat_id=None,
                             pass_index=1,
                         )
@@ -512,17 +561,24 @@ class StartRound:
         *,
         query: str,
         project_id: ProjectId,
-    ) -> tuple[tuple[tuple[str, MaterialChunk], ...], dict[str, MaterialPacket]]:
-        """按用户挑的 id 读材料 → 选块（`select_chunks` 是唯一决策点）。
+    ) -> _Picked:
+        """两段式：手勾材料**保底优先**，再把库级检索的结果**按分数收敛**进剩余预算。
+
+        第一段与改前一致（`select_chunks` 的第一步保底），只是成本尺子修好了（F0）。
+        第二段是本轮重设计的 stage 2：库级检索**宽召回**（`SEARCH_LIMIT`），**只保留有分的
+        块**、按分数降序填预算，**不做保底**——否则候选一宽，预算就被摊成十几份材料、
+        每份只摊到一两块（v4 实测 gold 材料 13.45 块 → 1.54 块，正确率 0.737 → 0.485）。
 
         `query` 是本轮输入：预算只有 4000 字，粗排把预算从"排最前面的"挪到"提到本轮用词的"
         （`02 §11.0.53`）。用户勾选的顺序仍然作数——它决定同分时的先后。
+
+        `section_overhead` **只在第一段预留**：那句收尾整节只渲染一次，两段都预留就是
+        记两次账，反而把可用预算压掉一倍。
         """
 
+        handpicked = list(dict.fromkeys(material_ids))
         packets: dict[str, MaterialPacket] = {}
-        for material_id in material_ids:
-            if material_id in packets:
-                continue
+        for material_id in handpicked:
             packet = self._materials.get(material_id)
             if packet is None:
                 raise ShapeError(f"找不到这份材料：{material_id}", material_id=material_id)
@@ -531,10 +587,57 @@ class StartRound:
                 # 不按"形状错"422（`test_delete_material.py` 的跨项目用例即此语义）。
                 raise UnknownMaterial(material_id)
             packets[material_id] = packet
-        picked = select_chunks(
-            [packets[item] for item in dict.fromkeys(material_ids)], query=query
+        picked, used = select_chunks(
+            [packets[item] for item in handpicked],
+            query=query,
+            section_overhead=SECTION_OVERHEAD,
         )
-        return picked, packets
+        order = list(handpicked)
+        remaining = MATERIAL_BUDGET - used - SECTION_OVERHEAD
+        # 预算已经被手勾的用光就别检索了：`search` 在向量路会跑同步推理，
+        # 白跑一趟还会阻塞事件循环（收益恒为 0）。
+        if self._retriever is None or remaining <= 0:
+            return _Picked(picked=picked, packets=packets, order=tuple(order))
+        try:
+            hits = self._retriever.search(
+                project_id=project_id, query=query, limit=SEARCH_LIMIT
+            )
+        except Exception:
+            # 检索是**增强项**：它挂了不该让这一轮起不来——回退到"只有勾的材料"，
+            # 也就是改前的行为。**但要说一声**：静默降级会让"检索器永久坏了"和
+            # "这轮确实没搜到"完全无法区分（评审 B）。
+            logger.warning(
+                "材料检索失败，本轮只用勾的材料：project=%s", project_id, exc_info=True
+            )
+            return _Picked(picked=picked, packets=packets, order=tuple(order))
+        # 同一份材料可能在命中里占两槽（`_MATERIAL_SLOTS=2`）→ 按材料去重。
+        auto: dict[str, MaterialPacket] = {}
+        for material_id in dict.fromkeys(hit.material_id for hit in hits):
+            if material_id in packets:
+                continue
+            packet = self._materials.get(material_id)
+            if packet is None or packet.project_id != str(project_id):
+                continue
+            if packet.parsed.origin == WEB_ORIGIN:
+                # **联网结果走另一条渲染路**：一条结果一个号、预算 `WEB_BUDGET`、
+                # 由 `render_web_results` 出正文。混进材料段会按块发号、按材料预算算，
+                # 结果就是"有号但提示词里一个字没有"——"编号 == 带进提示词的块"那条红线。
+                continue
+            auto[material_id] = packet
+        # `scores` 以 `chunk_id` 为键——前提是它**全局唯一**（生产由 `_restamp` 保证：
+        # `{material_id}#cNN`）。只留自动材料的分：手勾的那些已经进过第一段了。
+        scores = {
+            hit.chunk_id: hit.score for hit in hits if hit.material_id in auto
+        }
+        more, _ = select_chunks(
+            list(auto.values()),
+            scores=scores,
+            budget=remaining,
+        )
+        picked = picked + more
+        packets.update(auto)
+        order += list(auto)
+        return _Picked(picked=picked, packets=packets, order=tuple(order))
 
     def _resolve_seeds(
         self, project_id: ProjectId, seed_ids: Sequence[str]
@@ -710,6 +813,10 @@ class StartRound:
 WEB_SEARCH_KIND = "web_search"
 #: 联网结果在信息包里的 origin（`TavilySearchGateway` 盖的就是它）
 WEB_ORIGIN = "web_search"
+
+#: 应用层只有这一处会"吞"异常（库级检索是增强项），所以要有日志：
+#: 否则"检索器永久坏了"与"这一轮确实没搜到"分不开（评审 B）。
+logger = logging.getLogger(__name__)
 
 
 
@@ -994,7 +1101,7 @@ class SubmitOpening:
             drafts.extend(result)
         for draft in drafts:
             packets.append(self._keep(project_id, draft))
-        picked = select_chunks(packets, budget=WEB_BUDGET, cost=web_block_cost)
+        picked, _ = select_chunks(packets, budget=WEB_BUDGET, cost=web_block_cost)
         if 0 < len(picked) < len(packets):
             missed = len(packets) - len(picked)
             drops.append(

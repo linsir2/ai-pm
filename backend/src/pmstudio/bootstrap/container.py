@@ -387,6 +387,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         materials=materials,
         explorations=explorations,
         discussions=discussions,
+        # **同一个**检索器也交给建轮：建轮时用它宽召回、再按分数收敛进预算（stage 2）。
+        # 不另造一个实例——两处口径必须一致（换实现也只改 `material_search` 那一行）。
+        retriever=material_search,
     )
     submit_opening = SubmitOpening(
         rounds=rounds,

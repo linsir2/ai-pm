@@ -461,3 +461,27 @@ async def test_materials_the_budget_cannot_fit_are_said_out():
     prompt = external_material_text(round_, store=harness.materials)
     assert "另有 1 份材料因预算没带进来" in prompt, prompt
     assert "在材料表里，查得到，但这一轮没读" in prompt, prompt
+
+
+async def test_the_budget_dropped_trace_is_unchanged():
+    """R（回归）：手勾路（无自动检索）的 `missed` 文案**逐字不变**——F0 不许动老路的话术。
+
+    口径：这里没有自动检索，`missed` 的列表与两个计数都只数手勾的材料。
+    """
+
+    harness = Harness(replies={"claims": claims_reply()})
+    harness.seed_project()
+    for index in range(3):
+        harness.materials.seed(
+            make_material("字" * 3000, material_id=f"m{index + 1}", title=f"材料{index + 1}.md")
+        )
+
+    round_id = await started_round(harness, material_ids=("m1", "m2", "m3"))
+
+    round_ = harness.rounds.get(RoundId(round_id))
+    drops = [item for item in round_.dropped if item.source == DropSource.MATERIAL]
+    assert len(drops) == 1, f"预算挤掉的材料要留一条痕：{round_.dropped}"
+    assert drops[0].handle == "材料 3 份"
+    assert drops[0].reason == (
+        "预算只带得下 1 份，还有 2 份材料一块都没带进来（材料表里留着，搜得到）"
+    )

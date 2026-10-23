@@ -54,8 +54,10 @@ export function LoopPane({
   const integrated = round.questions.length > 0 || round.draft !== null;
   // 挂不到任何席位包上的留痕（地址写歪、或归因对不上号）：闭环区末尾单独一行。
   // 工具那几笔（检索失败 / 没带进去）不是席位的事，单独一段说（`P17b` §2.4）。
+  // 自动检索进来的材料（`material_auto`，`02 §11.0.91`）也不是"丢掉的"——它们读到了，
+  // 只是用户没勾；落进这个折叠会被那句"去处写错的"说反话，而且每轮都会出现。
   const unplaced = unplacedDrops(round.dropped, round.seat_packets).filter(
-    (item) => item.source !== "tool",
+    (item) => item.source !== "tool" && item.source !== "material_auto",
   );
   const toolNotes = toolDrops(round.dropped);
   const dupItems = round.list_items.length - new Set(round.list_items).size;

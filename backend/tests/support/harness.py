@@ -354,7 +354,13 @@ class Harness:
         return self.seats.titles()
 
     # —— 用例工厂 ——
-    def start_round(self):  # type: ignore[no-untyped-def]
+    def start_round(self, *, retriever=None):  # type: ignore[no-untyped-def]
+        """建轮用例。`retriever` **默认 None**（= 只用手勾的材料，与改前一致）。
+
+        要验"库级检索 + 收敛"的用例自己传一个检索器（`F2/F3`）——默认不给，
+        是为了让既有用例的行为**不受**这条新路影响。
+        """
+
         from pmstudio.application.use_cases import StartRound
 
         return StartRound(
@@ -374,6 +380,7 @@ class Harness:
             explorations=self.explorations,
             discussions=self.discussions,
             memory=self.memory,
+            retriever=retriever,
         )
 
     # —— 探索（M8）——

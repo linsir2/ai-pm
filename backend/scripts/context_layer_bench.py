@@ -71,8 +71,8 @@ def main() -> None:
 
     print("=== 上下文层基线（每轮进提示词的东西）===")
     for query in NEGATIVE_QUERIES[:3] + ["向量检索 召回效果"]:
-        picked = select_chunks(packets, budget=MATERIAL_BUDGET, cost=web_block_cost,
-                               query=query)
+        picked, _ = select_chunks(packets, budget=MATERIAL_BUDGET, cost=web_block_cost,
+                                  query=query)
         # `select_chunks` 返回 ((material_id, chunk), ...) 的元组
         materials = {material_id for material_id, _ in picked}
         chars = sum(len(chunk.text) for _, chunk in picked)

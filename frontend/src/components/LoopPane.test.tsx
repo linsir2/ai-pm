@@ -112,6 +112,29 @@ describe("闭环区的列表（P29 F1/F2）", () => {
       String(message).includes("same key"))).toBe(false);
     spy.mockRestore();
   });
+
+  it("自动检索进来的材料不算「留痕」：不进那句「去处写错的」，也不挤占工具的条数", () => {
+    const { container } = draw(
+      round({
+        seats: ["seat.a"],
+        dropped: [
+          {
+            handle: "自动检索 1 份",
+            reason: "这一轮还从材料库里按本轮输入检索并收敛了 1 份（不是你勾的，块已带进来）",
+            source: "material_auto",
+            seat_id: null,
+            pass_index: 1,
+          },
+          { handle: "web_search", reason: "没搜到结果", source: "tool", seat_id: null, pass_index: 1 },
+        ],
+      }),
+    );
+
+    // 它读到了、只是没勾：落进折叠会被那句「去处写错的」说反话，而且每轮都会出现
+    expect(container.textContent).not.toContain("自动检索 1 份");
+    // 工具那一趟照旧单列（不受影响）
+    expect(container.textContent).toContain("没搜到结果");
+  });
 });
 
 describe("对话流折叠纪律（Trae 式：标题行常显，明细点展）", () => {

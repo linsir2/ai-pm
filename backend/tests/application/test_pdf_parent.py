@@ -17,7 +17,7 @@ PDF 的块按**段落**切：实测真 PDF（11 页）中位块只 **34 字**，
 """
 
 from pmstudio.application.context import (
-    _material_block_cost,
+    material_block_cost,
     parent_text,
     render_materials,
 )
@@ -90,7 +90,7 @@ def test_the_cost_counts_the_parent_not_the_child():
     packet = _pdf_packet()
 
     child = packet.parsed.chunks[0]
-    parent = _material_block_cost(packet, child)
+    parent = material_block_cost(packet, child, first_of_material=False)
 
     assert parent > len(child.text), "成本没算父块"
 

@@ -425,7 +425,7 @@ def test_the_feature_field_table_says_main_flow_is_expected():
 def test_select_chunks_is_the_only_place_that_decides_what_goes_in():
     packet = make_packet(*["字" * 500 for _ in range(20)])
 
-    picked = context.select_chunks([packet], budget=1200)
+    picked, _ = context.select_chunks([packet], budget=1200)
 
     assert [chunk.ordinal for _, chunk in picked] == [0, 1]
     assert all(material_id == "m1" for material_id, _ in picked)
@@ -452,6 +452,139 @@ def test_a_block_always_fits_the_material_budget():
     assert worst_block < context.MATERIAL_BUDGET
 
 
+# ── F0：修预算尺子（成本模型与渲染同源）────────────────────────────────
+
+
+def test_select_chunks_returns_picked_and_used():
+    """R（契约形状）：`select_chunks` 返回 `(picked, used)`——`used` 是选块时算掉的成本。
+
+    为什么要它返回 `used`：手勾段与检索段要**共用一个预算**（F2），而"两段各自算
+    再相加"会与选块内部各算一套、口径漂掉（v4 评审 C.5）。
+    """
+
+    packet = make_packet("字" * 300, "字" * 300, "字" * 300)
+
+    picked, used = context.select_chunks([packet], budget=850)
+
+    assert [chunk.ordinal for _, chunk in picked] == [0, 1]
+    assert used == sum(
+        context.material_block_cost(
+            packet, chunk, first_of_material=chunk.ordinal == 0
+        )
+        for _, chunk in picked
+    )
+
+
+def test_both_cost_functions_take_the_first_of_material_flag():
+    """R：**两个**成本函数都接受 `first_of_material`（v4 的崩点）。
+
+    `cost` 是 2 参可调用，三条选块路统一按 `weigh(packet, chunk, first_of_material=…)` 调；
+    只改 `material_block_cost` 不改 `web_block_cost` → 联网路 `TypeError`（v4 漏了这条）。
+    """
+
+    packet = make_packet("字" * 100, "字" * 100)
+    upload_head = context.material_block_cost(
+        packet, packet.parsed.chunks[0], first_of_material=True
+    ) - context.material_block_cost(
+        packet, packet.parsed.chunks[0], first_of_material=False
+    )
+    assert upload_head > 0
+
+    web = stamp_web(make_web(url="https://a", text="字" * 100))[0]
+    web_head = context.web_block_cost(
+        web, web.parsed.chunks[0], first_of_material=True
+    ) - context.web_block_cost(
+        web, web.parsed.chunks[0], first_of_material=False
+    )
+    assert web_head > 0
+
+
+def test_the_head_line_is_charged_to_the_materials_first_selected_chunk():
+    """I：抬头算在**该材料被选中的第一块**上，不是 `ordinal == 0`（根因 A）。
+
+    粗排路里"第一名"常不是 ordinal 0；旧尺子只在 `ordinal == 0` 时算抬头
+    → 第一名不是 ordinal 0 就**漏算抬头** → 渲染超预算（C 臂实测 5578 > 4000）。
+    """
+
+    packet = make_packet("甲" * 300, "导出权限" * 100, "乙" * 300)
+
+    picked, _ = context.select_chunks([packet], budget=2000, query="导出权限")
+
+    # 粗排把第二块排到了第一 → 它是"该材料被选中的第一块"（ordinal 0 没被选中）
+    assert picked[0][1].ordinal == 1
+    head = len(context.material_head_line(packet)) + 1
+    # 抬头**只算一次**，且算在被选中的第一块上（不是 ordinal 0）
+    assert sum(
+        context.material_block_cost(
+            packet, chunk, first_of_material=chunk is picked[0][1]
+        )
+        for _, chunk in picked
+    ) == sum(
+        context.material_block_cost(packet, chunk, first_of_material=False)
+        for _, chunk in picked
+    ) + head + context.TRUNCATION_NOTE_RESERVE
+
+
+def test_the_rendered_text_now_fits_the_budget():
+    """I：尺子修好后，渲染**不超过预算**（今天 5578 > 4000）。
+
+    场景复刻 C 臂：每份材料的"相关块"都不是 ordinal 0 → 旧尺子给它们漏算抬头，
+    于是选进来的块渲染出来超预算。
+    """
+
+    packets = [
+        make_packet(
+            *(["字" * 250 for _ in range(6)]
+              + ["导出权限" * 50]
+              + ["字" * 250 for _ in range(13)]),
+            material_id=f"m{index}",
+            title=f"材料{index}.md",
+        )
+        for index in range(12)
+    ]
+    budget = context.MATERIAL_BUDGET
+
+    picked, _ = context.select_chunks(
+        packets,
+        budget=budget,
+        query="导出权限怎么定",
+        section_overhead=context.SECTION_OVERHEAD,
+    )
+    eids: dict[str, dict[str, str]] = {}
+    for index, (material_id, chunk) in enumerate(picked):
+        eids.setdefault(material_id, {})[chunk.chunk_id] = f"E{index + 1}"
+    entries = [
+        (packet, eids[packet.material_id])
+        for packet in packets
+        if packet.material_id in eids
+    ]
+
+    rendered = context.render_materials(entries)
+
+    assert entries, "至少要选进来一些材料（否则这条断言是空的）"
+    assert len(rendered.text) <= budget, (
+        f"渲染 {len(rendered.text)} 字 > 预算 {budget} 字 → 预算是假的"
+    )
+
+
+def test_the_in_order_path_selection_is_unaffected_by_f0():
+    """I：`_select_in_order` 按块序取 → 首块就是 ordinal 0 → 选中集合与 F0 之前一致。
+
+    注意它不只服务联网路——`query=""` 时**手勾路也走它**（用户只勾材料不写字）。
+    """
+
+    packet = make_packet("甲" * 300, "乙" * 300, "丙" * 300)
+
+    picked, used = context.select_chunks([packet], budget=850)
+
+    assert [chunk.ordinal for _, chunk in picked] == [0, 1]
+    assert used == context.material_block_cost(
+        packet, packet.parsed.chunks[0], first_of_material=True
+    ) + context.material_block_cost(
+        packet, packet.parsed.chunks[1], first_of_material=False
+    )
+
+
 # ── 选块粗排（`02 §11.0.53`）───────────────────────────────────────────
 #
 # 预算只有 4000 字 ≈ 8 块。没有 query 时"顺序取"会把预算给排在最前面的材料，而与内容无关；
@@ -466,7 +599,7 @@ def test_without_a_query_selection_keeps_document_order():
     # 预算 850：成本模型现在**把渲染写出去的每一行都算进去**（正文 + 编号行 +
     # 抬头 + 截断说明预留），两块的成本是 392 + 416 = 808（批 11 之前是 624 + 400 = 1024，
     # 旧模型没算抬头与编号行 → 渲染会超预算）。**断言的意图一字不改**。
-    picked = context.select_chunks([packet], budget=850)
+    picked, _ = context.select_chunks([packet], budget=850)
 
     assert [chunk.ordinal for _, chunk in picked] == [0, 1]
 
@@ -474,7 +607,7 @@ def test_without_a_query_selection_keeps_document_order():
 def test_a_query_pulls_the_blocks_that_mention_it_forward():
     packet = make_packet("甲" * 300, "导出权限" * 100, "乙" * 300)
 
-    picked = context.select_chunks([packet], budget=850, query="导出权限怎么定")
+    picked, _ = context.select_chunks([packet], budget=850, query="导出权限怎么定")
 
     assert [chunk.ordinal for _, chunk in picked] == [1, 0]
 
@@ -482,7 +615,7 @@ def test_a_query_pulls_the_blocks_that_mention_it_forward():
 def test_ties_keep_document_order_so_the_result_is_reproducible():
     packet = make_packet("同一段话", "同一段话", "同一段话")
 
-    picked = context.select_chunks([packet], budget=10_000, query="导出")
+    picked, _ = context.select_chunks([packet], budget=10_000, query="导出")
 
     assert [chunk.ordinal for _, chunk in picked] == [0, 1, 2]
 
@@ -490,7 +623,7 @@ def test_ties_keep_document_order_so_the_result_is_reproducible():
 def test_a_query_no_block_mentions_falls_back_to_document_order():
     packet = make_packet("甲" * 300, "乙" * 300, "丙" * 300)
 
-    picked = context.select_chunks([packet], budget=850, query="完全不搭的词")
+    picked, _ = context.select_chunks([packet], budget=850, query="完全不搭的词")
 
     assert [chunk.ordinal for _, chunk in picked] == [0, 1]
 
@@ -505,7 +638,7 @@ def test_every_picked_material_gets_at_least_one_block():
     strong = make_packet(*(["导出权限" * 60] * 12), material_id="强", title="强.md")
     weak = make_packet("甲" * 300, "乙" * 300, material_id="弱", title="弱.md")
 
-    picked = context.select_chunks([strong, weak], budget=800, query="导出权限")
+    picked, _ = context.select_chunks([strong, weak], budget=800, query="导出权限")
 
     assert {material_id for material_id, _ in picked} == {"强", "弱"}
 
@@ -516,7 +649,7 @@ def test_the_floor_does_not_break_the_budget():
     strong = make_packet(*(["字" * 500] * 12), material_id="强", title="强.md")
     weak = make_packet(*(["字" * 500] * 4), material_id="弱", title="弱.md")
 
-    picked = context.select_chunks([strong, weak], budget=1200)
+    picked, _ = context.select_chunks([strong, weak], budget=1200)
 
     assert sum(len(chunk.text) for _, chunk in picked) <= 1200
 
@@ -525,7 +658,7 @@ def test_select_chunks_stops_when_the_budget_runs_out_across_materials():
     first = make_packet("字" * 700, title="甲.md")
     second = make_packet("字" * 700, title="乙.md")
 
-    picked = context.select_chunks([first, second], budget=800)
+    picked, _ = context.select_chunks([first, second], budget=800)
 
     assert [material_id for material_id, _ in picked] == ["m1"]
 
@@ -551,7 +684,7 @@ def test_materials_that_were_cut_short_say_so():
         chunk.chunk_id: EvidenceId(f"E{index + 10}")
         for index, chunk in enumerate(packet.parsed.chunks)
     }
-    picked = context.select_chunks([packet], budget=1200)
+    picked, _ = context.select_chunks([packet], budget=1200)
 
     rendered = context.render_materials(
         [(packet, {chunk.chunk_id: eids[chunk.chunk_id] for _, chunk in picked})]
@@ -666,7 +799,7 @@ def test_the_selection_cost_never_lets_the_renderer_drop_a_numbered_chunk():
         *[make_web(url=f"https://example.com/{index}", text="字" * 250) for index in range(6)]
     )
 
-    picked = context.select_chunks(
+    picked, _ = context.select_chunks(
         packets, budget=context.WEB_BUDGET, cost=context.web_block_cost
     )
     by_id = {packet.material_id: packet for packet in packets}
@@ -1317,8 +1450,10 @@ def test_a_web_result_costs_its_title_and_url_once():
     store = InMemoryMaterialStore()
     stamped = store.put(project_id=PROJECT, parsed=packet, sha256="web-x", content=b"x", now=NOW)
 
-    first = context.web_block_cost(stamped, stamped.parsed.chunks[0])
-    second = context.web_block_cost(stamped, stamped.parsed.chunks[1])
+    first = context.web_block_cost(stamped, stamped.parsed.chunks[0], first_of_material=True)
+    second = context.web_block_cost(
+        stamped, stamped.parsed.chunks[1], first_of_material=False
+    )
 
     assert second == 100, f"第二块只该算正文（100），实得 {second}"
     assert first == 100 + len(stamped.parsed.title) + len(stamped.parsed.source_ref) \
@@ -1420,7 +1555,7 @@ def test_the_rendered_materials_never_exceed_the_budget():
     ]
     budget = 4000
 
-    picked = context.select_chunks(
+    picked, _ = context.select_chunks(
         packets, budget=budget, section_overhead=context.SECTION_OVERHEAD
     )
     eids: dict[str, dict[str, str]] = {}
@@ -1459,3 +1594,91 @@ def test_the_web_truncation_note_counts_results_not_blocks():
 
     assert "只带了前 1 条 / 共 2 条" in rendered.text, rendered.text
     assert "前 2 条 / 共 2 条" not in rendered.text, "块数不该写进条数的位置"
+
+
+# ── F1：按外部分数收敛（stage 2）──────────────────────────────────────
+
+
+def test_only_scored_chunks_are_candidates():
+    """I：给了 `scores`，候选集**只有**有分的块——非命中块不参赛。
+
+    "非命中块取什么分"的答案就是这条：它们不取分，也不进候选。检索没命中的块
+    不该被"每份材料露一名"的保底拉回来。
+    """
+
+    packet = make_packet("甲" * 300, "乙" * 300, "丙" * 300)
+
+    picked, _ = context.select_chunks(
+        [packet], budget=4000, scores={packet.parsed.chunks[2].chunk_id: 1.0}
+    )
+
+    assert [chunk.ordinal for _, chunk in picked] == [2]
+
+
+def test_an_empty_score_map_selects_nothing():
+    """I：`scores={}` 是"检索一个都没中"，**不许**退回按 query 粗排的老路。"""
+
+    packet = make_packet("甲" * 300)
+
+    picked, used = context.select_chunks([packet], budget=4000, query="甲", scores={})
+
+    assert picked == ()
+    assert used == 0
+
+
+def test_no_per_material_guarantee_when_scores_are_given():
+    """I（根因）：给了 `scores` 就**不做"每份材料露一名"的保底**。
+
+    这正是收敛语义：候选一宽时，保底那一步会把预算均分成十几份材料、每份一两块
+    （v4 实测 gold 材料 13.45 块 → 1.54 块）。对照的一半用 `query=` 的同一次调用。
+    """
+
+    rich = make_packet(*["甲" * 300 for _ in range(6)], material_id="ma")
+    other = make_packet("字" * 300, material_id="mb")
+    scores = {chunk.chunk_id: 1.0 - chunk.ordinal * 0.01 for chunk in rich.parsed.chunks}
+    scores[other.parsed.chunks[0].chunk_id] = 0.5
+
+    by_query, _ = context.select_chunks([rich, other], budget=2000, query="甲")
+    by_scores, _ = context.select_chunks([rich, other], budget=2000, scores=scores)
+
+    assert "mb" in {material_id for material_id, _ in by_query}, "老路有保底（对照）"
+    assert "mb" not in {material_id for material_id, _ in by_scores}, "收敛段不该有保底"
+    assert by_scores, "至少要选进来一些块（否则这条断言是空的）"
+
+
+def test_scores_take_precedence_over_the_2gram_ranking():
+    """I：分数是**外部**判断，压过我们自己的 2-gram 粗排（也就压过 `query` 路由）。"""
+
+    packet = make_packet("甲" * 300, "乙" * 300)
+
+    picked, _ = context.select_chunks(
+        [packet],
+        budget=600,
+        query="甲",
+        scores={
+            packet.parsed.chunks[0].chunk_id: 0.1,
+            packet.parsed.chunks[1].chunk_id: 1.0,
+        },
+    )
+
+    assert [chunk.ordinal for _, chunk in picked] == [1]
+
+
+def test_a_skipped_expensive_block_does_not_stop_the_cheaper_ones():
+    """I：高分块贵到装不下时**跳过**它、继续试后面的（不是 break）。
+
+    与 `_select_ranked` 第二步的处置一致：装不下一个不等于后面全装不下。
+    """
+
+    packet = make_packet("长" * 900, "短" * 50)
+
+    picked, _ = context.select_chunks(
+        [packet],
+        budget=600,
+        scores={
+            packet.parsed.chunks[0].chunk_id: 1.0,
+            packet.parsed.chunks[1].chunk_id: 0.5,
+        },
+    )
+
+    assert [chunk.ordinal for _, chunk in picked] == [1]

@@ -69,7 +69,7 @@ def main() -> int:
     page = [c for c in packet.parsed.chunks if page_of(c.anchor) == TARGET_PAGE]
     print(f"存储往返：{len(packet.parsed.chunks)} 块，第 {TARGET_PAGE} 页 {len(page)} 块")
 
-    picked = select_chunks([packet], query=page[0].text[:20])
+    picked, _ = select_chunks([packet], query=page[0].text[:20])
     picked_ids = {chunk.chunk_id for _, chunk in picked}
     hit = [chunk for _, chunk in picked if page_of(chunk.anchor) == TARGET_PAGE]
     siblings_not_picked = [c for c in page if c.chunk_id not in picked_ids]

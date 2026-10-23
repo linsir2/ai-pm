@@ -164,8 +164,13 @@ def probe_p5_budget() -> dict:  # type: ignore[no-untyped-def]
             parsed=parsed,
             created_at=NOW,
         )
-        picked = select_chunks([packet], budget=WEB_BUDGET, cost=web_block_cost)
-        costed = sum(web_block_cost(packet, chunk) for _, chunk in picked)
+        picked, _ = select_chunks([packet], budget=WEB_BUDGET, cost=web_block_cost)
+        costed = 0
+        seen = set()
+        for _, chunk in picked:
+            first = "m-probe" not in seen
+            seen.add("m-probe")
+            costed += web_block_cost(packet, chunk, first_of_material=first)
         rendered = render_web_results([(packet, [c for _, c in picked], "E12")])
         # **渲染器真正写出去的那几段**（不含尾部那句说明）
         body = "\n".join(chunk.text for _, chunk in picked)
@@ -198,9 +203,14 @@ def probe_p5_budget() -> dict:  # type: ignore[no-untyped-def]
                 created_at=NOW,
             )
         )
-    picked = select_chunks(packets, budget=WEB_BUDGET, cost=web_block_cost)
+    picked, _ = select_chunks(packets, budget=WEB_BUDGET, cost=web_block_cost)
     by_id = {packet.material_id: packet for packet in packets}
-    costed = sum(web_block_cost(by_id[material_id], chunk) for material_id, chunk in picked)
+    costed = 0
+    seen = set()
+    for material_id, chunk in picked:
+        first = material_id not in seen
+        seen.add(material_id)
+        costed += web_block_cost(by_id[material_id], chunk, first_of_material=first)
     grouped: dict[str, list] = {}
     for material_id, chunk in picked:
         grouped.setdefault(material_id, []).append(chunk)
@@ -247,13 +257,18 @@ def probe_p5_budget() -> dict:  # type: ignore[no-untyped-def]
                             created_at=NOW,
                         )
                     )
-                trial_picked = select_chunks(
+                trial_picked, _ = select_chunks(
                     trial, budget=WEB_BUDGET, cost=web_block_cost
                 )
                 trial_by_id = {p.material_id: p for p in trial}
-                trial_costed = sum(
-                    web_block_cost(trial_by_id[mid], chunk) for mid, chunk in trial_picked
-                )
+                trial_costed = 0
+                trial_seen = set()
+                for mid, chunk in trial_picked:
+                    first = mid not in trial_seen
+                    trial_seen.add(mid)
+                    trial_costed += web_block_cost(
+                        trial_by_id[mid], chunk, first_of_material=first
+                    )
                 trial_group: dict[str, list] = {}
                 for mid, chunk in trial_picked:
                     trial_group.setdefault(mid, []).append(chunk)

@@ -28,7 +28,7 @@ from pmstudio.domain.round.claim import Claim, SeatConflict
 from pmstudio.domain.round.draft import Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import Question
-from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.round import DropSource, Round
 from pmstudio.domain.shared.errors import BadTemplateDefinition
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
@@ -428,9 +428,12 @@ def render_round_digest(
         if round_.draft.gaps:
             lines += ["", "草案上标出的缺口："]
             lines += [f"- {item}" for item in round_.draft.gaps]
-    if round_.dropped:
+    # **自动检索进来的材料不算"被丢掉"**（`02 §11.0.91`）：它们读到了，只是用户没勾。
+    # 这份摘要会进记忆整理者的提示词——把它列在"没被交代 / 被丢掉的"下面等于写假事实。
+    dropped = [item for item in round_.dropped if item.source != DropSource.MATERIAL_AUTO]
+    if dropped:
         lines += ["", "没被交代 / 被丢掉的："]
-        lines += [f"- {item.handle}：{item.reason}" for item in round_.dropped]
+        lines += [f"- {item.handle}：{item.reason}" for item in dropped]
     return "\n".join(lines)
 
 
@@ -987,16 +990,21 @@ def select_chunks(
     packets: Sequence[MaterialPacket],
     *,
     budget: int = MATERIAL_BUDGET,
-    cost: Callable[[MaterialPacket, MaterialChunk], int] | None = None,
+    cost: Callable[[MaterialPacket, MaterialChunk, bool], int] | None = None,
     query: str = "",
     section_overhead: int = 0,
-) -> tuple[tuple[str, MaterialChunk], ...]:
+    scores: Mapping[str, float] | None = None,
+) -> tuple[tuple[tuple[str, MaterialChunk], ...], int]:
     """**唯一**决定"哪些块进这一轮"的地方。
 
-    返回 `(material_id, chunk)`：调用方拿它去发号（`Round.materials`）与渲染。
+    返回 `(picked, used)`：`picked` 是 `(material_id, chunk)`，调用方拿它去发号
+    （`Round.materials`）与渲染；`used` 是选块时算掉的成本——手勾段与检索段要
+    **共用一个预算**（F2）时靠它，不许两处各算一套（口径会漂，v4 评审 C.5）。
 
     `cost` 默认是"正文 + 每个块那行编号的开销"；联网结果要传 `web_block_cost`——
     那段渲染每条还要写标题与 URL，成本不一样（**同一件事不许有两把尺子**）。
+    两个成本函数都按 `first_of_material` 决定"抬头 / 标题 URL 算不算"：**按"该材料
+    被选中的第一块"**，不是 `ordinal == 0`（根因 A）。
 
     `query` 给空就是老行为（按材料顺序、块顺序取到预算为止）——联网检索那条路**必须**
     走这一支：Tavily 返回的顺序本身就是相关序，我们自己的粗排只会把它搅乱。
@@ -1004,12 +1012,20 @@ def select_chunks(
 
     `section_overhead` 是**这一节固定要渲染的开销**（收尾那句提醒 + 可能有的截断说明）：
     从预算里先扣掉，否则渲染出来会比预算多（"预算"是假的）。
+
+    `scores` 给了就**按外部分数收敛**（`_select_by_score`）：候选集**只有** `scores`
+    里有分的块，按分数降序取到预算满，**不做"每份材料露一名"的保底**。这是本轮
+    重设计的 stage 2——库级检索宽召回之后必须收敛，否则预算被摊成十几份材料、
+    每份只摊到一两块（v4 实测 gold 材料从 13.45 块掉到 1.54 块）。
+    `scores=None` 时**路由**与改前一致（结果仍可能因成本尺子 F0 而变）。
     """
 
-    weigh = cost or _material_block_cost
+    weigh = cost or material_block_cost
     # 预算里有固定的一段是**这一节的收尾**（那句"不是用户说的话"的提醒）：
     # 它一定会渲染出来 → 选块时先给它留出位置，否则渲染就会超预算（"预算"是假的）。
     usable = max(0, budget - section_overhead)
+    if scores is not None:
+        return _select_by_score(packets, budget=usable, weigh=weigh, scores=scores)
     if not query.strip():
         return _select_in_order(packets, budget=usable, weigh=weigh)
     return _select_ranked(packets, budget=usable, weigh=weigh, query=query)
@@ -1019,17 +1035,26 @@ def _select_in_order(
     packets: Sequence[MaterialPacket],
     *,
     budget: int,
-    weigh: Callable[[MaterialPacket, MaterialChunk], int],
-) -> tuple[tuple[str, MaterialChunk], ...]:
+    weigh: Callable[[MaterialPacket, MaterialChunk, bool], int],
+) -> tuple[tuple[tuple[str, MaterialChunk], ...], int]:
+    """按材料顺序、块顺序取到预算为止（`query=""` 的路由）。
+
+    首块就是 `ordinal 0` → 抬头照算（F0 不改这条路的选中集合）。
+    """
+
     picked: list[tuple[str, MaterialChunk]] = []
     used = 0
+    taken: set[str] = set()
     for packet in packets:
         for chunk in packet.parsed.chunks:
-            if used + weigh(packet, chunk) > budget:
-                return tuple(picked)
+            first = packet.material_id not in taken
+            cost = weigh(packet, chunk, first_of_material=first)
+            if used + cost > budget:
+                return tuple(picked), used
             picked.append((packet.material_id, chunk))
-            used += weigh(packet, chunk)
-    return tuple(picked)
+            taken.add(packet.material_id)
+            used += cost
+    return tuple(picked), used
 
 
 @dataclass(frozen=True, slots=True)
@@ -1046,9 +1071,9 @@ def _select_ranked(
     packets: Sequence[MaterialPacket],
     *,
     budget: int,
-    weigh: Callable[[MaterialPacket, MaterialChunk], int],
+    weigh: Callable[[MaterialPacket, MaterialChunk, bool], int],
     query: str,
-) -> tuple[tuple[str, MaterialChunk], ...]:
+) -> tuple[tuple[tuple[str, MaterialChunk], ...], int]:
     """按相关粗排取块。两步：**每份材料至少露出它自己的第一名**，再按分数补满预算。
 
     为什么要有保底那一步：用户勾 N 份材料等于说了"这些都要参与"。没有保底，
@@ -1072,17 +1097,20 @@ def _select_ranked(
     picked: list[tuple[str, MaterialChunk]] = []
     taken: set[tuple[str, int]] = set()
     floored: set[str] = set()
+    taken_materials: set[str] = set()
     used = 0
 
     def take(candidate: _Candidate) -> bool:
         """装得下就装；装不下返回 False（保底那一步靠这个跳过，不是报错）。"""
 
         nonlocal used
-        cost = weigh(candidate.packet, candidate.chunk)
+        first = candidate.packet.material_id not in taken_materials
+        cost = weigh(candidate.packet, candidate.chunk, first_of_material=first)
         if used + cost > budget:
             return False
         picked.append((candidate.packet.material_id, candidate.chunk))
         taken.add((candidate.packet.material_id, candidate.chunk.ordinal))
+        taken_materials.add(candidate.packet.material_id)
         used += cost
         return True
 
@@ -1096,7 +1124,55 @@ def _select_ranked(
     for candidate in order:
         if (candidate.packet.material_id, candidate.chunk.ordinal) not in taken:
             take(candidate)
-    return tuple(picked)
+    return tuple(picked), used
+
+
+def _select_by_score(
+    packets: Sequence[MaterialPacket],
+    *,
+    budget: int,
+    weigh: Callable[[MaterialPacket, MaterialChunk, bool], int],
+    scores: Mapping[str, float],
+) -> tuple[tuple[tuple[str, MaterialChunk], ...], int]:
+    """按**外部分数收敛**（stage 2）：候选集 = `scores` 的键，按分数降序取到预算满。
+
+    与 `_select_ranked` 只差两点，但这两点就是收敛语义本身：
+
+    - **不做第一步的保底**。`_select_ranked` 的第一步是"每份材料至少露一名"——
+      候选一宽（库级检索 20 份）它就从"选块"变成"摊薄器"，把预算均分给十几份材料，
+      每份只摊到一两块。收敛段**必须**关掉它，否则改不成。
+    - **候选不含未命中的块**。`scores` 里没有的块不进候选——检索没命中的块不该被
+      "保底"拉进来。这也是"非命中块取什么分"的答案：它们不取分，它们不参赛。
+
+    前提：`chunk_id` **全局唯一**（生产由 `materials.py` 的 `_restamp` 保证：
+    `{material_id}#cNN`）。若哪天退回"每份材料内从 c00 起"，这里会静默配错块。
+
+    装不下就跳过（`continue`，不是 `break`）：高分块贵到装不下时，后面便宜的中分块
+    还该有机会——这与 `_select_ranked` 第二步的处置一致。
+    """
+
+    ordered = sorted(
+        (
+            (scores[chunk.chunk_id], position, chunk.ordinal, packet, chunk)
+            for position, packet in enumerate(packets)
+            for chunk in packet.parsed.chunks
+            if chunk.chunk_id in scores
+        ),
+        key=lambda item: (-item[0], item[1], item[2]),
+    )
+
+    picked: list[tuple[str, MaterialChunk]] = []
+    taken_materials: set[str] = set()
+    used = 0
+    for _, _, _, packet, chunk in ordered:
+        first = packet.material_id not in taken_materials
+        cost = weigh(packet, chunk, first_of_material=first)
+        if used + cost > budget:
+            continue
+        picked.append((packet.material_id, chunk))
+        taken_materials.add(packet.material_id)
+        used += cost
+    return tuple(picked), used
 
 
 def _block_score(text: str, query: str) -> int:
@@ -1192,7 +1268,9 @@ def parent_text(packet: MaterialPacket, chunk: MaterialChunk) -> str:
     return "\n".join(item.text for item in siblings)
 
 
-def _material_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
+def material_block_cost(
+    packet: MaterialPacket, chunk: MaterialChunk, *, first_of_material: bool
+) -> int:
     """上传材料那条路的成本：**渲染出来的那几行**（与渲染同源）。
 
     2026-10-21（批 11）：原来是 `len(chunk.text) + CHUNK_OVERHEAD`——
@@ -1202,20 +1280,26 @@ def _material_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
 
     **抬头与结尾说明每份材料只渲染一次** → 由第一块承担（与联网路 `web_block_cost`
     同一个办法），不许每块都算一遍（那是同一段信息重复付费）。
+
+    2026-10-23（F0，根因 A）：`first_of_material` 由"该材料**被选中的第一块**"决定，
+    不再是 `ordinal == 0`——粗排路里第一名常不是 ordinal 0，旧尺子会**漏算抬头**
+    （C 臂实测渲染 5578 字 > 预算 4000）。
     """
 
     # 正文按**父块**算（与渲染同源）——否则父块回喂时成本少算 3 倍，预算失真。
     cost = len(parent_text(packet, chunk)) + 1  # 正文 + 换行
     # 编号行：每个编号一行前缀（同一父块合并成一行，但**每个编号都占位**）
     cost += EID_RESERVE + len(chunk.anchor) + 1  # 编号行 + 换行
-    if chunk.ordinal == 0:
+    if first_of_material:
         cost += len(material_head_line(packet)) + 1  # 抬头（每份材料只渲染一次）
         cost += TRUNCATION_NOTE_RESERVE  # 结尾说明的预留（只在截断时出现）
         cost += sum(len(warning) + 3 for warning in packet.parsed.warnings)  # 警告行
     return cost
 
 
-def web_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
+def web_block_cost(
+    packet: MaterialPacket, chunk: MaterialChunk, *, first_of_material: bool
+) -> int:
     """联网检索结果的**块**成本：**标题 + URL 只算一次**（第一块算），其余块只算正文。
 
     为什么必须只算一次（2026-10-19）：一条结果现在可能是**好几段**（切块后）。
@@ -1230,7 +1314,7 @@ def web_block_cost(packet: MaterialPacket, chunk: MaterialChunk) -> int:
     """
 
     cost = len(chunk.text)
-    if chunk.ordinal == 0:
+    if first_of_material:
         cost += (
             len(packet.parsed.title)
             + len(packet.parsed.source_ref)

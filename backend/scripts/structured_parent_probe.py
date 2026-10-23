@@ -131,7 +131,7 @@ def main() -> None:
             ),
         )
         probe_text = chunks[len(chunks) // 2].text[:40]
-        picked = select_chunks([packet], budget=MATERIAL_BUDGET, query=probe_text)
+        picked, _ = select_chunks([packet], budget=MATERIAL_BUDGET, query=probe_text)
         units = {parent_key(kind, chunk) for _mid, chunk in picked}
         covered = sum(len(chunk.text) for _mid, chunk in picked)
         print(

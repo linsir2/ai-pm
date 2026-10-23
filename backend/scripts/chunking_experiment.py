@@ -253,7 +253,7 @@ def main() -> None:
         # 上下文层：**回喂父块**（父块 = 相邻细块拼起来，不需要新增存储）后的
         # 块数 / 份数 / 字数，以及**跨块两处证据是否同框**（进同一个父块）
         packets = packets_of(connection)
-        picked = select_chunks(
+        picked, _ = select_chunks(
             packets, budget=MATERIAL_BUDGET, cost=web_block_cost, query="向量检索 召回效果"
         )
         if parent:
