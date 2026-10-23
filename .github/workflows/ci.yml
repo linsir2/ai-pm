@@ -47,6 +47,14 @@ jobs:
       - name: lint
         run: uv run ruff check --no-cache .
 
+      # compose 的 backend 服务 `env_file: ./backend/.env` —— 文件不存在会让
+      # `docker compose config`（`tests/architecture/test_container_assets.py`）直接失败。
+      # 那条用例**故意**把"env_file 缺失"当红灯（那正是它要抓的真问题，
+      # 见其文档串），所以这里给它一个占位：构建阶段不读值，只是要文件在
+      # （与下面的 build job 同一口径）。
+      - name: 造占位 .env
+        run: cp backend/.env.example backend/.env
+
       - name: 测试
         # ⚠️ **`-m "not slow"` 必须显式给**：`markers` 只是**注册**标记，
         # pytest 默认**会跑** slow 用例 → CI 会去下 90MB 的 ONNX 模型并调真模型 API

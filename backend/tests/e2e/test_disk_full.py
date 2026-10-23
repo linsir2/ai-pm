@@ -64,7 +64,16 @@ def _probe_report() -> dict:  # noqa: ANN201
         cwd=BACKEND,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
-    if completed.returncode not in (0, 1):
+    # **非 0 一律跳过**：探针的契约是"退出码只表达基础设施跑没跑起来"
+    # （见 `disk_full_probe.py` 的文档串）——`_child` 恒返回 0，
+    # 所以**非 0 只可能是 `unshare` 没起来**（挂载/命名空间/探针自己崩了）。
+    #
+    # 2026-10-23 修：原来写的是 `not in (0, 1)`，于是 `unshare` 的退出码 1
+    # 会**漏过去**，接着断言"探针没吐 JSON"→ 红。GitHub Actions 的 runner
+    # **不允许用户命名空间**（`/proc/self/uid_map: Operation not permitted`），
+    # 那台机器上这一组必然红——而"环境不支持"恰恰是**该跳过**的情况
+    # （跳过理由会打印出来，不假装通过）。
+    if completed.returncode != 0:
         pytest.skip(f"这台机器上跑不了挂载注入：{completed.stderr[-300:]}")
     line = next(
         (text for text in completed.stdout.splitlines() if text.startswith("{")),

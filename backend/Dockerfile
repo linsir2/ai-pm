@@ -10,11 +10,17 @@
 
 FROM python:3.13-slim
 
-# lxml 需要 libxml2/libxslt1；sqlite3 CLI 是 backup.sh / restore_check.sh 用的
+# lxml 需要 libxml2/libxslt；sqlite3 CLI 是 backup.sh / restore_check.sh 用的
 # （用 `sqlite3 .backup` 而不是 `cp`——WAL 模式下 `cp` 会丢 `-wal` 里的数据）。
+#
+# ⚠ 包名是 **libxslt1.1**，不是 `libxslt1`：后者在 Debian 的源里**不存在**
+# （trixie 的 main 索引里 `Package: libxslt1` 命中 0 条，`libxslt1.1` 才是）。
+# 2026-10-23 CI 实测：`E: Unable to locate package libxslt1` → 镜像构建直接红。
+# 基础镜像 `python:3.13-slim` 是**浮动标签**，它会随 Debian 发版漂移，
+# 所以这里不钉 bookworm/trixie——包名在两者上一致（都是 `libxslt1.1`）。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libxml2 libxslt1 sqlite3 ca-certificates \
+        libxml2 libxslt1.1 sqlite3 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
