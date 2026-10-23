@@ -356,6 +356,34 @@ class SimReviewView:
 
 
 @dataclass(frozen=True, slots=True)
+class CallEntry:
+    """一次外部调用的一行（时间序）：模型侧与工具侧同形状，`kind` 区分。
+
+    `name` 是 `purpose`（模型）或 `tool_id`（工具）；`error_kind` 对模型侧恒为 `None`
+    ——模型调用只有 `error` 文本，重算分类要造一个异常对象（造出来的是假的），**不硬凑**。
+    """
+
+    kind: str  # "model" | "tool"
+    name: str  # purpose（模型） / tool_id（工具）
+    duration_ms: int
+    ok: bool
+    error_kind: str | None
+    at: str  # ISO 时刻
+
+
+@dataclass(frozen=True, slots=True)
+class RoundCallsView:
+    """这一轮的外部调用轨迹（模型 + 工具，按时间序）——「它刚才做了什么」的一句话答案。"""
+
+    round_id: str
+    calls: tuple[CallEntry, ...]  # 按时间序
+    model_calls: int
+    model_failed: int
+    tool_calls: int
+    tool_failed: int
+
+
+@dataclass(frozen=True, slots=True)
 class RoundView:
     """一轮的只读投影。"""
 

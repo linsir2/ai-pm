@@ -233,7 +233,7 @@ harness/agents/       agent.py
 harness/events/       schemas.py bus.py
 harness/prompts/      analyzer.md inquiry.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md discussion_say.md discussion_cards.md
 harness/providers/    litellm.py
-harness/tools/        registry.py spec.py invoker.py definitions/*.toml
+harness/tools/        registry.py spec.py invoker.py recorder.py definitions/*.toml
 domain/authoring/     document.py blocks.py schema.py version.py instruction.py views.py diff.py readiness.py
 domain/provenance/    ledger.py evidence.py
 domain/round/         round.py step.py claim.py opinion.py questionnaire.py draft.py web_query.py
@@ -246,7 +246,7 @@ domain/shared/        ids.py errors.py invariants.py target.py label.py sections
 application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py discusser.py sim_inquirer.py persona_simulator.py definitions.py
 infrastructure/        security.py redis_limiter.py redis_bus.py
 infrastructure/templates/ loader.py standard.toml light.toml
-infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py tokenize.py model_calls.py project_factory.py observations_repo.py digest_repo.py inspiration_repo.py users.py owner_scope.py usage.py embedding.py vector_index.py
+infrastructure/sqlite/ database.py repositories.py serialization.py unit_of_work.py materials.py tokenize.py model_calls.py tool_calls.py call_log.py project_factory.py observations_repo.py digest_repo.py inspiration_repo.py users.py owner_scope.py usage.py embedding.py vector_index.py
 infrastructure/seats/ catalog.py definitions/*.toml
 infrastructure/personas/ catalog.py personas.toml
 infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py webclean.py webdedup.py

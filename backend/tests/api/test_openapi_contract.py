@@ -39,6 +39,8 @@ EXPECTED_PATHS = {
     # 批 4 Task 2：最近 10 轮未命中的记忆 id（记忆抽屉「久未使用」标签读它，只读）
     "/api/projects/{project_id}/memory/usage",
     "/api/rounds/{round_id}",
+    # 可观测性 v2：这一轮的外部调用轨迹（模型 + 工具，时间序）
+    "/api/rounds/{round_id}/calls",
     "/api/rounds/{round_id}/opening",
     "/api/rounds/{round_id}/answers",
     "/api/rounds/{round_id}/confirm",

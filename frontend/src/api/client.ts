@@ -59,6 +59,10 @@ export interface AdminStatsRow {
   calls: number;
   failed: number;
   avg_duration_ms: number | null;
+  /** 工具侧（可观测性 v2）：与模型侧**分开**算——两个失败率各有各的分母。 */
+  tool_calls: number;
+  tool_failed: number;
+  tool_avg_duration_ms: number | null;
   total_tokens: number;
   active_sessions: number;
   /** 后端给的是 ISO 串；这里**不**转 Date——表格里要显示原始时区那一行。 */
@@ -66,6 +70,29 @@ export interface AdminStatsRow {
   created_at: string | null;
   approved_at: string | null;
   approved_by: string | null;
+}
+
+/** 一次外部调用的一行（时间序）：模型侧与工具侧同形状，`kind` 区分。 */
+export interface CallEntry {
+  kind: string;
+  /** 模型侧是 `purpose`，工具侧是 `tool_id`。 */
+  name: string;
+  duration_ms: number;
+  ok: boolean;
+  /** 模型侧恒为 null（只有 error 文本，不硬凑分类）。 */
+  error_kind: string | null;
+  /** ISO 时刻。 */
+  at: string;
+}
+
+/** 这一轮的外部调用轨迹（模型 + 工具，按时间序）——「它刚才做了什么」的一句话答案。 */
+export interface RoundCalls {
+  round_id: string;
+  calls: CallEntry[];
+  model_calls: number;
+  model_failed: number;
+  tool_calls: number;
+  tool_failed: number;
 }
 
 /** 会话失效（任一端点回 401）时的**一处**通知口：AuthProvider 注册它清身份，
@@ -399,6 +426,9 @@ export const api = {
     request<DocumentView>(`/projects/${projectId}/document`),
 
   getRound: (roundId: string) => request<RoundView>(`/rounds/${roundId}`),
+
+  /** 这一轮的外部调用轨迹（模型 + 工具，按时间序）：闭环区「调用轨迹」读它。 */
+  getRoundCalls: (roundId: string) => request<RoundCalls>(`/rounds/${roundId}/calls`),
 
   /** 按编号查处方：本地索引查不到时用它（跨轮编号、以及"这条现在被谁用着"）。 */
   evidence: (projectId: string, eid: string) =>

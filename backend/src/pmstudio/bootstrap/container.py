@@ -42,6 +42,7 @@ from pmstudio.application.use_cases import (
     GetMe,
     GetMemoryUsage,
     GetRound,
+    GetRoundCalls,
     GetSchema,
     GetStats,
     GetTemplate,
@@ -110,6 +111,7 @@ from pmstudio.infrastructure.security import (
     verify_password_async,
 )
 from pmstudio.infrastructure.sqlite import database, owner_scope
+from pmstudio.infrastructure.sqlite.call_log import SqliteRoundCallLog
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
@@ -131,6 +133,7 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.tokenize import warm as warm_tokenizer
+from pmstudio.infrastructure.sqlite.tool_calls import SqliteToolCallRecorder
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from pmstudio.infrastructure.sqlite.usage import (
     SqliteAdminStatsRepository,
@@ -346,6 +349,10 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         # 留样默认关（`PMSTUDIO_TRACE_MODEL=1` 才接）：库会长，且它是排查材料不是业务事实
         recorder = SqliteModelCallRecorder(connection) if settings.trace_model else None
         gateway = _model_gateway(settings, recorder=recorder)
+    # 工具留样与模型留样同一条纪律：默认不写（`PMSTUDIO_TRACE_MODEL=1` 才接）。
+    # **必须在 `if gateway is None:` 块外造**：`gateway` 被注入时（端到端测试）那个
+    # 局部变量不存在，照抄块内写法会 `NameError`。
+    tool_recorder = SqliteToolCallRecorder(connection) if settings.trace_model else None
     catalog = TomlSeatCatalog(SEATS_DIR)
     discussion_roles = load_discussion_roles()
     personas = load_personas()
@@ -398,6 +405,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         events=bus,
         # 联网结果也要有向量（否则"换个说法搜它"搜不到——外部来源恰恰最需要语义召回）
         vectors=vector_index,
+        # 工具留样（可观测性 v2）：默认 None = 什么都不记
+        tool_recorder=tool_recorder,
     )
     run_seat_round = RunSeatRound(
         rounds=rounds,
@@ -515,6 +524,10 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         tools=tools,
         available_tool_keys=available_tool_keys,
         materials=materials,
+    )
+    # 这一轮的外部调用轨迹（模型 + 工具，时间序）：归属由用例先 `rounds.get` 判
+    get_round_calls = GetRoundCalls(
+        rounds=rounds, call_log=SqliteRoundCallLog(connection)
     )
     runner = RoundRunner(
         start_round=start_round,
@@ -710,6 +723,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         ),
         list_projects=ListProjects(index=index),
         get_round=get_round,
+        get_round_calls=get_round_calls,
         # 复用 175 行已加载的那份角色表（同一进程只 `load_discussion_roles()` 一次）
         get_schema=GetSchema(
             discussion_roles=discussion_roles,

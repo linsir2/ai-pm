@@ -20,7 +20,8 @@ PROFILE_KEY = "embed_profile"
 #:     `documents.template` 列（老库 ALTER 补）。
 #: 13 = 多用户改造：13 张表补 `owner_id` + 存量回填给首 admin + NULL 熔断。
 #: 14 = L2 观察回填 `created_at`（v11 当死字段删过，这里再加回来并让它当排序依据）。
-USER_VERSION = 15
+#: 16 = 工具调用留样：`tool_calls` 表（`CREATE TABLE IF NOT EXISTS` 自建）。
+USER_VERSION = 16
 
 #: v13 起带 `owner_id` 的表：12 张项目域表 + `templates`（裁决 A）。
 #: `templates` 的 builtin 行 owner 留 NULL（出厂模板人人可见）——回填与熔断都跳过它们。

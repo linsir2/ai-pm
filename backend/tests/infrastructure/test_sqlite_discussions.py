@@ -262,7 +262,7 @@ def test_unknown_thread_raises_unknown_discussion(store) -> None:  # type: ignor
 
 def test_user_version_is_current_and_discussions_table_exists(store) -> None:  # type: ignore[no-untyped-def]
     _, connection = store
-    assert database.USER_VERSION == 15
+    assert database.USER_VERSION == 16
     assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
     tables = {
         row["name"]

@@ -104,6 +104,12 @@ export interface AdminOverview {
   failed: number;
   /** 失败占比（0–1）。没有调用时给 0——"没调用"不是"0% 失败"。 */
   failureRate: number;
+  toolCalls: number;
+  toolFailed: number;
+  /** 工具侧失败占比（0–1），与 `failureRate` 同一写法、**各自的分母**。 */
+  toolFailureRate: number;
+  /** 工具均延迟（毫秒，按各行调用数加权）；没有工具调用就是 null。 */
+  toolAvgDurationMs: number | null;
   tokens: number;
   liveSessions: number;
 }
@@ -112,22 +118,38 @@ export function overviewOf(rows: readonly AdminStatsRow[]): AdminOverview {
   const accounts = rows.length;
   let calls = 0;
   let failed = 0;
+  let toolCalls = 0;
+  let toolFailed = 0;
+  let toolDurationSum = 0;
+  let toolDurationCount = 0;
   let tokens = 0;
   let liveSessions = 0;
   let awaiting = 0;
   for (const row of rows) {
     calls += row.calls;
     failed += row.failed;
+    toolCalls += row.tool_calls;
+    toolFailed += row.tool_failed;
     tokens += row.total_tokens;
     liveSessions += row.active_sessions;
     if (row.status === "pending") awaiting += 1;
+    // **不能**把每行的均值再等权平均（各行调用数不同，那是错的）——按各行的调用数加权。
+    if (row.tool_avg_duration_ms !== null && row.tool_calls > 0) {
+      toolDurationSum += row.tool_avg_duration_ms * row.tool_calls;
+      toolDurationCount += row.tool_calls;
+    }
   }
   return {
     accounts,
     awaiting,
     calls,
     failed,
+    toolCalls,
+    toolFailed,
     failureRate: calls === 0 ? 0 : failed / calls,
+    toolFailureRate: toolCalls === 0 ? 0 : toolFailed / toolCalls,
+    toolAvgDurationMs:
+      toolDurationCount === 0 ? null : toolDurationSum / toolDurationCount,
     tokens,
     liveSessions,
   };

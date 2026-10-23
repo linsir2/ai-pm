@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import math
 import secrets
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
@@ -120,6 +121,7 @@ from pmstudio.application.dto import (
     ParsedMaterial,
     ProjectSummaryView,
     RollbackResult,
+    RoundCallsView,
     RoundHeadView,
     RoundView,
     SchemaView,
@@ -186,6 +188,7 @@ from pmstudio.application.ports import (
     MaterialStore,
     MaterialVectorIndex,
     ProjectFactory,
+    RoundCallLog,
     RoundCanceller,
     SeatCatalog,
     SeatDefinition,
@@ -333,6 +336,8 @@ from pmstudio.harness.errors import (
     ToolCallFailed,
 )
 from pmstudio.harness.events import Event, EventPublisher
+from pmstudio.harness.model import failure
+from pmstudio.harness.tools.recorder import ToolCallRecorder
 from pmstudio.harness.tools.registry import ToolCatalog, ToolDefinition
 
 
@@ -778,6 +783,26 @@ def _checked_queries(
     return chosen, tool
 
 
+async def _search_one(
+    web_search: WebSearchGateway, *, query: str, limit: int
+) -> tuple[object, int]:
+    """一条 query 的检索：**异常当值 + 单独量耗时**（毫秒）。
+
+    与 `asyncio.gather(return_exceptions=True)` 同一条口径（一条坏了不连累后面），
+    但那层 gather 收不到「每条多久」——所以包一层把耗时一起当值带回来（留样要用）。
+    """
+
+    started = time.monotonic()
+    try:
+        result = await web_search.search(query=query, limit=limit)
+    except BaseException as error:  # noqa: BLE001 —— 异常当值，调用方按类型分派
+        # **`BaseException` 是刻意的，别顺手改成 `Exception`**：`CancelledError` 也要当值
+        # 返回、由调用方 `raise` 传播——这与原来的 `asyncio.gather(return_exceptions=True)`
+        # 同口径（gather 同样把取消当值）。改成 `Exception` 会把取消吞掉，语义变了。
+        return error, int((time.monotonic() - started) * 1000)
+    return result, int((time.monotonic() - started) * 1000)
+
+
 class SubmitOpening:
     def __init__(
         self,
@@ -796,6 +821,7 @@ class SubmitOpening:
         clock: Clock,
         events: EventPublisher,
         vectors: MaterialVectorIndex = NO_VECTORS,
+        tool_recorder: ToolCallRecorder | None = None,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -814,6 +840,8 @@ class SubmitOpening:
         self._events = events
         # 向量索引（检索阶段 2）：联网结果**也要**有向量，否则"换个说法搜它"搜不到。
         self._vectors = vectors
+        # 工具留样（可观测性 v2）：默认 None = 什么都不记（与模型留样同一条纪律）。
+        self._tool_recorder = tool_recorder
 
     async def __call__(
         self,
@@ -837,7 +865,9 @@ class SubmitOpening:
         # 复述卡、勾选、出处、材料引用一起落下去。顺序理由见 `P17b` §6：
         # 先写的话，进程崩在查的中间时重试会直接进席位轮，用户授权的检索被静默跳过。
         project_id = self._rounds.get(round_id).project_id
-        picks, failure = await self._search(project_id=project_id, chosen=chosen, tool=tool)
+        picks, failure = await self._search(
+            round_id=round_id, project_id=project_id, chosen=chosen, tool=tool
+        )
         with self._uow:
             round_ = self._rounds.get(round_id)
             # 席位必须在注册表里：不然它会一路走到 `catalog.by_id` 才炸成 500。
@@ -890,6 +920,7 @@ class SubmitOpening:
     async def _search(
         self,
         *,
+        round_id: RoundId,
         project_id: ProjectId,
         chosen: tuple[str, ...],
         tool: ToolDefinition | None,
@@ -897,6 +928,9 @@ class SubmitOpening:
         """**事务外**：查 → 盖章 → 选块。返回（选中的块，要留痕的那几条）。
 
         失败不抛出去：工具这一趟没成，是**这一轮的留痕**，不是整轮的失败（`P17b` §6）。
+
+        顺带把这一趟**留样**（可观测性 v2）：每条 query 一行（成功/失败/炸了都记），
+        **只加旁路调用**——`packets` / `drops` / 顺序 / 预算一个字不动，recorder 为 None 时零写入。
         """
 
         drops: list[DroppedItem] = []
@@ -909,9 +943,10 @@ class SubmitOpening:
         web_search = self._web_search
         # 多条 query **并发发出**（工具韧性 P2）——原来是串行 for-await（3 条 = 3× 延迟）。
         # 异常当值（不是整批取消）：一条坏了不连累后面，与失败隔离同一条口径。
-        results = await asyncio.gather(
-            *(web_search.search(query=query, limit=limit) for query in chosen),
-            return_exceptions=True,
+        # **耗时逐条量**（`_search_one` 包一层）：留样要答「这一步慢不慢」，
+        # 所以每条 query 的耗时单独记，不是整批一个数。
+        outcomes = await asyncio.gather(
+            *(_search_one(web_search, query=query, limit=limit) for query in chosen)
         )
         # **按勾选序 settle**（循环顺序执行）：`packets` 的顺序必须等于勾选序——
         # `select_chunks(query="")` 是 **in-order first-fit**（预算选哪几块依赖顺序），
@@ -919,12 +954,41 @@ class SubmitOpening:
         # 所以只并行"搜"、不并行"落"。
         # （注意：`material_id` 生产是 `UuidIdGenerator` 的随机 `m-<hex>`，**不是**顺序计数器，
         #  它不构成"必须保序"的理由；真正的理由只有上面两条。）
-        for query, result in zip(chosen, results, strict=True):
+        for query, (result, duration_ms) in zip(chosen, outcomes, strict=True):
             if isinstance(result, ToolCallFailed):
+                self._record_tool_call(
+                    round_id,
+                    query=query,
+                    limit=limit,
+                    duration_ms=duration_ms,
+                    ok=False,
+                    result_note=result.message,
+                    error=result.message,
+                    error_kind=failure.classify(result).value,
+                )
                 drops.append(_tool_drop(f"联网检索 {query}", f"检索失败：{result.message}"))
                 continue  # 一条坏了不连累后面（工具韧性 P1）：各记各的痕
             if isinstance(result, BaseException):
-                raise result  # 非工具异常照旧**不吞**（gather 只是把它当成了值）
+                # **非工具异常也先记一笔再 raise**：这次调用确实炸了，不留痕就是盲区
+                # （评审 #2）。`raise result` 的语义一个字不改（gather 只是把它当成了值）。
+                self._record_tool_call(
+                    round_id,
+                    query=query,
+                    limit=limit,
+                    duration_ms=duration_ms,
+                    ok=False,
+                    result_note=str(result),
+                    error=str(result),
+                )
+                raise result
+            self._record_tool_call(
+                round_id,
+                query=query,
+                limit=limit,
+                duration_ms=duration_ms,
+                ok=True,
+                result_note=f"{len(result)} 条",
+            )
             if not result:
                 drops.append(_tool_drop(f"联网检索 {query}", "没有搜到结果"))
             drafts.extend(result)
@@ -949,6 +1013,35 @@ class SubmitOpening:
         return (
             tuple(unique.values()),
             tuple(drops),
+        )
+
+    def _record_tool_call(
+        self,
+        round_id: RoundId,
+        *,
+        query: str,
+        limit: int,
+        duration_ms: int,
+        ok: bool,
+        result_note: str,
+        error: str | None = None,
+        error_kind: str | None = None,
+    ) -> None:
+        """工具这一趟的留样（**旁路**）：recorder 为 None 时零写入，业务路径一个字不改。"""
+
+        if self._tool_recorder is None:
+            return
+        self._tool_recorder.record(
+            trace_id=str(round_id),
+            tool_id=WEB_SEARCH_KIND,
+            # **两个参数都记**：只记 query 答不出「这次只回 3 条是 limit=3 还是上游只给了 3 条」。
+            arguments={"query": query, "limit": limit},
+            result_note=result_note,
+            duration_ms=duration_ms,
+            created_at=self._clock.now(),
+            ok=ok,
+            error=error,
+            error_kind=error_kind,
         )
 
     def _keep(self, project_id: ProjectId, draft: ParsedMaterial) -> MaterialPacket:
@@ -4147,6 +4240,31 @@ class GetRound:
         )
 
 
+class GetRoundCalls:
+    """这一轮的外部调用轨迹（模型 + 工具，时间序）——单轮读的现成形状的延伸。
+
+    归属校验**先**走 `rounds.get(round_id)`：别人的轮次自然 404，与 `GetRound` 同一条路。
+    """
+
+    def __init__(self, *, rounds: RoundReader, call_log: RoundCallLog) -> None:
+        self._rounds = rounds
+        self._call_log = call_log
+
+    async def __call__(self, *, round_id: RoundId) -> RoundCallsView:
+        round_ = self._rounds.get(round_id)
+        entries = self._call_log.round_calls(str(round_.round_id))
+        return RoundCallsView(
+            round_id=str(round_.round_id),
+            calls=entries,
+            model_calls=sum(1 for entry in entries if entry.kind == "model"),
+            model_failed=sum(
+                1 for entry in entries if entry.kind == "model" and not entry.ok
+            ),
+            tool_calls=sum(1 for entry in entries if entry.kind == "tool"),
+            tool_failed=sum(1 for entry in entries if entry.kind == "tool" and not entry.ok),
+        )
+
+
 class SkipSeat:
     """用户手动跳过一个还没交回的席位（`02` §11.0.67 用户手动跳过）。
 
@@ -6695,6 +6813,9 @@ class StatsView:
         "calls",
         "failed",
         "avg_duration_ms",
+        "tool_calls",
+        "tool_failed",
+        "tool_avg_duration_ms",
         "total_tokens",
         "active_sessions",
         "last_seen_at",
@@ -6742,6 +6863,9 @@ class GetStats:
                     calls=row.calls,  # type: ignore[attr-defined]
                     failed=row.failed,  # type: ignore[attr-defined]
                     avg_duration_ms=row.avg_duration_ms,  # type: ignore[attr-defined]
+                    tool_calls=row.tool_calls,  # type: ignore[attr-defined]
+                    tool_failed=row.tool_failed,  # type: ignore[attr-defined]
+                    tool_avg_duration_ms=row.tool_avg_duration_ms,  # type: ignore[attr-defined]
                     total_tokens=row.total_tokens,  # type: ignore[attr-defined]
                     active_sessions=row.active_sessions,  # type: ignore[attr-defined]
                     last_seen_at=row.last_seen_at,  # type: ignore[attr-defined]

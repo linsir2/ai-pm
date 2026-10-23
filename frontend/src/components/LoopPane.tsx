@@ -11,6 +11,7 @@ import { canSkipSeat } from "../document/status";
 import { claimLabelText, compactTarget } from "../labels";
 import { labelCounts, rewritesOf } from "../state/progress";
 import { limitsOf } from "../state/schema";
+import { CallTrace } from "./CallTrace";
 import { EvidenceChip } from "./EvidenceChip";
 import { RoundMaterials } from "./RoundMaterials";
 import { RoundStatus } from "./RoundStatus";
@@ -84,6 +85,9 @@ export function LoopPane({
 
       <div className="loop__scroll">
         <RoundMaterials materials={round.materials} />
+
+        {/* 这一轮每一次外部调用（模型 + 工具）的时间序——只读，历史轮也显示。 */}
+        <CallTrace roundId={round.round_id} />
 
         <ol className="timeline">
           <Node actor="你" title="本轮输入" meta="本轮">

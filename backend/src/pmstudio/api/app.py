@@ -37,6 +37,7 @@ from pmstudio.application.use_cases import (
     GetEvidence,
     GetMemoryUsage,
     GetRound,
+    GetRoundCalls,
     GetSchema,
     GetTemplate,
     GetVersionDiff,
@@ -131,6 +132,7 @@ class ApiServices:
     workspace: GetWorkspace
     list_projects: ListProjects
     get_round: GetRound
+    get_round_calls: GetRoundCalls
     get_schema: GetSchema
     list_rounds: ListRounds
     search: SearchProject

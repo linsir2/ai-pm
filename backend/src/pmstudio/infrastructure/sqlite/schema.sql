@@ -169,6 +169,25 @@ CREATE TABLE IF NOT EXISTS model_calls (
 );
 CREATE INDEX IF NOT EXISTS idx_model_calls_round ON model_calls(round_id, id);
 
+-- 工具调用留样：与 model_calls 同一条纪律（默认不写、旁路、要清就 DELETE）。
+-- **为什么单独一张表**：列与模型调用不同（没有 model/prompt_sha/usage，
+-- 有 tool_id/arguments/error_kind）——合表要迁移且语义错位。
+-- **为什么没有 owner_id**：与 model_calls 同例（归属 join rounds 查）。
+-- **成功也记**：只记失败就答不出「这个工具慢不慢」。
+CREATE TABLE IF NOT EXISTS tool_calls (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  round_id    TEXT,            -- 列名与 model_calls 一致：装的是 trace id（r-* / x-*）
+  tool_id     TEXT NOT NULL,   -- 'web_search'
+  arguments   TEXT NOT NULL,   -- JSON（{"query": "...", "limit": 5}）
+  result_note TEXT NOT NULL,   -- 一句结果摘要（"12 条" / 失败原因），不是原文
+  duration_ms INTEGER NOT NULL,
+  created_at  TEXT NOT NULL,
+  ok          INTEGER NOT NULL DEFAULT 1,
+  error       TEXT,
+  error_kind  TEXT             -- failure.classify(...).value；成功为 NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_round ON tool_calls(round_id, id);
+
 -- L2 轮次观察（记忆层 M-boat）：席位意见提炼的结构化记录。
 -- 席位意见每轮结束就丢了，L2 把它们存下来供跨轮渐进式披露。
 CREATE TABLE IF NOT EXISTS observations (

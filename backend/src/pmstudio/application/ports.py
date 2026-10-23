@@ -13,6 +13,8 @@ TOML 实现搬进 `pmstudio.harness.tools.registry`——"一个工具有哪些�
 留在这里的都是**产品侧**能力：席位编制、材料库、全局检索投影、项目工厂、轮的编排与取消。
 """
 
+from __future__ import annotations
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,6 +33,7 @@ from pmstudio.domain.shared.template import DocumentTemplate
 if TYPE_CHECKING:
     from pmstudio.application.commands import RoundCommand
     from pmstudio.application.dto import (
+        CallEntry,
         ExplorationView,
         MaterialHit,
         MaterialPacket,
@@ -79,7 +82,7 @@ class SeatCatalog(Protocol):
 class MaterialParser(Protocol):
     """把上传的字节变成**解析草稿**。抽不出文字抛 `UnsupportedMaterial`，不返回空包。"""
 
-    def parse(self, *, filename: str, media_type: str, data: bytes) -> "ParsedMaterial": ...
+    def parse(self, *, filename: str, media_type: str, data: bytes) -> ParsedMaterial: ...
     def identities(self) -> frozenset[tuple[str, str]]:
         """我能产出的 `(parser_id, parser_version)` 集合——判断"这份材料是不是旧解析器读的"。"""
 
@@ -94,7 +97,7 @@ class WebSearchGateway(Protocol):
     所以网关不产 `MaterialPacket`——它连"这是哪个项目"都不知道。
     """
 
-    async def search(self, *, query: str, limit: int) -> tuple["ParsedMaterial", ...]: ...
+    async def search(self, *, query: str, limit: int) -> tuple[ParsedMaterial, ...]: ...
 
 
 @runtime_checkable
@@ -105,7 +108,7 @@ class WebFetcher(Protocol):
     （搜回来的只是线索，300 字摘要就够）。抓不到就抛 `ToolCallFailed`——不吞、不假装抓到。
     """
 
-    async def fetch(self, *, url: str) -> "FetchedPage": ...
+    async def fetch(self, *, url: str) -> FetchedPage: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,18 +139,18 @@ class MaterialStore(Protocol):
         self,
         *,
         project_id: ProjectId,
-        parsed: "ParsedMaterial",
+        parsed: ParsedMaterial,
         sha256: str,
         content: bytes,
         now: datetime,
-    ) -> "MaterialPacket": ...
-    def get(self, material_id: str) -> "MaterialPacket | None": ...
+    ) -> MaterialPacket: ...
+    def get(self, material_id: str) -> MaterialPacket | None: ...
     def raw_bytes(self, material_id: str) -> bytes | None: ...
     def list_for_project(
         self, project_id: ProjectId, *, current: frozenset[tuple[str, str]]
-    ) -> tuple["MaterialSummaryView", ...]: ...
+    ) -> tuple[MaterialSummaryView, ...]: ...
     def count_for_project(self, project_id: ProjectId) -> int: ...
-    def find_by_sha(self, project_id: ProjectId, sha256: str) -> "MaterialPacket | None": ...
+    def find_by_sha(self, project_id: ProjectId, sha256: str) -> MaterialPacket | None: ...
     def chunk_count(self, material_id: str) -> int: ...
     def delete(self, material_id: str) -> None:
         """删掉这份材料（块随 `ON DELETE CASCADE` 一起走，原始字节也不留）。
@@ -158,7 +161,7 @@ class MaterialStore(Protocol):
 
         ...
 
-    def replace_chunks(self, material_id: str, parsed: "ParsedMaterial") -> "MaterialPacket":
+    def replace_chunks(self, material_id: str, parsed: ParsedMaterial) -> MaterialPacket:
         """**就地**换掉这份材料的块与解析器身份（`P19` 的重解析）。
 
         只用于"没被任何一轮引用过"的材料：`material_id`、去重键、原始字节、标题都不动，
@@ -170,8 +173,8 @@ class MaterialStore(Protocol):
 
 
     def refresh(
-        self, material_id: str, *, parsed: "ParsedMaterial", content: bytes
-    ) -> "MaterialPacket":
+        self, material_id: str, *, parsed: ParsedMaterial, content: bytes
+    ) -> MaterialPacket:
         """**就地**刷新一份材料：原始字节、块、解析器身份、截断与告警一起换（`P27`）。
 
         只给"没被任何一轮引用过"的材料用（用例那边判，`P19` 的同一道边）——
@@ -201,7 +204,7 @@ class MaterialRetriever(Protocol):
 
     def search(
         self, *, project_id: ProjectId, query: str, limit: int = 5
-    ) -> tuple["MaterialHit", ...]: ...
+    ) -> tuple[MaterialHit, ...]: ...
 
 
 @runtime_checkable
@@ -225,18 +228,18 @@ class WorkspaceIndex(Protocol):
     因为 `DocumentReader` / `RoundReader` 是聚合入口，不该长出"列全部项目"这种查询。
     """
 
-    def summary(self, project_id: ProjectId) -> "ProjectSummaryView": ...
-    def list_summaries(self) -> tuple["ProjectSummaryView", ...]: ...
+    def summary(self, project_id: ProjectId) -> ProjectSummaryView: ...
+    def list_summaries(self) -> tuple[ProjectSummaryView, ...]: ...
     def latest_round_id(self, project_id: ProjectId) -> RoundId | None: ...
     def recent_rounds(
         self, project_id: ProjectId, *, limit: int = 5
-    ) -> tuple["RoundOutcomeView", ...]: ...
+    ) -> tuple[RoundOutcomeView, ...]: ...
     def list_rounds(
         self, project_id: ProjectId, *, limit: int = 20
-    ) -> tuple["RoundHeadView", ...]: ...
+    ) -> tuple[RoundHeadView, ...]: ...
     def recent_opinions(
         self, project_id: ProjectId, *, limit_rounds: int = 10
-    ) -> tuple["OpinionSourceView", ...]: ...
+    ) -> tuple[OpinionSourceView, ...]: ...
     def material_references(
         self, project_id: ProjectId
     ) -> Mapping[str, tuple[str, ...]]:
@@ -247,6 +250,17 @@ class WorkspaceIndex(Protocol):
         """
 
         ...
+
+
+@runtime_checkable
+class RoundCallLog(Protocol):
+    """一轮的外部调用轨迹（模型 + 工具，时间序）。实现是 `SqliteRoundCallLog`。
+
+    归属**不在这里判**：调用走 `round_id`，而「这一轮是不是你的」由用例先
+    `rounds.get(round_id)` 决定（与 `GetRound` 同一条路，别人的轮次自然 404）。
+    """
+
+    def round_calls(self, trace_id: str) -> tuple[CallEntry, ...]: ...
 
 
 @runtime_checkable
@@ -296,7 +310,7 @@ class RoundOrchestrator(Protocol):
     `api` 只认这个协议，所以它不必 import infrastructure——分层守卫因此能保持全绿。
     """
 
-    async def run(self, command: "RoundCommand") -> "RoundView": ...
+    async def run(self, command: RoundCommand) -> RoundView: ...
 
 
 @runtime_checkable
@@ -319,10 +333,10 @@ class ExplorationOrchestrator(Protocol):
     """
 
     async def start(
-        self, *, project_id: ProjectId, scope: "ExplorationScope"
-    ) -> "ExplorationView": ...
+        self, *, project_id: ProjectId, scope: ExplorationScope
+    ) -> ExplorationView: ...
 
-    async def retry(self, *, exploration_id: str) -> "ExplorationView": ...
+    async def retry(self, *, exploration_id: str) -> ExplorationView: ...
 
 
 @runtime_checkable
@@ -344,7 +358,7 @@ class DiscussionRunner(Protocol):
     讨论 abort 没有"先写状态"的那一半（与 AbandonRound/AbandonExploration 不同）。
     """
 
-    async def run_round(self, *, discussion_id: DiscussionId) -> "ThreadView": ...
+    async def run_round(self, *, discussion_id: DiscussionId) -> ThreadView: ...
 
     async def abort(self, *, discussion_id: DiscussionId) -> None: ...
 

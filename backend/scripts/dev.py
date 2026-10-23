@@ -175,6 +175,12 @@ def main() -> int:
     timeout = os.environ.get("PMSTUDIO_MODEL_TIMEOUT", "").strip() or "90"
     print(f"超时：{timeout} 秒/次（一次业务调用最多重试 3 次）")
     print(f"库：{db_path}{'（已存在）' if db_path.exists() else '（还没有，首次写入时建）'}")
+    # 留样默认关（模型与工具同一开关）：开着才会写 `model_calls` / `tool_calls`。
+    # **起之前就说清楚**：管理后台「用量与失败率」恒为 0 时，先回来对一眼这行。
+    trace_model = os.environ.get("PMSTUDIO_TRACE_MODEL", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    print(f"留样：{'开' if trace_model else '关'}（PMSTUDIO_TRACE_MODEL）")
     redis_url = os.environ.get("PMSTUDIO_REDIS_URL", "").strip()
     if redis_url:
         print(f"登录限流：Redis 共享计数（{redis_url}）——多 worker 合起来算一份")

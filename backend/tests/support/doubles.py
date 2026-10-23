@@ -12,7 +12,7 @@ from pmstudio.harness.events import Event
 from pmstudio.harness.model.contracts import ModelReply, ModelRequest
 
 if TYPE_CHECKING:
-    from pmstudio.application.dto import MaterialHit, ParsedMaterial
+    from pmstudio.application.dto import CallEntry, MaterialHit, ParsedMaterial
     from pmstudio.application.ports import FetchedPage
 
 SCRIPTED_MODEL = "scripted"
@@ -292,6 +292,23 @@ class RecordingMaterialRetriever:
         self, *, project_id: ProjectId, query: str, limit: int = 5
     ) -> tuple["MaterialHit", ...]:
         self.calls.append((str(project_id), query, limit))
+        return self.returns
+
+
+class RecordingCallLog:
+    """调用轨迹读模型替身：记录查询，按配置回条目（**只在测试里**）。
+
+    真实现是 `infrastructure/sqlite/call_log.py` 的 `SqliteRoundCallLog`
+    （`model_calls` / `tool_calls` 两张表 `UNION ALL`）；这里只让"用例拿到条目后
+    怎么组装成 `RoundCallsView`"可被断言，**不复制那一份 SQL**——两套口径会漂。
+    """
+
+    def __init__(self, *, returns: Sequence["CallEntry"] = ()) -> None:
+        self.calls: list[str] = []
+        self.returns = tuple(returns)
+
+    def round_calls(self, trace_id: str) -> tuple["CallEntry", ...]:
+        self.calls.append(trace_id)
         return self.returns
 
 

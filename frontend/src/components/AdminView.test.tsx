@@ -70,6 +70,9 @@ function stat(over: Record<string, unknown> = {}) {
     calls: 0,
     failed: 0,
     avg_duration_ms: null,
+    tool_calls: 0,
+    tool_failed: 0,
+    tool_avg_duration_ms: null,
     total_tokens: 0,
     active_sessions: 0,
     last_seen_at: null,
@@ -204,6 +207,30 @@ it("概览条把总账算出来：失败率与 token 缩写", async () => {
   expect(facts.textContent).toContain("183");
   expect(facts.textContent).toContain("16");
   expect(facts.textContent).toContain("1.49M");
+});
+
+it("概览把工具侧失败率与均延迟摆出来（改前只有模型侧失败率）", async () => {
+  captureFetch({
+    "/auth/me": ADMIN_ME,
+    "/auth/stats": jsonResponse({
+      stats: [
+        stat({
+          calls: 4,
+          failed: 0,
+          tool_calls: 4,
+          tool_failed: 1,
+          tool_avg_duration_ms: 1200,
+        }),
+      ],
+    }),
+  });
+  draw();
+  await screen.findByText("alice");
+
+  const facts = screen.getByLabelText("总览");
+  expect(facts.textContent).toContain("模型 0（0.0%）");
+  expect(facts.textContent).toContain("工具 1（25.0%）");
+  expect(facts.textContent).toContain("工具均延迟 1.2s");
 });
 
 it("从没登录过的人明说「从未登录」", async () => {

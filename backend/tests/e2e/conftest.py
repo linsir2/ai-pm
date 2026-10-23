@@ -68,6 +68,8 @@ def build_app(
     autologin: bool = True,
     login_ip_max_attempts: int = 10_000,
     login_username_max_attempts: int = 10_000,
+    trace_model: bool = False,
+    tavily_api_key: str | None = None,
 ) -> tuple[FastAPI, ScriptedModelGateway]:
     owner_scope.set_owner_scope(E2E_OWNER)
     gateway = ScriptedModelGateway(replies=replies, seat_replies=seat_replies or {})
@@ -86,6 +88,11 @@ def build_app(
         # 要验限流的用例自己传一个小的进去。
         login_ip_max_attempts=login_ip_max_attempts,
         login_username_max_attempts=login_username_max_attempts,
+        # 留样（可观测性 v2）：默认关，与生产一致；要验工具留样的用例显式传 True。
+        trace_model=trace_model,
+        # 联网检索 key：给了才会让 `tool.web_search` 可用（真网关会出网，
+        # 所以只给 key、再把网关实例换成替身，见 `test_call_observability.py`）。
+        tavily_api_key=tavily_api_key,
     )
     container = build_container(settings, gateway=gateway)
     if autologin:
@@ -102,6 +109,8 @@ def make_app(tmp_path):
         autologin: bool = True,
         login_ip_max_attempts: int = 10_000,
         login_username_max_attempts: int = 10_000,
+        trace_model: bool = False,
+        tavily_api_key: str | None = None,
     ) -> tuple[FastAPI, ScriptedModelGateway]:
         return build_app(
             tmp_path,
@@ -110,6 +119,8 @@ def make_app(tmp_path):
             autologin=autologin,
             login_ip_max_attempts=login_ip_max_attempts,
             login_username_max_attempts=login_username_max_attempts,
+            trace_model=trace_model,
+            tavily_api_key=tavily_api_key,
         )
 
     return _make

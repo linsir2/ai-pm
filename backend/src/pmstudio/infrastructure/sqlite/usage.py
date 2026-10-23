@@ -40,6 +40,9 @@ class UserActivityRow:
         "calls",
         "failed",
         "avg_duration_ms",
+        "tool_calls",
+        "tool_failed",
+        "tool_avg_duration_ms",
         "total_tokens",
         "active_sessions",
         "last_seen_at",
@@ -92,6 +95,15 @@ class SqliteAdminStatsRepository:
                    (SELECT AVG(mc.duration_ms) FROM model_calls mc
                       JOIN rounds r ON r.round_id = mc.round_id
                      WHERE r.owner_id = u.user_id) AS avg_duration_ms,
+                   (SELECT COUNT(*) FROM tool_calls tc
+                      JOIN rounds r ON r.round_id = tc.round_id
+                     WHERE r.owner_id = u.user_id) AS tool_calls,
+                   (SELECT COUNT(*) FROM tool_calls tc
+                      JOIN rounds r ON r.round_id = tc.round_id
+                     WHERE r.owner_id = u.user_id AND tc.ok = 0) AS tool_failed,
+                   (SELECT AVG(tc.duration_ms) FROM tool_calls tc
+                      JOIN rounds r ON r.round_id = tc.round_id
+                     WHERE r.owner_id = u.user_id) AS tool_avg_duration_ms,
                    (SELECT SUM(json_extract(mc.usage_json, '$.total_tokens'))
                       FROM model_calls mc
                       JOIN rounds r ON r.round_id = mc.round_id
@@ -121,6 +133,13 @@ class SqliteAdminStatsRepository:
                 avg_duration_ms=(
                     round(float(row["avg_duration_ms"]))
                     if row["avg_duration_ms"] is not None
+                    else None
+                ),
+                tool_calls=int(row["tool_calls"]),
+                tool_failed=int(row["tool_failed"]),
+                tool_avg_duration_ms=(
+                    round(float(row["tool_avg_duration_ms"]))
+                    if row["tool_avg_duration_ms"] is not None
                     else None
                 ),
                 total_tokens=(

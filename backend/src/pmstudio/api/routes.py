@@ -355,6 +355,15 @@ async def get_round(request: Request, round_id: str, user: CurrentUser):  # type
     return as_json(view)
 
 
+@router.get("/rounds/{round_id}/calls")
+async def get_round_calls(request: Request, round_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
+    """这一轮的外部调用轨迹（模型 + 工具，按时间序）——「它刚才做了什么」的一句话答案。"""
+
+    return as_json(
+        await services_of(request).get_round_calls(round_id=RoundId(round_id))
+    )
+
+
 @router.post("/rounds/{round_id}/opening")
 async def submit_opening(request: Request, round_id: str, body: OpeningRequest, user: CurrentUser):  # type: ignore[no-untyped-def]
     edits = tuple(

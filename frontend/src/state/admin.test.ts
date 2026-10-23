@@ -26,6 +26,9 @@ function row(over: Partial<AdminStatsRow> = {}): AdminStatsRow {
     calls: 0,
     failed: 0,
     avg_duration_ms: null,
+    tool_calls: 0,
+    tool_failed: 0,
+    tool_avg_duration_ms: null,
     total_tokens: 0,
     active_sessions: 0,
     last_seen_at: null,
@@ -80,6 +83,9 @@ it("概览把失败率算出来；没有调用时是 0 而不是 NaN", () => {
   const none = overviewOf([row({ user_id: "a" })]);
   expect(none.calls).toBe(0);
   expect(none.failureRate).toBe(0);
+  expect(none.toolCalls).toBe(0);
+  expect(none.toolFailureRate).toBe(0);
+  expect(none.toolAvgDurationMs).toBeNull();
 
   const some = overviewOf([
     row({ user_id: "a", calls: 100, failed: 8, total_tokens: 1493085, active_sessions: 3 }),
@@ -91,6 +97,18 @@ it("概览把失败率算出来；没有调用时是 0 而不是 NaN", () => {
   expect(some.failed).toBe(16);
   expect(some.failureRate).toBeCloseTo(16 / 183, 6);
   expect(some.liveSessions).toBe(4);
+});
+
+it("工具侧失败率与模型侧**各有分母**，均延迟按调用数加权", () => {
+  const some = overviewOf([
+    row({ user_id: "a", tool_calls: 3, tool_failed: 1, tool_avg_duration_ms: 300 }),
+    row({ user_id: "b", tool_calls: 6, tool_failed: 2, tool_avg_duration_ms: 600 }),
+  ]);
+  expect(some.toolCalls).toBe(9);
+  expect(some.toolFailed).toBe(3);
+  expect(some.toolFailureRate).toBeCloseTo(3 / 9, 6);
+  // (300×3 + 600×6) / 9 = 500 —— 等权平均会是 450，那是错的
+  expect(some.toolAvgDurationMs).toBeCloseTo(500, 6);
 });
 
 it("大数缩写：token 到百万级不缩写没法一眼比", () => {

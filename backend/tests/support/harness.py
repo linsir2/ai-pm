@@ -28,6 +28,7 @@ from pmstudio.infrastructure.personas.catalog import PersonaDefinition
 from tests.support.builders import PROJECT, make_document, make_seat
 from tests.support.doubles import (
     FixedClock,
+    RecordingCallLog,
     RecordingMaterialRetriever,
     RecordingPrompts,
     RecordingPublisher,
@@ -297,6 +298,11 @@ class Harness:
         self.web_search = web_search or RecordingWebSearch()
         self.fetcher = fetcher or RecordingWebFetch()
         self.material_retriever = material_retriever or RecordingMaterialRetriever()
+        # 调用轨迹读模型替身（可观测性 v2）：真实现是 `SqliteRoundCallLog`（真 SQLite）。
+        self.call_log = RecordingCallLog()
+        #: 工具留样器：默认 None = 什么都不记（与生产 `trace_model` 默认关同一条纪律）。
+        #: 用例要验留样时自己塞一个真的 `SqliteToolCallRecorder`。
+        self.tool_recorder = None
         self.analyzer = ClaimAnalyzer(
             model=self.gateway, prompts=self.prompts, catalog=self.seats
         )
@@ -653,6 +659,7 @@ class Harness:
             uow=self.uow,
             clock=self.clock,
             events=self.events,
+            tool_recorder=self.tool_recorder,
         )
 
     def run_seat_round(self):  # type: ignore[no-untyped-def]
@@ -814,6 +821,11 @@ class Harness:
             available_tool_keys=self.available_tool_keys,
             materials=self.materials,
         )
+
+    def get_round_calls(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import GetRoundCalls
+
+        return GetRoundCalls(rounds=self.rounds, call_log=self.call_log)
 
     def get_versions(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import GetVersions
@@ -1042,6 +1054,7 @@ class Harness:
             workspace=self.get_workspace(),
             list_projects=self.list_projects(),
             get_round=self.get_round(),
+            get_round_calls=self.get_round_calls(),
             get_schema=self.get_schema(),
             list_rounds=self.list_rounds(),
             search=self.search(),

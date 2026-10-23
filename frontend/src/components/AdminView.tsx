@@ -135,10 +135,22 @@ function AdminPanel() {
               <Fact label="待审批" value={String(overview.awaiting)} tone={overview.awaiting > 0 ? "warn" : "plain"} />
               <Fact label="活跃会话" value={String(overview.liveSessions)} />
               <Fact label="模型调用" value={compactNumber(overview.calls)} />
+              {/* 「失败」那一格：**模型与工具分开算**（各自的分母），同行带工具均延迟——
+                  否则工具侧的失败率根本看不见（改前只有模型侧）。 */}
               <Fact
                 label="失败"
-                value={`${overview.failed}（${(overview.failureRate * 100).toFixed(1)}%）`}
-                tone={overview.failed > 0 ? "danger" : "plain"}
+                value={
+                  `模型 ${overview.failed}（${(overview.failureRate * 100).toFixed(1)}%）` +
+                  ` / 工具 ${overview.toolFailed}（${(overview.toolFailureRate * 100).toFixed(1)}%）` +
+                  (overview.toolAvgDurationMs === null
+                    ? ""
+                    : ` · 工具均延迟 ${durationText(overview.toolAvgDurationMs)}`)
+                }
+                tone={
+                  overview.failed > 0 || overview.toolFailed > 0
+                    ? "danger"
+                    : "plain"
+                }
               />
               <Fact label="总 token" value={compactNumber(overview.tokens)} />
             </ul>
