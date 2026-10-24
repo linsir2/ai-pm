@@ -63,7 +63,8 @@ export function MaterialLibrary({
           <ul className="materials__list">
             {materials.map((item) => {
               const on = selected.includes(item.material_id);
-              const frozen = item.eids.length > 0;
+              const frozen = item.frozen || item.eids.length > 0;
+              const attachable = item.origin !== "web_search";
               // 被引用过的材料可能挂着几十个编号（真跑里一份材料 31 个 E18…E48）：
               // 原样铺开会把整行撑到几百像素高、把表头挤成竖条（P29 F5）。收几个，其余报数。
               const refs = summarizeEids(item.eids);
@@ -78,19 +79,30 @@ export function MaterialLibrary({
                   </span>
                   <span className="muted small" title={refs.title || undefined}>
                     {frozen
-                      ? `已被引用：${refs.shown.join("、")}${
-                          refs.rest > 0 ? ` 等 ${refs.rest} 个` : ""
-                        }`
+                      ? refs.shown.length > 0
+                        ? `已被引用：${refs.shown.join("、")}${
+                            refs.rest > 0 ? ` 等 ${refs.rest} 个` : ""
+                          }`
+                        : "已被本轮引用（手勾/手动带料）"
                       : "还没被用过（可以删、可以重解析）"}
                   </span>
                   <span className="row">
                     <button
                       type="button"
                       className="btn btn--ghost btn--sm"
-                      disabled={pending}
+                      disabled={pending || !attachable}
+                      title={
+                        attachable
+                          ? undefined
+                          : "联网结果不能手勾；请用研究入口"
+                      }
                       onClick={() => onToggleSelected(item.material_id)}
                     >
-                      {on ? "不带进这一轮" : "带进这一轮"}
+                      {!attachable
+                        ? "联网结果不可手勾"
+                        : on
+                          ? "不带进这一轮"
+                          : "带进这一轮"}
                     </button>
                     {item.origin !== "web_search" && (
                       <button
@@ -119,7 +131,9 @@ export function MaterialLibrary({
                   </span>
                   {frozen && (
                     <span className="muted small">
-                      已经发过编号 {item.eids.join("、")}，不能删——要用新解析器读，就点「重解析」。
+                      {item.eids.length > 0
+                        ? `已经发过编号 ${item.eids.join("、")}，不能删——要用新解析器读，就点「重解析」。`
+                        : "已被本轮引用（手勾/手动带料），不能删——它可能还没投影、没有编号。"}
                     </span>
                   )}
                 </li>

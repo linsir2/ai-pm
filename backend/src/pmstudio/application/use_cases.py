@@ -639,6 +639,10 @@ class StartRound:
                 # 串项目带料 = 读别人的东西：与删/重解析同一口径，按"资源不在"404，
                 # 不按"形状错"422（`test_delete_material.py` 的跨项目用例即此语义）。
                 raise UnknownMaterial(material_id)
+            if packet.parsed.origin == WEB_ORIGIN:
+                # 联网结果走 `render_web_results`（一条结果一个号）；手勾进来会
+                # 逐块发号、只渲染一个号——"编号 == 进提示词的块"那条红线。
+                raise WebMaterialNotAttachable(material_id=material_id)
             packets[material_id] = packet
         # 手勾来源**合计**最多 60%：自动段从此有位置（长文不再吃满 4000）。
         picked, used = select_chunks(
@@ -1207,12 +1211,14 @@ class SubmitOpening:
             cost=web_block_cost,
             section_overhead=WEB_SECTION_OVERHEAD,
         )
-        if 0 < len(picked) < len(packets):
-            missed = len(packets) - len(picked)
+        selected_results = {material_id for material_id, _ in picked}
+        if len(selected_results) < len(packets):
+            missed = len(packets) - len(selected_results)
             drops.append(
                 _tool_drop(
                     f"联网检索结果 {len(packets)} 条",
-                    f"预算只带得下 {len(picked)} 条，还有 {missed} 条没带进去"
+                    f"预算只带得下 {len(selected_results)} 条，"
+                    f"还有 {missed} 条没带进去"
                     "（材料表里留着，搜得到）",
                 )
             )
@@ -3241,15 +3247,6 @@ class AttachMaterials:
     async def __call__(
         self, *, round_id: RoundId, material_id: str, chunk_ids: Sequence[str]
     ) -> None:
-        round_ = self._rounds.get(round_id)
-        self._ensure_attachable(round_)
-        packet = self._materials.get(material_id)
-        if packet is None or packet.project_id != str(round_.project_id):
-            raise UnknownMaterial(material_id)
-        if packet.parsed.origin == WEB_ORIGIN:
-            # 联网结果一条一个号、走 WEB_BUDGET；混进材料池会破"编号==进提示词的块"。
-            raise WebMaterialNotAttachable(material_id=material_id)
-
         wanted = tuple(dict.fromkeys(item.strip() for item in chunk_ids if item.strip()))
         if not wanted:
             raise ShapeError("要带进的块不能为空")
@@ -3258,15 +3255,21 @@ class AttachMaterials:
                 f"一次最多带 {MAX_MANUAL_CHUNKS_PER_CALL} 块",
                 count=len(wanted),
             )
-        known = {chunk.chunk_id for chunk in packet.parsed.chunks}
-        outside = [item for item in wanted if item not in known]
-        if outside:
-            raise ShapeError("这些块不属于这份材料", chunk_ids=outside)
 
         with self._uow:
             round_ = self._rounds.get(round_id)
-            # 状态在事务里再判一次：读与写之间可能有人把轮推进了。
+            # 状态与材料都在事务里读：材料可能在"读到它"和"pin 它"之间被删/重解析。
             self._ensure_attachable(round_)
+            packet = self._materials.get(material_id)
+            if packet is None or packet.project_id != str(round_.project_id):
+                raise UnknownMaterial(material_id)
+            if packet.parsed.origin == WEB_ORIGIN:
+                # 联网结果一条一个号、走 WEB_BUDGET；混进材料池会破"编号==进提示词的块"。
+                raise WebMaterialNotAttachable(material_id=material_id)
+            known = {chunk.chunk_id for chunk in packet.parsed.chunks}
+            outside = [item for item in wanted if item not in known]
+            if outside:
+                raise ShapeError("这些块不属于这份材料", chunk_ids=outside)
             already = {ref.chunk_id for ref in round_.materials} | {
                 item.chunk_id for item in round_.manual_chunks
             }
@@ -4135,8 +4138,22 @@ def list_material_views(
     """
 
     references = index.material_references(project_id)
+
+    def actual_eids(values: tuple[str, ...]) -> tuple[str, ...]:
+        # 引用列里混着 `手勾` / `手动带料` 哨兵（冻结判据需要它们）；
+        # `MaterialSummaryView.eids` 的契约是**编号**，不能把哨兵当 E 号显示。
+        return tuple(
+            value
+            for value in values
+            if len(value) > 1 and value.startswith("E") and value[1:].isdigit()
+        )
+
     return tuple(
-        replace(item, eids=references.get(item.material_id, ()))
+        replace(
+            item,
+            eids=actual_eids(references.get(item.material_id, ())),
+            frozen=bool(references.get(item.material_id, ())),
+        )
         for item in materials.list_for_project(project_id, current=parser.identities())
     )
 
@@ -4766,7 +4783,8 @@ def external_material_text(
 
     `query` 非空时按它选块到 `MATERIAL_BUDGET`（模拟调研/评测用：主链路已经有
     `RoundContextPreparer` 的每步投影；这两个旁路只需要"别把整池塞进提示词"）。
-    **不传 query 时逐字保持老行为**——Analyzer 看的是 SEED 那一批，不需要二次选块。
+    不传 query 也**会**按文档序选块到预算（Analyzer 的 SEED 材料也可能很长）；
+    差别只在排序：有 query 走相关粗排，没 query 走文档序。
     """
 
     by_material: dict[str, dict[str, EvidenceId]] = {}
@@ -4777,8 +4795,8 @@ def external_material_text(
     missing: list[str] = []
     for material_id, eids in by_material.items():
         packet = store.get(material_id)
-        if packet is None:
-            # 材料不在了（将来允许删材料时会出现）：不编内容，跳过；但要说清少了几份
+        if packet is None or packet.project_id != str(round_.project_id):
+            # 材料不在了 / 串项目：不编内容，但要说清少了几份
             missing.append(material_id)
             continue
         if packet.parsed.origin == WEB_ORIGIN:
@@ -4817,11 +4835,23 @@ def external_material_text(
     # **被预算挤掉的材料也要说给模型听**（2026-10-21 批 11）：不写这一句，
     # 模型会以为自己看到的就是全部材料 → 回答里会说"材料里没有相关内容"，
     # 而那份材料其实在库里（只是预算没带进来）。
-    budget_drops = [
-        item for item in round_.dropped if item.source == DropSource.MATERIAL
+    # 一条 drop 可能代表多份材料（StartRound 的 `missed` 是聚合留痕），
+    # 所以按"手勾了但一块都没进"的材料数说，不按 drop 条目数说。
+    selected_materials = {ref.material_id for ref in round_.materials}
+    missed_materials = [
+        material_id
+        for material_id in dict.fromkeys(round_.pinned_materials)
+        if material_id not in selected_materials and material_id not in missing
     ]
-    if budget_drops:
-        parts.append(budget_drop_line(len(budget_drops)))
+    if missed_materials:
+        parts.append(budget_drop_line(len(missed_materials)))
+    elif any(item.source == DropSource.MATERIAL for item in round_.dropped):
+        # 老 payload 只有聚合留痕、没有 pinned 明细：退回条目数（至少不说反话）
+        parts.append(
+            budget_drop_line(
+                sum(1 for item in round_.dropped if item.source == DropSource.MATERIAL)
+            )
+        )
     return "\n\n".join(parts) if parts else NO_MATERIAL_TEXT
 
 
@@ -4832,41 +4862,33 @@ def _select_uploads(
 ) -> tuple[list[tuple[MaterialPacket, dict[str, EvidenceId]]], int, int]:
     """把这一轮的材料按预算选一遍（三条调用路径共用：Analyzer / 模拟 / 未来旁路）。
 
-    返回 `(selected_entries, selected_chunks, pool_chunks)`。渲染仍用**原始 packet**
-    （好让"共 M 块"说的是整份材料）；没编号的块先过滤掉，不让它们白占预算。
+    返回 `(selected_entries, selected_chunks, pool_chunks)`。渲染用**原始 packet**
+    （好让"共 M 块"说的是整份材料）；只有**有编号的块**参赛，但成本按完整 packet
+    算——PDF 的父块会把整页兄弟块一起渲染，先裁包再算成本会让预算失真。
     `query=""` 时按文档序取（Analyzer 那条路）。
     """
 
     pool_count = sum(len(eids) for _, eids in uploads)
-    filtered = []
-    for packet, eids in uploads:
-        allowed = tuple(
-            chunk for chunk in packet.parsed.chunks if chunk.chunk_id in eids
-        )
-        if allowed:
-            filtered.append(
-                (
-                    replace(packet, parsed=replace(packet.parsed, chunks=allowed)),
-                    packet,
-                    eids,
-                )
-            )
+    candidates = {
+        packet.material_id: frozenset(eids) for packet, eids in uploads
+    }
     picked, _ = select_chunks(
-        [item[0] for item in filtered],
+        [packet for packet, _ in uploads],
         query=query,
         budget=MATERIAL_BUDGET,
         section_overhead=SECTION_OVERHEAD,
+        candidates=candidates,
     )
-    eids_by_material = {item[0].material_id: item[2] for item in filtered}
-    original_by_material = {item[0].material_id: item[1] for item in filtered}
+    eids_by_material = {packet.material_id: eids for packet, eids in uploads}
     selected: dict[str, dict[str, EvidenceId]] = {}
     for material_id, chunk in picked:
         eid = eids_by_material[material_id].get(chunk.chunk_id)
         if eid is not None:
             selected.setdefault(material_id, {})[chunk.chunk_id] = eid
     entries = [
-        (original_by_material[material_id], eids)
-        for material_id, eids in selected.items()
+        (packet, selected[packet.material_id])
+        for packet, _ in uploads
+        if packet.material_id in selected
     ]
     return entries, sum(len(eids) for _, eids in entries), pool_count
 

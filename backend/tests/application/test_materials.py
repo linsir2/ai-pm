@@ -11,7 +11,11 @@ import json
 import pytest
 
 from pmstudio.application.dto import MaterialChunk, MaterialPacket, ParsedMaterial
-from pmstudio.application.errors import UnsupportedMaterial  # noqa: F401  (接口存在性)
+from pmstudio.application.errors import (
+    MaterialFrozen,
+    UnsupportedMaterial,  # noqa: F401  (接口存在性)
+    WebMaterialNotAttachable,
+)
 from pmstudio.application.use_cases import _unreferenced_materials_for, external_material_text
 from pmstudio.domain.authoring.instruction import WriteInstruction  # noqa: F401
 from pmstudio.domain.provenance.evidence import EvidenceKind
@@ -22,7 +26,14 @@ from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, RoundId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from tests.support.builders import NOW, PROJECT, SEAT, make_document
+from tests.support.builders import (
+    NOW,
+    PROJECT,
+    SEAT,
+    make_document,
+    make_material_packet,
+    make_round,
+)
 from tests.support.harness import Harness
 
 
@@ -459,7 +470,7 @@ async def test_materials_the_budget_cannot_fit_are_said_out():
 
     # 提示词里也要说给模型听（模型得知道"还有材料没带进来"）
     prompt = external_material_text(round_, store=harness.materials)
-    assert "另有 1 份材料因预算没带进来" in prompt, prompt
+    assert "另有 2 份材料因预算没带进来" in prompt, prompt
     assert "在材料表里，查得到，但这一轮没读" in prompt, prompt
 
 
@@ -485,3 +496,41 @@ async def test_the_budget_dropped_trace_is_unchanged():
     assert drops[0].reason == (
         "预算只带得下 1 份，还有 2 份材料一块都没带进来（材料表里留着，搜得到）"
     )
+
+
+async def test_starting_a_round_rejects_a_web_search_material():
+    """联网结果走另一条渲染/编号路，手勾进来会逐块发号、只渲染一个编号。"""
+
+    harness = Harness(replies={"claims": claims_reply()})
+    harness.seed_project()
+    harness.materials.seed(
+        make_material_packet(
+            "联网正文",
+            material_id="w1",
+            origin="web_search",
+            source_ref="https://example.com/rbac",
+        )
+    )
+
+    with pytest.raises(WebMaterialNotAttachable):
+        await harness.start_round().create(
+            project_id=PROJECT, user_input="按联网结果写", material_ids=["w1"]
+        )
+
+
+async def test_material_list_keeps_sentinels_out_of_eids_but_still_freezes():
+    harness = Harness(replies={"claims": claims_reply()})
+    harness.seed_project()
+    harness.materials.seed(make_material("还没投影的手勾材料", material_id="m1"))
+    round_ = make_round()
+    round_.pin_materials(("m1",))
+    harness.rounds.seed(round_)
+
+    views = await harness.list_materials()(project_id=PROJECT)
+
+    assert views[0].eids == (), "手勾哨兵不能混进编号列"
+    assert views[0].frozen is True
+    with pytest.raises(MaterialFrozen) as caught:
+        await harness.delete_material()(project_id=PROJECT, material_id="m1")
+    assert "手勾/手动带料" in str(caught.value)
+    assert caught.value.details["eids"] == []

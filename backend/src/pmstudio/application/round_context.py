@@ -12,6 +12,7 @@
 一次宽读；它没有"上一步的池"可投影）。
 """
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -62,6 +63,8 @@ MAX_INTEGRATE_RETRIEVALS = 3
 #: 本模块反向 import 用例（会成环）。
 WEB_ORIGIN = "web_search"
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class PreparedContext:
@@ -107,34 +110,132 @@ class RoundContextPreparer:
 
         pass_index = self._pass_index(round_, stage)
         existing = self._trace_of(round_, stage, pass_index)
-        eid_of = {
-            (ref.material_id, ref.chunk_id): ref.eid for ref in round_.materials
-        }
+        hits: tuple[RetrievalHit, ...] = ()
+        error: str | None = None
+        attempted = False
         if existing is None:
-            hits, error = self._retrieve(round_, query, stage)
-            packets, pool, web_by_material, missing = self._pool(
-                round_, eid_of, extra_hits=hits
-            )
-        else:
-            hits, error = (), None
-            packets, pool, web_by_material, missing = self._pool(round_, eid_of)
-        pool_count = sum(len(chunk_ids) for chunk_ids in pool.values())
+            hits, error, attempted = self._retrieve(round_, query, stage)
 
-        if existing is not None:
-            # 幂等：恢复/重试时不重查、不重发号；只按已有 selected 重新渲染。
-            hits: tuple[RetrievalHit, ...] = existing.hits
-            selection = Selection(
-                chunks=tuple(
-                    (item.material_id, self._chunk_of(packets, item))
-                    for item in existing.selected
-                    if item.material_id in packets
-                    and self._chunk_of(packets, item) is not None
-                ),
-                hit_count=len(existing.hits),
-                used=0,
-                skipped_manual=(),
+        with self._uow:
+            # 写锁内**重新读**：检索在事务外，另一个 worker 可能已经把这步做完了。
+            # 发号也必须在这里——账本整份 JSON 覆盖写，事务外读会互相覆盖。
+            target = self._rounds.get(round_id)
+            pass_index = self._pass_index(target, stage)
+            existing = self._trace_of(target, stage, pass_index)
+            eid_of = {
+                (ref.material_id, ref.chunk_id): ref.eid
+                for ref in target.materials
+            }
+            if existing is None:
+                packets, pool, web_by_material, missing = self._pool(
+                    target, eid_of, extra_hits=hits if attempted else ()
+                )
+            else:
+                packets, pool, web_by_material, missing = self._pool(target, eid_of)
+            pool_count = sum(len(chunk_ids) for chunk_ids in pool.values())
+
+            if existing is not None:
+                # 幂等：恢复/重试（或另一个 worker 先完成）不重查、不重发号。
+                selection = Selection(
+                    chunks=tuple(
+                        (item.material_id, chunk)
+                        for item in existing.selected
+                        if (chunk := self._chunk_of(packets, item)) is not None
+                    ),
+                    hit_count=len(existing.hits),
+                    used=0,
+                    skipped_manual=(),
+                )
+            else:
+                selection = select_projection(
+                    packets=packets,
+                    pool=pool,
+                    pinned=target.pinned_materials,
+                    manual=target.manual_chunks,
+                    stage_hits=hits,
+                    query=query,
+                    budget=MATERIAL_BUDGET,
+                    section_overhead=SECTION_OVERHEAD,
+                    pinned_share=PINNED_BUDGET_SHARE,
+                )
+
+            ledger = None
+            if existing is None:
+                ledger = self._evidence.get(target.project_id)
+                new_refs: list[MaterialRef] = []
+                for material_id, chunk in selection.chunks:
+                    key = (material_id, chunk.chunk_id)
+                    if key in eid_of:
+                        continue
+                    packet = packets[material_id]
+                    eid = ledger.record(
+                        kind=material_kind(packet),
+                        text=chunk.text,
+                        source=EvidenceSource(external_ref=external_ref(packet, chunk)),
+                        now=self._clock.now(),
+                    )
+                    eid_of[key] = eid
+                    new_refs.append(
+                        MaterialRef(
+                            material_id=material_id, chunk_id=chunk.chunk_id, eid=eid
+                        )
+                    )
+                if new_refs:
+                    target.add_materials(new_refs)
+
+            score_by_chunk = {hit.chunk_id: hit.score for hit in hits}
+            selected = tuple(
+                RetrievalHit(
+                    material_id=material_id,
+                    chunk_id=chunk.chunk_id,
+                    score=score_by_chunk.get(chunk.chunk_id, 0.0),
+                )
+                for material_id, chunk in selection.chunks
             )
-            return self._finish(
+            # 到上限时**不新增 trace**：只投影、不再查；重入仍用同一份池。
+            trace = None
+            if existing is None and attempted and self._can_retrieve(target, stage):
+                trace = RetrievalTrace(
+                    stage=stage,
+                    pass_index=pass_index,
+                    query=query,
+                    hits=tuple(hits),
+                    selected=selected,
+                    ok=error is None,
+                    error=error,
+                    created_at=self._clock.now(),
+                )
+            elif existing is None and not self._can_retrieve(target, stage):
+                logger.info(
+                    "material_search caller=round stage=%s pass=%d skipped=cap",
+                    stage.value,
+                    pass_index,
+                )
+            if trace is not None:
+                target.note_retrieval(trace)
+            if selection.skipped_manual:
+                seen = {
+                    (item.handle, item.source, item.pass_index)
+                    for item in target.dropped
+                }
+                fresh = [
+                    DroppedItem(
+                        handle=chunk_id,
+                        reason="手动带进的块因本步预算没进来（它还在证据池里）",
+                        source=DropSource.TOOL,
+                        seat_id=None,
+                        pass_index=pass_index,
+                    )
+                    for chunk_id in selection.skipped_manual
+                    if (chunk_id, DropSource.TOOL, pass_index) not in seen
+                ]
+                if fresh:
+                    target.note_dropped(fresh)
+            if ledger is not None:
+                self._evidence_writer.save(ledger)
+            self._round_writer.save(target)
+
+            prepared = self._finish(
                 selection=selection,
                 packets=packets,
                 pool_count=pool_count,
@@ -142,104 +243,23 @@ class RoundContextPreparer:
                 web_by_material=web_by_material,
                 missing=missing,
             )
-
-        selection = select_projection(
-            packets=packets,
-            pool=pool,
-            pinned=round_.pinned_materials,
-            manual=round_.manual_chunks,
-            stage_hits=hits,
-            query=query,
-            budget=MATERIAL_BUDGET,
-            section_overhead=SECTION_OVERHEAD,
-            pinned_share=PINNED_BUDGET_SHARE,
-        )
-
-        ledger = self._evidence.get(round_.project_id)
-        new_refs: list[MaterialRef] = []
-        for material_id, chunk in selection.chunks:
-            key = (material_id, chunk.chunk_id)
-            if key in eid_of:
-                continue
-            packet = packets[material_id]
-            eid = ledger.record(
-                kind=material_kind(packet),
-                text=chunk.text,
-                source=EvidenceSource(external_ref=external_ref(packet, chunk)),
-                now=self._clock.now(),
-            )
-            eid_of[key] = eid
-            new_refs.append(
-                MaterialRef(material_id=material_id, chunk_id=chunk.chunk_id, eid=eid)
-            )
-
-        score_by_chunk = {hit.chunk_id: hit.score for hit in hits}
-        selected = tuple(
-            RetrievalHit(
-                material_id=material_id,
-                chunk_id=chunk.chunk_id,
-                score=score_by_chunk.get(chunk.chunk_id, 0.0),
-            )
-            for material_id, chunk in selection.chunks
-        )
-        # 到上限时**不新增 trace**：只投影、不再查。重入仍是同一份投影（池没变）。
-        trace = None
-        if self._can_retrieve(round_, stage):
-            trace = RetrievalTrace(
-                stage=stage,
-                pass_index=pass_index,
-                query=query,
-                hits=tuple(hits),
-                selected=selected,
-                ok=error is None,
-                error=error,
-                created_at=self._clock.now(),
-            )
-
-        with self._uow:
-            target = self._rounds.get(round_id)
-            if new_refs:
-                target.add_materials(new_refs)
-            if trace is not None:
-                target.note_retrieval(trace)
-            if selection.skipped_manual:
-                target.note_dropped(
-                    [
-                        DroppedItem(
-                            handle=chunk_id,
-                            reason="手动带进的块因本步预算没进来（它还在证据池里）",
-                            source=DropSource.MATERIAL,
-                            seat_id=None,
-                            pass_index=pass_index,
-                        )
-                        for chunk_id in selection.skipped_manual
-                    ]
-                )
-            self._evidence_writer.save(ledger)
-            self._round_writer.save(target)
-
-        return self._finish(
-            selection=selection,
-            packets=packets,
-            pool_count=pool_count,
-            eid_of=eid_of,
-            web_by_material=web_by_material,
-            missing=missing,
-        )
+        return prepared
 
     # —— 内部 ——
 
     def _retrieve(
         self, round_: Round, query: str, stage: RetrievalStage
-    ) -> tuple[tuple[RetrievalHit, ...], str | None]:
+    ) -> tuple[tuple[RetrievalHit, ...], str | None, bool]:
         if self._retriever is None or not self._can_retrieve(round_, stage):
-            return (), None
+            # 没接线 / 到上限 = **没查**，不是"查了零命中"。空 query 仍算查过
+            # （检索器会回空），重入时据此不重查。
+            return (), None, False
         try:
             hits = self._retriever.search(
                 project_id=round_.project_id, query=query, limit=SEARCH_LIMIT
             )
         except Exception as error:  # noqa: BLE001 —— 检索是增强项，失败留痕不判死
-            return (), f"{type(error).__name__}: {error}"
+            return (), f"{type(error).__name__}: {error}", True
         # `MaterialRetriever` 回的是 `MaterialHit`（带摘要/锚点）；池与 trace 只认
         # `RetrievalHit`（material_id/chunk_id/score）。在**这一处**转换，别让下游猜。
         return (
@@ -252,6 +272,7 @@ class RoundContextPreparer:
                 for hit in hits
             ),
             None,
+            True,
         )
 
     def _can_retrieve(self, round_: Round, stage: RetrievalStage) -> bool:
@@ -304,6 +325,7 @@ class RoundContextPreparer:
         """
 
         allowed: dict[str, set[str]] = {}
+        missing: list[str] = []
         # 本步刚检索到的块**必须先入池**：否则下面的 chunks_of 会把它们过滤掉，
         # 表现就是"检索命中 K、带进 0"（真跑会像检索器坏了）。
         for hit in extra_hits:
@@ -317,7 +339,12 @@ class RoundContextPreparer:
             allowed.setdefault(item.material_id, set()).add(item.chunk_id)
         for material_id in round_.pinned_materials:
             packet = self._materials.get(material_id)
-            if packet is None or packet.parsed.origin == WEB_ORIGIN:
+            if packet is None or packet.project_id != str(round_.project_id):
+                # 手勾材料也不许静默消失：提示词里要说清它不在了。
+                if material_id not in missing:
+                    missing.append(material_id)
+                continue
+            if packet.parsed.origin == WEB_ORIGIN:
                 continue
             allowed.setdefault(material_id, set()).update(
                 chunk.chunk_id for chunk in packet.parsed.chunks
@@ -325,12 +352,12 @@ class RoundContextPreparer:
 
         packets: dict[str, MaterialPacket] = {}
         web_by_material: dict[str, dict[str, EvidenceId]] = {}
-        missing: list[str] = []
         for material_id in list(allowed):
             packet = self._materials.get(material_id)
             if packet is None or packet.project_id != str(round_.project_id):
                 # 材料不在了 / 串项目：不编内容，也不把别家的材料写进本轮。
-                missing.append(material_id)
+                if material_id not in missing:
+                    missing.append(material_id)
                 allowed.pop(material_id)
                 continue
             if packet.parsed.origin == WEB_ORIGIN:

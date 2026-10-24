@@ -356,6 +356,25 @@ export function materialHitTarget(
   return { found: false };
 }
 
+/**
+ * 材料命中点下去但**跳不过去**时的说明。组件只负责显示，不拼业务判断。
+ * 三种情况：在当前轮材料卡里但页面没挂载 / 已手动带进但还没投影 / 根本没进过轮。
+ */
+export function materialHitNotice(
+  chunkId: string,
+  materials: RoundMaterialView[],
+  manualChunks: readonly { chunk_id: string }[] = [],
+): string {
+  const target = materialHitTarget(chunkId, materials);
+  if (target.found) {
+    return `这一块在「${target.title}」（${target.anchor}），但它现在不在页面上——切到它所在的那一轮再看。`;
+  }
+  if (manualChunks.some((chunk) => chunk.chunk_id === chunkId)) {
+    return "这一块已经带进本轮了；等下一步投影后它才会有 E 号，也才会出现在材料卡上。";
+  }
+  return "这一块还没带进任何一轮（所以它没有编号）；它在材料列表里，等它进某一轮才会发 E 编号。";
+}
+
 export type SearchHitAction =
   | { visible: false }
   | { visible: true; enabled: false; label: string; reason: string }
@@ -370,9 +389,9 @@ export function searchHitAction(
   if (hit.kind !== "material" || round === null || historical) {
     return { visible: false };
   }
-  const materialId = hit.material_id;
+  const materialId = hit.material_id ?? null;
   const chunkId = hit.chunk_id ?? hit.ref;
-  if (materialId === undefined || chunkId === "") {
+  if (materialId === null || chunkId === null || chunkId === "") {
     return { visible: false };
   }
   const already =
@@ -386,6 +405,14 @@ export function searchHitAction(
       enabled: false,
       label: "已在本轮",
       reason: "这一块已经在当前轮里了",
+    };
+  }
+  if (hit.origin === "web_search") {
+    return {
+      visible: true,
+      enabled: false,
+      label: "带进本轮",
+      reason: "联网结果不能手勾，请用研究入口",
     };
   }
   if (["awaiting_confirm", "done", "failed", "abandoned"].includes(round.step)) {

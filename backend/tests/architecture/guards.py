@@ -242,6 +242,16 @@ def imported_layers(source: str) -> set[str]:
     return layers
 
 
+def _is_uow_context(expr: ast.expr) -> bool:
+    """`with uow:` 与 `with self._uow:` 都算——生产事务几乎全是后者。"""
+
+    if isinstance(expr, ast.Name):
+        return expr.id == "uow"
+    if isinstance(expr, ast.Attribute):
+        return expr.attr in {"uow", "_uow"}
+    return False
+
+
 def await_inside_uow(source: str) -> list[int]:
     """返回"在名字叫 uow 的 with 块里出现 await / async for / async with"的行号。
 
@@ -253,10 +263,7 @@ def await_inside_uow(source: str) -> list[int]:
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.With):
             continue
-        if not any(
-            isinstance(item.context_expr, ast.Name) and item.context_expr.id == "uow"
-            for item in node.items
-        ):
+        if not any(_is_uow_context(item.context_expr) for item in node.items):
             continue
         for inner in ast.walk(node):
             if isinstance(inner, (ast.Await, ast.AsyncWith, ast.AsyncFor)):

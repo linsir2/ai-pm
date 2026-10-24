@@ -77,4 +77,8 @@ describe("materialSource", () => {
     expect(materialSource("m2", [], true)).toBe("自动");
     expect(materialSource("m3", [], false)).toBeNull();
   });
+
+  it("联网结果不标手勾/自动（它走另一条渲染路）", () => {
+    expect(materialSource("w1", ["w1"], true, "web_search")).toBeNull();
+  });
 });

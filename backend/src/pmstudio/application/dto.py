@@ -587,6 +587,9 @@ class SearchHitView:
     #: 只有材料命中非空：`ref` 是旧名、`chunk_id` 是新名（兼容期同值）。
     material_id: str | None = None
     chunk_id: str | None = None
+    #: 材料来源（`upload` / `web_search` / `web_fetch` / `simulation`）。
+    #: 前端据此决定能不能「带进本轮」；非材料命中为 None。
+    origin: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -687,6 +690,8 @@ class MaterialSummaryView:
     #: 这份材料被**哪些编号**引用过（`P19`）：空 = 没被用过 = 可以删、可以就地重解析。
     #: 有编号的**冻结**：编号指向它里面的块，删了会让 `E7` 指向空气，改形状会让编号改指。
     eids: tuple[str, ...] = ()
+    #: 被引用过（含手勾/手动带料哨兵）就冻结。`eids` 只放真正的 E 号，不能混哨兵。
+    frozen: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,6 +710,8 @@ class MaterialHit:
     source_ref: str
     #: 材料标题（列表那行的开头："权限系统设计详解：<片段>"）
     title: str
+    #: 材料来源；空串兼容测试里手搓的旧夹具。
+    origin: str = ""
 
 
 #: 包结构版本：换形状时 +1，`needs_reparse` 会因此判"该重解析"
@@ -896,6 +903,7 @@ def search_hits(
                 where=f"材料 · {material.anchor}",
                 material_id=material.material_id,
                 chunk_id=material.chunk_id,
+                origin=material.origin or None,
             )
         )
 

@@ -38,12 +38,14 @@ export function RoundMaterials({
               material.material_id,
               pinnedMaterials,
               hasRetrievals,
+              material.origin,
             ) !== null && (
               <span className="tag round-materials__source">
                 {materialSource(
                   material.material_id,
                   pinnedMaterials,
                   hasRetrievals,
+                  material.origin,
                 )}
               </span>
             )}

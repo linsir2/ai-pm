@@ -4,12 +4,27 @@
 "`Round.materials` 长大以后，提示词不会跟着涨"。
 """
 
-from pmstudio.application.context import MATERIAL_BUDGET
+from pmstudio.application.context import (
+    MATERIAL_BUDGET,
+    WEB_BUDGET,
+    WEB_PARTIAL_NOTE,
+    WEB_SECTION_OVERHEAD,
+    render_web_results,
+    select_chunks,
+    web_block_cost,
+)
+from pmstudio.application.dto import MaterialChunk, MaterialPacket, ParsedMaterial
 from pmstudio.application.use_cases import external_material_text
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.round.round import MaterialRef
+from pmstudio.domain.shared.ids import EvidenceId
 from tests.application.test_materials import make_material
-from tests.support.builders import NOW, PROJECT, make_round
+from tests.support.builders import (
+    NOW,
+    PROJECT,
+    make_material_packet,
+    make_round,
+)
 from tests.support.harness import Harness
 
 
@@ -95,3 +110,107 @@ def test_the_web_section_respects_its_budget():
     text = render_web_results(entries).text
 
     assert len(text) <= WEB_BUDGET
+
+
+def _pdf_packet(
+    *, pages: int = 10, per_page: int = 40, size: int = 100, material_id: str = "m1"
+) -> MaterialPacket:
+    chunks = tuple(
+        MaterialChunk(
+            chunk_id=f"{material_id}#c{page * per_page + index:03d}",
+            ordinal=page * per_page + index,
+            text="字" * size,
+            heading_path=(),
+            anchor=f"第 {page + 1} 页（第 {index + 1} 段）",
+        )
+        for page in range(pages)
+        for index in range(per_page)
+    )
+    return MaterialPacket(
+        material_id=material_id,
+        project_id=str(PROJECT),
+        parsed=ParsedMaterial(
+            origin="upload",
+            title="需求.pdf",
+            source_ref="attachment:需求.pdf",
+            media_type="application/pdf",
+            bytes_len=size * len(chunks),
+            chunks=chunks,
+            parser_id="pdf",
+            parser_version="v1",
+        ),
+        created_at=NOW,
+    )
+
+
+def test_a_pdf_parent_page_cannot_escape_the_budget_when_only_one_child_is_numbered():
+    """PDF 的一页会作为父块整页回喂；成本若只算子块，选块 10 块 → 渲染 400 块。"""
+
+    packet = _pdf_packet()
+    harness = Harness(replies={})
+    harness.seed_project()
+    harness.materials.seed(packet)
+    round_ = make_round()
+    ledger = harness.evidences.get(PROJECT)
+    refs = []
+    for page in range(10):
+        chunk = packet.parsed.chunks[page * 40]
+        eid = ledger.record(
+            kind=EvidenceKind.EXTERNAL,
+            text=chunk.text,
+            source=EvidenceSource(external_ref=f"attachment:需求.pdf#{chunk.ordinal}"),
+            now=NOW,
+        )
+        refs.append(MaterialRef(packet.material_id, chunk.chunk_id, eid))
+    round_.add_materials(refs)
+    harness.evidences.save(ledger)
+
+    text = external_material_text(round_, store=harness.materials)
+
+    assert len(text) <= MATERIAL_BUDGET, f"渲染 {len(text)} 字 > {MATERIAL_BUDGET}"
+
+
+def test_web_selection_and_render_share_one_budget():
+    """选块成本漏算换行时，渲染会丢掉已选中的编号（账本有、模型看不到）。"""
+
+    packets = [
+        make_material_packet(
+            *(["段" * 12] * 13),
+            title="t",
+            source_ref="u",
+            material_id=f"w{index}",
+            origin="web_search",
+        )
+        for index in range(11)
+    ]
+    picked, _ = select_chunks(
+        packets,
+        budget=WEB_BUDGET,
+        cost=web_block_cost,
+        section_overhead=WEB_SECTION_OVERHEAD,
+    )
+    entries = []
+    for index, packet in enumerate(packets):
+        chunks = [chunk for material_id, chunk in picked if material_id == packet.material_id]
+        if chunks:
+            entries.append((packet, chunks, EvidenceId(f"E{index + 1}")))
+
+    rendered = render_web_results(entries)
+
+    assert len(rendered.text) <= WEB_BUDGET, f"渲染 {len(rendered.text)} 字 > {WEB_BUDGET}"
+    assert {chunk.chunk_id for _, chunk in picked} <= set(rendered.used_chunk_ids), (
+        "选中的块必须全部渲染出来"
+    )
+
+
+def test_a_partial_web_result_is_said_out():
+    packet = make_material_packet(
+        "甲", "乙", "丙", material_id="w1", origin="web_search", title="t", source_ref="u"
+    )
+
+    rendered = render_web_results(
+        [(packet, [packet.parsed.chunks[0]], EvidenceId("E1"))]
+    )
+
+    assert WEB_PARTIAL_NOTE in rendered.text
+    assert len(rendered.text) <= WEB_BUDGET

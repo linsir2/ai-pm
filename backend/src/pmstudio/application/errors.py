@@ -185,13 +185,27 @@ class MaterialFrozen(ApplicationError):
     """
 
     def __init__(self, material_id: object, *, eids: tuple[str, ...], action: str) -> None:
-        listed = "、".join(eids)
+        numbers = tuple(
+            eid
+            for eid in eids
+            if len(eid) > 1 and eid.startswith("E") and eid[1:].isdigit()
+        )
+        if numbers:
+            message = (
+                f"这份材料已经发过编号 {'、'.join(numbers)}，不能{action}"
+                "——编号指向它里面的块，不能回收、也不能改指。"
+            )
+        else:
+            message = (
+                f"这份材料已被本轮引用（手勾/手动带料），不能{action}"
+                "——它可能还没投影、没有编号，但用户已经明确要它。"
+            )
         super().__init__(
-            f"这份材料已经发过编号 {listed}，不能{action}"
-            "——编号指向它里面的块，不能回收、也不能改指。",
+            message,
             code="material_frozen",
             material_id=str(material_id),
-            eids=list(eids),
+            eids=list(numbers),
+            references=list(eids),
             action=action,
         )
 

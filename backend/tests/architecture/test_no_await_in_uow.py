@@ -9,6 +9,11 @@ def test_guard_flags_await_inside_uow():
     assert await_inside_uow(source) == [3]
 
 
+def test_guard_flags_await_inside_self_dot_uow():
+    source = "async def run(self):\n    with self._uow:\n        await thing()\n"
+    assert await_inside_uow(source) == [3]
+
+
 def test_guard_allows_await_outside_uow():
     source = "async def run(uow):\n    await thing()\n    with uow:\n        save()\n"
     assert await_inside_uow(source) == []

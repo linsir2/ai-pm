@@ -614,6 +614,8 @@ export interface MaterialSummaryView {
    * 有编号 = **冻结**（编号指向它里面的块，删了编号就指向空气）。
    */
   eids: string[];
+  /** 被引用过（含手勾/手动带料，可能还没有 E 号）就冻结。 */
+  frozen: boolean;
 }
 
 export interface RoundMaterialChunkView {
@@ -656,8 +658,10 @@ export interface SearchHitView {
   ref: string;
   where: string;
   /** 只有材料命中非空；`ref` 是旧名、`chunk_id` 是新名（兼容期同值）。 */
-  material_id?: string;
-  chunk_id?: string;
+  material_id?: string | null;
+  chunk_id?: string | null;
+  /** 材料来源；非材料命中 / 老后端为 null。 */
+  origin?: string | null;
 }
 
 export interface SearchResultsView {

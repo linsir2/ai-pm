@@ -1459,9 +1459,11 @@ def test_a_web_result_costs_its_title_and_url_once():
         stamped, stamped.parsed.chunks[1], first_of_material=False
     )
 
-    assert second == 100, f"第二块只该算正文（100），实得 {second}"
+    # 第二块只算正文 + 段间换行（100 + 1）；标题/URL/编号仍只在第一块。
+    assert second == 101, f"第二块只该算正文 + 换行（101），实得 {second}"
+    # 第一块：正文 100 + 段尾换行 1 + 标题/URL + 编号位 + 两个行内换行 + 结果间换行。
     assert first == 100 + len(stamped.parsed.title) + len(stamped.parsed.source_ref) \
-        + context.WEB_EID_RESERVE, f"第一块还要算标题+URL+编号位，实得 {first}"
+        + context.WEB_EID_RESERVE + 4, f"第一块还要算标题+URL+编号位，实得 {first}"
 
 
 def test_the_rendered_web_text_contains_every_selected_chunk():
@@ -1694,27 +1696,33 @@ def test_a_skipped_expensive_block_does_not_stop_the_cheaper_ones():
 def test_section_overheads_cover_the_rendered_fixed_lines():
     """R：`SECTION_OVERHEAD` / `WEB_SECTION_OVERHEAD` 由渲染字符串推导，不是手写魔数。
 
-    I：用 4 位数上限算每条固定行；
+    I：用**生产最坏形状**算固定行（10 字符材料 id、5 位计数），不用短样例；
     P：常量 == 各部分之和（改文案时这条会红，提醒重算）；
     R：值不低于当前实测下限。
     """
 
     from pmstudio.application import context
 
+    ids = ("m-ffffffff", "m-ffffffff", "m-ffffffff")
     assert context.SECTION_OVERHEAD == (
         len(context.MATERIAL_CLOSING)
-        + len(context.material_header(9999, 9999, stage="本步"))
-        + len(context.budget_drop_line(9999))
-        + len(context.missing_line(9999, ("m-1", "m-2", "m-3"), more=True))
+        + max(
+            len(context.material_header(99_999, 99_999, stage="本步")),
+            len(context.material_header(99_999, 99_999, stage="本轮")),
+            len(context.material_header(99_999, 99_999, stage="按主题")),
+        )
+        + len(context.budget_drop_line(99_999))
+        + len(context.missing_line(99_999, ids, more=True))
         + 8
     )
     assert context.WEB_SECTION_OVERHEAD == (
         len(context.WEB_CLOSING)
-        + len(context.web_truncation_note(9999, 9999))
-        + 2
+        + len(context.web_truncation_note(99_999, 99_999))
+        + len(context.WEB_PARTIAL_NOTE)
+        + 3
     )
-    assert context.SECTION_OVERHEAD >= 178
-    assert context.WEB_SECTION_OVERHEAD >= 77
+    assert context.SECTION_OVERHEAD >= 204
+    assert context.WEB_SECTION_OVERHEAD >= 103
 
 
 def test_material_header_states_the_pool_may_have_more():

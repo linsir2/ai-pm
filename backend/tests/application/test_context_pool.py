@@ -383,3 +383,27 @@ def test_every_pinned_material_gets_a_floor_even_above_the_share():
     materials = {material_id for material_id, _ in selection.chunks}
     assert {"m1", "m2"} <= materials
     assert selection.used <= 1000
+
+
+def test_a_manual_chunk_saved_by_the_floor_is_not_reported_as_skipped():
+    """60% 闸拒了它、地板又把它装回来 → 不能同时说"因预算没进来"。"""
+
+    packet = make_material("字" * 250)
+    chunk = packet.parsed.chunks[0]
+    cost = material_block_cost(packet, chunk, first_of_material=True)
+    budget = cost
+
+    selection = select_projection(
+        packets={"m1": packet},
+        pool={"m1": frozenset({chunk.chunk_id})},
+        pinned=("m1",),
+        manual=(ManualChunk("m1", chunk.chunk_id),),
+        stage_hits=(),
+        query="",
+        budget=budget,
+        section_overhead=0,
+        pinned_share=0.6,
+    )
+
+    assert [chunk.chunk_id for _, chunk in selection.chunks] == [chunk.chunk_id]
+    assert selection.skipped_manual == ()

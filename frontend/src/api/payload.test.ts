@@ -17,6 +17,7 @@ import {
   groupAdvisories,
   initialClaimEdits,
   integrationSummary,
+  materialHitNotice,
   materialHitTarget,
   searchHitAction,
   selectableLabels,
@@ -682,6 +683,45 @@ describe("searchHitAction", () => {
       visible: true,
       enabled: true,
       label: "带进本轮",
+    });
+  });
+
+  it("材料命中跳不过去时，三种情况各说各的话", () => {
+    const materials = [
+      {
+        material_id: "m1",
+        title: "需求.md",
+        source_ref: "s",
+        origin: "upload",
+        parser_id: "p",
+        chunk_count: 1,
+        truncated: false,
+        warnings: [],
+        chunks: [
+          { chunk_id: "m1#c00", text: "x", anchor: "第 1 行", eid: "E1" },
+        ],
+      },
+    ];
+    expect(materialHitNotice("m1#c00", materials)).toContain("切到它所在的那一轮");
+    expect(
+      materialHitNotice("m1#c01", materials, [{ chunk_id: "m1#c01" }]),
+    ).toContain("投影");
+    expect(materialHitNotice("m1#c02", materials, [])).toContain(
+      "还没带进任何一轮",
+    );
+  });
+
+  it("联网检索结果不能手勾（后端会 422）", () => {
+    expect(
+      searchHitAction(
+        materialHit({ origin: "web_search" }),
+        actionRound(),
+        false,
+      ),
+    ).toMatchObject({
+      visible: true,
+      enabled: false,
+      reason: expect.stringContaining("研究入口"),
     });
   });
 });

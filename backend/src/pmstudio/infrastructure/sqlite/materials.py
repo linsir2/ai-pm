@@ -422,7 +422,7 @@ class SqliteFtsRetriever:
 
     _SQL = """
         SELECT c.chunk_id, c.material_id, c.text, c.anchor, c.ordinal,
-               m.title, m.source_ref, bm25(material_chunks_fts) AS rank
+               m.title, m.source_ref, m.origin, bm25(material_chunks_fts) AS rank
         FROM material_chunks_fts f
         JOIN material_chunks c ON c.chunk_id = f.chunk_id
         JOIN materials m ON m.material_id = c.material_id
@@ -480,6 +480,7 @@ class SqliteFtsRetriever:
             anchor=str(row["anchor"]),
             source_ref=str(row["source_ref"]),
             title=str(row["title"]),
+            origin=str(row["origin"]),
         )
 
 
@@ -859,7 +860,8 @@ class SqliteHybridRetriever:
             return {}
         placeholders = ",".join("?" for _ in chunk_ids)
         rows = self._connection.execute(
-            "SELECT c.chunk_id, c.material_id, c.text, c.anchor, m.title, m.source_ref"
+            "SELECT c.chunk_id, c.material_id, c.text, c.anchor, m.title, m.source_ref,"
+            " m.origin"
             " FROM material_chunks c JOIN materials m ON m.material_id = c.material_id"
             f" WHERE c.chunk_id IN ({placeholders})"
             " AND m.project_id = ? AND c.owner_id = ?",
@@ -879,5 +881,6 @@ class SqliteHybridRetriever:
                 anchor=str(row["anchor"]),
                 source_ref=str(row["source_ref"]),
                 title=str(row["title"]),
+                origin=str(row["origin"]),
             )
         return hits

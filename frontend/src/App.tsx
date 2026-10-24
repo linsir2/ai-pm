@@ -11,6 +11,7 @@ import {
   awaitingMode,
   buildAnswers,
   buildOpeningBody,
+  materialHitNotice,
   materialHitTarget,
   searchHitAction,
 } from "./api/payload";
@@ -282,15 +283,12 @@ function Workspace() {
         // 材料命中：只有"这一块已经带进某一轮"才跳得动（跳的是**当前正在看的那一轮**的材料卡）
         const target = materialHitTarget(hit.ref, shownRound?.materials ?? []);
         if (target.found && jumpToChunk(hit.ref)) return;
-        const manual = (shownRound?.manual_chunks ?? []).some(
-          (chunk) => chunk.chunk_id === (hit.chunk_id ?? hit.ref),
-        );
         data.notify(
-          target.found
-            ? `这一块在「${target.title}」（${target.anchor}），但它现在不在页面上——切到它所在的那一轮再看。`
-            : manual
-              ? "这一块已经带进本轮了；等下一步投影后它才会有 E 号，也才会出现在材料卡上。"
-              : "这一块还没带进任何一轮（所以它没有编号）；它在材料列表里，等它进某一轮才会发 E 编号。",
+          materialHitNotice(
+            hit.chunk_id ?? hit.ref,
+            shownRound?.materials ?? [],
+            shownRound?.manual_chunks ?? [],
+          ),
         );
         return;
       }

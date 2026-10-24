@@ -977,6 +977,7 @@ def test_material_hits_land_last_with_their_title_and_anchor():
                 anchor="第 3 页 §2.1",
                 source_ref="attachment:诊断报告.pdf",
                 title="诊断报告.pdf",
+                origin="upload",
             ),
         ),
     )
@@ -986,6 +987,7 @@ def test_material_hits_land_last_with_their_title_and_anchor():
     assert material.ref == "m1#c03"
     assert material.label == "诊断报告.pdf：…结论：导出要走异步队列…"
     assert material.where == "材料 · 第 3 页 §2.1"
+    assert material.origin == "upload"
 
 
 def test_search_stops_at_the_limit_and_says_it_truncated():

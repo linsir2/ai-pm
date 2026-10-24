@@ -29,6 +29,7 @@ const uploaded: MaterialSummaryView = {
   warnings: [],
   stale: false,
   eids: [],
+  frozen: false,
 };
 
 const used: MaterialSummaryView = { ...uploaded, material_id: "m2", title: "旧规范.pdf", eids: ["E4", "E9"] };

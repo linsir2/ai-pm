@@ -372,14 +372,14 @@ export function useWorkspaceData() {
       const round = state.round;
       const materialId = hit.material_id;
       const chunkId = hit.chunk_id ?? hit.ref;
-      if (round === null || materialId === undefined || chunkId === "") return;
+      if (round === null || materialId == null || chunkId === "") return;
       await run("round_material", async () => {
         const fresh = await api.addRoundMaterial(
           round.round_id,
           materialId,
           chunkId,
         );
-        dispatch({ type: "round", round: fresh });
+        dispatch({ type: "round", round: fresh, expectRoundId: round.round_id });
       });
     },
     [run, state.round],

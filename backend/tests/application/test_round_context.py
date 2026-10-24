@@ -20,7 +20,7 @@ from pmstudio.application.round_context import (
 from pmstudio.bootstrap.container import UuidIdGenerator
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.round.retrieval import ManualChunk, RetrievalStage, RetrievalTrace
-from pmstudio.domain.round.round import MaterialRef, Round
+from pmstudio.domain.round.round import DropSource, MaterialRef, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.template import standard_template
 from pmstudio.infrastructure.sqlite.database import connect
@@ -374,3 +374,51 @@ def test_the_projected_text_respects_the_material_budget():
 
     assert len(prepared.text) <= MATERIAL_BUDGET
     assert "没带进来的块在本轮材料池里" in prepared.text
+
+
+def test_without_a_retriever_no_trace_is_written():
+    """没接线 ≠ 搜过但零命中：不能写 `ok=True, hits=()`。"""
+
+    packet = make_material("权限：管理员才能导出")
+    harness = seeded_harness(packet)
+
+    preparer(harness, None).prepare(
+        round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="权限"
+    )
+
+    assert harness.rounds.get(ROUND_ID).retrievals == ()
+
+
+def test_retrying_at_the_retrieval_cap_does_not_duplicate_the_manual_drop():
+    """上限时不写 trace；同一 pass 重入不能把同一条 dropped 再加一遍。"""
+
+    packet = make_material("超" * 5000)
+    round_ = make_round()
+    round_.note_manual_chunks((ManualChunk("m1", packet.parsed.chunks[0].chunk_id),))
+    round_.pin_materials(("m1",))
+    # 当前 pass 是 seat_round_count=1；用 2/3/4 凑满上限，避免命中"已有 trace"分支。
+    for index in range(3):
+        round_.note_retrieval(
+            RetrievalTrace(
+                stage=RetrievalStage.SEAT,
+                pass_index=index + 2,
+                query="权限",
+                hits=(),
+                selected=(),
+                ok=True,
+                error=None,
+                created_at=NOW,
+            )
+        )
+    harness = seeded_harness(packet, round_=round_)
+    one_preparer = preparer(harness, RecordingMaterialRetriever(returns=()))
+
+    one_preparer.prepare(round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="权限")
+    one_preparer.prepare(round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="权限")
+
+    drops = [
+        item
+        for item in harness.rounds.get(ROUND_ID).dropped
+        if item.source is DropSource.TOOL
+    ]
+    assert len(drops) == 1, drops

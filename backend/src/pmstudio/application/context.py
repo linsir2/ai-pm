@@ -982,6 +982,8 @@ MATERIAL_CLOSING = (
 WEB_CLOSING = (
     "（以上是联网检索结果，不是用户说的话；不要再把它说成用户说的话。要引就引方括号里的编号）"
 )
+#: 一条联网结果只选中了部分段时，至少要说一句（别让模型以为看到的是整条）。
+WEB_PARTIAL_NOTE = "（有些联网结果只带了部分段；其余段没进提示词）"
 
 
 def material_header(selected: int, pool: int, *, stage: str = "本步") -> str:
@@ -1035,19 +1037,37 @@ def web_truncation_note(shown: int, total: int) -> str:
 #: 「材料较长，只带了 N 块 / 共 M 块」只在截断时出现，选块时不知道截不截 → 留上限。
 TRUNCATION_NOTE_RESERVE = len(truncation_note(9999, 9999)) + 2
 
+#: 固定行预留按**生产最坏形状**算，不用短样例：
+#: 材料 id 是 `m-<8hex>`（10 字符）；池/选中数最多 5 位。
+_MAX_COUNT = 99_999
+_MAX_MATERIAL_ID = "m-" + "f" * 8
+
 #: 材料节所有**固定行**的上限（收尾 + 抬头 + 预算留痕 + 缺失留痕 + 换行）。
 #: 由渲染字符串推导，不是手写魔数——改文案时这个数自动跟着变。
 SECTION_OVERHEAD = (
     len(MATERIAL_CLOSING)
-    + len(material_header(9999, 9999))
-    + len(budget_drop_line(9999))
-    + len(missing_line(9999, ("m-1", "m-2", "m-3"), more=True))
+    + max(
+        len(material_header(_MAX_COUNT, _MAX_COUNT)),
+        len(material_header(_MAX_COUNT, _MAX_COUNT, stage="本轮")),
+        len(material_header(_MAX_COUNT, _MAX_COUNT, stage="按主题")),
+    )
+    + len(budget_drop_line(_MAX_COUNT))
+    + len(
+        missing_line(
+            _MAX_COUNT,
+            (_MAX_MATERIAL_ID, _MAX_MATERIAL_ID, _MAX_MATERIAL_ID),
+            more=True,
+        )
+    )
     + 8
 )
 
-#: 联网节的固定行（收尾 + 截断说明 + 换行）。选块与渲染共用这一个数。
+#: 联网节的固定行（收尾 + 截断说明 + 部分段说明 + 换行）。选块与渲染共用。
 WEB_SECTION_OVERHEAD = (
-    len(WEB_CLOSING) + len(web_truncation_note(9999, 9999)) + 2
+    len(WEB_CLOSING)
+    + len(web_truncation_note(_MAX_COUNT, _MAX_COUNT))
+    + len(WEB_PARTIAL_NOTE)
+    + 3
 )
 
 #: 联网结果渲染时每条还会多一个「[E123] 」编号位：选块的成本要把这个位子也算上，
@@ -1065,6 +1085,7 @@ def select_chunks(
     query: str = "",
     section_overhead: int = 0,
     scores: Mapping[str, float] | None = None,
+    candidates: Mapping[str, frozenset[str]] | None = None,
 ) -> tuple[tuple[tuple[str, MaterialChunk], ...], int]:
     """**唯一**决定"哪些块进这一轮"的地方。
 
@@ -1089,6 +1110,10 @@ def select_chunks(
     重设计的 stage 2——库级检索宽召回之后必须收敛，否则预算被摊成十几份材料、
     每份只摊到一两块（v4 实测 gold 材料从 13.45 块掉到 1.54 块）。
     `scores=None` 时**路由**与改前一致（结果仍可能因成本尺子 F0 而变）。
+
+    `candidates` 可选：只允许这些块参赛，但**成本仍按完整 packet 算**。这是
+    PDF 父块路径的关键——把 packet 裁成"有编号的块"再选，`parent_text` 只看到
+    一个兄弟块，成本会少算整页；渲染却用原始 packet，预算就破了。
     """
 
     weigh = cost or material_block_cost
@@ -1096,10 +1121,16 @@ def select_chunks(
     # 它一定会渲染出来 → 选块时先给它留出位置，否则渲染就会超预算（"预算"是假的）。
     usable = max(0, budget - section_overhead)
     if scores is not None:
-        return _select_by_score(packets, budget=usable, weigh=weigh, scores=scores)
+        return _select_by_score(
+            packets, budget=usable, weigh=weigh, scores=scores, candidates=candidates
+        )
     if not query.strip():
-        return _select_in_order(packets, budget=usable, weigh=weigh)
-    return _select_ranked(packets, budget=usable, weigh=weigh, query=query)
+        return _select_in_order(
+            packets, budget=usable, weigh=weigh, candidates=candidates
+        )
+    return _select_ranked(
+        packets, budget=usable, weigh=weigh, query=query, candidates=candidates
+    )
 
 
 def _select_in_order(
@@ -1107,6 +1138,7 @@ def _select_in_order(
     *,
     budget: int,
     weigh: Callable[[MaterialPacket, MaterialChunk, bool], int],
+    candidates: Mapping[str, frozenset[str]] | None = None,
 ) -> tuple[tuple[tuple[str, MaterialChunk], ...], int]:
     """按材料顺序、块顺序取到预算为止（`query=""` 的路由）。
 
@@ -1117,7 +1149,10 @@ def _select_in_order(
     used = 0
     taken: set[str] = set()
     for packet in packets:
+        allowed = candidates.get(packet.material_id) if candidates is not None else None
         for chunk in packet.parsed.chunks:
+            if allowed is not None and chunk.chunk_id not in allowed:
+                continue
             first = packet.material_id not in taken
             cost = weigh(packet, chunk, first_of_material=first)
             if used + cost > budget:
@@ -1144,6 +1179,7 @@ def _select_ranked(
     budget: int,
     weigh: Callable[[MaterialPacket, MaterialChunk, bool], int],
     query: str,
+    candidates: Mapping[str, frozenset[str]] | None = None,
 ) -> tuple[tuple[tuple[str, MaterialChunk], ...], int]:
     """按相关粗排取块。两步：**每份材料至少露出它自己的第一名**，再按分数补满预算。
 
@@ -1152,7 +1188,7 @@ def _select_ranked(
     （勾了材料、提示词说没材料），修完块宽不保底会以另一种形式重现。
     """
 
-    candidates = [
+    ranked = [
         _Candidate(
             score=block_score(chunk.text, query),
             position=position,
@@ -1161,9 +1197,11 @@ def _select_ranked(
         )
         for position, packet in enumerate(packets)
         for chunk in packet.parsed.chunks
+        if candidates is None
+        or chunk.chunk_id in candidates.get(packet.material_id, frozenset())
     ]
     # 分数降序；同分按材料顺序、块顺序——排序**完全确定**，同样的输入永远得到同样的选择
-    order = sorted(candidates, key=lambda item: (-item.score, item.position, item.chunk.ordinal))
+    order = sorted(ranked, key=lambda item: (-item.score, item.position, item.chunk.ordinal))
 
     picked: list[tuple[str, MaterialChunk]] = []
     taken: set[tuple[str, int]] = set()
@@ -1204,6 +1242,7 @@ def _select_by_score(
     budget: int,
     weigh: Callable[[MaterialPacket, MaterialChunk, bool], int],
     scores: Mapping[str, float],
+    candidates: Mapping[str, frozenset[str]] | None = None,
 ) -> tuple[tuple[tuple[str, MaterialChunk], ...], int]:
     """按**外部分数收敛**（stage 2）：候选集 = `scores` 的键，按分数降序取到预算满。
 
@@ -1228,6 +1267,10 @@ def _select_by_score(
             for position, packet in enumerate(packets)
             for chunk in packet.parsed.chunks
             if chunk.chunk_id in scores
+            and (
+                candidates is None
+                or chunk.chunk_id in candidates.get(packet.material_id, frozenset())
+            )
         ),
         key=lambda item: (-item[0], item[1], item[2]),
     )
@@ -1384,12 +1427,15 @@ def web_block_cost(
     这里也只算一次——所以"选进来的每一条都会被渲染出来"那条不变量还成立。
     """
 
-    cost = len(chunk.text)
+    # 正文段之间渲染时用 `\n` 连接：每段多 1 个换行（最后一段也算，留余量）。
+    cost = len(chunk.text) + 1
     if first_of_material:
+        # 编号位 + 标题/URL 两行 + 两个换行 + 结果与结果之间的一个换行。
         cost += (
             len(packet.parsed.title)
             + len(packet.parsed.source_ref)
             + WEB_EID_RESERVE
+            + 3
         )
     return cost
 
@@ -1513,10 +1559,12 @@ def render_web_results(
         lines.append(block)
         used += len(block)
         used_ids.extend(chunk.chunk_id for chunk in chunks)
+    shown = len(lines)
+    if any(len(chunks) < len(packet.parsed.chunks) for packet, chunks, _ in entries):
+        lines.append(WEB_PARTIAL_NOTE)
     if truncated:
         # 单位是**结果条数**，不是块数（2026-10-21 修）：`used_ids` 数的是块，
         # 一条结果可能好几段 → 写出来会变成"只带了前 7 条 / 共 5 条"这种反直觉的话。
-        shown = len(lines)
         lines.append(web_truncation_note(shown, len(entries)))
     lines.append(WEB_CLOSING)
     return RenderedMaterial(

@@ -25,6 +25,7 @@ const summary: MaterialSummaryView = {
   warnings: [],
   stale: false,
   eids: [],
+  frozen: false,
 };
 
 function draw(over: Partial<Parameters<typeof MaterialPicker>[0]> = {}) {

@@ -121,7 +121,7 @@ class _RoundMaterialIndex:
     """材料引用在测试里的查询源：把内存仓储里的轮次投影成 `{material_id: (eid, …)}`。
 
     与真实现（`SqliteWorkspaceIndex.material_references` 扫 `rounds.payload`）同一条口径：
-    只看 `Round.materials`，不限轮数，不带任何写能力。
+    `Round.materials` + 手勾/手动带料哨兵，不限轮数，不带任何写能力。
     """
 
     def __init__(self, rounds) -> None:  # type: ignore[no-untyped-def]
@@ -134,6 +134,10 @@ class _RoundMaterialIndex:
                 continue
             for ref in item.materials:
                 found.setdefault(ref.material_id, []).append(str(ref.eid))
+            for material_id in item.pinned_materials:
+                found.setdefault(material_id, []).append("手勾")
+            for chunk in item.manual_chunks:
+                found.setdefault(chunk.material_id, []).append("手动带料")
         return {material_id: tuple(eids) for material_id, eids in found.items()}
 
 

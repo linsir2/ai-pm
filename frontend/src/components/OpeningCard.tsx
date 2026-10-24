@@ -60,7 +60,11 @@ export function OpeningCard({
           </p>
         ) : null}
 
-        <RoundMaterials materials={round.materials} />
+        <RoundMaterials
+          materials={round.materials}
+          pinnedMaterials={round.pinned_materials ?? []}
+          hasRetrievals={(round.retrievals ?? []).length > 0}
+        />
 
         <ul className="claims">
           {round.claims.map((claim) => {

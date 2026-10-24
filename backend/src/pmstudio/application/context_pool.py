@@ -257,6 +257,9 @@ def select_projection(
         if take(material_id, chunk) and material_id not in pinned_set:
             auto_slots[material_id] = auto_slots.get(material_id, 0) + 1
 
+    # 地板可能把 `①` 里记下的 manual 块又装回来（总预算够、60% 闸不够）：
+    # 已经 `taken` 的不再算"没进来"，否则提示词/留痕会说反话。
+    skipped_manual = [chunk_id for chunk_id in skipped_manual if chunk_id not in taken]
     return Selection(
         chunks=tuple(picked),
         hit_count=len(stage_hits),

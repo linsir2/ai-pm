@@ -43,7 +43,10 @@ export function materialSource(
   materialId: string,
   pinnedMaterials: string[],
   hasRetrievals: boolean,
+  origin = "",
 ): "手勾" | "自动" | null {
+  // 联网结果走另一条路（一条结果一个号），既不是"手勾"也不是"自动"。
+  if (origin === "web_search") return null;
   if (pinnedMaterials.includes(materialId)) return "手勾";
   return hasRetrievals ? "自动" : null;
 }

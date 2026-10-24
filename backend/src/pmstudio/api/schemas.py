@@ -142,8 +142,10 @@ class OpeningRequest(BaseModel):
 class AttachMaterialRequest(BaseModel):
     """搜索框「带进本轮」：材料 id + 要带的块（一次最多 3 块，用例层再挡）。"""
 
-    material_id: str = Field(min_length=1)
-    chunk_ids: list[str] = Field(min_length=1)
+    material_id: str = Field(min_length=1, max_length=64)
+    #: 与 `application.use_cases.MAX_MANUAL_CHUNKS_PER_CALL=3` 对齐；解析层先挡，
+    #: 别等超大 JSON 进了用例才数。
+    chunk_ids: list[str] = Field(min_length=1, max_length=3)
 
 
 class AnswerRequest(BaseModel):
