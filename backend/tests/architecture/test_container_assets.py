@@ -110,6 +110,15 @@ def test_the_backend_dockerfile_disables_reload() -> None:
     assert any("--no-reload" in line for line in cmds)
 
 
+def test_the_backend_dockerfile_skips_uv_sync_at_runtime() -> None:
+    """`uv run` 默认每次起都全量 sync —— 镜像里的 `.venv` 是 `--no-dev` 的，
+    它会把 dev 包（ruff/playwright，几十 MB）再下一遍才起服务。
+    构建时依赖已锁死（`uv sync --frozen`），运行时不许再碰网关。"""
+
+    cmds = _directives(_text(BACKEND_DOCKERFILE), "CMD")
+    assert any("--no-sync" in line for line in cmds)
+
+
 def test_the_backend_dockerfile_uses_an_absolute_db_path() -> None:
     """相对路径按 `backend/` 解析（`scripts/dev.py`），容器里会落到别处。"""
 

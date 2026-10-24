@@ -81,6 +81,24 @@ def test_settings_model_params_reads_json(tmp_path):
     ).model_params == {}
 
 
+def test_settings_model_params_strips_shell_quotes(tmp_path):
+    """`.env.example` 要求 JSON 值带单引号（`source` 才吃得下，learnings L19），
+    但 docker `--env-file` / compose `env_file` 不剥引号（原样注入）。
+    配置解析在这里统一剥一层——原生（dev.py 已剥过）是 no-op，容器里是救命。
+    """
+
+    settings = Settings.from_env(
+        {
+            "PMSTUDIO_MODEL": "m",
+            "PMSTUDIO_API_KEY": "k",
+            "PMSTUDIO_MODEL_PARAMS": '\'{"extra_body": {"enable_thinking": false}}\'',
+        },
+        default_db=tmp_path / "d.db",
+    )
+
+    assert settings.model_params == {"extra_body": {"enable_thinking": False}}
+
+
 def test_settings_model_params_bad_json_is_a_hard_error(tmp_path):
     with pytest.raises(ConfigError, match="PMSTUDIO_MODEL_PARAMS"):
         Settings.from_env(

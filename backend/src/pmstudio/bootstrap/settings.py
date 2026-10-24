@@ -107,6 +107,22 @@ def _positive_int(source: Mapping[str, str], name: str, default: int) -> int:
     return value
 
 
+def _unquote(raw: str) -> str:
+    """剥一层 shell 引号（`'...'` 或 `"..."`）。
+
+    `.env.example` 要求 JSON 值带单引号（否则 `source .env` 时 bash 把 `{`
+    当命令，见 learnings L19）；但 docker `--env-file` / compose `env_file`
+    **不剥引号**（原样注入环境变量），`dev.py` 的自解析器剥、docker 的不剥——
+    两边行为不一致，配置在原生跑得好好的、进容器就 `ConfigError`。
+    在这里统一剥一层，两边都成立；`dev.py` 那边已经剥过一次的，这里是 no-op。
+    """
+
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1].strip()
+    return text
+
+
 def _parse_mcp_servers(raw: str) -> tuple[Mapping[str, object], ...]:
     """解析 `PMSTUDIO_MCP_SERVERS`（JSON 数组）。
 
@@ -119,7 +135,7 @@ def _parse_mcp_servers(raw: str) -> tuple[Mapping[str, object], ...]:
     if not raw:
         return ()
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(_unquote(raw))
     except json.JSONDecodeError as error:
         raise ConfigError(f"{MCP_SERVERS_ENV} 要是 JSON 数组：{error.msg}") from error
     if not isinstance(parsed, list):
@@ -247,7 +263,7 @@ class Settings:
         if model_timeout <= 0:
             raise ConfigError(f"{TIMEOUT_ENV} 必须大于 0，现在是 {model_timeout}")
         trace_model = source.get(TRACE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
-        raw_params = source.get(PARAMS_ENV, "").strip()
+        raw_params = _unquote(source.get(PARAMS_ENV, "").strip())
         model_params: dict[str, object] = {}
         if raw_params:
             try:

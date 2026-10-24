@@ -41,7 +41,10 @@ ENV PYTHONUNBUFFERED=1 \
 # 容器里必须 `--host 0.0.0.0`：`dev.py` 的默认是 `127.0.0.1`
 # （那样容器外**连不上，而且没有日志**）。`--no-reload` 是必须的：
 # 热重载会挂文件监听，且与多 worker 互斥。
+# `--no-sync` 是必须的：`uv run` 默认每次起都全量 sync（镜像里 `.venv`
+# 是 `--no-dev` 的，它会把 ruff/playwright 等 dev 包再下一遍——每次起多等
+# 约一分钟，且启动依赖网关可达）。镜像构建时依赖已锁死，运行时不再 sync。
 # 端口**不写在这里**：`dev.py` 读 `PMSTUDIO_PORT`（默认 8000），CMD 再写
 # `--port 8000` 会让改环境变量失效（CLI 永远赢），两处迟早漂移。
 EXPOSE 8000
-CMD ["uv", "run", "python", "scripts/dev.py", "--host", "0.0.0.0", "--no-reload"]
+CMD ["uv", "run", "--no-sync", "python", "scripts/dev.py", "--host", "0.0.0.0", "--no-reload"]
