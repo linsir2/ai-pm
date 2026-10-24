@@ -227,6 +227,25 @@ def test_the_dockerignore_excludes_secrets_and_data() -> None:
         assert entry in text, f".dockerignore 缺条目：{entry}"
 
 
+def test_the_backend_dockerignore_excludes_secrets_data_and_venv() -> None:
+    """后端 context 是 `backend/`，根上的 `.dockerignore` 管不到它。
+
+    没有这一份，`backend/.env`（真 key）、`backend/data`（sqlite 库）、
+    `.venv` 每次都被送进构建上下文（`COPY` 只取 src/scripts 所以进不了镜像层，
+    但上下文白白变大，且 key 离镜像越远越好）。
+    """
+
+    path = ROOT / "backend" / ".dockerignore"
+    assert path.is_file(), "backend 缺 .dockerignore（context 是 backend/ → 根那份管不到）"
+    text = path.read_text(encoding="utf-8")
+    for entry in (".env", "data", ".venv"):
+        assert entry in text, f"backend/.dockerignore 缺条目：{entry}"
+    assert ".env.example" not in text, (
+        "不能把 .env.example 也挡掉——CI 靠 `cp .env.example .env` 造占位"
+        "（占位本身被 `.env` 那条挡掉，进不了镜像，只是要文件在）"
+    )
+
+
 def test_the_fastembed_cache_volume_matches_its_env() -> None:
     """fastembed 的缓存目录必须**就是**挂卷的那个目录（C5）。
 

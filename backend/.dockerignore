@@ -1,0 +1,17 @@
+# 后端镜像的 build context 是 `backend/`（见 docker-compose.yml），
+# 仓库根的 `.dockerignore` 管不到这里，所以这里要有一份自己的。
+#
+# 为什么必须有：没有它，`backend/.env`（含模型 key）与 `backend/data`
+# （整个 SQLite 库）、`.venv` 每次都会被送进构建上下文——
+# `COPY` 只取 `src/` 与 `scripts/`，所以它们进不了镜像层（不泄漏），
+# 但上下文白白变大、构建变慢，且 key 离镜像越远越好。
+
+.env
+data
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+*.db
+*.db-wal
+*.db-shm
