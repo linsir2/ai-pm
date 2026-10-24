@@ -384,6 +384,22 @@ class RoundCallsView:
 
 
 @dataclass(frozen=True, slots=True)
+class RetrievalView:
+    """一步检索的只读投影：命中多少、真正带进多少、成功没有。"""
+
+    stage: str
+    pass_index: int
+    query: str
+    hit_count: int
+    selected_count: int
+    #: 真正带进本步提示词的块（有 E 号）；界面据此跳转与打来源徽标。
+    chunk_ids: tuple[str, ...]
+    ok: bool
+    error: str | None
+    created_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class RoundView:
     """一轮的只读投影。"""
 
@@ -439,6 +455,10 @@ class RoundView:
     analysis_basis: str = ""
     #: 这一轮攒下的记忆提议（M6）：**提议**，默认不勾；勾了随 `/confirm` 一起生效
     memory_proposals: tuple[MemoryProposalView, ...] = ()
+    #: 每一步检索的轨迹（P0）：界面显示"本步命中 K / 带进 L"。
+    retrievals: tuple[RetrievalView, ...] = ()
+    #: 手勾的材料 id（投影时这些材料的块合计 ≤60% 预算）。
+    pinned_materials: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -547,10 +567,13 @@ class OpinionSourceView:
 class SearchHitView:
     """一条搜索结果。`ref` 是"去哪儿找"：条目 id / 块 id / 编号 / 轮次 id。"""
 
-    kind: str  # "entry" | "feature" | "evidence" | "opinion"
+    kind: str  # "entry" | "feature" | "evidence" | "opinion" | "material"
     label: str
     ref: str
     where: str
+    #: 只有材料命中非空：`ref` 是旧名、`chunk_id` 是新名（兼容期同值）。
+    material_id: str | None = None
+    chunk_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -858,6 +881,8 @@ def search_hits(
                 # 落点是**块 id**：前端据此滚到本轮材料卡的那一块（没进过轮次就没有块可跳）
                 ref=material.chunk_id,
                 where=f"材料 · {material.anchor}",
+                material_id=material.material_id,
+                chunk_id=material.chunk_id,
             )
         )
 
@@ -1465,6 +1490,21 @@ def round_view(
             )
             for item in round_.memory_proposals
         ),
+        retrievals=tuple(
+            RetrievalView(
+                stage=trace.stage.value,
+                pass_index=trace.pass_index,
+                query=trace.query,
+                hit_count=len(trace.hits),
+                selected_count=len(trace.selected),
+                chunk_ids=tuple(hit.chunk_id for hit in trace.selected),
+                ok=trace.ok,
+                error=trace.error,
+                created_at=trace.created_at,
+            )
+            for trace in round_.retrievals
+        ),
+        pinned_materials=tuple(round_.pinned_materials),
     )
 
 

@@ -14,6 +14,11 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
+from pmstudio.domain.round.retrieval import (
+    RetrievalHit,
+    RetrievalStage,
+    RetrievalTrace,
+)
 from pmstudio.domain.round.round import (
     DroppedItem,
     DropSource,
@@ -1310,3 +1315,66 @@ def test_schema_view_exposes_discussion_turn_limit() -> None:
     from pmstudio.domain.discussion.thread import MAX_DISCUSSION_TURNS
 
     assert dto.schema_view().limits.max_discussion_turns == MAX_DISCUSSION_TURNS
+
+
+# —— P0.3：检索投影与材料命中身份 ——
+
+
+def test_round_view_projects_retrievals_and_pinned_materials():
+    round_ = make_round()
+    round_.pin_materials(["m1", "m2"])
+    round_.note_retrieval(
+        RetrievalTrace(
+            stage=RetrievalStage.SEAT,
+            pass_index=1,
+            query="导出权限",
+            hits=(RetrievalHit("m1", "m1#c00", 3.0), RetrievalHit("m1", "m1#c01", 2.0)),
+            selected=(RetrievalHit("m1", "m1#c01", 2.0),),
+            ok=True,
+            error=None,
+            created_at=NOW,
+        )
+    )
+
+    view = dto.round_view(round_)
+
+    assert view.pinned_materials == ("m1", "m2")
+    assert len(view.retrievals) == 1
+    one = view.retrievals[0]
+    assert (one.stage, one.pass_index, one.query) == ("seat", 1, "导出权限")
+    assert (one.hit_count, one.selected_count) == (2, 1)
+    assert one.chunk_ids == ("m1#c01",)
+    assert one.ok is True and one.error is None
+    assert one.created_at == NOW
+
+
+def test_an_old_round_projects_empty_retrievals():
+    view = dto.round_view(make_round())
+
+    assert view.retrievals == ()
+    assert view.pinned_materials == ()
+
+
+def test_a_material_hit_carries_material_and_chunk_identity():
+    results = dto.search_hits(
+        "导出",
+        document=make_document().view(),
+        evidence=(),
+        opinions=(),
+        materials=(
+            dto.MaterialHit(
+                material_id="m1",
+                chunk_id="m1#c03",
+                score=3.0,
+                excerpt="…导出要走异步队列…",
+                anchor="第 3 页",
+                source_ref="attachment:诊断报告.pdf",
+                title="诊断报告.pdf",
+            ),
+        ),
+    )
+
+    hit = next(one for one in results.hits if one.kind == "material")
+    assert hit.material_id == "m1"
+    assert hit.chunk_id == "m1#c03"
+    assert hit.ref == "m1#c03"
