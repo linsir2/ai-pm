@@ -431,8 +431,10 @@ class SqliteFtsRetriever:
         LIMIT ?
     """
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, *, caller: str = "search") -> None:
         self._connection = connection
+        #: 观测行的 caller 标签。空串 = 不记（混合检索内部会调它，那一层已有自己的分解行）。
+        self._caller = caller
 
     def search(
         self,
@@ -450,7 +452,20 @@ class SqliteFtsRetriever:
             self._SQL, (expr, str(project_id), str(resolved), limit)
         ).fetchall()
         tokens = query_tokens(query)
-        return tuple(self._hit(row, tokens) for row in rows)
+        hits = tuple(self._hit(row, tokens) for row in rows)
+        if self._caller:
+            # 顶栏搜索没有词面/语义分解（它是纯 FTS），只记 caller/stage/命中数。
+            # R8 的真查询样本据此把"人搜索"与"建轮自动检索"分开。
+            logger.info(
+                "material_search caller=%s stage=lookup project=%s query=%r"
+                " limit=%d hits=%d",
+                self._caller,
+                project_id,
+                query,
+                limit,
+                len(hits),
+            )
+        return hits
 
     def _hit(self, row: sqlite3.Row, tokens: list[str]) -> MaterialHit:
         text = str(row["text"])
@@ -586,7 +601,7 @@ class SqliteHybridRetriever:
 
     def __init__(self, connection: sqlite3.Connection, embedder) -> None:
         self._connection = connection
-        self._fts = SqliteFtsRetriever(connection)
+        self._fts = SqliteFtsRetriever(connection, caller="")
         self._embedder = embedder
 
     def search(
@@ -646,8 +661,8 @@ class SqliteHybridRetriever:
         # 最终混合命中几个。
         #
         # 为什么记在**检索器**里（用例层拿不到分解）：只有这里知道两路各出了什么。
-        # 而且全仓只有 `SearchProject` 一个调用方 → 记到的全是**用户发起的**检索
-        # （席位轮走的是另一条路），不会把模型生成的检索词混进样本。
+        # 调用方不只在 `SearchProject`：建轮/席位前/整合前也走同一个实例。
+        # 这行只记**分解**，不猜 caller——`caller/stage` 由调用方那行记。
         #
         # **只打日志**：不上报、不入库（本地单用户应用）。两个用途：
         # ① 攒**真实查询分布**（现在的检索判据全是「从文档反推」的合成查询 → R9）；

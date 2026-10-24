@@ -7,6 +7,8 @@
 四条口径（块级、锚点、字面通配符、项目隔离）与 v1 逐字不变——**换实现类，签名与语义不变**。
 """
 
+import logging
+
 import pytest
 
 from pmstudio.domain.shared.ids import ProjectId
@@ -285,3 +287,26 @@ def test_a_material_is_findable_by_its_title(world):
     hits = retriever.search(project_id=PROJECT, query="权限说明")
 
     assert [h.chunk_id for h in hits] == [f"{mid}#c00"]
+
+
+def test_every_search_is_observed_with_its_caller(world, caplog):
+    """顶栏搜索那一行必须带 caller/stage/命中数（P0.4）。
+
+    分解行（词面/语义）只在混合检索里；纯 FTS 只有命中数。
+    """
+
+    retriever, seed, _, _ = world
+    seed("权限模型 与 访问控制")
+
+    with caplog.at_level(logging.INFO):
+        hits = retriever.search(project_id=PROJECT, query="权限", owner=TEST_OWNER)
+
+    assert hits
+    line = next(
+        record.getMessage()
+        for record in caplog.records
+        if "material_search" in record.getMessage()
+    )
+    assert "caller=search" in line
+    assert "stage=lookup" in line
+    assert f"hits={len(hits)}" in line

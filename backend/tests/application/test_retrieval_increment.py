@@ -75,3 +75,17 @@ def test_the_rescue_rate_counts_the_queries_the_semantics_saved():
 def test_no_samples_means_no_rate():
     """R：一条样本都没有 → 率是 0（**不是**除零崩掉）。"""
     assert rescue_rate_from_samples([]) == {"n": 0, "救回率": 0.0, "挤掉率": 0.0}
+
+
+def test_lookup_samples_do_not_enter_the_rescue_rate():
+    """顶栏搜索的样本没有词面/语义分解，不能混进救回率。"""
+
+    samples = [
+        {"hits": 3, "caller": "search"},
+        {"fts_hits": 0, "hybrid_hits": 2},
+    ]
+
+    result = rescue_rate_from_samples(samples)
+
+    assert result["n"] == 1
+    assert result["救回率"] == 1.0

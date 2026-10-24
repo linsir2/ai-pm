@@ -268,10 +268,14 @@ def rescue_rate_from_samples(samples: list[dict]) -> dict[str, float]:
     注意：救回**不等于**捞对了（可能捞回的是无关材料）→ 精确率那一侧由**负样本集**
     与**合成查询的配对增量**负责（2026-10-22 批 13，R9）。
     """
-    total = len(samples)
-    rescued = sum(1 for item in samples if item["fts_hits"] == 0 and item["hybrid_hits"] > 0)
+    # 顶栏搜索的样本（caller=search）没有词面/语义分解 → 只做查询分布，不进救回率。
+    usable = [
+        item for item in samples if "fts_hits" in item and "hybrid_hits" in item
+    ]
+    total = len(usable)
+    rescued = sum(1 for item in usable if item["fts_hits"] == 0 and item["hybrid_hits"] > 0)
     pushed_out = sum(
-        1 for item in samples if item["fts_hits"] > 0 and item["hybrid_hits"] == 0
+        1 for item in usable if item["fts_hits"] > 0 and item["hybrid_hits"] == 0
     )
     return {
         "n": total,
@@ -303,7 +307,7 @@ def measure(connection, embedder, url2mid, mid2chunks, queries, *, limit=5, samp
     """
     lexical, paraphrase, cross, negatives = queries
     hybrid = SqliteHybridRetriever(connection, embedder=embedder)
-    fts_only = SqliteFtsRetriever(connection)
+    fts_only = SqliteFtsRetriever(connection, caller="bench")
 
     def target_chunks(mid: str, word: str) -> set[str]:
         """目标词所在的**所有**块（该词可能在好几块里都出现）。

@@ -602,12 +602,24 @@ class StartRound:
             hits = self._retriever.search(
                 project_id=project_id, query=query, limit=SEARCH_LIMIT
             )
+            # 观测（P0.4）：建轮自动检索与顶栏搜索共用检索器，必须能分开。
+            logger.info(
+                "material_search caller=round stage=seed project=%s query=%r"
+                " limit=%d hits=%d",
+                project_id,
+                query,
+                SEARCH_LIMIT,
+                len(hits),
+            )
         except Exception:
             # 检索是**增强项**：它挂了不该让这一轮起不来——回退到"只有勾的材料"，
             # 也就是改前的行为。**但要说一声**：静默降级会让"检索器永久坏了"和
             # "这轮确实没搜到"完全无法区分（评审 B）。
             logger.warning(
-                "材料检索失败，本轮只用勾的材料：project=%s", project_id, exc_info=True
+                "material_search caller=round stage=seed project=%s ok=False"
+                "（材料检索失败，本轮只用勾的材料）",
+                project_id,
+                exc_info=True,
             )
             return _Picked(picked=picked, packets=packets, order=tuple(order))
         # 同一份材料可能在命中里占两槽（`_MATERIAL_SLOTS=2`）→ 按材料去重。

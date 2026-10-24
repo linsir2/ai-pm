@@ -32,8 +32,9 @@ from pathlib import Path
 
 #: 观测行的形状（`logger.info` 的 %r → Python 的 repr，用 `ast.literal_eval` 还原）
 PATTERN = re.compile(
-    r"material_search project=(?P<project>\S+) query=(?P<query>'(?:[^'\\]|\\.)*')"
-    r"(?P<rest>.*)"
+    r"material_search (?:caller=(?P<caller>\S+) )?(?:stage=(?P<stage>\S+) )?"
+    r"(?:seat=(?P<seat>\S+) )?project=(?P<project>\S+)"
+    r" query=(?P<query>'(?:[^'\\]|\\.)*')(?P<rest>.*)"
 )
 
 
@@ -43,17 +44,23 @@ def parse_line(line: str) -> dict | None:
         return None
     fields = dict(
         re.findall(
-            r"(fts_candidates|vec_candidates|fts_hits|hybrid_hits)=(\d+)",
+            r"(fts_candidates|vec_candidates|fts_hits|hybrid_hits|limit|hits)=(\d+)",
             match.group("rest"),
         )
     )
     if not fields:
+        # 失败行（ok=False）没有数字 → 不进样本；它只用于现场诊断。
         return None
-    return {
+    item: dict = {
         "project": match.group("project"),
         "query": ast.literal_eval(match.group("query")),
         **{name: int(value) for name, value in fields.items()},
     }
+    for key in ("caller", "stage", "seat"):
+        value = match.group(key)
+        if value:
+            item[key] = value
+    return item
 
 
 def main() -> None:
@@ -74,7 +81,14 @@ def main() -> None:
             item = parse_line(line)
             if item is None:
                 continue
-            samples[(item["project"], item["query"])] = item
+            key = (
+                item["project"],
+                item["query"],
+                item.get("caller", ""),
+                item.get("stage", ""),
+                item.get("seat", ""),
+            )
+            samples[key] = item
 
     payload = {"count": len(samples), "samples": [samples[key] for key in sorted(samples)]}
     args.out.parent.mkdir(parents=True, exist_ok=True)
