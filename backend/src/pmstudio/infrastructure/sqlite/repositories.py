@@ -650,16 +650,29 @@ class SqliteWorkspaceIndex:
             except (json.JSONDecodeError, TypeError):
                 continue
             materials = payload.get("materials")
-            if not isinstance(materials, list):
-                continue
-            for item in materials:
+            if isinstance(materials, list):
+                for item in materials:
+                    if not isinstance(item, dict):
+                        continue
+                    material_id = str(item.get("material_id") or "").strip()
+                    eid = str(item.get("eid") or "").strip()
+                    if not material_id or not eid:
+                        continue
+                    found.setdefault(material_id, []).append(eid)
+            # **手勾 / 手动带料也算引用**（2026-10-24，P2.0）：它们可能还没投影、没有 E 号，
+            # 但用户已经明确要它们；不挡住的话，删掉/就地重解析会让下一次投影拿到空包。
+            # 哨兵不是 E 号：错误文案里会显示"手勾"而不是"E12"，这是有意的——
+            # 它确实还没有编号。
+            for material_id in payload.get("pinned_materials") or ():
+                key = str(material_id or "").strip()
+                if key:
+                    found.setdefault(key, []).append("手勾")
+            for item in payload.get("manual_chunks") or ():
                 if not isinstance(item, dict):
                     continue
-                material_id = str(item.get("material_id") or "").strip()
-                eid = str(item.get("eid") or "").strip()
-                if not material_id or not eid:
-                    continue
-                found.setdefault(material_id, []).append(eid)
+                key = str(item.get("material_id") or "").strip()
+                if key:
+                    found.setdefault(key, []).append("手动带料")
         return {material_id: tuple(eids) for material_id, eids in found.items()}
 
 

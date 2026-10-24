@@ -95,13 +95,13 @@ from pmstudio.application.context import (
     select_chunks,
     web_block_cost,
 )
+from pmstudio.application.context_pool import PINNED_BUDGET_SHARE, build_stage_query
 from pmstudio.application.deliverable import (
     Deliverable,
     iter_document_entries,
     render_markdown,
 )
 from pmstudio.application.discussion import (
-    ORIGIN_DISCUSSION,
     discussion_material,
     render_findings,
     render_thread_history,
@@ -119,6 +119,7 @@ from pmstudio.application.dto import (
     EvidenceLookupView,
     ExplorationView,
     MaterialChunk,
+    MaterialHit,
     MaterialPacket,
     MaterialSummaryView,
     ParsedMaterial,
@@ -170,7 +171,6 @@ from pmstudio.application.events import (
     ROUND_UPDATED,
 )
 from pmstudio.application.exploration import (
-    ORIGIN_EXPLORATION,
     candidate_material,
     document_has_content,
     entry_focus,
@@ -178,6 +178,8 @@ from pmstudio.application.exploration import (
     scope_line,
     validate_inquiry,
 )
+from pmstudio.application.material_refs import external_ref as _external_ref
+from pmstudio.application.material_refs import material_kind as _material_kind
 from pmstudio.application.material_synthesis import (
     material_sha as namespaced_material_sha,
 )
@@ -207,8 +209,8 @@ from pmstudio.application.ports import (
     WorkspaceIndex,
 )
 from pmstudio.application.repair import repair_note
+from pmstudio.application.round_context import RoundContextPreparer
 from pmstudio.application.sim_inquiry import (
-    ORIGIN_SIMULATION,
     duplicate_of,
     narrow_offense,
     normalize_statement,
@@ -288,7 +290,12 @@ from pmstudio.domain.round.questionnaire import (
     Question,
     QuestionKind,
 )
-from pmstudio.domain.round.retrieval import ManualChunk
+from pmstudio.domain.round.retrieval import (
+    ManualChunk,
+    RetrievalHit,
+    RetrievalStage,
+    RetrievalTrace,
+)
 from pmstudio.domain.round.round import (
     DroppedItem,
     DropSource,
@@ -386,6 +393,10 @@ class _Picked:
     picked: tuple[tuple[str, MaterialChunk], ...]
     packets: dict[str, MaterialPacket]
     order: tuple[str, ...]
+    #: 这一趟检索的原始命中（用于 SEED trace；失败时为空）
+    hits: tuple[MaterialHit, ...] = ()
+    #: 检索失败的原因（None = 成功；空命中不算失败）
+    error: str | None = None
 
 
 class StartRound:
@@ -451,6 +462,7 @@ class StartRound:
             material_ids, query=user_input, project_id=project_id
         )
         picked, packets, order = selection.picked, selection.packets, selection.order
+        seed_hits, seed_error = selection.hits, selection.error
         # 种子同样是事务外的只读校验：必须存在、同项目、跑完了、且被收下为「下一轮输入」
         seeds = self._resolve_seeds(project_id, seed_ids)
         with self._uow:
@@ -463,6 +475,8 @@ class StartRound:
                 now=self._clock.now(),
                 seeds=seeds,
             )
+            # pin 是投影的输入：手勾的形状不写进轮次，后面的每步投影就没有"手勾优先"。
+            round_.pin_materials(material_ids)
             if picked:
                 # 逐块记 `external` 出处：**只有带进这一轮的块才有编号**（口径见 02 §11.0.28）
                 #
@@ -501,6 +515,34 @@ class StartRound:
                     ]
                 )
                 self._evidence_writer.save(ledger)
+            # SEED trace：命中什么、选中什么、失败没有。零命中也要写（恢复时不重查）。
+            score_by_chunk = {hit.chunk_id: hit.score for hit in seed_hits}
+            round_.note_retrieval(
+                RetrievalTrace(
+                    stage=RetrievalStage.SEED,
+                    pass_index=0,
+                    query=user_input,
+                    hits=tuple(
+                        RetrievalHit(
+                            material_id=hit.material_id,
+                            chunk_id=hit.chunk_id,
+                            score=hit.score,
+                        )
+                        for hit in seed_hits
+                    ),
+                    selected=tuple(
+                        RetrievalHit(
+                            material_id=material_id,
+                            chunk_id=chunk.chunk_id,
+                            score=score_by_chunk.get(chunk.chunk_id, 0.0),
+                        )
+                        for material_id, chunk in picked
+                    ),
+                    ok=seed_error is None,
+                    error=seed_error,
+                    created_at=self._clock.now(),
+                )
+            )
             # **预算装不下的材料要说出来**（2026-10-21 批 11）：用户勾了 N 份材料，
             # 预算只带得下 K 份 → 剩下的**整份缺席**。不记这一笔，提示词与界面上
             # 都看不出"材料被预算挤掉了"，模型会以为自己看到的就是全部
@@ -590,11 +632,30 @@ class StartRound:
                 # 不按"形状错"422（`test_delete_material.py` 的跨项目用例即此语义）。
                 raise UnknownMaterial(material_id)
             packets[material_id] = packet
+        # 手勾来源**合计**最多 60%：自动段从此有位置（长文不再吃满 4000）。
         picked, used = select_chunks(
             [packets[item] for item in handpicked],
             query=query,
+            budget=int(MATERIAL_BUDGET * PINNED_BUDGET_SHARE),
             section_overhead=SECTION_OVERHEAD,
         )
+        # **地板**：每份手勾材料至少要有机会露一块。单块就可能比 60% 预算还大
+        # （实测 3000 字的块 > 2400）——只有上限没有地板，会出现"一份手勾都进不来"，
+        # 那是比"自动段被饿死"更糟的回归。地板仍受**总预算**约束，所以自动段至少
+        # 还能拿到剩下的零头。
+        selected_floor = {material_id for material_id, _ in picked}
+        floor_packets = [
+            packets[item] for item in handpicked if item not in selected_floor
+        ]
+        if floor_packets:
+            floor_picked, floor_used = select_chunks(
+                floor_packets,
+                query=query,
+                budget=max(0, MATERIAL_BUDGET - used - SECTION_OVERHEAD),
+                section_overhead=0,
+            )
+            picked = picked + floor_picked
+            used += floor_used
         order = list(handpicked)
         remaining = MATERIAL_BUDGET - used - SECTION_OVERHEAD
         # 预算已经被手勾的用光就别检索了：`search` 在向量路会跑同步推理，
@@ -614,7 +675,7 @@ class StartRound:
                 SEARCH_LIMIT,
                 len(hits),
             )
-        except Exception:
+        except Exception as error:
             # 检索是**增强项**：它挂了不该让这一轮起不来——回退到"只有勾的材料"，
             # 也就是改前的行为。**但要说一声**：静默降级会让"检索器永久坏了"和
             # "这轮确实没搜到"完全无法区分（评审 B）。
@@ -624,7 +685,12 @@ class StartRound:
                 project_id,
                 exc_info=True,
             )
-            return _Picked(picked=picked, packets=packets, order=tuple(order))
+            return _Picked(
+                picked=picked,
+                packets=packets,
+                order=tuple(order),
+                error=f"{type(error).__name__}: {error}",
+            )
         # 同一份材料可能在命中里占两槽（`_MATERIAL_SLOTS=2`）→ 按材料去重。
         auto: dict[str, MaterialPacket] = {}
         for material_id in dict.fromkeys(hit.material_id for hit in hits):
@@ -1288,6 +1354,7 @@ class RunSeatRound:
         materials: MaterialStore,
         memory: MemoryReader,
         observations_repo: ObservationRepository = NO_OBSERVATIONS,
+        preparer: RoundContextPreparer | None = None,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -1304,17 +1371,31 @@ class RunSeatRound:
         self._materials = materials
         self._memory = memory
         self._observations_repo = observations_repo
+        self._preparer = preparer
 
     async def __call__(self, *, round_id: RoundId) -> None:
         # 读取阶段不开事务：模型调用绝不能包在事务里。
         round_ = self._rounds.get(round_id)
         document = self._documents.get(round_.project_id)
-        ledger = self._evidence.get(round_.project_id)
         pending = tuple(self._catalog.by_id(seat_id) for seat_id in round_.pending_seats)
         view = document.view()
-        window = document_window(
-            view, readiness=self._checker.check(view, adapter=adapt(document.template))
-        )
+        readiness = self._checker.check(view, adapter=adapt(document.template))
+        window = document_window(view, readiness=readiness)
+        prepared = None
+        if self._preparer is not None and pending:
+            prepared = self._preparer.prepare(
+                round_id=round_id,
+                stage=RetrievalStage.SEAT,
+                query=build_stage_query(
+                    RetrievalStage.SEAT,
+                    round_=round_,
+                    seats=pending,
+                    readiness=readiness,
+                ),
+            )
+            # 投影刚写了材料与账本：必须重读，否则新 E 号会被下面的 `ledger_ids` 过滤掉。
+            round_ = self._rounds.get(round_id)
+        ledger = self._evidence.get(round_.project_id)
         document_state = window.text
         claims_text = render_claims(round_.claims)
         answered_text = render_answers(round_, ledger=ledger)
@@ -1323,7 +1404,11 @@ class RunSeatRound:
         # 历史意见**不再一次性渲染成共用品**：指针式要按席位分流（本席位逐字、其它席位
         # 一行点名），所以把原始 seat_reviews 传下去，由每个席位自己裁（`07 §7.12` 第 1 项）。
         # 顺带省掉一件蠢事：以前 N 个席位人手一份全量历史，其实各不相同也没意义。
-        external_material = external_material_text(round_, store=self._materials)
+        external_material = (
+            prepared.text
+            if prepared is not None
+            else external_material_text(round_, store=self._materials)
+        )
         # **不变量**（`02` §11.0.61）：`known` 必须等于这次提示词里**看得见**的编号，
         # 不能再是整个账本——账本里有而提示词里没有的（模型在编号空间上外推出来的幻觉，
         # 真跑 955 个席位引用里占 9 个）以前一律放行。
@@ -2110,6 +2195,7 @@ class IntegrateRound:
         observations_repo: ObservationRepository = NO_OBSERVATIONS,
         digest_repo: DigestRepository = NO_DIGESTS,
         inspiration_repo: InspirationRepository = NO_INSPIRATIONS,
+        preparer: RoundContextPreparer | None = None,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -2130,6 +2216,7 @@ class IntegrateRound:
         self._observations_repo = observations_repo
         self._digest_repo = digest_repo
         self._inspiration_repo = inspiration_repo
+        self._preparer = preparer
 
     async def __call__(self, *, round_id: RoundId) -> None:
         result = await self._integrate_with_repair(round_id=round_id)
@@ -2560,6 +2647,24 @@ class IntegrateRound:
         validate_left = MAX_INTEGRATION_ATTEMPTS
         accounting_left = MAX_ACCOUNTING_REPAIRS
         first_pass = True
+        # 整合前取一次"缺口证据"：整趟只查一次，报文重装不重查（同一 integration_seq）。
+        prepared_text: str | None = None
+        if self._preparer is not None:
+            round_for_query = self._rounds.get(round_id)
+            document_for_query = self._documents.get(round_for_query.project_id)
+            adapter_for_query = adapt(document_for_query.template)
+            readiness_for_query = self._checker.check(
+                document_for_query.view(), adapter=adapter_for_query
+            )
+            prepared_text = self._preparer.prepare(
+                round_id=round_id,
+                stage=RetrievalStage.INTEGRATE,
+                query=build_stage_query(
+                    RetrievalStage.INTEGRATE,
+                    round_=round_for_query,
+                    readiness=readiness_for_query,
+                ),
+            ).text
         # —— 第一段：拿到一份能过校验的整包 ——
         while True:
             round_ = self._rounds.get(round_id)
@@ -2639,7 +2744,11 @@ class IntegrateRound:
                 self._inspiration_repo.recent(round_.project_id)
             ),
             entry_ids=render_existing_entries(document),
-                    external_material=external_material_text(round_, store=self._materials),
+                    external_material=(
+                        prepared_text
+                        if prepared_text is not None
+                        else external_material_text(round_, store=self._materials)
+                    ),
                     validation_error=validation_error,
                     round_id=round_id,
                     authorized_features=authorized_features,
@@ -4625,15 +4734,6 @@ def _system_defaults(
     return defaults
 
 
-def _external_ref(packet: MaterialPacket, chunk: MaterialChunk) -> str:
-    """材料块在账本里的"外部指称"：`attachment:需求.md#c00` / `https://…`（URL 不加后缀）。"""
-
-    source_ref = packet.parsed.source_ref
-    if source_ref.startswith("http"):
-        return source_ref
-    return f"{source_ref}#c{chunk.ordinal:02d}"
-
-
 def external_material_text(round_: Round, *, store: MaterialStore) -> str:
     """把这一轮带进来的材料渲染成提示词那一段（三个智能体共用同一个渲染器）。
 
@@ -4798,22 +4898,6 @@ MAX_SIM_INQUIRY_ATTEMPTS = 2
 MAX_SIM_INQUIRIES_PER_ROUND = 2
 #: 过一次目台最多回几趟探索（列表投影的截断值；这不是"存了多少"，是"给多少"）
 MAX_EXPLORATION_LIST = 20
-
-
-def _material_kind(packet: MaterialPacket) -> EvidenceKind:
-    """材料块进账本的 kind **单点**：探索产物是 `simulated`，其余一律 `external`。
-
-    发号有两个点（起轮带材料 / 联网结果进轮），口径必须一处说了算——
-    两处各写一遍的话，"探索材料被当成外部事实"这种错只会错一半。
-    """
-
-    if packet.parsed.origin == ORIGIN_EXPLORATION:
-        return EvidenceKind.SIMULATED
-    if packet.parsed.origin == ORIGIN_DISCUSSION:
-        return EvidenceKind.SIMULATED
-    if packet.parsed.origin == ORIGIN_SIMULATION:
-        return EvidenceKind.SIMULATED
-    return EvidenceKind.EXTERNAL
 
 
 def _publish_exploration(

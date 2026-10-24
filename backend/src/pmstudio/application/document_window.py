@@ -110,7 +110,7 @@ def entries_matching_topic(view: DocumentView, topic: str) -> frozenset[str]:
     if not all_entries:
         return frozenset()
     scores = {
-        str(entry.entry_id): context._block_score(entry.text, probe)
+        str(entry.entry_id): context.block_score(entry.text, probe)
         for entry in all_entries
     }
     best = max(scores.values())

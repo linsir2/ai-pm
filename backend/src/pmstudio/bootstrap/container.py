@@ -71,6 +71,7 @@ from pmstudio.application.use_cases import (
     RetryExploration,
     RetryRound,
     RollbackVersion,
+    RoundContextPreparer,
     RunInquiry,
     RunPanelRound,
     RunSeatRound,
@@ -416,6 +417,17 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         # 工具留样（可观测性 v2）：默认 None = 什么都不记
         tool_recorder=tool_recorder,
     )
+    # 每步投影：席位轮/整合共用同一个实例（无状态，只读装配依赖）。
+    round_context = RoundContextPreparer(
+        rounds=rounds,
+        round_writer=rounds,
+        evidence=evidences,
+        evidence_writer=evidences,
+        materials=materials,
+        retriever=material_search,
+        uow=uow,
+        clock=clock,
+    )
     run_seat_round = RunSeatRound(
         rounds=rounds,
         round_writer=rounds,
@@ -432,6 +444,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         materials=materials,
         memory=memory,
         observations_repo=observations_repo,
+        preparer=round_context,
     )
     integrate_round = IntegrateRound(
         rounds=rounds,
@@ -453,6 +466,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         observations_repo=observations_repo,
         digest_repo=digest_repo,
         inspiration_repo=inspiration_repo,
+        preparer=round_context,
     )
     submit_answers = SubmitAnswers(
         rounds=rounds,

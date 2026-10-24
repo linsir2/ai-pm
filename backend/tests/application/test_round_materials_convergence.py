@@ -16,6 +16,7 @@ import pytest
 from pmstudio.application import context
 from pmstudio.application.dto import MaterialHit
 from pmstudio.application.use_cases import SECTION_OVERHEAD, external_material_text
+from pmstudio.domain.round.retrieval import RetrievalStage
 from pmstudio.domain.shared.errors import ShapeError
 from tests.application.test_materials import make_material
 from tests.support.builders import PROJECT
@@ -291,3 +292,27 @@ async def test_the_round_digest_does_not_call_auto_materials_dropped():
     digest = context.render_round_digest(harness.rounds.get(round_id))
 
     assert "被丢掉的" not in digest, digest
+
+
+async def test_seed_pins_handpicked_and_caps_their_share():
+    """P2.4：手勾来源合计 ≤60%（长文不再把自动段饿死），并留下 SEED trace。"""
+
+    pinned = make_material(
+        *[f"第 {index} 段：导出权限说明" for index in range(100)], material_id="m1"
+    )
+    other = make_material("权限：只给管理员", material_id="m2", title="权限.md")
+    harness = harness_with(pinned, other)
+
+    round_id = await harness.start_round(
+        retriever=RecordingMaterialRetriever(returns=(hit(other, 0, 0.9),))
+    ).create(project_id=PROJECT, user_input="导出权限怎么定", material_ids=["m1"])
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.pinned_materials == ("m1",)
+    assert round_.retrievals and round_.retrievals[0].stage is RetrievalStage.SEED
+    assert round_.retrievals[0].ok is True
+    assert round_.retrievals[0].selected
+    picked_ids = {ref.material_id for ref in round_.materials}
+    assert "m2" in picked_ids, "自动段必须还有位置"
+    assert len([ref for ref in round_.materials if ref.material_id == "m1"]) < 100
+    assert selection_cost(harness, round_) <= 4000

@@ -1083,7 +1083,7 @@ def _select_ranked(
 
     candidates = [
         _Candidate(
-            score=_block_score(chunk.text, query),
+            score=block_score(chunk.text, query),
             position=position,
             packet=packet,
             chunk=chunk,
@@ -1175,7 +1175,7 @@ def _select_by_score(
     return tuple(picked), used
 
 
-def _block_score(text: str, query: str) -> int:
+def block_score(text: str, query: str) -> int:
     """块与本轮输入的字面重合度：**同一把尺子**——按字面重合度算（与信息包挑选同源）。
 
     为什么是 2-gram 而不是"整句包含"：query 是"导出权限该怎么定"这样一句话，

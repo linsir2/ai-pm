@@ -188,6 +188,9 @@ backend/src/pmstudio/
 │   ├── exploration.py
 │   ├── discussion.py
 │   ├── material_synthesis.py
+│   ├── material_refs.py
+│   ├── context_pool.py
+│   ├── round_context.py
 │   ├── sim_inquiry.py
 │   ├── sim_review.py
 │   └── agents/

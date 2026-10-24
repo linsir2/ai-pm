@@ -12,6 +12,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
+from pmstudio.domain.round.retrieval import ManualChunk
 from pmstudio.domain.round.round import (
     DroppedItem,
     DropSource,
@@ -710,3 +711,32 @@ def test_round_payload_without_skipped_seats_key_still_loads():
 
     assert loaded.skipped_seats == ()
     assert loaded.pending_seats == ("seat.a", "seat.b")
+
+
+def test_material_references_counts_pinned_and_manual_chunks(tmp_path):
+    """P2.0：还没投影、没有 E 号的"手勾/手动带料"也算引用——不许删、不许就地重解析。"""
+
+    connection = database.connect(tmp_path / "pmstudio.db")
+    try:
+        rounds = SqliteRoundRepository(connection)
+        index = SqliteWorkspaceIndex(connection)
+        uow = SqliteUnitOfWork(connection)
+        round_ = Round(
+            round_id=RoundId("r-pinned"),
+            project_id=PROJECT,
+            user_input="带料",
+            created_at=NOW,
+            step=Step.DONE,
+            waiting_on=WaitingOn.NONE,
+        )
+        round_.pin_materials(("m7",))
+        round_.note_manual_chunks((ManualChunk("m8", "m8#c00"),))
+        with uow:
+            rounds.save(round_)
+
+        references = index.material_references(PROJECT)
+    finally:
+        connection.close()
+
+    assert references.get("m7"), "手勾材料必须算被引用"
+    assert references.get("m8"), "手动带进的块必须算被引用"

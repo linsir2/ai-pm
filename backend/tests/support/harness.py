@@ -679,7 +679,7 @@ class Harness:
             uow=self.uow,
         )
 
-    def run_seat_round(self):  # type: ignore[no-untyped-def]
+    def run_seat_round(self, *, preparer=None):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import RunSeatRound
 
         return RunSeatRound(
@@ -698,9 +698,10 @@ class Harness:
             materials=self.materials,
             memory=self.memory,
             observations_repo=self.observations,
+            preparer=preparer,
         )
 
-    def integrate_round(self):  # type: ignore[no-untyped-def]
+    def integrate_round(self, *, preparer=None):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import IntegrateRound
 
         return IntegrateRound(
@@ -723,6 +724,7 @@ class Harness:
             observations_repo=self.observations,
             digest_repo=self.digests,
             inspiration_repo=self.inspirations,
+            preparer=preparer,
         )
 
     def submit_answers(self):  # type: ignore[no-untyped-def]
