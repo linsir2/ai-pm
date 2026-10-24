@@ -4734,13 +4734,19 @@ def _system_defaults(
     return defaults
 
 
-def external_material_text(round_: Round, *, store: MaterialStore) -> str:
+def external_material_text(
+    round_: Round, *, store: MaterialStore, query: str = ""
+) -> str:
     """把这一轮带进来的材料渲染成提示词那一段（三个智能体共用同一个渲染器）。
 
     没有任何材料时返回 `context.NO_MATERIAL_TEXT`——**不留空节**（空节会让模型以为材料被省略了）。
 
     上传材料与联网检索**分两段渲染**（排面与预算都不一样）：前者一段一份材料、块级编号；
     后者一条一段（编号 + 标题 + URL + 摘要）。两段都有就都带上，各说各的。
+
+    `query` 非空时按它选块到 `MATERIAL_BUDGET`（模拟调研/评测用：主链路已经有
+    `RoundContextPreparer` 的每步投影；这两个旁路只需要"别把整池塞进提示词"）。
+    **不传 query 时逐字保持老行为**——Analyzer 看的是 SEED 那一批，不需要二次选块。
     """
 
     by_material: dict[str, dict[str, EvidenceId]] = {}
@@ -4764,6 +4770,49 @@ def external_material_text(round_: Round, *, store: MaterialStore) -> str:
                 found.append((packet, picked, next(iter(eids.values()))))
         else:
             uploads.append((packet, eids))
+    no_selection_note = ""
+    if query.strip() and uploads:
+        # 先按 `round_.materials` 过滤出**有编号的块**再选（没编号的块渲染不出来，
+        # 选了也白占预算）；渲染仍用原始 packet，好让"共 M 块"说的是整份材料。
+        filtered = []
+        for packet, eids in uploads:
+            allowed = tuple(
+                chunk for chunk in packet.parsed.chunks if chunk.chunk_id in eids
+            )
+            if allowed:
+                filtered.append(
+                    (
+                        replace(
+                            packet,
+                            parsed=replace(packet.parsed, chunks=allowed),
+                        ),
+                        packet,
+                        eids,
+                    )
+                )
+        picked, _ = select_chunks(
+            [item[0] for item in filtered],
+            query=query,
+            budget=MATERIAL_BUDGET,
+            section_overhead=SECTION_OVERHEAD,
+        )
+        eids_by_material = {item[0].material_id: item[2] for item in filtered}
+        original_by_material = {item[0].material_id: item[1] for item in filtered}
+        selected: dict[str, dict[str, EvidenceId]] = {}
+        for material_id, chunk in picked:
+            eid = eids_by_material[material_id].get(chunk.chunk_id)
+            if eid is not None:
+                selected.setdefault(material_id, {})[chunk.chunk_id] = eid
+        if uploads and not selected:
+            # 有材料但一块都没装下：说清楚，别写"这一轮没有外部材料"。
+            no_selection_note = (
+                f"（材料池里有 {sum(len(eids) for _, eids in uploads)} 块；本步没有选中）"
+            )
+        uploads = [
+            (original_by_material[material_id], eids)
+            for material_id, eids in selected.items()
+        ]
+
     parts: list[str] = []
     if uploads:
         parts.append(render_materials(uploads).text)
@@ -4773,6 +4822,8 @@ def external_material_text(round_: Round, *, store: MaterialStore) -> str:
         parts.append(
             f"（{len(missing)} 份材料已不在库里，未带入：{'、'.join(missing)}）"
         )
+    if no_selection_note:
+        parts.append(no_selection_note)
     # **被预算挤掉的材料也要说给模型听**（2026-10-21 批 11）：不写这一句，
     # 模型会以为自己看到的就是全部材料 → 回答里会说"材料里没有相关内容"，
     # 而那份材料其实在库里（只是预算没带进来）。
@@ -6166,7 +6217,9 @@ class RunSimInquiry:
         # 接地三源（`02` §11.0.47）：文档 ＋ 本轮用户的话（带 E 编号）＋ 本轮材料。
         # 只渲染文档时，空文档的项目里模型看不见任何编号——真跑把 s8 当锚点了。
         claims_text = render_claims(round_.claims)
-        material_text = external_material_text(round_, store=self._materials)
+        material_text = external_material_text(
+            round_, store=self._materials, query=round_.user_input
+        )
         ledger = self._evidence.get(round_.project_id)
         # **不变量**（`02` §11.0.61）：接地三源都算"看得见"，账本其余部分不算。
         known_eids = window.known_eids(ledger) | (
@@ -6505,7 +6558,12 @@ class RunSimReview:
         )
         memory_text = render_memory(self._memory.get(round_.project_id).entries)
         claims_text = render_claims(round_.claims)
-        material_text = external_material_text(round_, store=self._materials)
+        # 评测只查点名的功能：材料按这些功能名选块（不再把整池塞进提示词）。
+        material_text = external_material_text(
+            round_,
+            store=self._materials,
+            query=" ".join(feature_slugs) or round_.user_input,
+        )
 
         results = await asyncio.gather(
             *(

@@ -175,6 +175,23 @@ export interface SeatSuggestionView {
   matched_keywords: string[];
 }
 
+export interface ManualChunkView {
+  material_id: string;
+  chunk_id: string;
+}
+
+export interface RetrievalView {
+  stage: string;
+  pass_index: number;
+  query: string;
+  hit_count: number;
+  selected_count: number;
+  chunk_ids: string[];
+  ok: boolean;
+  error: string | null;
+  created_at: string | null;
+}
+
 export interface RoundView {
   round_id: string;
   project_id: string;
@@ -220,6 +237,12 @@ export interface RoundView {
   answer_sets: AnswerBatchView[];
   /** 这一轮带进提示词的材料块（工具层 C-2）。 */
   materials: RoundMaterialView[];
+  /** 手勾的材料 id（投影时这些材料的块合计 ≤60%）。 */
+  pinned_materials?: string[];
+  /** 用户从搜索框「带进本轮」的块（还没投影时也在这里）。 */
+  manual_chunks?: ManualChunkView[];
+  /** 每一步检索的轨迹（P0）：闭环区显示"本步命中 K / 带进 L"。 */
+  retrievals?: RetrievalView[];
   /**
    * 分析者提名的联网检索词（工具层 C-2b）：**只是提名**，勾了才会真去查。
    * 勾选状态由用户给（默认不勾），后端把"你勾过哪条"投影在 `chosen` 里。
@@ -626,10 +649,13 @@ export interface RoundHeadView {
 
 /** 一条搜索结果：`ref` 是"去哪儿找"（条目 id / 块 id / 编号 / 轮次 id）。 */
 export interface SearchHitView {
-  kind: "entry" | "feature" | "evidence" | "opinion" | string;
+  kind: "entry" | "feature" | "evidence" | "opinion" | "material" | string;
   label: string;
   ref: string;
   where: string;
+  /** 只有材料命中非空；`ref` 是旧名、`chunk_id` 是新名（兼容期同值）。 */
+  material_id?: string;
+  chunk_id?: string;
 }
 
 export interface SearchResultsView {

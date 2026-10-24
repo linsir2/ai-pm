@@ -1129,6 +1129,36 @@ details.drawer__history[open] > summary::before {
   background: var(--tint-primary);
 }
 
+/* 一行 = 主按钮（跳转 + listbox option）+ 次按钮（带进本轮）。
+   次按钮是普通 Tab 焦点，不参与 option 计数（ARIA 的 option 只有主按钮）。 */
+.search__row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+}
+
+.search__row .search__hit {
+  flex: 1;
+  min-width: 0;
+}
+
+.search__add {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.search__add:disabled {
+  color: var(--empty);
+  cursor: not-allowed;
+}
+
 .search__label {
   flex: 1;
 }

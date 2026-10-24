@@ -5,7 +5,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { SearchResultsView } from "../api/types";
+import type { SearchHitAction } from "../api/payload";
+import type { SearchHitView, SearchResultsView } from "../api/types";
 import { SearchBox } from "./SearchBox";
 
 afterEach(cleanup);
@@ -110,4 +111,43 @@ describe("SearchBox", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(props.onPick).toHaveBeenCalledWith(results.hits[0]);
   });
+});
+
+it("带进本轮：显示次按钮，点了把命中递给回调", () => {
+  const onAdd = vi.fn();
+  const actionFor = (hit: SearchHitView): SearchHitAction =>
+    hit.kind === "material"
+      ? { visible: true, enabled: true, label: "带进本轮" }
+      : { visible: false };
+  draw({
+    query: "导出",
+    results,
+    actionFor,
+    onAddToRound: onAdd,
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "带进本轮" }));
+
+  expect(onAdd).toHaveBeenCalledWith(results.hits[2]);
+});
+
+it("带进本轮：禁用时按钮不可点，理由在 title 里", () => {
+  const actionFor = (hit: SearchHitView): SearchHitAction =>
+    hit.kind === "material"
+      ? {
+          visible: true,
+          enabled: false,
+          label: "带进本轮",
+          reason: "这一块已经在当前轮里了",
+        }
+      : { visible: false };
+  draw({
+    query: "导出",
+    results,
+    actionFor,
+  });
+
+  const button = screen.getByRole("button", { name: "带进本轮" });
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  expect(button.getAttribute("title")).toBe("这一块已经在当前轮里了");
 });

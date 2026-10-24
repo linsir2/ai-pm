@@ -87,6 +87,7 @@ def test_prepare_retrieves_projects_and_assigns_eids():
     round_ = harness.rounds.get(ROUND_ID)
     assert prepared.hit_count == 1
     assert prepared.selected_count >= 1
+    assert "本步从证据池带了" in prepared.text
     assert "权限" in prepared.text
     assert len(round_.materials) == prepared.selected_count
     assert round_.retrievals[0].stage is RetrievalStage.SEAT

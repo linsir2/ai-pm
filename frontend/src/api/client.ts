@@ -454,6 +454,13 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  /** 搜索框「带进本轮」：pin 材料 + 记 manual chunk；E 号在投影时才发。 */
+  addRoundMaterial: (roundId: string, materialId: string, chunkId: string) =>
+    request<RoundView>(`/rounds/${roundId}/materials`, {
+      method: "POST",
+      body: JSON.stringify({ material_id: materialId, chunk_ids: [chunkId] }),
+    }),
+
   /** 这个项目走过的探索（最新在前，≤20）：过目台与历史都读它（M8）。 */
   explorations: (projectId: string) =>
     request<ExplorationView[]>(`/projects/${projectId}/explorations`),

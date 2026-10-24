@@ -26,6 +26,7 @@ import type {
   RoundHeadView,
   RoundView,
   SchemaView,
+  SearchHitView,
   SearchResultsView,
   ThreadView,
   WorkspaceEvent,
@@ -44,6 +45,8 @@ export type PendingAction =
   | "edit"
   /** 材料库上的动作（删 / 重解析）：与"这一轮"无关，但仍然串行，不并发点。 */
   | "material"
+  /** 搜索框「带进本轮」：轮内动作，串行不并发。 */
+  | "round_material"
   /** 记忆抽屉上的动作（M6）：删一条记忆——同样串行，不与"这一轮"的动作并发。 */
   | "memory"
   /** 过目台上的动作（M8）：发起 / 重试 / 放弃 / 收下 / 删掉，串行不并发。 */
@@ -361,6 +364,25 @@ export function useWorkspaceData() {
       }
     },
     [pending],
+  );
+
+  /** 搜索框「带进本轮」：成功后用返回的 RoundView 换掉当前这一轮。 */
+  const addHitToRound = useCallback(
+    async (hit: SearchHitView) => {
+      const round = state.round;
+      const materialId = hit.material_id;
+      const chunkId = hit.chunk_id ?? hit.ref;
+      if (round === null || materialId === undefined || chunkId === "") return;
+      await run("round_material", async () => {
+        const fresh = await api.addRoundMaterial(
+          round.round_id,
+          materialId,
+          chunkId,
+        );
+        dispatch({ type: "round", round: fresh });
+      });
+    },
+    [run, state.round],
   );
 
   /**
@@ -935,6 +957,7 @@ export function useWorkspaceData() {
     searchResults,
     searchPending,
     setSearchQuery,
+    addHitToRound,
     pendingMaterials,
     addMaterial,
     removeMaterial,

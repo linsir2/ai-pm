@@ -11,6 +11,7 @@
 
 import { useState } from "react";
 
+import type { SearchHitAction } from "../api/payload";
 import type { SearchHitView, SearchResultsView } from "../api/types";
 
 const KIND_TEXT: Record<string, string> = {
@@ -27,12 +28,16 @@ export function SearchBox({
   pending,
   onQueryChange,
   onPick,
+  actionFor,
+  onAddToRound,
 }: {
   query: string;
   results: SearchResultsView | null;
   pending: boolean;
   onQueryChange: (query: string) => void;
   onPick: (hit: SearchHitView) => void;
+  actionFor?: (hit: SearchHitView) => SearchHitAction;
+  onAddToRound?: (hit: SearchHitView) => void;
 }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const open = query.trim() !== "" && results !== null;
@@ -83,22 +88,48 @@ export function SearchBox({
             <p className="search__empty muted small">{pending ? "在找…" : "没找到"}</p>
           ) : (
             <ul className="search__hits" id="project-search-list" role="listbox">
-              {results.hits.map((hit, index) => (
-                <li key={`${hit.kind}-${hit.ref}`} role="presentation">
-                  <button
-                    type="button"
-                    id={`search-opt-${index}`}
-                    role="option"
-                    aria-selected={index === activeIndex}
-                    className={index === activeIndex ? "search__hit search__hit--on" : "search__hit"}
-                    onClick={() => onPick(hit)}
+              {results.hits.map((hit, index) => {
+                const action = actionFor?.(hit) ?? { visible: false };
+                return (
+                  <li
+                    key={`${hit.kind}-${hit.ref}`}
+                    className="search__row"
+                    role="presentation"
                   >
-                    <span className="tag">{KIND_TEXT[hit.kind] ?? hit.kind}</span>
-                    <span className="search__label">{hit.label}</span>
-                    <span className="muted small mono">{hit.where}</span>
-                  </button>
-                </li>
-              ))}
+                    <button
+                      type="button"
+                      id={`search-opt-${index}`}
+                      role="option"
+                      aria-selected={index === activeIndex}
+                      className={
+                        index === activeIndex
+                          ? "search__hit search__hit--on"
+                          : "search__hit"
+                      }
+                      onClick={() => onPick(hit)}
+                    >
+                      <span className="tag">{KIND_TEXT[hit.kind] ?? hit.kind}</span>
+                      <span className="search__label">{hit.label}</span>
+                      <span className="muted small mono">{hit.where}</span>
+                    </button>
+                    {action.visible && (
+                      <button
+                        type="button"
+                        className="search__add"
+                        disabled={!action.enabled}
+                        title={
+                          action.enabled
+                            ? "把这一块带进当前轮（下一步生效）"
+                            : action.reason
+                        }
+                        onClick={() => onAddToRound?.(hit)}
+                      >
+                        {action.label}
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
           {results.truncated && (

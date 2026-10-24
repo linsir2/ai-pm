@@ -18,6 +18,7 @@ import {
   initialClaimEdits,
   integrationSummary,
   materialHitTarget,
+  searchHitAction,
   selectableLabels,
   seatNominationSummary,
   summarizeEids,
@@ -30,6 +31,7 @@ import type {
   MaterialSummaryView,
   RoundMaterialView,
   RoundView,
+  SearchHitView,
 } from "./types";
 
 const round = {
@@ -569,5 +571,117 @@ describe("summarizeEids（P29 眼睛检查 F5）", () => {
 
     expect(summary.shown).toEqual(["E1", "E2"]);
     expect(summary.rest).toBe(0);
+  });
+});
+
+
+// —— 搜索命中上的「带进本轮」（P2.8）——
+
+function actionRound(over: Partial<RoundView> = {}): RoundView {
+  return {
+    round_id: "r1",
+    project_id: "p1",
+    user_input: "",
+    step: "seats_running",
+    waiting_on: "none",
+    seat_round_count: 1,
+    seats: [],
+    active_seats: [],
+    nominated_seats: [],
+    available_seats: [],
+    claims: [],
+    seat_packets: [],
+    dropped: [],
+    questions: [],
+    asked_questions: [],
+    list_items: [],
+    draft: null,
+    advisories: [],
+    failure_reason: null,
+    failure_at_step: null,
+    retry_from: null,
+    analysis_basis: "",
+    abandon_reason: null,
+    confirmed_version_no: null,
+    form_id: null,
+    answer_sets: [],
+    materials: [],
+    ...over,
+  } as RoundView;
+}
+
+function materialHit(over: Partial<SearchHitView> = {}): SearchHitView {
+  return {
+    kind: "material",
+    label: "诊断报告.pdf",
+    ref: "m1#c00",
+    where: "材料 · 第 1 页",
+    material_id: "m1",
+    chunk_id: "m1#c00",
+    ...over,
+  };
+}
+
+describe("searchHitAction", () => {
+  it("非材料命中不显示动作", () => {
+    expect(
+      searchHitAction(materialHit({ kind: "entry" }), actionRound(), false),
+    ).toEqual({ visible: false });
+  });
+
+  it("看历史轮时不显示（带不进历史）", () => {
+    expect(searchHitAction(materialHit(), actionRound(), true)).toEqual({
+      visible: false,
+    });
+  });
+
+  it("已在 materials 或 manual_chunks 里 → 禁用并说已在", () => {
+    const inMaterials = actionRound({
+      materials: [
+        {
+          material_id: "m1",
+          title: "t",
+          source_ref: "s",
+          origin: "upload",
+          parser_id: "p",
+          chunk_count: 1,
+          truncated: false,
+          warnings: [],
+          chunks: [
+            { chunk_id: "m1#c00", text: "x", anchor: "第 1 页", eid: "E1" },
+          ],
+        },
+      ],
+    });
+    expect(searchHitAction(materialHit(), inMaterials, false)).toMatchObject({
+      visible: true,
+      enabled: false,
+      label: "已在本轮",
+    });
+    expect(
+      searchHitAction(
+        materialHit(),
+        actionRound({ manual_chunks: [{ material_id: "m1", chunk_id: "m1#c00" }] }),
+        false,
+      ),
+    ).toMatchObject({ visible: true, enabled: false, label: "已在本轮" });
+  });
+
+  it("草案卡之后禁用并说等下一轮", () => {
+    expect(
+      searchHitAction(materialHit(), actionRound({ step: "awaiting_confirm" }), false),
+    ).toMatchObject({
+      visible: true,
+      enabled: false,
+      reason: expect.stringContaining("下一轮"),
+    });
+  });
+
+  it("可带料时启用", () => {
+    expect(searchHitAction(materialHit(), actionRound(), false)).toEqual({
+      visible: true,
+      enabled: true,
+      label: "带进本轮",
+    });
   });
 });

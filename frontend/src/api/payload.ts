@@ -13,6 +13,7 @@ import type {
   MaterialSummaryView,
   RoundMaterialView,
   RoundView,
+  SearchHitView,
 } from "./types";
 import { featureFields } from "../state/schema";
 
@@ -353,6 +354,49 @@ export function materialHitTarget(
     }
   }
   return { found: false };
+}
+
+export type SearchHitAction =
+  | { visible: false }
+  | { visible: true; enabled: false; label: string; reason: string }
+  | { visible: true; enabled: true; label: "带进本轮" };
+
+/** 搜索命中行上的「带进本轮」动作：可见 / 可用 / 文案全部在这里判，组件不判。 */
+export function searchHitAction(
+  hit: SearchHitView,
+  round: RoundView | null,
+  historical: boolean,
+): SearchHitAction {
+  if (hit.kind !== "material" || round === null || historical) {
+    return { visible: false };
+  }
+  const materialId = hit.material_id;
+  const chunkId = hit.chunk_id ?? hit.ref;
+  if (materialId === undefined || chunkId === "") {
+    return { visible: false };
+  }
+  const already =
+    round.materials.some((material) =>
+      material.chunks.some((chunk) => chunk.chunk_id === chunkId),
+    ) ||
+    (round.manual_chunks ?? []).some((chunk) => chunk.chunk_id === chunkId);
+  if (already) {
+    return {
+      visible: true,
+      enabled: false,
+      label: "已在本轮",
+      reason: "这一块已经在当前轮里了",
+    };
+  }
+  if (["awaiting_confirm", "done", "failed", "abandoned"].includes(round.step)) {
+    return {
+      visible: true,
+      enabled: false,
+      label: "带进本轮",
+      reason: "这一轮已经出草案或结束了，等下一轮再带",
+    };
+  }
+  return { visible: true, enabled: true, label: "带进本轮" };
 }
 
 export interface AdvisoryGroup {

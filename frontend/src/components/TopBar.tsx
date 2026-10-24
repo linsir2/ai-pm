@@ -1,4 +1,5 @@
 import type { AuthUser } from "../api/client";
+import type { SearchHitAction } from "../api/payload";
 import type { ProjectSummaryView, SearchHitView, SearchResultsView } from "../api/types";
 import { Logo } from "./Logo";
 import { SearchBox } from "./SearchBox";
@@ -69,6 +70,8 @@ export function TopBar({
     pending: boolean;
     onQueryChange: (query: string) => void;
     onPick: (hit: SearchHitView) => void;
+    actionFor?: (hit: SearchHitView) => SearchHitAction;
+    onAddToRound?: (hit: SearchHitView) => void;
   } | null;
   /** 当前用户（Task 7）：传了就显示用户菜单；不传整块不画（未登录页用不到顶栏）。 */
   user?: AuthUser;
