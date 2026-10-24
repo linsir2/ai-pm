@@ -50,6 +50,12 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
+from pmstudio.domain.round.retrieval import (
+    ManualChunk,
+    RetrievalHit,
+    RetrievalStage,
+    RetrievalTrace,
+)
 from pmstudio.domain.round.round import (
     DroppedItem,
     DropSource,
@@ -727,6 +733,41 @@ def round_to_payload(round_: Round) -> dict:
             }
             for ref in round_.materials
         ],
+        # 每一步检索的轨迹（老行没有这把键 → 空）。**不存 eid**：编号真相源是 materials+账本。
+        "retrievals": [
+            {
+                "stage": item.stage.value,
+                "pass_index": item.pass_index,
+                "query": item.query,
+                "hits": [
+                    {
+                        "material_id": hit.material_id,
+                        "chunk_id": hit.chunk_id,
+                        "score": hit.score,
+                    }
+                    for hit in item.hits
+                ],
+                "selected": [
+                    {
+                        "material_id": hit.material_id,
+                        "chunk_id": hit.chunk_id,
+                        "score": hit.score,
+                    }
+                    for hit in item.selected
+                ],
+                "ok": item.ok,
+                "error": item.error,
+                "created_at": _when(item.created_at) if item.created_at is not None else None,
+            }
+            for item in round_.retrievals
+        ],
+        # 手勾材料（投影时合计 ≤60%）；老行没有这把键 → 空
+        "pinned_materials": list(round_.pinned_materials),
+        # 搜索框「带进本轮」的块；老行没有这把键 → 空
+        "manual_chunks": [
+            {"material_id": item.material_id, "chunk_id": item.chunk_id}
+            for item in round_.manual_chunks
+        ],
         "unreferenced_materials": list(round_.unreferenced_materials),
         # 这一轮带进来的过目产物（老行没有这把键 → 读侧回落空；老行的两键形状
         # 读回来就是探索来源，M12 起两种来源共用 origin/ref_id/item_id）
@@ -829,6 +870,48 @@ def round_from_payload(
                 eid=EvidenceId(item["eid"]),
             )
             for item in payload.get("materials") or ()
+        ),
+        # 老行没有这把键（检索 trace 是 P0 后加的）：空——不编"它查过"
+        retrievals=tuple(
+            RetrievalTrace(
+                stage=RetrievalStage(str(item["stage"])),
+                pass_index=int(item["pass_index"]),
+                query=str(item.get("query") or ""),
+                hits=tuple(
+                    RetrievalHit(
+                        material_id=str(hit["material_id"]),
+                        chunk_id=str(hit["chunk_id"]),
+                        score=float(hit.get("score") or 0.0),
+                    )
+                    for hit in item.get("hits") or ()
+                ),
+                selected=tuple(
+                    RetrievalHit(
+                        material_id=str(hit["material_id"]),
+                        chunk_id=str(hit["chunk_id"]),
+                        score=float(hit.get("score") or 0.0),
+                    )
+                    for hit in item.get("selected") or ()
+                ),
+                ok=bool(item.get("ok", True)),
+                error=item.get("error"),
+                created_at=(
+                    _unwhen(item["created_at"]) if item.get("created_at") else None
+                ),
+            )
+            for item in payload.get("retrievals") or ()
+            if isinstance(item, dict)
+        ),
+        pinned_materials=tuple(
+            str(item) for item in payload.get("pinned_materials") or ()
+        ),
+        manual_chunks=tuple(
+            ManualChunk(
+                material_id=str(item["material_id"]),
+                chunk_id=str(item["chunk_id"]),
+            )
+            for item in payload.get("manual_chunks") or ()
+            if isinstance(item, dict)
         ),
         unreferenced_materials=tuple(
             str(item) for item in payload.get("unreferenced_materials") or ()

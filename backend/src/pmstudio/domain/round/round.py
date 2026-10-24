@@ -9,6 +9,7 @@ from pmstudio.domain.round.claim import Claim, Contradiction
 from pmstudio.domain.round.draft import Draft
 from pmstudio.domain.round.opinion import Opinion, SeatReview
 from pmstudio.domain.round.questionnaire import AnswerSet, ListItem, Question, Questionnaire
+from pmstudio.domain.round.retrieval import ManualChunk, RetrievalStage, RetrievalTrace
 from pmstudio.domain.round.step import LEGAL_ADVANCES, MAX_SEAT_ROUNDS, Step, WaitingOn
 from pmstudio.domain.round.web_query import MAX_WEB_QUERIES, WebQuery
 from pmstudio.domain.shared.errors import (
@@ -248,6 +249,12 @@ class Round:
         extra_seat_rounds: int = 0,
         integration_seq: int = 0,
         materials: tuple[MaterialRef, ...] = (),
+        #: 每一步检索的轨迹（P0）：命中/选中，不含 eid（编号真相源是 materials+账本）。
+        retrievals: tuple[RetrievalTrace, ...] = (),
+        #: 用户手勾的材料 id：投影时这些材料的块合计最多占 60% 预算。
+        pinned_materials: tuple[str, ...] = (),
+        #: 用户在搜索框「带进本轮」的块：投影时先装（装不下要留痕）。
+        manual_chunks: tuple[ManualChunk, ...] = (),
         unreferenced_materials: tuple[str, ...] = (),
         seeds: tuple[SeedRef, ...] = (),
         web_queries: tuple[WebQuery, ...] = (),
@@ -298,6 +305,9 @@ class Round:
         self._extra_seat_rounds = extra_seat_rounds
         self._integration_seq = integration_seq
         self._materials = tuple(materials)
+        self._retrievals = tuple(retrievals)
+        self._pinned_materials = tuple(pinned_materials)
+        self._manual_chunks = tuple(manual_chunks)
         self._unreferenced_materials = tuple(unreferenced_materials)
         #: 这一轮带进来的过目产物（M8 调研种子 / M12 灵感箱）；空 = 不是从过目产物来的
         self._seeds = tuple(seeds)
@@ -959,6 +969,54 @@ class Round:
         """这一轮**带进提示词**的外部材料块（附件与检索结果同一条路）。"""
 
         return self._materials
+
+    @property
+    def retrievals(self) -> tuple[RetrievalTrace, ...]:
+        """每一步检索的轨迹（只追加；`selected` 是真正进过提示词的块）。"""
+
+        return self._retrievals
+
+    @property
+    def pinned_materials(self) -> tuple[str, ...]:
+        """用户手勾的材料 id（投影时合计 ≤60% 预算）。"""
+
+        return self._pinned_materials
+
+    @property
+    def manual_chunks(self) -> tuple[ManualChunk, ...]:
+        """用户在搜索框「带进本轮」的块（投影时先装）。"""
+
+        return self._manual_chunks
+
+    def note_retrieval(self, trace: RetrievalTrace) -> None:
+        """追加一条检索轨迹。**只追加**：同一 (stage, pass) 的幂等由调用方先查。"""
+
+        self._retrievals = self._retrievals + (trace,)
+
+    def has_retrieval(self, stage: RetrievalStage, pass_index: int) -> bool:
+        """这一 (stage, pass) 是否已经查过。恢复/重入时据此跳过检索。"""
+
+        return any(
+            item.stage is stage and item.pass_index == pass_index
+            for item in self._retrievals
+        )
+
+    def pin_materials(self, material_ids: tuple[str, ...] | list[str]) -> None:
+        """把材料标成"手勾"：去重、保序。空串不是材料 id。"""
+
+        self._pinned_materials = tuple(
+            dict.fromkeys(item.strip() for item in material_ids if item.strip())
+        )
+
+    def note_manual_chunks(
+        self, items: tuple[ManualChunk, ...] | list[ManualChunk]
+    ) -> None:
+        """记下用户手动带进的块：按 (material_id, chunk_id) 去重、保序。"""
+
+        unique: dict[tuple[str, str], ManualChunk] = {}
+        for item in items:
+            unique.setdefault((item.material_id, item.chunk_id), item)
+        self._manual_chunks = tuple(unique.values())
 
     @property
     def unreferenced_materials(self) -> tuple[str, ...]:
