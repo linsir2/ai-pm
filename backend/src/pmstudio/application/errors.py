@@ -111,6 +111,29 @@ class UnknownMaterial(ApplicationError):
         )
 
 
+class RoundNotAttachable(ApplicationError):
+    """这一轮已经走到不能追加材料的步骤（草案卡之后、或已结束）——合法但状态不允许。"""
+
+    def __init__(self, *, round_id: object, step: object) -> None:
+        super().__init__(
+            f"这一轮已经不能带料了（当前 {step}）：等下一轮再带",
+            code="round_not_attachable",
+            round_id=str(round_id),
+            step=str(step),
+        )
+
+
+class WebMaterialNotAttachable(ApplicationError):
+    """联网材料有另一条渲染/编号路径，不能从搜索框手动带进材料池。"""
+
+    def __init__(self, *, material_id: object) -> None:
+        super().__init__(
+            "联网结果不能手动带进本轮；请用联网申请或研究入口",
+            code="web_material_not_attachable",
+            material_id=str(material_id),
+        )
+
+
 class UnknownTemplate(ApplicationError):
     """没有这个模板（创建项目/取模板时给错了 id）——资源不在，404。"""
 

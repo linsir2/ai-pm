@@ -400,6 +400,14 @@ class RetrievalView:
 
 
 @dataclass(frozen=True, slots=True)
+class ManualChunkView:
+    """用户手动带进本轮的一块（还没投影、可能还没有 E 号）。"""
+
+    material_id: str
+    chunk_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class RoundView:
     """一轮的只读投影。"""
 
@@ -459,6 +467,8 @@ class RoundView:
     retrievals: tuple[RetrievalView, ...] = ()
     #: 手勾的材料 id（投影时这些材料的块合计 ≤60% 预算）。
     pinned_materials: tuple[str, ...] = ()
+    #: 用户从搜索框「带进本轮」的块（还没投影时也在这里，界面据此禁用重复带料）。
+    manual_chunks: tuple[ManualChunkView, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1505,6 +1515,10 @@ def round_view(
             for trace in round_.retrievals
         ),
         pinned_materials=tuple(round_.pinned_materials),
+        manual_chunks=tuple(
+            ManualChunkView(material_id=item.material_id, chunk_id=item.chunk_id)
+            for item in round_.manual_chunks
+        ),
     )
 
 

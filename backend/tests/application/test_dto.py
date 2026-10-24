@@ -15,6 +15,7 @@ from pmstudio.domain.round.questionnaire import (
     QuestionType,
 )
 from pmstudio.domain.round.retrieval import (
+    ManualChunk,
     RetrievalHit,
     RetrievalStage,
     RetrievalTrace,
@@ -1353,6 +1354,17 @@ def test_an_old_round_projects_empty_retrievals():
 
     assert view.retrievals == ()
     assert view.pinned_materials == ()
+
+
+def test_round_view_projects_manual_chunks_with_material_identity():
+    round_ = make_round()
+    round_.note_manual_chunks([ManualChunk("m1", "m1#c03")])
+
+    view = dto.round_view(round_)
+
+    assert [(item.material_id, item.chunk_id) for item in view.manual_chunks] == [
+        ("m1", "m1#c03")
+    ]
 
 
 def test_a_material_hit_carries_material_and_chunk_identity():

@@ -5,6 +5,7 @@ from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.shared.ids import EntryId, EvidenceId, ProjectId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from tests.application.test_materials import make_material
 from tests.support.api_client import async_client
 from tests.support.harness import Harness
 
@@ -759,3 +760,32 @@ async def test_round_view_exposes_discussion_stream_data():
     assert body["claims"][0]["label"] == "need"
     assert body["seat_packets"][0]["status"] == "pending"
     assert body["nominated_seats"][0]["seat_id"] == "seat.data_scale"
+
+
+async def test_attach_material_endpoint_pins_and_records_without_an_eid():
+    """P1.3：搜索框「带进本轮」的 HTTP 形状与幂等语义。"""
+
+    harness = Harness(replies={"claims": CLAIMS_REPLY})
+    project_id = harness.seed_project()
+    harness.materials.seed(make_material("权限：管理员才能导出", "审计：导出要留痕"))
+    app = create_app(_services(harness))
+    async with async_client(app) as client:
+        created = await client.post(
+            f"/api/projects/{project_id}/rounds", json={"input": "想做个订单导出"}
+        )
+        round_id = created.json()["round_id"]
+        response = await client.post(
+            f"/api/rounds/{round_id}/materials",
+            json={"material_id": "m1", "chunk_ids": ["m1#c01"]},
+        )
+        bad = await client.post(
+            f"/api/rounds/{round_id}/materials",
+            json={"material_id": "m1", "chunk_ids": ["m1#c99"]},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["pinned_materials"] == ["m1"]
+    assert body["manual_chunks"] == [{"material_id": "m1", "chunk_id": "m1#c01"}]
+    assert body["materials"] == [], "还没投影，不许提前发 E 号"
+    assert bad.status_code == 422

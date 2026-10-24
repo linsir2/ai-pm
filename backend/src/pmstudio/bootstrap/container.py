@@ -22,6 +22,7 @@ from pmstudio.application.use_cases import (
     AbandonRound,
     ApproveUser,
     AssembleCards,
+    AttachMaterials,
     AuthenticateUser,
     BanUser,
     CloseDiscussion,
@@ -116,6 +117,7 @@ from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
 from pmstudio.infrastructure.sqlite.materials import (
+    SqliteFtsRetriever,
     SqliteHybridRetriever,
     SqliteMaterialStore,
 )
@@ -329,6 +331,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     # `SqliteHybridRetriever` 内部对向量路做了降级：扩展缺失/推理失败就退回纯 FTS5，
     # 检索永远有结果，所以这里不需要再分叉。
     material_search = SqliteHybridRetriever(connection, embedder=embedder)
+    #: 顶栏搜索**只做关键词**（P1.1）：不碰 embedding、不碰融合、不占向量预算。
+    #: 轮内上下文仍用 `material_search`（hybrid）——两条路各有各的消费者。
+    search_lookup = SqliteFtsRetriever(connection)
     parser = LocalMaterialParser()
     # 按网址抓网页（P27）：真 httpx，护栏在实现里（只抓公开网页、限 3 跳 / 15s / 5MB）。
     # 与解析器一样，换实现（无头浏览器 / 更强的正文抽取）只改这一行。
@@ -532,6 +537,9 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     get_round_calls = GetRoundCalls(
         rounds=rounds, call_log=SqliteRoundCallLog(connection)
     )
+    attach_materials = AttachMaterials(
+        rounds=rounds, round_writer=rounds, materials=materials, uow=uow
+    )
     runner = RoundRunner(
         start_round=start_round,
         submit_opening=submit_opening,
@@ -544,6 +552,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         get_round=get_round,
         run_sim_inquiry=run_sim_inquiry,
         run_sim_review=run_sim_review,
+        attach_materials=attach_materials,
     )
     run_inquiry = RunInquiry(
         documents=documents,
@@ -737,7 +746,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         ),
         list_rounds=ListRounds(index=index),
         search=SearchProject(
-            documents=documents, evidence=evidences, index=index, materials=material_search
+            documents=documents, evidence=evidences, index=index, materials=search_lookup
         ),
         upload_material=UploadMaterial(
             documents=documents,

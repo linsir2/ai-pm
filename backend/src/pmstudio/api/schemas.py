@@ -139,6 +139,13 @@ class OpeningRequest(BaseModel):
     web_queries: list[str] = Field(default_factory=list)
 
 
+class AttachMaterialRequest(BaseModel):
+    """搜索框「带进本轮」：材料 id + 要带的块（一次最多 3 块，用例层再挡）。"""
+
+    material_id: str = Field(min_length=1)
+    chunk_ids: list[str] = Field(min_length=1)
+
+
 class AnswerRequest(BaseModel):
     question_id: str
     text: str = ""

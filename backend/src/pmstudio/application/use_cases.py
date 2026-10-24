@@ -152,6 +152,7 @@ from pmstudio.application.errors import (
     BuiltinTemplateProtected,
     MaterialFrozen,
     MaterialTooLarge,
+    RoundNotAttachable,
     SeatAlreadyReviewed,
     UnknownEntryId,
     UnknownEvidenceId,
@@ -159,6 +160,7 @@ from pmstudio.application.errors import (
     UnknownMaterial,
     UnknownRole,
     UnsupportedMaterial,
+    WebMaterialNotAttachable,
 )
 from pmstudio.application.events import (
     DOC_CHANGED,
@@ -286,6 +288,7 @@ from pmstudio.domain.round.questionnaire import (
     Question,
     QuestionKind,
 )
+from pmstudio.domain.round.retrieval import ManualChunk
 from pmstudio.domain.round.round import (
     DroppedItem,
     DropSource,
@@ -825,6 +828,10 @@ class StartRound:
 WEB_SEARCH_KIND = "web_search"
 #: 联网结果在信息包里的 origin（`TavilySearchGateway` 盖的就是它）
 WEB_ORIGIN = "web_search"
+
+#: 一轮最多手动带进几块 / 一次最多几块（登记在 `02 §11.0.90`）。
+MAX_MANUAL_CHUNKS = 10
+MAX_MANUAL_CHUNKS_PER_CALL = 3
 
 #: 应用层只有这一处会"吞"异常（库级检索是增强项），所以要有日志：
 #: 否则"检索器永久坏了"与"这一轮确实没搜到"分不开（评审 B）。
@@ -3073,6 +3080,86 @@ class SubmitAnswers:
             self._evidence_writer.save(ledger)
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
+
+
+class AttachMaterials:
+    """把搜索框里点中的块「带进本轮」：pin 材料 + 记 manual_chunks。
+
+    **不发 E 号**：E 号在投影时发（P2）。这里只把块放进证据池；
+    下一次 `RoundContextPreparer.prepare` 会先装 manual、再按预算发号。
+
+    状态闸：只在还没出草案时允许。出了草案再带料，改不了已经生成的那一份——
+    与其让用户以为生效了，不如 409 说清"等下一轮"。
+    """
+
+    ATTACHABLE_STEPS = frozenset(
+        {Step.STARTED, Step.CLAIMS_READY, Step.SEATS_RUNNING, Step.AWAITING_ANSWERS}
+    )
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        materials: MaterialStore,
+        uow: UnitOfWork,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._materials = materials
+        self._uow = uow
+
+    async def __call__(
+        self, *, round_id: RoundId, material_id: str, chunk_ids: Sequence[str]
+    ) -> None:
+        round_ = self._rounds.get(round_id)
+        self._ensure_attachable(round_)
+        packet = self._materials.get(material_id)
+        if packet is None or packet.project_id != str(round_.project_id):
+            raise UnknownMaterial(material_id)
+        if packet.parsed.origin == WEB_ORIGIN:
+            # 联网结果一条一个号、走 WEB_BUDGET；混进材料池会破"编号==进提示词的块"。
+            raise WebMaterialNotAttachable(material_id=material_id)
+
+        wanted = tuple(dict.fromkeys(item.strip() for item in chunk_ids if item.strip()))
+        if not wanted:
+            raise ShapeError("要带进的块不能为空")
+        if len(wanted) > MAX_MANUAL_CHUNKS_PER_CALL:
+            raise ShapeError(
+                f"一次最多带 {MAX_MANUAL_CHUNKS_PER_CALL} 块",
+                count=len(wanted),
+            )
+        known = {chunk.chunk_id for chunk in packet.parsed.chunks}
+        outside = [item for item in wanted if item not in known]
+        if outside:
+            raise ShapeError("这些块不属于这份材料", chunk_ids=outside)
+
+        with self._uow:
+            round_ = self._rounds.get(round_id)
+            # 状态在事务里再判一次：读与写之间可能有人把轮推进了。
+            self._ensure_attachable(round_)
+            already = {ref.chunk_id for ref in round_.materials} | {
+                item.chunk_id for item in round_.manual_chunks
+            }
+            fresh = [
+                ManualChunk(material_id=material_id, chunk_id=item)
+                for item in wanted
+                if item not in already
+            ]
+            if not fresh:
+                return  # 幂等：已经在本轮（投影过或已手动带过）
+            if len(round_.manual_chunks) + len(fresh) > MAX_MANUAL_CHUNKS:
+                raise ShapeError(
+                    f"本轮最多手动带 {MAX_MANUAL_CHUNKS} 块",
+                    count=len(round_.manual_chunks) + len(fresh),
+                )
+            round_.pin_materials((*round_.pinned_materials, material_id))
+            round_.note_manual_chunks((*round_.manual_chunks, *fresh))
+            self._round_writer.save(round_)
+
+    def _ensure_attachable(self, round_: Round) -> None:
+        if round_.step not in self.ATTACHABLE_STEPS:
+            raise RoundNotAttachable(round_id=round_.round_id, step=round_.step)
 
 
 class ConfirmDraft:

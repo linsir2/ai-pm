@@ -64,3 +64,21 @@ def test_container_warms_the_chinese_tokenizer(tmp_path, monkeypatch):
     )
 
     assert calls == [1], "组装没有预热分词器"
+
+
+def test_search_project_uses_keyword_retrieval_only(tmp_path):
+    """P1.1：顶栏搜索走**纯 FTS**，不再碰 embedding/融合。
+
+    这是**接线守卫**（不是业务断言）：`SearchProject` 只依赖 `MaterialRetriever` 协议，
+    换实现应该在装配点一行完成；这里直接看装配进去的实例类型。
+    """
+
+    from pmstudio.application.use_cases import SearchProject
+    from pmstudio.infrastructure.sqlite.materials import SqliteFtsRetriever
+
+    settings = Settings(db_path=tmp_path / "p.db", model="m", api_key="k", api_base=None)
+    container = build_container(settings)
+
+    search = container.app.state.services.search
+    assert isinstance(search, SearchProject)
+    assert isinstance(search._materials, SqliteFtsRetriever)

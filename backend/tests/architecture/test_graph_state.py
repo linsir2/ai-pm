@@ -35,6 +35,9 @@ def test_round_command_holds_no_business_state():
         # 模拟评测（M11）选中的 persona 与功能：同样是"本次动作的参数"
         "persona_ids",
         "feature_slugs",
+        # 「带进本轮」（P1.3）：材料 id + 块 id，同样是"本次动作的参数"
+        "material_id",
+        "chunk_ids",
     }
 
 
@@ -52,6 +55,7 @@ def test_every_graph_node_and_router_is_async():
         "node_resume",
         "node_sim_inquiry",
         "node_sim_review",
+        "node_attach_materials",
         "route_by_command",
         "route_after_resume",
     ):

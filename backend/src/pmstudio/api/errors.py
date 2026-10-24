@@ -18,6 +18,9 @@ CODE_STATUS = {
     # 材料层的"资源不在"与"状态不允许"（P19）
     "unknown_material": 404,
     "material_frozen": 409,
+    # 带料：状态不允许 = 409；联网材料走别的路 = 422（你给的东西不对）
+    "round_not_attachable": 409,
+    "web_material_not_attachable": 422,
     # 管理动作落在 admin 头上（含自封）：请求本身合法、状态不允许 → 409。
     # 用 400 是"请求有问题"，用 403 是"你没权限"——都不是这两件事。
     "admin_protected": 409,

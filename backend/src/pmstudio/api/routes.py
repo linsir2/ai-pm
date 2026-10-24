@@ -9,6 +9,7 @@ from fastapi.responses import Response, StreamingResponse
 from pmstudio.api.deps import require_user
 from pmstudio.api.schemas import (
     AnswersRequest,
+    AttachMaterialRequest,
     ConfirmRequest,
     CreateProjectRequest,
     EditEntryRequest,
@@ -386,6 +387,23 @@ async def submit_opening(request: Request, round_id: str, body: OpeningRequest, 
             seats=tuple(body.seats),
             web_queries=tuple(body.web_queries),
             claim_edits=edits,
+        )
+    )
+    return as_json(view)
+
+
+@router.post("/rounds/{round_id}/materials")
+async def attach_round_material(  # type: ignore[no-untyped-def]
+    request: Request, round_id: str, body: AttachMaterialRequest, user: CurrentUser
+):
+    """搜索框「带进本轮」：pin 材料 + 记 manual_chunks；E 号在投影时才发。"""
+
+    view = await services_of(request).runner.run(
+        RoundCommand(
+            kind="attach_materials",
+            round_id=round_id,
+            material_id=body.material_id,
+            chunk_ids=tuple(body.chunk_ids),
         )
     )
     return as_json(view)

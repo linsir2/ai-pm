@@ -669,6 +669,16 @@ class Harness:
             tool_recorder=self.tool_recorder,
         )
 
+    def attach_materials(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import AttachMaterials
+
+        return AttachMaterials(
+            rounds=self.rounds,
+            round_writer=self.rounds,
+            materials=self.materials,
+            uow=self.uow,
+        )
+
     def run_seat_round(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import RunSeatRound
 
@@ -992,6 +1002,7 @@ class Harness:
                 dig_round=self.dig_round(),
                 run_sim_inquiry=self.run_sim_inquiry(),
                 run_sim_review=self.run_sim_review(),
+                attach_materials=self.attach_materials(),
                 get_round=GetRound(
                     rounds=self.rounds,
                     evidence=self.evidences,

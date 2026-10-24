@@ -32,3 +32,6 @@ class RoundCommand:
     #: 模拟评测（M11）：选中的模拟使用者与要查的功能（不碰 step 的轮内动作）
     persona_ids: tuple[str, ...] = ()
     feature_slugs: tuple[str, ...] = ()
+    #: 「带进本轮」（P1.3）：材料 id + 要带的块（一次动作的参数，不是聚合字段）
+    material_id: str = ""
+    chunk_ids: tuple[str, ...] = ()
