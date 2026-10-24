@@ -165,7 +165,15 @@ def test_the_compose_file_parses() -> None:
         text=True,
         check=False,
     )
-    if result.returncode != 0 and "is not a docker command" in (result.stderr or ""):
+    # 两种文案都表示"compose 插件不在"：
+    #   老 CLI：`docker: 'compose' is not a docker command`
+    #   新 CLI：`docker: unknown command: docker compose`
+    # 只认前者会让后者变成红灯——而它的语义确实是"本机没插件"，该 skip。
+    missing_plugin = (
+        "is not a docker command" in (result.stderr or "")
+        or "unknown command: docker compose" in (result.stderr or "")
+    )
+    if result.returncode != 0 and missing_plugin:
         pytest.skip("本机没有 docker compose 插件")
     assert result.returncode == 0, result.stderr
 
