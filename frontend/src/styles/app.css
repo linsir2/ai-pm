@@ -3812,3 +3812,28 @@ details.loop__group[open] > summary::before {
   border-bottom: var(--hairline);
   background: color-mix(in srgb, var(--open) 8%, var(--app-bg));
 }
+
+/* 每步检索：一行事实，不抢眼。失败用矛盾色（与"失败必须是失败"同一套语义色）。 */
+.retrieval {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.retrieval--failed {
+  color: var(--conflict);
+}
+
+.retrieval__query {
+  overflow-wrap: anywhere;
+}
+
+.packet__retrieval {
+  margin: var(--space-1) 0 0;
+}
+
+.round-materials__source {
+  margin-left: var(--space-2);
+}

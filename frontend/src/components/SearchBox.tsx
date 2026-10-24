@@ -100,6 +100,7 @@ export function SearchBox({
                       type="button"
                       id={`search-opt-${index}`}
                       role="option"
+                      tabIndex={-1}
                       aria-selected={index === activeIndex}
                       className={
                         index === activeIndex
@@ -113,19 +114,33 @@ export function SearchBox({
                       <span className="muted small mono">{hit.where}</span>
                     </button>
                     {action.visible && (
-                      <button
-                        type="button"
-                        className="search__add"
-                        disabled={!action.enabled}
-                        title={
-                          action.enabled
-                            ? "把这一块带进当前轮（下一步生效）"
-                            : action.reason
-                        }
-                        onClick={() => onAddToRound?.(hit)}
-                      >
-                        {action.label}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="search__add"
+                          disabled={!action.enabled}
+                          aria-label={`把「${hit.label}」带进本轮`}
+                          aria-describedby={
+                            action.enabled ? undefined : `search-reason-${index}`
+                          }
+                          title={
+                            action.enabled
+                              ? "把这一块带进当前轮（下一步生效）"
+                              : action.reason
+                          }
+                          onClick={() => onAddToRound?.(hit)}
+                        >
+                          {action.label}
+                        </button>
+                        {!action.enabled && (
+                          <span
+                            id={`search-reason-${index}`}
+                            className="sr-only"
+                          >
+                            {action.reason}
+                          </span>
+                        )}
+                      </>
                     )}
                   </li>
                 );

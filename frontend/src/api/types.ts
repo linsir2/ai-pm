@@ -243,6 +243,8 @@ export interface RoundView {
   manual_chunks?: ManualChunkView[];
   /** 每一步检索的轨迹（P0）：闭环区显示"本步命中 K / 带进 L"。 */
   retrievals?: RetrievalView[];
+  /** 已完成几次整合（integrate trace 的 pass_index = 它，界面据此取本次那条）。 */
+  integration_seq?: number;
   /**
    * 分析者提名的联网检索词（工具层 C-2b）：**只是提名**，勾了才会真去查。
    * 勾选状态由用户给（默认不勾），后端把"你勾过哪条"投影在 `chosen` 里。

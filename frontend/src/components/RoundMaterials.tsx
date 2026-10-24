@@ -6,9 +6,19 @@
    2. 编号是可点的出处胶囊（复用 EvidenceChip）：点一下回到那块原文。 */
 
 import type { RoundMaterialView } from "../api/types";
+import { materialSource } from "../state/retrieval";
 import { EvidenceChip } from "./EvidenceChip";
 
-export function RoundMaterials({ materials }: { materials: RoundMaterialView[] }) {
+export function RoundMaterials({
+  materials,
+  pinnedMaterials = [],
+  hasRetrievals = false,
+}: {
+  materials: RoundMaterialView[];
+  pinnedMaterials?: string[];
+  /** 本轮有没有检索记录；没有（老轮次）就不画来源徽标，不猜"自动"。 */
+  hasRetrievals?: boolean;
+}) {
   if (materials.length === 0) return null;
 
   return (
@@ -24,6 +34,19 @@ export function RoundMaterials({ materials }: { materials: RoundMaterialView[] }
               {material.chunks.length} / {material.chunk_count} 块 · {material.parser_id}
               {material.origin === "web_search" ? " · 联网检索" : ""}
             </span>
+            {materialSource(
+              material.material_id,
+              pinnedMaterials,
+              hasRetrievals,
+            ) !== null && (
+              <span className="tag round-materials__source">
+                {materialSource(
+                  material.material_id,
+                  pinnedMaterials,
+                  hasRetrievals,
+                )}
+              </span>
+            )}
           </summary>
           {material.warnings.map((warning) => (
             <p className="muted small" key={warning}>

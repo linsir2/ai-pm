@@ -153,3 +153,39 @@ describe("SeatPacketCard 跳过", () => {
     expect(container.querySelectorAll("ul.drops li.drop")).toHaveLength(1);
   });
 });
+
+
+  it("显示本步检索的命中/带进（同趟共享一条）", () => {
+    const { container } = render(
+      <SeatPacketCard
+        packet={
+          {
+            seat_id: "seat.a",
+            title: "业务规则",
+            status: "completed",
+            pass_index: 1,
+            packet_id: null,
+            basis: "读了文档",
+            opinions: [],
+            judgment_count: 0,
+            question_count: 0,
+          } as never
+        }
+        order={1}
+        running={false}
+        retrieval={{
+          stage: "seat",
+          pass_index: 1,
+          query: "导出权限",
+          hit_count: 3,
+          selected_count: 2,
+          chunk_ids: [],
+          ok: true,
+          error: null,
+          created_at: null,
+        }}
+      />,
+    );
+
+    expect(container.textContent).toContain("本步检索：命中 3 块 / 带进 2 块");
+  });

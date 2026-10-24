@@ -51,8 +51,11 @@ from pmstudio.domain.round.round import (
 )
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 
-#: 一轮最多几次"按步检索"（SEED 不算；手动带料与联网也不占）。到顶就只投影、不再查。
-MAX_ROUND_RETRIEVALS = 3
+#: 每**阶段**最多几次检索。**不共用一本账**：正常的两批问卷流程是
+#: SEAT(1)→INTEGRATE(1)→SEAT(2)→INTEGRATE(2)，共用一个 3 会把最后一次整合饿死。
+#: 额度与既有配额对齐：席位轮最多 3 趟、整合最多 3 次。
+MAX_SEAT_RETRIEVALS = 3
+MAX_INTEGRATE_RETRIEVALS = 3
 #: 本步抬头（"带了 K / 共 N 块"）的预算预留。P2.7 会把它并进 `SECTION_OVERHEAD` 的实测值。
 STEP_HEADER_RESERVE = 80
 #: 联网材料的 origin。与 `use_cases.WEB_ORIGIN` 同一个产品词；定义在这里是为了不让
@@ -108,7 +111,7 @@ class RoundContextPreparer:
             (ref.material_id, ref.chunk_id): ref.eid for ref in round_.materials
         }
         if existing is None:
-            hits, error = self._retrieve(round_, query)
+            hits, error = self._retrieve(round_, query, stage)
             packets, pool, web_by_material, missing = self._pool(
                 round_, eid_of, extra_hits=hits
             )
@@ -181,7 +184,7 @@ class RoundContextPreparer:
         )
         # 到上限时**不新增 trace**：只投影、不再查。重入仍是同一份投影（池没变）。
         trace = None
-        if self._can_retrieve(round_):
+        if self._can_retrieve(round_, stage):
             trace = RetrievalTrace(
                 stage=stage,
                 pass_index=pass_index,
@@ -227,9 +230,9 @@ class RoundContextPreparer:
     # —— 内部 ——
 
     def _retrieve(
-        self, round_: Round, query: str
+        self, round_: Round, query: str, stage: RetrievalStage
     ) -> tuple[tuple[RetrievalHit, ...], str | None]:
-        if self._retriever is None or not self._can_retrieve(round_):
+        if self._retriever is None or not self._can_retrieve(round_, stage):
             return (), None
         try:
             hits = self._retriever.search(
@@ -251,17 +254,23 @@ class RoundContextPreparer:
             None,
         )
 
-    def _can_retrieve(self, round_: Round) -> bool:
-        used = sum(
-            1 for trace in round_.retrievals if trace.stage is not RetrievalStage.SEED
+    def _can_retrieve(self, round_: Round, stage: RetrievalStage) -> bool:
+        limit = (
+            MAX_SEAT_RETRIEVALS
+            if stage is RetrievalStage.SEAT
+            else MAX_INTEGRATE_RETRIEVALS
         )
-        return used < MAX_ROUND_RETRIEVALS
+        used = sum(1 for trace in round_.retrievals if trace.stage is stage)
+        return used < limit
 
     @staticmethod
     def _pass_index(round_: Round, stage: RetrievalStage) -> int:
         if stage is RetrievalStage.SEAT:
             return round_.seat_round_count
-        return round_.integration_seq
+        # **第几次整合**（1 起），不是 `integration_seq` 的当前值：后者在
+        # `Round.integrate` 成功后才 +1。用 +1 让 trace 的 pass 与整合成功后的
+        # `RoundView.integration_seq` 对得上（前端据此取"本次整合"那条，不回退旧 trace）。
+        return round_.integration_seq + 1
 
     @staticmethod
     def _trace_of(
@@ -319,7 +328,8 @@ class RoundContextPreparer:
         missing: list[str] = []
         for material_id in list(allowed):
             packet = self._materials.get(material_id)
-            if packet is None:
+            if packet is None or packet.project_id != str(round_.project_id):
+                # 材料不在了 / 串项目：不编内容，也不把别家的材料写进本轮。
                 missing.append(material_id)
                 allowed.pop(material_id)
                 continue

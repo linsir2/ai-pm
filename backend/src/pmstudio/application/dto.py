@@ -467,6 +467,9 @@ class RoundView:
     retrievals: tuple[RetrievalView, ...] = ()
     #: 手勾的材料 id（投影时这些材料的块合计 ≤60% 预算）。
     pinned_materials: tuple[str, ...] = ()
+    #: 已完成几次整合（`retrievals` 里 integrate 的 pass_index = 它；
+    #: 界面据此取"本次整合"那条，不拿旧 pass 冒充）。
+    integration_seq: int = 0
     #: 用户从搜索框「带进本轮」的块（还没投影时也在这里，界面据此禁用重复带料）。
     manual_chunks: tuple[ManualChunkView, ...] = ()
 
@@ -1515,6 +1518,7 @@ def round_view(
             for trace in round_.retrievals
         ),
         pinned_materials=tuple(round_.pinned_materials),
+        integration_seq=round_.integration_seq,
         manual_chunks=tuple(
             ManualChunkView(material_id=item.material_id, chunk_id=item.chunk_id)
             for item in round_.manual_chunks

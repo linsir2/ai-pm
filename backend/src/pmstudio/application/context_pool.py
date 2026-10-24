@@ -133,7 +133,8 @@ def select_projection(
     **前提**：`packets` / `pool` 只含可投影材料（调用方负责排除 `web_search`：
     它一条一个号、走 `WEB_BUDGET`，混进来会破"编号==进提示词的块"）。
 
-    选块顺序：manual（硬保）→ 手勾（全局 ≤`pinned_share`）→ 本步命中 → 池里其余。
+    选块顺序：manual（硬保）→ 每份手勾至少一块（地板，用总预算）→
+    手勾按相关度（全局 ≤`pinned_share`）→ 本步命中 → 池里其余。
     装不下就跳过（继续试后面的块），不 break——高分块贵、后面的便宜块还该有机会。
     """
 
@@ -158,7 +159,9 @@ def select_projection(
         allowed = pool.get(material_id, frozenset())
         return tuple(chunk for chunk in packet.parsed.chunks if chunk.chunk_id in allowed)
 
-    def take(material_id: str, chunk: MaterialChunk) -> bool:
+    def take(
+        material_id: str, chunk: MaterialChunk, *, respect_pinned_cap: bool = True
+    ) -> bool:
         nonlocal used, pinned_used
         if chunk.chunk_id in taken:
             return False
@@ -169,7 +172,11 @@ def select_projection(
         cost = material_block_cost(packet, chunk, first_of_material=first)
         if used + cost > usable:
             return False
-        if material_id in pinned_set and pinned_used + cost > pinned_cap:
+        if (
+            respect_pinned_cap
+            and material_id in pinned_set
+            and pinned_used + cost > pinned_cap
+        ):
             return False
         picked.append((material_id, chunk))
         taken.add(chunk.chunk_id)
@@ -190,7 +197,20 @@ def select_projection(
         if not take(item.material_id, chunk) and chunk.chunk_id not in taken:
             skipped_manual.append(item.chunk_id)
 
-    # ② 手勾材料：按本步 query 的相关度取，受全局 60% 闸。
+    # ② 地板：每份手勾材料至少露一块（用**总预算**，不受 60% 闸）。
+    #    没有这一步，两份手勾材料时第一份长文能吃满 60%，第二份每一步都进不来。
+    for material_id in pinned_order:
+        if any(mid == material_id for mid, _ in picked):
+            continue
+        candidates = [
+            chunk for chunk in chunks_of(material_id) if chunk.chunk_id not in taken
+        ]
+        candidates.sort(key=lambda chunk: (-block_score(chunk.text, query), chunk.ordinal))
+        for chunk in candidates:
+            if take(material_id, chunk, respect_pinned_cap=False):
+                break
+
+    # ③ 手勾材料：按本步 query 的相关度取，受全局 60% 闸。
     for material_id in pinned_order:
         candidates = [
             chunk for chunk in chunks_of(material_id) if chunk.chunk_id not in taken
@@ -201,7 +221,7 @@ def select_projection(
                 break
             take(material_id, chunk)
 
-    # ③ 本步检索命中：按检索分数（调用方已排好序）。
+    # ④ 本步检索命中：按检索分数（调用方已排好序）。
     for item in stage_hits:
         if item.chunk_id in taken:
             continue
@@ -218,7 +238,7 @@ def select_projection(
         if take(item.material_id, chunk) and item.material_id not in pinned_set:
             auto_slots[item.material_id] = auto_slots.get(item.material_id, 0) + 1
 
-    # ④ 池里其余：按 2-gram 相关度填满。
+    # ⑤ 池里其余：按 2-gram 相关度填满。
     rest: list[tuple[str, MaterialChunk]] = []
     for material_id in pool:
         rest.extend(

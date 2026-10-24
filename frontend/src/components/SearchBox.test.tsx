@@ -126,7 +126,7 @@ it("带进本轮：显示次按钮，点了把命中递给回调", () => {
     onAddToRound: onAdd,
   });
 
-  fireEvent.click(screen.getByRole("button", { name: "带进本轮" }));
+  fireEvent.click(screen.getByRole("button", { name: /带进本轮/ }));
 
   expect(onAdd).toHaveBeenCalledWith(results.hits[2]);
 });
@@ -147,7 +147,12 @@ it("带进本轮：禁用时按钮不可点，理由在 title 里", () => {
     actionFor,
   });
 
-  const button = screen.getByRole("button", { name: "带进本轮" });
+  const button = screen.getByRole("button", { name: /带进本轮/ });
   expect((button as HTMLButtonElement).disabled).toBe(true);
   expect(button.getAttribute("title")).toBe("这一块已经在当前轮里了");
+  const reasonId = button.getAttribute("aria-describedby");
+  expect(reasonId).not.toBeNull();
+  expect(document.getElementById(reasonId!)?.textContent).toBe(
+    "这一块已经在当前轮里了",
+  );
 });

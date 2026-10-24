@@ -316,3 +316,14 @@ async def test_seed_pins_handpicked_and_caps_their_share():
     assert "m2" in picked_ids, "自动段必须还有位置"
     assert len([ref for ref in round_.materials if ref.material_id == "m1"]) < 100
     assert selection_cost(harness, round_) <= 4000
+
+
+async def test_no_retriever_means_no_seed_trace():
+    """没注入检索器 = **没查**，不是零命中——不该写一条成功的 SEED trace。"""
+
+    harness = harness_with(make_material("权限：管理员才能导出"))
+    round_id = await harness.start_round().create(
+        project_id=PROJECT, user_input="导出权限怎么定", material_ids=["m1"]
+    )
+
+    assert harness.rounds.get(round_id).retrievals == ()

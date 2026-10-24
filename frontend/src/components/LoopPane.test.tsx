@@ -296,3 +296,55 @@ describe("对话流折叠纪律（Trae 式：标题行常显，明细点展）",
     expect(hidden.container.textContent).not.toContain("开局");
   });
 });
+
+
+describe("每步检索（P2.8b）", () => {
+  it("开局取料 + 每趟席位共享本步检索", () => {
+    const { container } = draw(
+      round({
+        seats: ["seat.a"],
+        active_seats: ["seat.a"],
+        retrievals: [
+          {
+            stage: "seed",
+            pass_index: 0,
+            query: "导出",
+            hit_count: 3,
+            selected_count: 2,
+            chunk_ids: [],
+            ok: true,
+            error: null,
+            created_at: null,
+          },
+          {
+            stage: "seat",
+            pass_index: 1,
+            query: "权限",
+            hit_count: 4,
+            selected_count: 3,
+            chunk_ids: [],
+            ok: true,
+            error: null,
+            created_at: null,
+          },
+        ],
+        seat_packets: [
+          {
+            seat_id: "seat.a",
+            title: "业务规则",
+            status: "completed",
+            pass_index: 1,
+            packet_id: null,
+            basis: "读了文档",
+            opinions: [],
+            judgment_count: 0,
+            question_count: 0,
+          } as never,
+        ],
+      }),
+    );
+
+    expect(container.textContent).toContain("开局取料");
+    expect(container.textContent).toContain("本步检索：命中 4 块 / 带进 3 块");
+  });
+});

@@ -1,5 +1,6 @@
-import type { SeatPacketView } from "../api/types";
+import type { RetrievalView, SeatPacketView } from "../api/types";
 import type { DroppedView } from "../api/types";
+import { retrievalLine } from "../state/retrieval";
 import { dropHeadline } from "../document/dropped";
 import { opinionFormText } from "../labels";
 import { EvidenceChip } from "./EvidenceChip";
@@ -12,10 +13,13 @@ export function SeatPacketCard({
   drops = [],
   skippable = false,
   onSkip,
+  retrieval = null,
 }: {
   packet: SeatPacketView;
   order: number;
   running: boolean;
+  /** 这一趟共享的检索轨迹（LoopPane 按 pass_index 配好；没有就不画）。 */
+  retrieval?: RetrievalView | null;
   /** 这个席位这一趟"没进卡片"的意见（原因由后端留痕，界面只摆出来）。 */
   drops?: DroppedView[];
   /** 能不能点"跳过"（LoopPane 用 `canSkipSeat` 算好传进来，卡片自己不判断）。 */
@@ -107,6 +111,12 @@ export function SeatPacketCard({
           )}
 
         </>
+      )}
+
+      {retrieval !== null && (
+        <p className="packet__retrieval muted small">
+          本步检索：{retrievalLine(retrieval)}
+        </p>
       )}
 
       {drops.length > 0 && (

@@ -397,6 +397,8 @@ class _Picked:
     hits: tuple[MaterialHit, ...] = ()
     #: 检索失败的原因（None = 成功；空命中不算失败）
     error: str | None = None
+    #: 这一轮**真的调用过**检索器吗？没调用（未注入/预算已满）≠ 零命中。
+    attempted: bool = False
 
 
 class StartRound:
@@ -515,34 +517,36 @@ class StartRound:
                     ]
                 )
                 self._evidence_writer.save(ledger)
-            # SEED trace：命中什么、选中什么、失败没有。零命中也要写（恢复时不重查）。
+            # SEED trace：命中什么、选中什么、失败没有。**没查就不写**（未注入/预算已满
+            # 不是"零命中"）；真的查过才写，零命中也写（恢复时不重查）。
             score_by_chunk = {hit.chunk_id: hit.score for hit in seed_hits}
-            round_.note_retrieval(
-                RetrievalTrace(
-                    stage=RetrievalStage.SEED,
-                    pass_index=0,
-                    query=user_input,
-                    hits=tuple(
-                        RetrievalHit(
-                            material_id=hit.material_id,
-                            chunk_id=hit.chunk_id,
-                            score=hit.score,
-                        )
-                        for hit in seed_hits
-                    ),
-                    selected=tuple(
-                        RetrievalHit(
-                            material_id=material_id,
-                            chunk_id=chunk.chunk_id,
-                            score=score_by_chunk.get(chunk.chunk_id, 0.0),
-                        )
-                        for material_id, chunk in picked
-                    ),
-                    ok=seed_error is None,
-                    error=seed_error,
-                    created_at=self._clock.now(),
+            if selection.attempted:
+                round_.note_retrieval(
+                    RetrievalTrace(
+                        stage=RetrievalStage.SEED,
+                        pass_index=0,
+                        query=user_input,
+                        hits=tuple(
+                            RetrievalHit(
+                                material_id=hit.material_id,
+                                chunk_id=hit.chunk_id,
+                                score=hit.score,
+                            )
+                            for hit in seed_hits
+                        ),
+                        selected=tuple(
+                            RetrievalHit(
+                                material_id=material_id,
+                                chunk_id=chunk.chunk_id,
+                                score=score_by_chunk.get(chunk.chunk_id, 0.0),
+                            )
+                            for material_id, chunk in picked
+                        ),
+                        ok=seed_error is None,
+                        error=seed_error,
+                        created_at=self._clock.now(),
+                    )
                 )
-            )
             # **预算装不下的材料要说出来**（2026-10-21 批 11）：用户勾了 N 份材料，
             # 预算只带得下 K 份 → 剩下的**整份缺席**。不记这一笔，提示词与界面上
             # 都看不出"材料被预算挤掉了"，模型会以为自己看到的就是全部
@@ -690,6 +694,7 @@ class StartRound:
                 packets=packets,
                 order=tuple(order),
                 error=f"{type(error).__name__}: {error}",
+                attempted=True,
             )
         # 同一份材料可能在命中里占两槽（`_MATERIAL_SLOTS=2`）→ 按材料去重。
         auto: dict[str, MaterialPacket] = {}
@@ -718,7 +723,13 @@ class StartRound:
         picked = picked + more
         packets.update(auto)
         order += list(auto)
-        return _Picked(picked=picked, packets=packets, order=tuple(order))
+        return _Picked(
+            picked=picked,
+            packets=packets,
+            order=tuple(order),
+            hits=tuple(hits),
+            attempted=True,
+        )
 
     def _resolve_seeds(
         self, project_id: ProjectId, seed_ids: Sequence[str]

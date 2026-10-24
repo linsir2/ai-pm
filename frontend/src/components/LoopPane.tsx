@@ -10,10 +10,12 @@ import { dropsFor, toolDrops, unplacedDrops } from "../document/dropped";
 import { canSkipSeat } from "../document/status";
 import { claimLabelText, compactTarget } from "../labels";
 import { labelCounts, rewritesOf } from "../state/progress";
+import { retrievalForPacket, retrievalForStage } from "../state/retrieval";
 import { limitsOf } from "../state/schema";
 import { CallTrace } from "./CallTrace";
 import { EvidenceChip } from "./EvidenceChip";
 import { RoundMaterials } from "./RoundMaterials";
+import { RoundRetrieval } from "./RoundRetrieval";
 import { RoundStatus } from "./RoundStatus";
 import { SeatPacketCard } from "./SeatPacketCard";
 
@@ -65,6 +67,12 @@ export function LoopPane({
   const actionable =
     (round.waiting_on === "questionnaire" && round.questions.length > 0) ||
     (round.waiting_on === "draft_card" && round.draft !== null);
+  const seedRetrieval = retrievalForStage(round, "seed", 0);
+  const integrateRetrieval = retrievalForStage(
+    round,
+    "integrate",
+    round.integration_seq ?? 0,
+  );
 
   return (
     <div className="loop__round">
@@ -86,7 +94,11 @@ export function LoopPane({
       </header>
 
       <div className="loop__scroll">
-        <RoundMaterials materials={round.materials} />
+        <RoundMaterials
+          materials={round.materials}
+          pinnedMaterials={round.pinned_materials ?? []}
+          hasRetrievals={(round.retrievals ?? []).length > 0}
+        />
 
         {/* 这一轮每一次外部调用（模型 + 工具）的时间序——只读，历史轮也显示。 */}
         <CallTrace roundId={round.round_id} />
@@ -140,6 +152,12 @@ export function LoopPane({
             )}
           </Node>
 
+          {seedRetrieval !== null && (
+            <Node actor="检索" title="开局取料" meta={null}>
+              <RoundRetrieval trace={seedRetrieval} />
+            </Node>
+          )}
+
           {round.seats.length > 0 && (
             <Node
               actor="席位轮"
@@ -159,6 +177,7 @@ export function LoopPane({
                   drops={dropsFor(packet, round.dropped)}
                   skippable={canSkipSeat(packet, running, round.active_seats)}
                   onSkip={onSkipSeat}
+                  retrieval={retrievalForPacket(round, packet)}
                   key={`${packet.seat_id}-${packet.pass_index}`}
                 />
               ))}
@@ -204,6 +223,12 @@ export function LoopPane({
                   </div>
                 ))}
               </div>
+            </Node>
+          )}
+
+          {integrateRetrieval !== null && (
+            <Node actor="检索" title="整合前取缺口证据" meta={null}>
+              <RoundRetrieval trace={integrateRetrieval} />
             </Node>
           )}
 

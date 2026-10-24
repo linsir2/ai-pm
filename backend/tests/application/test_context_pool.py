@@ -357,3 +357,29 @@ def test_pdf_parent_cost_is_counted_for_the_selected_child():
 
     assert selection.chunks
     assert selection.used >= len("第一段内容") + len("第二段内容")
+
+
+def test_every_pinned_material_gets_a_floor_even_above_the_share():
+    """两份手勾：第一份长文吃满 60%，第二份仍需至少露一块（总预算内）。"""
+
+    first = make_material(
+        *[f"甲 {index} " + "字" * 100 for index in range(10)], material_id="m1"
+    )
+    second = make_material("乙 " + "字" * 100, material_id="m2")
+    packets = packets_of(first, second)
+
+    selection = select_projection(
+        packets=packets,
+        pool=pool_of(first, second),
+        pinned=("m1", "m2"),
+        manual=(),
+        stage_hits=(),
+        query="甲 乙",
+        budget=1000,
+        section_overhead=0,
+        pinned_share=0.6,
+    )
+
+    materials = {material_id for material_id, _ in selection.chunks}
+    assert {"m1", "m2"} <= materials
+    assert selection.used <= 1000

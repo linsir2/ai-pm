@@ -12,14 +12,15 @@ from dataclasses import replace
 
 from pmstudio.application.dto import MaterialHit
 from pmstudio.application.round_context import (
-    MAX_ROUND_RETRIEVALS,
+    MAX_INTEGRATE_RETRIEVALS,
     PreparedContext,
     RoundContextPreparer,
 )
 from pmstudio.bootstrap.container import UuidIdGenerator
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
-from pmstudio.domain.round.retrieval import RetrievalStage, RetrievalTrace
+from pmstudio.domain.round.retrieval import ManualChunk, RetrievalStage, RetrievalTrace
 from pmstudio.domain.round.round import MaterialRef, Round
+from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.template import standard_template
 from pmstudio.infrastructure.sqlite.database import connect
 from pmstudio.infrastructure.sqlite.materials import (
@@ -186,17 +187,27 @@ def test_a_failed_retrieval_is_visible_but_still_projects_from_the_pool():
     assert "检索器坏了" in round_after.retrievals[0].error
 
 
-def test_the_round_retrieval_cap_stops_querying_but_still_projects():
+def test_each_stage_has_its_own_retrieval_cap():
+    """额度按 stage 分账：3 条 INTEGRATE trace 才封顶下一次整合检索，SEAT 不受牵连。"""
+
     packet = make_material("权限：管理员才能导出")
-    round_ = make_round()
+    round_ = Round(
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        user_input="导出",
+        created_at=NOW,
+        step=Step.SEATS_RUNNING,
+        waiting_on=WaitingOn.NONE,
+        seats=(SEAT,),
+        active_seats=(SEAT,),
+        integration_seq=MAX_INTEGRATE_RETRIEVALS,
+    )
     round_.pin_materials(("m1",))
-    for index, stage in enumerate(
-        (RetrievalStage.SEAT, RetrievalStage.SEAT, RetrievalStage.INTEGRATE), start=1
-    ):
+    for pass_index in range(1, MAX_INTEGRATE_RETRIEVALS + 1):
         round_.note_retrieval(
             RetrievalTrace(
-                stage=stage,
-                pass_index=index,
+                stage=RetrievalStage.INTEGRATE,
+                pass_index=pass_index,
                 query="q",
                 hits=(),
                 selected=(),
@@ -214,8 +225,38 @@ def test_the_round_retrieval_cap_stops_querying_but_still_projects():
 
     round_after = harness.rounds.get(ROUND_ID)
     assert retriever.calls == []
-    assert len(round_after.retrievals) == MAX_ROUND_RETRIEVALS
+    assert len(round_after.retrievals) == MAX_INTEGRATE_RETRIEVALS
     assert "权限：管理员才能导出" in prepared.text
+
+
+def test_integration_trace_pass_is_the_next_integration_number():
+    packet = make_material("权限：管理员才能导出")
+    round_ = make_round()
+    round_.pin_materials(("m1",))
+    harness = seeded_harness(packet, round_=round_)
+
+    preparer(harness, RecordingMaterialRetriever(returns=())).prepare(
+        round_id=ROUND_ID, stage=RetrievalStage.INTEGRATE, query=""
+    )
+
+    trace = harness.rounds.get(ROUND_ID).retrievals[-1]
+    assert trace.pass_index == 1, "integration_seq=0 时，这次是第 1 次整合"
+
+
+def test_manual_chunks_are_projected_and_get_an_eid():
+    packet = make_material("手动带进来的一段")
+    round_ = make_round()
+    round_.pin_materials(("m1",))
+    round_.note_manual_chunks((ManualChunk("m1", "m1#c00"),))
+    harness = seeded_harness(packet, round_=round_)
+
+    prepared = preparer(harness, RecordingMaterialRetriever(returns=())).prepare(
+        round_id=ROUND_ID, stage=RetrievalStage.SEAT, query=""
+    )
+
+    after = harness.rounds.get(ROUND_ID)
+    assert "手动带进来的一段" in prepared.text
+    assert any(ref.chunk_id == "m1#c00" for ref in after.materials)
 
 
 def test_prepare_round_trips_through_real_sqlite(tmp_path):
