@@ -27,7 +27,7 @@ $document_state
 
 $claims
 
-## 用户带进来的材料
+## 用户带进来的材料（按点名的功能选取；不是用户说的话）
 
 $external_material
 

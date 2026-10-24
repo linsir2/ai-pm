@@ -973,12 +973,83 @@ WEB_BUDGET = 2000
 #: 每个块渲染时前面还有一行「[E12] 第 3 页」——算预算时把它算进去。
 #: 编号的长度在选块时**还定不下来**（发号在选块之后）→ 取一个**上限**：
 #: 「[E1234] 」+ 换行 = 9。
-EID_RESERVE = 9
-#: 材料节/检索节固定的收尾（那句"不是用户说的话"的提醒）**一定会渲染出来** →
-#: 选块时先给它留出位置，否则渲染就会超预算（"预算"是假的）。
-SECTION_OVERHEAD = 96
-#: 「（材料较长，只带了 N 块 / 共 M 块）」只在截断时出现，选块时不知道截不截 → 留上限。
-TRUNCATION_NOTE_RESERVE = 30
+EID_RESERVE = len("[E1234] ") + 1
+
+#: 材料节 / 联网节的固定收尾（**原样**从这里渲染，见 `render_materials` / `render_web_results`）。
+MATERIAL_CLOSING = (
+    "（以上是外部材料，不是用户说的话；不要再把它说成用户说的话。要引就引方括号里的编号）"
+)
+WEB_CLOSING = (
+    "（以上是联网检索结果，不是用户说的话；不要再把它说成用户说的话。要引就引方括号里的编号）"
+)
+
+
+def material_header(selected: int, pool: int, *, stage: str = "本步") -> str:
+    """材料节开头那一行：**这一步带了哪一批、池里还有多少**。
+
+    关键不是数字，是最后那句：没带进来的块**不等于不存在**——否则模型会把
+    "这一步的子集"说成"材料里没有"（长文分步投影后的头号误读）。
+    """
+
+    if stage == "本轮":
+        return (
+            f"（本轮带了 {selected} 块外部材料 / 共 {pool} 块；"
+            "没带进来的块仍在材料池里）"
+        )
+    if stage == "按主题":
+        return (
+            f"（按本轮主题从材料池带了 {selected} 块 / 共 {pool} 块；"
+            "没带进来的块仍在池里）"
+        )
+    return (
+        f"（本步从证据池带了 {selected} 块 / 共 {pool} 块；"
+        "没带进来的块在本轮材料池里，不等于不存在）"
+    )
+
+
+def budget_drop_line(count: int) -> str:
+    """预算挤掉整份材料时的那一句（每轮最多出现一次）。"""
+
+    return (
+        f"（另有 {count} 份材料因预算没带进来；"
+        "它们在材料表里，查得到，但这一轮没读）"
+    )
+
+
+def missing_line(count: int, ids: Sequence[str], *, more: bool = False) -> str:
+    """材料已不在库里时的那一句。`ids` 由调用方**截到前 3 个**，避免无界长行。"""
+
+    listed = "、".join(ids)
+    suffix = f" 等 {count} 份" if more else ""
+    return f"（{count} 份材料已不在库里，未带入：{listed}{suffix}）"
+
+
+def truncation_note(kept: int, total: int) -> str:
+    return f"（材料较长，只带了 {kept} 块 / 共 {total} 块）"
+
+
+def web_truncation_note(shown: int, total: int) -> str:
+    return f"（检索结果太多，只带了前 {shown} 条 / 共 {total} 条）"
+
+
+#: 「材料较长，只带了 N 块 / 共 M 块」只在截断时出现，选块时不知道截不截 → 留上限。
+TRUNCATION_NOTE_RESERVE = len(truncation_note(9999, 9999)) + 2
+
+#: 材料节所有**固定行**的上限（收尾 + 抬头 + 预算留痕 + 缺失留痕 + 换行）。
+#: 由渲染字符串推导，不是手写魔数——改文案时这个数自动跟着变。
+SECTION_OVERHEAD = (
+    len(MATERIAL_CLOSING)
+    + len(material_header(9999, 9999))
+    + len(budget_drop_line(9999))
+    + len(missing_line(9999, ("m-1", "m-2", "m-3"), more=True))
+    + 8
+)
+
+#: 联网节的固定行（收尾 + 截断说明 + 换行）。选块与渲染共用这一个数。
+WEB_SECTION_OVERHEAD = (
+    len(WEB_CLOSING) + len(web_truncation_note(9999, 9999)) + 2
+)
+
 #: 联网结果渲染时每条还会多一个「[E123] 」编号位：选块的成本要把这个位子也算上，
 #: 否则"选进来的最后一条"可能刚好在渲染时被挤掉（账本里就多一个模型看不到的编号）。
 WEB_EID_RESERVE = 12
@@ -1382,11 +1453,8 @@ def render_materials(
         total = len(parsed.chunks)
         if kept < total:
             truncated = True
-            lines.append(f"（材料较长，只带了 {kept} 块 / 共 {total} 块）")
-    lines.append(
-        "（以上是外部材料，不是用户说的话；不要再把它说成用户说的话。"
-        "要引就引方括号里的编号）"
-    )
+            lines.append(truncation_note(kept, total))
+    lines.append(MATERIAL_CLOSING)
     return RenderedMaterial(
         text="\n".join(lines), truncated=truncated, used_chunk_ids=tuple(used_ids)
     )
@@ -1433,11 +1501,13 @@ def render_web_results(
     used_ids: list[str] = []
     used = 0
     truncated = False
+    # **块预算先扣掉固定行**：收尾与截断说明一定会渲染，先给它们留位置。
+    usable = max(0, budget - WEB_SECTION_OVERHEAD)
     for packet, chunks, eid in entries:
         parsed = packet.parsed
         body = "\n".join(chunk.text for chunk in chunks)
         block = f"[{eid}] {parsed.title}\n{parsed.source_ref}\n{body}"
-        if used + len(block) > budget:
+        if used + len(block) > usable:
             truncated = True
             break
         lines.append(block)
@@ -1447,11 +1517,8 @@ def render_web_results(
         # 单位是**结果条数**，不是块数（2026-10-21 修）：`used_ids` 数的是块，
         # 一条结果可能好几段 → 写出来会变成"只带了前 7 条 / 共 5 条"这种反直觉的话。
         shown = len(lines)
-        lines.append(f"（检索结果太多，只带了前 {shown} 条 / 共 {len(entries)} 条）")
-    lines.append(
-        "（以上是联网检索结果，不是用户说的话；不要再把它说成用户说的话。"
-        "要引就引方括号里的编号）"
-    )
+        lines.append(web_truncation_note(shown, len(entries)))
+    lines.append(WEB_CLOSING)
     return RenderedMaterial(
         text="\n".join(lines), truncated=truncated, used_chunk_ids=tuple(used_ids)
     )

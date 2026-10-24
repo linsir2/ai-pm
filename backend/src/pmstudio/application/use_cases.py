@@ -66,10 +66,14 @@ from pmstudio.application.context import (
     NO_MATERIAL_TEXT,
     SECTION_OVERHEAD,
     WEB_BUDGET,
+    WEB_SECTION_OVERHEAD,
     answer_eids,
+    budget_drop_line,
     build_project_context,
     build_round_digest,
     extract_observations_from_reviews,
+    material_header,
+    missing_line,
     render_answers,
     render_asked_questions,
     render_citations,
@@ -1197,7 +1201,12 @@ class SubmitOpening:
             drafts.extend(result)
         for draft in drafts:
             packets.append(self._keep(project_id, draft))
-        picked, _ = select_chunks(packets, budget=WEB_BUDGET, cost=web_block_cost)
+        picked, _ = select_chunks(
+            packets,
+            budget=WEB_BUDGET,
+            cost=web_block_cost,
+            section_overhead=WEB_SECTION_OVERHEAD,
+        )
         if 0 < len(picked) < len(packets):
             missed = len(packets) - len(picked)
             drops.append(
@@ -4781,60 +4790,30 @@ def external_material_text(
                 found.append((packet, picked, next(iter(eids.values()))))
         else:
             uploads.append((packet, eids))
-    no_selection_note = ""
-    if query.strip() and uploads:
-        # 先按 `round_.materials` 过滤出**有编号的块**再选（没编号的块渲染不出来，
-        # 选了也白占预算）；渲染仍用原始 packet，好让"共 M 块"说的是整份材料。
-        filtered = []
-        for packet, eids in uploads:
-            allowed = tuple(
-                chunk for chunk in packet.parsed.chunks if chunk.chunk_id in eids
-            )
-            if allowed:
-                filtered.append(
-                    (
-                        replace(
-                            packet,
-                            parsed=replace(packet.parsed, chunks=allowed),
-                        ),
-                        packet,
-                        eids,
-                    )
-                )
-        picked, _ = select_chunks(
-            [item[0] for item in filtered],
-            query=query,
-            budget=MATERIAL_BUDGET,
-            section_overhead=SECTION_OVERHEAD,
-        )
-        eids_by_material = {item[0].material_id: item[2] for item in filtered}
-        original_by_material = {item[0].material_id: item[1] for item in filtered}
-        selected: dict[str, dict[str, EvidenceId]] = {}
-        for material_id, chunk in picked:
-            eid = eids_by_material[material_id].get(chunk.chunk_id)
-            if eid is not None:
-                selected.setdefault(material_id, {})[chunk.chunk_id] = eid
-        if uploads and not selected:
-            # 有材料但一块都没装下：说清楚，别写"这一轮没有外部材料"。
-            no_selection_note = (
-                f"（材料池里有 {sum(len(eids) for _, eids in uploads)} 块；本步没有选中）"
-            )
-        uploads = [
-            (original_by_material[material_id], eids)
-            for material_id, eids in selected.items()
-        ]
 
+    selected_uploads, selected_count, pool_count = _select_uploads(
+        uploads, query=query
+    )
     parts: list[str] = []
     if uploads:
-        parts.append(render_materials(uploads).text)
+        if selected_count:
+            parts.append(
+                material_header(
+                    selected_count,
+                    pool_count,
+                    stage="按主题" if query.strip() else "本轮",
+                )
+            )
+            parts.append(render_materials(selected_uploads).text)
+        else:
+            # 有材料但一块都没装下：说清楚，别写"这一轮没有外部材料"。
+            parts.append(f"（材料池里有 {pool_count} 块；本步没有选中）")
     if found:
         parts.append(render_web_results(found).text)
     if missing:
         parts.append(
-            f"（{len(missing)} 份材料已不在库里，未带入：{'、'.join(missing)}）"
+            missing_line(len(missing), missing[:3], more=len(missing) > 3)
         )
-    if no_selection_note:
-        parts.append(no_selection_note)
     # **被预算挤掉的材料也要说给模型听**（2026-10-21 批 11）：不写这一句，
     # 模型会以为自己看到的就是全部材料 → 回答里会说"材料里没有相关内容"，
     # 而那份材料其实在库里（只是预算没带进来）。
@@ -4842,11 +4821,54 @@ def external_material_text(
         item for item in round_.dropped if item.source == DropSource.MATERIAL
     ]
     if budget_drops:
-        parts.append(
-            f"（另有 {len(budget_drops)} 份材料因预算没带进来；"
-            "它们在材料表里，查得到，但这一轮没读）"
-        )
+        parts.append(budget_drop_line(len(budget_drops)))
     return "\n\n".join(parts) if parts else NO_MATERIAL_TEXT
+
+
+def _select_uploads(
+    uploads: Sequence[tuple[MaterialPacket, dict[str, EvidenceId]]],
+    *,
+    query: str,
+) -> tuple[list[tuple[MaterialPacket, dict[str, EvidenceId]]], int, int]:
+    """把这一轮的材料按预算选一遍（三条调用路径共用：Analyzer / 模拟 / 未来旁路）。
+
+    返回 `(selected_entries, selected_chunks, pool_chunks)`。渲染仍用**原始 packet**
+    （好让"共 M 块"说的是整份材料）；没编号的块先过滤掉，不让它们白占预算。
+    `query=""` 时按文档序取（Analyzer 那条路）。
+    """
+
+    pool_count = sum(len(eids) for _, eids in uploads)
+    filtered = []
+    for packet, eids in uploads:
+        allowed = tuple(
+            chunk for chunk in packet.parsed.chunks if chunk.chunk_id in eids
+        )
+        if allowed:
+            filtered.append(
+                (
+                    replace(packet, parsed=replace(packet.parsed, chunks=allowed)),
+                    packet,
+                    eids,
+                )
+            )
+    picked, _ = select_chunks(
+        [item[0] for item in filtered],
+        query=query,
+        budget=MATERIAL_BUDGET,
+        section_overhead=SECTION_OVERHEAD,
+    )
+    eids_by_material = {item[0].material_id: item[2] for item in filtered}
+    original_by_material = {item[0].material_id: item[1] for item in filtered}
+    selected: dict[str, dict[str, EvidenceId]] = {}
+    for material_id, chunk in picked:
+        eid = eids_by_material[material_id].get(chunk.chunk_id)
+        if eid is not None:
+            selected.setdefault(material_id, {})[chunk.chunk_id] = eid
+    entries = [
+        (original_by_material[material_id], eids)
+        for material_id, eids in selected.items()
+    ]
+    return entries, sum(len(eids) for _, eids in entries), pool_count
 
 
 def _materials_of(round_: Round, *, store: MaterialStore) -> tuple[MaterialPacket, ...]:

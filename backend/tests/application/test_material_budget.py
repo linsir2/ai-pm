@@ -67,3 +67,31 @@ def test_without_a_query_the_old_rendering_is_unchanged():
 
     assert "短材料" in text
     assert "本步没有选中" not in text
+
+
+def test_without_a_query_still_caps_and_says_the_pool_may_have_more():
+    packet = make_material(
+        *[f"第 {index} 段" * 50 for index in range(100)], material_id="m1"
+    )
+    harness, round_ = _round_with_material(packet)
+
+    text = external_material_text(round_, store=harness.materials)
+
+    assert len(text) <= MATERIAL_BUDGET
+    assert "本轮带了" in text
+    assert "没带进来的" in text
+
+
+def test_the_web_section_respects_its_budget():
+    from pmstudio.application.context import WEB_BUDGET, render_web_results
+    from pmstudio.domain.shared.ids import EvidenceId
+
+    packet = make_material("联网正文" * 240, material_id="w1")
+    entries = [
+        (packet, [packet.parsed.chunks[0]], EvidenceId(f"E{index}"))
+        for index in range(1, 4)
+    ]
+
+    text = render_web_results(entries).text
+
+    assert len(text) <= WEB_BUDGET

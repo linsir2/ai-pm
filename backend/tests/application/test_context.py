@@ -779,7 +779,8 @@ def test_render_web_results_is_budgeted_and_says_how_many_it_left_out():
         (second, list(second.parsed.chunks), EvidenceId("E10")),
     ]
 
-    rendered = context.render_web_results(entries, budget=200)
+    # 固定收尾 + 截断说明占 `WEB_SECTION_OVERHEAD`：200 已经装不下第一条（契约变更）。
+    rendered = context.render_web_results(entries, budget=300)
 
     assert "[E9]" in rendered.text
     assert "[E10]" not in rendered.text
@@ -800,7 +801,10 @@ def test_the_selection_cost_never_lets_the_renderer_drop_a_numbered_chunk():
     )
 
     picked, _ = context.select_chunks(
-        packets, budget=context.WEB_BUDGET, cost=context.web_block_cost
+        packets,
+        budget=context.WEB_BUDGET,
+        cost=context.web_block_cost,
+        section_overhead=context.WEB_SECTION_OVERHEAD,
     )
     by_id = {packet.material_id: packet for packet in packets}
     rendered = context.render_web_results(
@@ -1589,8 +1593,8 @@ def test_the_web_truncation_note_counts_results_not_blocks():
         (other, [other.parsed.chunks[0]], EvidenceId("E2")),
     ]
 
-    # 预算只够第一条（一条结果 = 标题 + URL + 两段正文 ≈ 650 字）
-    rendered = context.render_web_results(entries, budget=700)
+    # 预算只够第一条（一条结果 = 标题 + URL + 两段正文 ≈ 650 字；固定行另占 77）
+    rendered = context.render_web_results(entries, budget=800)
 
     assert "只带了前 1 条 / 共 2 条" in rendered.text, rendered.text
     assert "前 2 条 / 共 2 条" not in rendered.text, "块数不该写进条数的位置"
@@ -1682,3 +1686,42 @@ def test_a_skipped_expensive_block_does_not_stop_the_cheaper_ones():
     )
 
     assert [chunk.ordinal for _, chunk in picked] == [1]
+
+
+# —— P2.7：固定行的预留必须覆盖实际渲染 ——
+
+
+def test_section_overheads_cover_the_rendered_fixed_lines():
+    """R：`SECTION_OVERHEAD` / `WEB_SECTION_OVERHEAD` 由渲染字符串推导，不是手写魔数。
+
+    I：用 4 位数上限算每条固定行；
+    P：常量 == 各部分之和（改文案时这条会红，提醒重算）；
+    R：值不低于当前实测下限。
+    """
+
+    from pmstudio.application import context
+
+    assert context.SECTION_OVERHEAD == (
+        len(context.MATERIAL_CLOSING)
+        + len(context.material_header(9999, 9999, stage="本步"))
+        + len(context.budget_drop_line(9999))
+        + len(context.missing_line(9999, ("m-1", "m-2", "m-3"), more=True))
+        + 8
+    )
+    assert context.WEB_SECTION_OVERHEAD == (
+        len(context.WEB_CLOSING)
+        + len(context.web_truncation_note(9999, 9999))
+        + 2
+    )
+    assert context.SECTION_OVERHEAD >= 178
+    assert context.WEB_SECTION_OVERHEAD >= 77
+
+
+def test_material_header_states_the_pool_may_have_more():
+    from pmstudio.application import context
+
+    header = context.material_header(2, 9, stage="本步")
+
+    assert "2 块" in header and "9 块" in header
+    assert "没带进来的" in header
+    assert "不等于不存在" in header

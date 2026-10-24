@@ -19,6 +19,8 @@ from pmstudio.application.context import (
     MATERIAL_BUDGET,
     NO_MATERIAL_TEXT,
     SECTION_OVERHEAD,
+    material_header,
+    missing_line,
     render_materials,
     render_web_results,
 )
@@ -56,8 +58,6 @@ from pmstudio.domain.shared.ids import EvidenceId, RoundId
 #: 额度与既有配额对齐：席位轮最多 3 趟、整合最多 3 次。
 MAX_SEAT_RETRIEVALS = 3
 MAX_INTEGRATE_RETRIEVALS = 3
-#: 本步抬头（"带了 K / 共 N 块"）的预算预留。P2.7 会把它并进 `SECTION_OVERHEAD` 的实测值。
-STEP_HEADER_RESERVE = 80
 #: 联网材料的 origin。与 `use_cases.WEB_ORIGIN` 同一个产品词；定义在这里是为了不让
 #: 本模块反向 import 用例（会成环）。
 WEB_ORIGIN = "web_search"
@@ -151,7 +151,7 @@ class RoundContextPreparer:
             stage_hits=hits,
             query=query,
             budget=MATERIAL_BUDGET,
-            section_overhead=SECTION_OVERHEAD + STEP_HEADER_RESERVE,
+            section_overhead=SECTION_OVERHEAD,
             pinned_share=PINNED_BUDGET_SHARE,
         )
 
@@ -373,8 +373,8 @@ class RoundContextPreparer:
         missing: Sequence[str],
     ) -> PreparedContext:
         if selection.chunks:
-            header = (
-                f"（本步从证据池带了 {len(selection.chunks)} 块 / 共 {pool_count} 块）"
+            header = material_header(
+                len(selection.chunks), pool_count, stage="本步"
             )
             by_material: dict[str, dict[str, EvidenceId]] = {}
             for material_id, chunk in selection.chunks:
@@ -407,7 +407,9 @@ class RoundContextPreparer:
         parts = [part for part in (header, material_text, web_text) if part]
         if missing:
             parts.append(
-                f"（{len(missing)} 份材料已不在库里，未带入：{'、'.join(missing)}）"
+                missing_line(
+                    len(missing), missing[:3], more=len(missing) > 3
+                )
             )
         if not parts:
             parts.append(NO_MATERIAL_TEXT)

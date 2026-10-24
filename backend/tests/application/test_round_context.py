@@ -10,6 +10,7 @@
 
 from dataclasses import replace
 
+from pmstudio.application.context import MATERIAL_BUDGET
 from pmstudio.application.dto import MaterialHit
 from pmstudio.application.round_context import (
     MAX_INTEGRATE_RETRIEVALS,
@@ -357,3 +358,19 @@ async def test_integrate_round_uses_the_prepared_text():
         one for one in harness.gateway.requests if one.purpose == "integration"
     )
     assert any("【整合投影】" in message.content for message in request.messages)
+
+
+def test_the_projected_text_respects_the_material_budget():
+    packet = make_material(
+        *[f"第 {index} 段" * 50 for index in range(100)], material_id="m1"
+    )
+    round_ = make_round()
+    round_.pin_materials(("m1",))
+    harness = seeded_harness(packet, round_=round_)
+
+    prepared = preparer(
+        harness, RecordingMaterialRetriever(returns=(material_hit(packet, 0),))
+    ).prepare(round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="第 1 段")
+
+    assert len(prepared.text) <= MATERIAL_BUDGET
+    assert "没带进来的块在本轮材料池里" in prepared.text
