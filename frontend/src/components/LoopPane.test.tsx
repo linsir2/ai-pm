@@ -345,4 +345,68 @@ describe("每步检索（P2.8b）", () => {
     expect(container.textContent).toContain("开局取料");
     expect(container.textContent).toContain("本步检索：命中 4 块 / 带进 3 块");
   });
+
+  it("整合失败时显示本次失败 trace，不拿上一次成功冒充", () => {
+    const { container } = draw(
+      round({
+        step: "failed",
+        waiting_on: "none",
+        integration_seq: 1,
+        retrievals: [
+          {
+            stage: "integrate",
+            pass_index: 1,
+            query: "上一次成功的查询",
+            hit_count: 3,
+            selected_count: 2,
+            ok: true,
+            error: null,
+            created_at: null,
+          },
+          {
+            stage: "integrate",
+            pass_index: 2,
+            query: "本次缺口的查询",
+            hit_count: 0,
+            selected_count: 0,
+            ok: false,
+            error: "整合检索超时",
+            created_at: null,
+          },
+        ],
+      }),
+    );
+
+    expect(container.textContent).toContain("整合前取缺口证据");
+    expect(container.textContent).toContain("检索失败：整合检索超时");
+    expect(container.textContent).toContain("本次缺口的查询");
+    expect(container.textContent).not.toContain("上一次成功的查询");
+    expect(container.textContent).not.toContain("命中 3 块 / 带进 2 块");
+  });
+
+  it("整合失败但没有本次 trace：不显示上一次成功那条", () => {
+    const { container } = draw(
+      round({
+        step: "failed",
+        waiting_on: "none",
+        integration_seq: 1,
+        retrievals: [
+          {
+            stage: "integrate",
+            pass_index: 1,
+            query: "上一次成功的查询",
+            hit_count: 3,
+            selected_count: 2,
+            ok: true,
+            error: null,
+            created_at: null,
+          },
+        ],
+      }),
+    );
+
+    expect(container.textContent).not.toContain("整合前取缺口证据");
+    expect(container.textContent).not.toContain("上一次成功的查询");
+    expect(container.textContent).not.toContain("命中 3 块 / 带进 2 块");
+  });
 });

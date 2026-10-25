@@ -10,7 +10,11 @@ import { dropsFor, toolDrops, unplacedDrops } from "../document/dropped";
 import { canSkipSeat } from "../document/status";
 import { claimLabelText, compactTarget } from "../labels";
 import { labelCounts, rewritesOf } from "../state/progress";
-import { retrievalForPacket, retrievalForStage } from "../state/retrieval";
+import {
+  retrievalForIntegration,
+  retrievalForPacket,
+  retrievalForStage,
+} from "../state/retrieval";
 import { limitsOf } from "../state/schema";
 import { CallTrace } from "./CallTrace";
 import { EvidenceChip } from "./EvidenceChip";
@@ -68,11 +72,7 @@ export function LoopPane({
     (round.waiting_on === "questionnaire" && round.questions.length > 0) ||
     (round.waiting_on === "draft_card" && round.draft !== null);
   const seedRetrieval = retrievalForStage(round, "seed", 0);
-  const integrateRetrieval = retrievalForStage(
-    round,
-    "integrate",
-    round.integration_seq ?? 0,
-  );
+  const integrateRetrieval = retrievalForIntegration(round);
 
   return (
     <div className="loop__round">

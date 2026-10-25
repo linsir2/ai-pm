@@ -23,6 +23,18 @@ export function retrievalForPacket(
   return retrievalForStage(round, "seat", packet.pass_index);
 }
 
+/**
+ * 整合那一步的检索：成功取 `integration_seq`；失败取本次 pending 的
+ * `integration_seq + 1`。没有本次 trace 就返回 null，不拿上一次成功冒充。
+ */
+export function retrievalForIntegration(round: RoundView): RetrievalView | null {
+  const seq = round.integration_seq ?? 0;
+  if (round.step !== "failed") {
+    return retrievalForStage(round, "integrate", seq);
+  }
+  return retrievalForStage(round, "integrate", seq + 1);
+}
+
 export function retrievalLine(trace: RetrievalView): string {
   if (!trace.ok) {
     return `检索失败：${trace.error ?? "未知原因"}`;

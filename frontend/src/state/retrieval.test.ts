@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RetrievalView, RoundView, SeatPacketView } from "../api/types";
 import {
   materialSource,
+  retrievalForIntegration,
   retrievalForPacket,
   retrievalForStage,
   retrievalLine,
@@ -55,6 +56,35 @@ describe("retrievalForStage / retrievalForPacket", () => {
 
   it("没有 retrievals 字段（老轮次）时不炸", () => {
     expect(retrievalForStage({} as RoundView, "seed", 0)).toBeNull();
+  });
+});
+
+describe("retrievalForIntegration", () => {
+  it("整合失败且有本次 pending trace：取 pass=seq+1", () => {
+    const round = roundWith([
+      trace({ stage: "integrate", pass_index: 1 }),
+      trace({ stage: "integrate", pass_index: 2 }),
+    ]);
+    round.integration_seq = 1;
+    round.step = "failed";
+
+    expect(retrievalForIntegration(round)?.pass_index).toBe(2);
+  });
+
+  it("整合成功：取 integration_seq", () => {
+    const round = roundWith([trace({ stage: "integrate", pass_index: 2 })]);
+    round.integration_seq = 2;
+    round.step = "awaiting_confirm";
+
+    expect(retrievalForIntegration(round)?.pass_index).toBe(2);
+  });
+
+  it("失败但没有本次 trace：返回 null，不拿旧成功冒充", () => {
+    const round = roundWith([trace({ stage: "integrate", pass_index: 1 })]);
+    round.integration_seq = 1;
+    round.step = "failed";
+
+    expect(retrievalForIntegration(round)).toBeNull();
   });
 });
 
