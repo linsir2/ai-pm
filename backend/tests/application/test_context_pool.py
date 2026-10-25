@@ -262,8 +262,34 @@ def test_pinned_materials_never_exceed_the_share_when_auto_candidates_exist():
         pinned_share=0.6,
     )
 
-    assert spent_on(selection, packets, only={"m1"}) <= 600
+    pinned_spent = spent_on(selection, packets, only={"m1"})
+    assert any(material_id == "m1" for material_id, _ in selection.chunks)
+    assert 0 < pinned_spent <= 600
     assert any(material_id == "m2" for material_id, _ in selection.chunks)
+
+
+def test_a_single_pinned_block_over_the_cap_does_not_get_floor_rescued():
+    """单块手勾超过 60% cap 时，地板不能绕过 cap 把它装回来（D1）。"""
+
+    pinned = make_material("超" * 3000, material_id="m1")
+    auto = make_material("自动材料", material_id="m2")
+    packets = packets_of(pinned, auto)
+
+    selection = select_projection(
+        packets=packets,
+        pool=pool_of(pinned, auto),
+        pinned=("m1",),
+        manual=(),
+        stage_hits=(),
+        query="自动",
+        budget=4000,
+        section_overhead=204,
+        pinned_share=0.6,
+    )
+
+    assert all(material_id != "m1" for material_id, _ in selection.chunks)
+    assert any(material_id == "m2" for material_id, _ in selection.chunks)
+    assert spent_on(selection, packets, only={"m1"}) == 0
 
 
 def test_no_auto_candidates_lets_pinned_use_full_budget():
@@ -321,7 +347,9 @@ def test_a_second_pinned_material_is_not_forced_over_the_cap():
         pinned_share=0.6,
     )
 
-    assert spent_on(selection, packets, only={"m1", "m2"}) <= 600
+    pinned_spent = spent_on(selection, packets, only={"m1", "m2"})
+    assert any(material_id == "m1" for material_id, _ in selection.chunks)
+    assert 0 < pinned_spent <= 600
     assert any(material_id == "m3" for material_id, _ in selection.chunks)
 
 
@@ -454,8 +482,8 @@ def test_pdf_parent_cost_is_counted_for_the_selected_child():
     assert selection.used >= len("第一段内容") + len("第二段内容")
 
 
-def test_every_pinned_material_gets_a_floor_even_above_the_share():
-    """两份手勾：第一份长文吃满 60%，第二份仍需至少露一块（总预算内）。"""
+def test_every_pinned_material_gets_a_floor_without_auto_candidates():
+    """没有自动候选时手勾 cap = 整个可用预算：两份手勾都能至少露一块。"""
 
     first = make_material(
         *[f"甲 {index} " + "字" * 100 for index in range(10)], material_id="m1"
@@ -480,8 +508,8 @@ def test_every_pinned_material_gets_a_floor_even_above_the_share():
     assert selection.used <= 1000
 
 
-def test_a_manual_chunk_saved_by_the_floor_is_not_reported_as_skipped():
-    """60% 闸拒了它、地板又把它装回来 → 不能同时说"因预算没进来"。"""
+def test_a_manual_chunk_can_use_full_budget_without_auto_candidates():
+    """没有自动候选时手勾可用满预算 → manual 块能进来，也不该被报成 skipped。"""
 
     packet = make_material("字" * 250)
     chunk = packet.parsed.chunks[0]

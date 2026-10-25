@@ -5,13 +5,17 @@
 1. `build_stage_query`：把"这一步该看什么"压成一句 query（席位职责 / 阻塞题 / 缺口）。
    它不是用户原话——SEED 才用原话，所以这里拒绝 SEED。
 2. `select_projection`：从池里选出这一步真正进提示词的块。
-   顺序写死：manual → 手勾（全局 ≤60%）→ 本步命中 → 池里其余（2-gram）。
+   顺序写死：manual → 手勾（有可行自动候选时全局 ≤60%）→ 本步命中 → 池里其余（2-gram）。
 
-## 为什么 60% 是**全局**的
+## 60% 什么时候生效
 
-手勾材料如果只在"pinned 阶段"受限，它还能在 stage_hits / pool rest 阶段被选回来，
-自动段仍然可能是 0（实测：长文 13/15 篇手勾吃满 4000 字）。所以任何
-`material_id ∈ pinned` 的块，无论从哪一步选中，都计入同一个 `pinned_used`。
+只有池里存在**能装进余量的自动候选**时，手勾来源合计才受 60% 硬上限约束；
+没有这样的候选时手勾可用满整个可用预算（不人为留一段空预算）。
+
+上限一旦生效就是**全局**的：手勾材料如果只在"pinned 阶段"受限，它还能在
+stage_hits / pool rest 阶段被选回来，自动段仍然可能是 0（实测：长文 13/15 篇手勾
+吃满 4000 字）。所以任何 `material_id ∈ pinned` 的块，无论从哪一步选中，
+都计入同一个 `pinned_used`。
 """
 
 from collections.abc import Mapping, Sequence
@@ -29,7 +33,8 @@ from pmstudio.domain.authoring.readiness import ReadinessItem, Severity
 from pmstudio.domain.round.retrieval import ManualChunk, RetrievalHit, RetrievalStage
 from pmstudio.domain.round.round import Round
 
-#: 手勾来源（手勾材料 + 手动带料）在一份投影里最多占多少预算。
+#: 手勾来源（手勾材料 + 手动带料）的预算上限比例：**仅当池里有能装进余量的
+#: 自动候选时**生效；没有这样的候选时手勾可用满整个可用预算。
 PINNED_BUDGET_SHARE = 0.6
 #: 自动材料（非手勾）每步最多几个槽——与检索器的 `_MATERIAL_SLOTS` **不是**同一个概念：
 #: 那个管"检索结果多样性"，这个管"每步上下文深度"。
@@ -204,9 +209,7 @@ def select_projection(
     )
     pinned_cap = split.pinned_cap
 
-    def take(
-        material_id: str, chunk: MaterialChunk, *, respect_pinned_cap: bool = True
-    ) -> bool:
+    def take(material_id: str, chunk: MaterialChunk) -> bool:
         nonlocal used, pinned_used
         if chunk.chunk_id in taken:
             return False
@@ -217,11 +220,7 @@ def select_projection(
         cost = material_block_cost(packet, chunk, first_of_material=first)
         if used + cost > usable:
             return False
-        if (
-            respect_pinned_cap
-            and material_id in pinned_set
-            and pinned_used + cost > pinned_cap
-        ):
+        if material_id in pinned_set and pinned_used + cost > pinned_cap:
             return False
         picked.append((material_id, chunk))
         taken.add(chunk.chunk_id)
