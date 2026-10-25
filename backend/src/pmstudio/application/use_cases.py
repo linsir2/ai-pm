@@ -1203,6 +1203,21 @@ class SubmitOpening:
             if item.state is WebRequestState.APPROVED
         )
         if approved:
+            # 已批准申请可能先于本次 opening 存在（旧 payload 迁移 / decision），
+            # 此时 `chosen` / `approved_ids` 都是空的——工具必须在这里补解析。
+            if tool is None:
+                tool = web_search_tool(self._tools, keys=self._available_tool_keys)
+            if tool is None:
+                raise ShapeError(
+                    "这一轮有已批准的联网申请，但服务端没有配好联网工具"
+                    "（没配密钥，或工具被停用）",
+                    tool_ids=[item.tool_id for item in self._tools.all()],
+                )
+            if self._web_search is None:
+                raise ShapeError(
+                    "联网工具声明可用，但组装点没有接上实现（这一轮先别勾联网）",
+                    tool_id=WEB_SEARCH_KIND,
+                )
             # 每轮执行名额是硬上限；预检不通过就不联网。
             limit = min(tool_limit(tool, "max_queries"), MAX_WEB_EXECUTIONS)
             if len(approved) > limit:
@@ -1286,10 +1301,11 @@ class RunSeatRound:
         self._web_research = web_research
 
     async def __call__(self, *, round_id: RoundId) -> None:
-        # 执行点必须在**第一次读 round 之前**：新 E 号与本步 web_selection
-        # 要在 prepare 时就能看见。
+        # 执行点必须在**主读取之前**：新 E 号与本步 web_selection 要在 prepare
+        # 时就能看见。这里只为 TOOL 留痕预读一次趟号，执行完会重新读整轮。
         if self._web_research is not None:
-            await self._web_research.execute_approved(round_id)
+            pass_index = self._rounds.get(round_id).seat_round_count
+            await self._web_research.execute_approved(round_id, pass_index)
         # 读取阶段不开事务：模型调用绝不能包在事务里。
         round_ = self._rounds.get(round_id)
         document = self._documents.get(round_.project_id)
@@ -2169,7 +2185,9 @@ class IntegrateRound:
         # 早于 `_integrate_with_repair` 的第一次读 round / `retry_hint`：
         # 已批准 + allow_web 自动批准的申请都该在本步 prepare 前执行完。
         if self._web_research is not None:
-            await self._web_research.execute_approved(round_id)
+            # 整合这一趟的 pass 是 `integration_seq + 1`（成功后 +1，见 round_context）。
+            pass_index = self._rounds.get(round_id).integration_seq + 1
+            await self._web_research.execute_approved(round_id, pass_index)
         result = await self._integrate_with_repair(round_id=round_id)
         assembled, gaps = result.assembled, result.gaps
         # 记忆整理（M6）：**出草案那一刻**跑一次小调用。它必须在这一行——
@@ -4744,9 +4762,10 @@ def external_material_text(
             missing.append(material_id)
             continue
         if packet.parsed.origin == WEB_ORIGIN:
-            # 联网结果：一条结果 = **一个编号**（多段共享它），渲染时把
-            # **这一条结果被选中的每一段**都拼出来。`eids` 是 {块 id: 编号}——
-            # 一条结果的各段共用同一个编号，所以取任意一个即可。
+            # 联网结果：正常口径是**一条结果 = 一个编号**（多段共享它），渲染时把
+            # **这一条结果被选中的每一段**都拼出来。`eids` 是 {块 id: 编号}。
+            # 旧脏数据可能一块一个号：此时固定取**文档序第一个选中块**的编号，
+            # 与 `RoundContextPreparer` 同一条选择规则（M1）。
             # 新 payload 还受本步 `web_selection` 约束：没选中的旧块只当历史留着。
             picked = [
                 chunk

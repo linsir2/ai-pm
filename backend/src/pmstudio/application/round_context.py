@@ -430,7 +430,9 @@ class RoundContextPreparer:
                 chunk for chunk in packet.parsed.chunks if chunk.chunk_id in eids
             ]
             if chunks:
-                web_entries.append((packet, chunks, next(iter(eids.values()))))
+                # 正常一条结果一个号；旧脏多 EID 时固定取文档序第一个选中块，
+                # 与 `external_material_text` 同一条选择规则（M1）。
+                web_entries.append((packet, chunks, eids[chunks[0].chunk_id]))
         web_text = render_web_results(web_entries).text if web_entries else ""
 
         parts = [part for part in (header, material_text, web_text) if part]

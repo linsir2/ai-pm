@@ -185,11 +185,23 @@ class WebResearch:
 
         返回 `None` 表示没有要执行的东西；否则调用方必须在一个 `UoW` 里
         调 `apply`，把材料/出处/请求状态/留痕一次写完。
+
+        非工具异常（含取消）会先把本次请求标 `FAILED` + TOOL 留痕，再原样抛出：
+        `approved` 不回退、名额照样消耗，下一次执行点不会再自动重跑网络。
         """
 
         requests = tuple(requests)
         if not requests:
             return None
+        not_approved = [
+            item.request_id
+            for item in requests
+            if item.state is not WebRequestState.APPROVED
+        ]
+        if not_approved:
+            raise ShapeError(
+                "只有已批准的联网申请能被执行", request_ids=not_approved
+            )
         tool = self._require_tool("执行联网申请")
         limit = min(tool_limit(tool, "max_queries"), MAX_WEB_EXECUTIONS)
         if len(requests) > limit:
@@ -198,6 +210,19 @@ class WebResearch:
                 limit=limit,
                 requested=len(requests),
             )
+        try:
+            return await self._run(round_id, requests, tool, pass_index)
+        except BaseException as error:
+            self._fail_requests(round_id, requests, error, pass_index)
+            raise
+
+    async def _run(
+        self,
+        round_id: RoundId,
+        requests: Sequence[WebRequest],
+        tool: ToolDefinition,
+        pass_index: int,
+    ) -> WebExecution:
         round_ = self._rounds.get(round_id)
         project_id = round_.project_id
         result_limit = tool_limit(tool, "max_results")
@@ -339,6 +364,50 @@ class WebResearch:
                 dict.fromkeys((material_id, chunk.chunk_id) for material_id, chunk in picked)
             ),
         )
+
+    def _fail_requests(
+        self,
+        round_id: RoundId,
+        requests: Sequence[WebRequest],
+        error: BaseException,
+        pass_index: int,
+    ) -> None:
+        """本次执行被异常打断：已批准的请求标 `FAILED`，并留一条 TOOL 痕迹。
+
+        **不回退 approved**：名额已经花掉，用户要重试就重新提申请。
+        若请求在真实轮次里还没批准（opening 的联网前预演），这里没有可标的状态，
+        只跳过——网络崩溃时轮次仍停在 opening。
+        """
+
+        note = f"执行中断：{type(error).__name__}: {error}"
+        with self._uow:
+            target = self._rounds.get(round_id)
+            wanted = {request.request_id for request in requests}
+            known = {
+                item.request_id: item
+                for item in target.web_requests
+                if item.request_id in wanted
+            }
+            drops: list[DroppedItem] = []
+            for request in requests:
+                current = known.get(request.request_id)
+                if current is None or current.state is not WebRequestState.APPROVED:
+                    continue
+                target.mark_web_request(
+                    request.request_id,
+                    WebRequestState.FAILED,
+                    result_note=note,
+                )
+                drops.append(
+                    self._drop(
+                        f"联网检索 {request.query}",
+                        note,
+                        pass_index,
+                    )
+                )
+            if drops:
+                target.note_dropped(drops)
+                self._round_writer.save(target)
 
     async def execute_approved(
         self, round_id: RoundId, pass_index: int = 1

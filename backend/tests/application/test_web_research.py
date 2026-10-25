@@ -19,8 +19,9 @@ from pmstudio.application.dto import MaterialChunk, ParsedMaterial
 from pmstudio.domain.provenance.evidence import EvidenceKind
 from pmstudio.domain.round.round import DropSource
 from pmstudio.domain.round.step import Step, WaitingOn
-from pmstudio.domain.round.web import WebRequest, WebRequestState
+from pmstudio.domain.round.web import LEGACY_REQUEST_WHY, WebRequest, WebRequestState
 from pmstudio.domain.shared.errors import ShapeError
+from pmstudio.harness.errors import ToolCallFailed
 from pmstudio.harness.tools.registry import ToolDefinition
 from tests.support.builders import PROJECT, SEAT, make_web_packet
 from tests.support.doubles import RecordingWebSearch
@@ -479,3 +480,249 @@ async def test_the_effective_execution_limit_is_the_smaller_of_tool_and_round_ca
 
     assert "最多执行 1 条" in error.value.message
     assert harness.web_search.calls == []
+
+
+async def test_a_preapproved_request_is_executed_even_without_resending_its_id():
+    """I1：旧 payload 迁移 / B4 decision 可以先批准；opening 只带 seats 也要执行。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply({"query": QUERY_A, "why": "要查行业做法"})},
+        web_search=RecordingWebSearch(returns=(make_web_packet(url="https://pre"),)),
+    )
+    round_id = await analyzed_round(harness)
+    round_ = harness.rounds.get(round_id)
+    round_.decide_web_request("w1", approve=True)
+    harness.rounds.save(round_)
+
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    assert harness.web_search.calls == [(QUERY_A, 5)]
+    assert only_request(harness, round_id).state is WebRequestState.DONE
+    assert [ref.chunk_id for ref in harness.rounds.get(round_id).materials] == ["m1#c00"]
+
+
+async def test_a_preapproved_request_without_a_tool_is_a_shape_error_and_changes_nothing():
+    harness = Harness(
+        replies={"claims": claims_reply({"query": QUERY_A, "why": "要查行业做法"})},
+        available_tool_keys=frozenset(),
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    round_ = harness.rounds.get(round_id)
+    round_.decide_web_request("w1", approve=True)
+    harness.rounds.save(round_)
+    before = harness.rounds.get(round_id)
+    before_state = (
+        before.step,
+        before.waiting_on,
+        before.allow_web,
+        tuple((item.request_id, item.state) for item in before.web_requests),
+        before.materials,
+    )
+
+    with pytest.raises(ShapeError) as error:
+        await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    assert "已批准" in error.value.message
+    assert "联网工具" in error.value.message
+    assert harness.web_search.calls == []
+    after = harness.rounds.get(round_id)
+    assert (
+        after.step,
+        after.waiting_on,
+        after.allow_web,
+        tuple((item.request_id, item.state) for item in after.web_requests),
+        after.materials,
+    ) == before_state
+
+
+async def test_tool_failure_marks_the_request_failed_without_an_eid():
+    """I3：失败 → FAILED + result_note + TOOL drop；无 external 编号。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply({"query": QUERY_A, "why": "要查行业做法"})},
+        web_search=RecordingWebSearch(
+            failure=ToolCallFailed(
+                "联网搜索失败：HTTP 504", tool_id="tool.web_search", status=504
+            )
+        ),
+    )
+    round_id = await analyzed_round(harness)
+    (request_id,) = request_ids(harness, round_id)
+
+    await harness.submit_opening()(
+        round_id=round_id, seats=(SEAT,), approved_request_ids=(request_id,)
+    )
+
+    request = only_request(harness, round_id)
+    assert request.state is WebRequestState.FAILED
+    assert "504" in request.result_note
+    assert external_evidences(harness) == []
+    assert harness.rounds.get(round_id).materials == ()
+    drops = [
+        item
+        for item in harness.rounds.get(round_id).dropped
+        if item.source is DropSource.TOOL
+    ]
+    assert len(drops) == 1
+    assert "检索失败" in drops[0].reason
+
+
+async def test_an_empty_search_result_is_done_with_no_eid():
+    """I3：工具正常但 0 条 → DONE + 说明；不是失败，也没编号。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply({"query": QUERY_A, "why": "要查行业做法"})},
+        web_search=RecordingWebSearch(returns=()),
+    )
+    round_id = await analyzed_round(harness)
+    (request_id,) = request_ids(harness, round_id)
+
+    await harness.submit_opening()(
+        round_id=round_id, seats=(SEAT,), approved_request_ids=(request_id,)
+    )
+
+    request = only_request(harness, round_id)
+    assert request.state is WebRequestState.DONE
+    assert request.result_note == "没有搜到结果"
+    assert external_evidences(harness) == []
+    assert harness.rounds.get(round_id).materials == ()
+
+
+async def test_a_non_tool_error_marks_every_request_failed_then_reraises():
+    """R14：非工具异常（含取消）先把本次请求标 FAILED + TOOL drop，再原样抛。"""
+
+    harness = Harness(
+        replies={
+            "claims": claims_reply(
+                {"query": QUERY_A, "why": "第一条"}, {"query": QUERY_B, "why": "第二条"}
+            )
+        },
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    round_ = harness.rounds.get(round_id)
+    for item in round_.web_requests:
+        round_.decide_web_request(item.request_id, approve=True)
+    harness.rounds.save(round_)
+    harness.web_search.failure = ValueError("boom")
+
+    with pytest.raises(ValueError, match="boom"):
+        await harness.web_research().execute_approved(round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert [item.state for item in round_.web_requests] == [
+        WebRequestState.FAILED,
+        WebRequestState.FAILED,
+    ]
+    assert all("boom" in (item.result_note or "") for item in round_.web_requests)
+    drops = [item for item in round_.dropped if item.source is DropSource.TOOL]
+    assert len(drops) == 2
+    assert all("boom" in item.reason for item in drops)
+    assert external_evidences(harness) == []
+    assert round_.materials == ()
+    assert [query for query, _ in harness.web_search.calls] == [QUERY_A, QUERY_B]
+
+
+async def test_a_non_tool_error_after_auto_approval_also_marks_failed():
+    """I2：自动批准已提交之后再炸，也要在一个 UoW 里收成 FAILED（不能留 approved）。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={
+            SEAT: seat_reply(
+                {"query": QUERY_B, "why": "席位第一条"},
+                {"query": QUERY_C, "why": "席位第二条"},
+            )
+        },
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,), allow_web=True)
+    await harness.run_seat_round()(round_id=round_id)
+    harness.web_search.failure = ValueError("auto boom")
+
+    with pytest.raises(ValueError, match="auto boom"):
+        await harness.web_research().execute_approved(round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert [item.state for item in round_.web_requests] == [
+        WebRequestState.FAILED,
+        WebRequestState.FAILED,
+    ]
+    assert all("auto boom" in (item.result_note or "") for item in round_.web_requests)
+    assert external_evidences(harness) == []
+    drops = [item for item in round_.dropped if item.source is DropSource.TOOL]
+    assert len(drops) == 2
+
+
+async def test_execute_rejects_a_proposed_request_before_any_network_call():
+    """M4/R15：公开 `execute` 只接受 APPROVED。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply({"query": QUERY_A, "why": "要查行业做法"})},
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    (request,) = harness.rounds.get(round_id).web_requests
+
+    with pytest.raises(ShapeError):
+        await harness.web_research().execute(round_id, (request,))
+
+    assert harness.web_search.calls == []
+
+
+async def test_un_nominated_legacy_query_is_executed_once_with_the_legacy_reason():
+    """M3：旧复述卡允许勾一条分析者没提名的词——它也要执行一次并记 done。"""
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        web_search=RecordingWebSearch(returns=(make_web_packet(url="https://legacy"),)),
+    )
+    round_id = await analyzed_round(harness)
+    free_query = "未提名的自由勾选"
+
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,), web_queries=(free_query,))
+
+    assert harness.web_search.calls == [(free_query, 5)]
+    request = only_request(harness, round_id)
+    assert request.query == free_query
+    assert request.why == LEGACY_REQUEST_WHY
+    assert request.origin == "analyzer"
+    assert request.state is WebRequestState.DONE
+    assert len(external_evidences(harness)) == 1
+
+
+async def test_the_integration_execution_point_uses_the_real_integration_pass():
+    """R16/M6：第二趟整合的失败留痕挂 pass=2，不是恒 1。"""
+
+    harness = Harness(
+        replies={
+            "claims": claims_reply(),
+            "integration": integration_reply(
+                {"query": QUERY_C, "why": "整合者要查导出编码"}
+            ),
+        },
+        seat_replies={SEAT: SEAT_REPLY},
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,), allow_web=True)
+    await harness.run_seat_round()(round_id=round_id)
+    await harness.integrate_round()(round_id=round_id)
+    await harness.dig_round()(round_id=round_id)
+
+    harness.web_search.failure = ToolCallFailed(
+        "联网搜索失败：HTTP 500", tool_id="tool.web_search", status=500
+    )
+    await harness.integrate_round()(round_id=round_id)
+
+    request = only_request(harness, round_id)
+    assert request.state is WebRequestState.FAILED
+    drops = [
+        item
+        for item in harness.rounds.get(round_id).dropped
+        if item.source is DropSource.TOOL
+    ]
+    assert drops[-1].pass_index == 2
+    assert QUERY_C in drops[-1].handle

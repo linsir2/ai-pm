@@ -531,3 +531,98 @@ def test_old_payload_without_web_selection_still_renders_every_web_ref():
 
     assert "第一份联网正文" in prepared.text
     assert "第二份联网正文" in prepared.text
+
+
+def test_external_material_text_filters_web_selection_and_falls_back_to_none():
+    """M2：无 preparer 的旁路也要守 `web_selection`；None 时回退全部旧 refs。"""
+
+    from pmstudio.application.use_cases import external_material_text
+
+    first = make_material("第一份联网正文", material_id="w1")
+    first = replace(first, parsed=replace(first.parsed, origin="web_search"))
+    second = make_material("第二份联网正文", material_id="w2")
+    second = replace(second, parsed=replace(second.parsed, origin="web_search"))
+    harness = seeded_harness(first, second)
+    ledger = harness.evidences.get(PROJECT)
+    first_eid = ledger.record(
+        kind=EvidenceKind.EXTERNAL,
+        text="第一份联网正文",
+        source=EvidenceSource(external_ref="https://example.com/first"),
+        now=NOW,
+    )
+    second_eid = ledger.record(
+        kind=EvidenceKind.EXTERNAL,
+        text="第二份联网正文",
+        source=EvidenceSource(external_ref="https://example.com/second"),
+        now=NOW,
+    )
+    harness.evidences.save(ledger)
+    round_ = make_round()
+    round_.add_materials(
+        (
+            MaterialRef(first.material_id, first.parsed.chunks[0].chunk_id, first_eid),
+            MaterialRef(second.material_id, second.parsed.chunks[0].chunk_id, second_eid),
+        )
+    )
+    round_.note_web_selection(((first.material_id, first.parsed.chunks[0].chunk_id),))
+
+    selected_text = external_material_text(round_, store=harness.materials)
+    assert str(first_eid) in selected_text
+    assert "第一份联网正文" in selected_text
+    assert str(second_eid) not in selected_text
+    assert "第二份联网正文" not in selected_text
+
+    round_.clear_web_selection()
+    fallback_text = external_material_text(round_, store=harness.materials)
+    assert str(first_eid) in fallback_text
+    assert str(second_eid) in fallback_text
+    assert "第一份联网正文" in fallback_text
+    assert "第二份联网正文" in fallback_text
+
+
+def test_dirty_multi_eid_web_result_uses_the_same_first_chunk_in_both_renderers():
+    """M1：旧脏数据一块一个号时，preparer 与 external_material_text 取同一块。"""
+
+    from pmstudio.application.use_cases import external_material_text
+
+    web = make_material("第一段正文", "第二段正文", material_id="w1")
+    web = replace(web, parsed=replace(web.parsed, origin="web_search"))
+    harness = seeded_harness(web)
+    ledger = harness.evidences.get(PROJECT)
+    first_eid = ledger.record(
+        kind=EvidenceKind.EXTERNAL,
+        text="第一段正文",
+        source=EvidenceSource(external_ref="https://example.com/dirty"),
+        now=NOW,
+    )
+    second_eid = ledger.record(
+        kind=EvidenceKind.EXTERNAL,
+        text="第二段正文",
+        source=EvidenceSource(external_ref="https://example.com/dirty"),
+        now=NOW,
+    )
+    harness.evidences.save(ledger)
+    round_ = make_round()
+    round_.add_materials(
+        (
+            MaterialRef(web.material_id, web.parsed.chunks[0].chunk_id, first_eid),
+            MaterialRef(web.material_id, web.parsed.chunks[1].chunk_id, second_eid),
+        )
+    )
+    round_.note_web_selection(
+        (
+            (web.material_id, web.parsed.chunks[0].chunk_id),
+            (web.material_id, web.parsed.chunks[1].chunk_id),
+        )
+    )
+    harness.rounds.seed(round_)
+
+    prepared = preparer(harness, RecordingMaterialRetriever(returns=())).prepare(
+        round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="联网"
+    )
+    external = external_material_text(harness.rounds.get(ROUND_ID), store=harness.materials)
+
+    assert str(first_eid) in prepared.text
+    assert str(first_eid) in external
+    assert str(second_eid) not in prepared.text
+    assert str(second_eid) not in external
