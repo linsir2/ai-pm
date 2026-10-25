@@ -671,7 +671,10 @@ class Round:
 
     @property
     def web_queries(self) -> tuple[WebQuery, ...]:
-        """旧口径派生：分析者提名的检索词（带"为什么"），只读。"""
+        """旧口径派生：分析者提名的检索词（带"为什么"），只读。
+
+        顺序是申请挂载顺序（不是用户勾选顺序）；文本是申请里的原话，不做归一化。
+        """
 
         return tuple(
             WebQuery(query=item.query, why=item.why)
@@ -684,6 +687,9 @@ class Round:
         """旧口径派生：用户批准过（含已执行）的分析者检索词，只读。
 
         `proposed` 还没批、`rejected` 是被拒的，都不算"勾中"。
+        **顺序是申请挂载顺序，不是用户勾选顺序**；文本是申请里的原话。
+        当前消费方（DTO 的 `chosen` 布尔、执行/迁移的成员判断）都按集合用，
+        没有消费者依赖这个顺序——别把它当"用户点选的先后"。
         """
 
         return tuple(
@@ -901,6 +907,16 @@ class Round:
             if matched is None:
                 # 旧版复述卡允许勾一条分析者没提名的词：补成一条 approved analyzer 申请，
                 # 否则"用户勾了"这件事在新载体里没有地方可存。
+                # 但 analyzer 名额已经满了就不能再补：这是用户可改的请求（422），
+                # 不静默丢用户的选择，也不把一组超过 3 条的申请写进聚合。
+                analyzer_count = sum(1 for item in requests if item.origin == "analyzer")
+                if analyzer_count >= MAX_WEB_QUERIES:
+                    raise ShapeError(
+                        f"分析者最多 {MAX_WEB_QUERIES} 条联网申请，"
+                        f"勾选的「{query}」没有名额",
+                        query=query,
+                        count=analyzer_count,
+                    )
                 request_id = f"w{self._next_request_number(requests)}"
                 requests.append(
                     WebRequest(

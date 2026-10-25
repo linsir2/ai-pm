@@ -283,6 +283,16 @@ def test_submit_opening_approves_ids_and_legacy_queries_without_duplicating():
     assert round_.web_queries_chosen == ("一", "只有旧字符串")
 
 
+def snapshot(round_: Round) -> tuple:
+    return (
+        round_.step,
+        round_.waiting_on,
+        round_.seats,
+        round_.allow_web,
+        round_.web_requests,
+    )
+
+
 def test_submit_opening_acceptable_already_approved_id_but_rejects_unknown_or_rejected():
     round_ = opening_round()
     round_.attach_web_requests([request("w1", "一"), request("w2", "二")])
@@ -293,14 +303,34 @@ def test_submit_opening_acceptable_already_approved_id_but_rejects_unknown_or_re
 
     other = opening_round()
     other.attach_web_requests([request("w1", "一")])
+    before = snapshot(other)
     with pytest.raises(ShapeError):
         other.submit_opening(seats=(SEAT,), approved_request_ids=("w9",))
+    assert snapshot(other) == before
 
     rejected = opening_round()
     rejected.attach_web_requests([request("w1", "一")])
     rejected.decide_web_request("w1", approve=False)
+    before = snapshot(rejected)
     with pytest.raises(ShapeError):
         rejected.submit_opening(seats=(SEAT,), approved_request_ids=("w1",))
+    assert snapshot(rejected) == before
+
+
+def test_submit_opening_rejects_a_free_query_when_analyzer_is_full_without_mutating():
+    round_ = opening_round()
+    round_.attach_web_requests(three("analyzer"))
+    before = snapshot(round_)
+
+    with pytest.raises(ShapeError) as error:
+        round_.submit_opening(
+            seats=(SEAT,),
+            allow_web=True,
+            web_queries_chosen=("自由勾选的一条",),
+        )
+
+    assert "3" in error.value.message
+    assert snapshot(round_) == before
 
 
 # —— web_selection（步级快照） ——
@@ -373,6 +403,30 @@ def test_web_selection_is_omitted_when_none_and_missing_key_reads_back_as_none()
     assert load(payload, step=Step.CLAIMS_READY).web_selection is None
 
 
+def test_empty_web_selection_is_persisted_as_empty_not_missing():
+    round_ = opening_round()
+    round_.note_web_selection(())
+
+    payload = round_to_payload(round_)
+    assert payload["web_selection"] == []
+    assert restored(round_).web_selection == ()
+
+    # `[]`（这一趟一块都没选）与缺键（旧 payload，回退全部旧 web refs）不是一回事
+    without = dict(payload)
+    without.pop("web_selection")
+    assert load(without, step=Step.CLAIMS_READY).web_selection is None
+
+
+def test_clear_web_selection_removes_the_key_and_reads_back_none():
+    round_ = opening_round()
+    round_.note_web_selection((("m1", "m1#c00"),))
+    round_.clear_web_selection()
+
+    payload = round_to_payload(round_)
+    assert "web_selection" not in payload
+    assert restored(round_).web_selection is None
+
+
 # —— 旧 payload 迁移：按 step 判定，不重跑 ——
 
 
@@ -384,12 +438,13 @@ def test_legacy_claims_ready_migrates_chosen_to_approved():
 
     round_ = load(payload, step=Step.CLAIMS_READY)
 
+    # 迁移先把用户勾过的排在前面，再填没勾的提案。
     assert [
         (item.request_id, item.query, item.why, item.origin, item.state)
         for item in round_.web_requests
     ] == [
-        ("w1", "一", "为什么一", "analyzer", WebRequestState.PROPOSED),
-        ("w2", "二", "为什么二", "analyzer", WebRequestState.APPROVED),
+        ("w1", "二", "为什么二", "analyzer", WebRequestState.APPROVED),
+        ("w2", "一", "为什么一", "analyzer", WebRequestState.PROPOSED),
     ]
     assert round_.web_queries_chosen == ("二",)
 
@@ -404,8 +459,8 @@ def test_legacy_advanced_step_marks_chosen_done_so_it_is_not_rerun():
     round_ = load(payload, step=Step.SEATS_RUNNING)
 
     assert [item.state for item in round_.web_requests] == [
-        WebRequestState.PROPOSED,
         WebRequestState.DONE,
+        WebRequestState.PROPOSED,
     ]
     assert [ref.chunk_id for ref in round_.materials] == ["m1#c00"]
     assert round_.web_selection is None
@@ -433,10 +488,44 @@ def test_legacy_migration_caps_the_analyzer_origin_at_three_and_traces_the_rest(
 
     round_ = load(payload, step=Step.SEATS_RUNNING)
 
-    assert [item.query for item in round_.web_requests] == ["一", "二", "三"]
-    assert [item.handle for item in round_.dropped] == ["联网申请 四", "联网申请 五"]
-    assert all("每方最多 3 条" in item.reason for item in round_.dropped)
+    # 用户勾的两条先保住；剩余名额给第一条未勾选提案，后两条提案 TOOL 留痕。
+    assert [item.query for item in round_.web_requests] == ["四", "五", "一"]
+    assert [item.handle for item in round_.dropped] == ["联网申请 二", "联网申请 三"]
+    assert all("未勾选提案" in item.reason for item in round_.dropped)
     assert {item.source.value for item in round_.dropped} == {"tool"}
+
+
+def test_legacy_cap_keeps_user_choices_before_unselected_proposals():
+    payload = legacy_payload(
+        queries=[("一", "为什么一"), ("二", "为什么二"), ("三", "为什么三")],
+        chosen=["三", "未提名的一条"],
+    )
+
+    round_ = load(payload, step=Step.CLAIMS_READY)
+
+    assert [(item.query, item.why, item.state) for item in round_.web_requests] == [
+        ("三", "为什么三", WebRequestState.APPROVED),
+        ("未提名的一条", LEGACY_WHY, WebRequestState.APPROVED),
+        ("一", "为什么一", WebRequestState.PROPOSED),
+    ]
+    assert [item.handle for item in round_.dropped] == ["联网申请 二"]
+    assert "未勾选提案" in round_.dropped[0].reason
+
+
+def test_legacy_drop_texts_distinguish_unselected_proposals_from_unnominated_choices():
+    payload = legacy_payload(
+        queries=[("一", "为什么一"), ("二", "为什么二"), ("三", "为什么三")],
+        chosen=["四", "五", "六", "七"],
+    )
+
+    round_ = load(payload, step=Step.SEATS_RUNNING)
+
+    assert [item.query for item in round_.web_requests] == ["四", "五", "六"]
+    reasons = {item.handle: item.reason for item in round_.dropped}
+    assert "未提名勾选" in reasons["联网申请 七"]
+    assert all(
+        "未勾选提案" in reasons[f"联网申请 {query}"] for query in ("一", "二", "三")
+    )
 
 
 def test_old_keys_are_ignored_when_the_new_key_is_present():

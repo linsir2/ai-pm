@@ -1019,6 +1019,9 @@ def _web_requests_from_payload(
 
     未提名的勾选补一条 analyzer 申请；补完仍按每方 3 条截断，余下 TOOL 留痕
     （旧版 UI 允许勾一条分析者没提名的词，不补就等于把用户的选择静默丢掉）。
+
+    **截断先保 chosen、再填未勾选提案**：名额不够时丢的是没被用户勾过的旧提案，
+    不是用户真的点过的选择。drop 文案据此分成"未勾选提案"与"未提名勾选"两类。
     """
 
     if "web_requests" in payload:
@@ -1045,67 +1048,73 @@ def _web_requests_from_payload(
             (),
         )
 
-    chosen_keys = {
-        normalized_query(str(item))
-        for item in payload.get("web_queries_chosen") or ()
-        if str(item).strip()
-    }
-    chosen_state = (
-        WebRequestState.APPROVED
-        if step is Step.CLAIMS_READY
-        else WebRequestState.DONE
-    )
-    requests: list[WebRequest] = []
-    declared: set[str] = set()
-    for item in payload.get("web_queries") or ():
-        query = str(item["query"])
-        key = normalized_query(query)
-        if key in declared:
-            continue
-        declared.add(key)
-        requests.append(
-            WebRequest(
-                request_id=f"w{len(requests) + 1}",
-                query=query,
-                why=str(item["why"]),
-                origin="analyzer",
-                state=chosen_state if key in chosen_keys else WebRequestState.PROPOSED,
-            )
-        )
-
+    chosen_queries: list[str] = []
+    chosen_keys: set[str] = set()
     for raw in payload.get("web_queries_chosen") or ():
         query = str(raw).strip()
         if not query:
             continue
         key = normalized_query(query)
-        if key in declared:
+        if key in chosen_keys:
             continue
-        declared.add(key)
-        requests.append(
-            WebRequest(
-                request_id=f"w{len(requests) + 1}",
-                query=query,
-                why=LEGACY_REQUEST_WHY,
-                origin="analyzer",
-                state=chosen_state,
-            )
-        )
+        chosen_keys.add(key)
+        chosen_queries.append(query)
 
-    if len(requests) <= MAX_WEB_QUERIES:
-        return tuple(requests), ()
+    declared: dict[str, tuple[str, str]] = {}
+    for item in payload.get("web_queries") or ():
+        query = str(item["query"])
+        declared.setdefault(normalized_query(query), (query, str(item["why"])))
+
+    chosen_state = (
+        WebRequestState.APPROVED
+        if step is Step.CLAIMS_READY
+        else WebRequestState.DONE
+    )
+    # 顺序：先保用户真的勾过的（含未提名补的），再填没勾的旧提案。
+    # 名额不够时先丢未勾选提案，而不是把用户的选择挤掉。
+    ordered: list[tuple[str, str, WebRequestState, bool]] = []
+    for query in chosen_queries:
+        key = normalized_query(query)
+        declared_query, why = declared.get(key, (query, LEGACY_REQUEST_WHY))
+        ordered.append((declared_query, why, chosen_state, key in declared))
+    for key, (query, why) in declared.items():
+        if key in chosen_keys:
+            continue
+        ordered.append((query, why, WebRequestState.PROPOSED, True))
+
+    kept = ordered[:MAX_WEB_QUERIES]
+    requests = tuple(
+        WebRequest(
+            request_id=f"w{index + 1}",
+            query=query,
+            why=why,
+            origin="analyzer",
+            state=state,
+        )
+        for index, (query, why, state, _nominated) in enumerate(kept)
+    )
+    if len(ordered) <= MAX_WEB_QUERIES:
+        return requests, ()
 
     pass_index = int(payload.get("seat_round_count") or 1)
-    drops = tuple(
-        DroppedItem(
-            handle=f"联网申请 {item.query}",
-            reason=f"每方最多 {MAX_WEB_QUERIES} 条提案，多出来的旧版勾选没补进本轮",
-            source=DropSource.TOOL,
-            seat_id=None,
-            pass_index=pass_index,
+    drops: list[DroppedItem] = []
+    for query, _why, state, nominated in ordered[MAX_WEB_QUERIES:]:
+        if state is WebRequestState.PROPOSED:
+            reason = f"每方最多 {MAX_WEB_QUERIES} 条提案，未勾选提案没进本轮"
+        elif not nominated:
+            reason = f"每方最多 {MAX_WEB_QUERIES} 条提案，未提名勾选没进本轮"
+        else:
+            reason = f"每方最多 {MAX_WEB_QUERIES} 条提案，旧版勾选（已提名）没进本轮"
+        drops.append(
+            DroppedItem(
+                handle=f"联网申请 {query}",
+                reason=reason,
+                source=DropSource.TOOL,
+                seat_id=None,
+                pass_index=pass_index,
+            )
         )
-        for item in requests[MAX_WEB_QUERIES:]
-    )
-    return tuple(requests[:MAX_WEB_QUERIES]), drops
+    return requests, tuple(drops)
 
 
 def _dropped_from_payload(payload: dict) -> tuple[DroppedItem, ...]:

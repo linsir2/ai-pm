@@ -208,6 +208,20 @@ def test_web_requests_and_step_selection_round_trip(repos):
     assert loaded.web_selection == (("m1", "m1#c00"), ("m2", "m2#c00"))
 
 
+def test_empty_web_selection_round_trips_as_empty_not_missing(repos):
+    """`()` = 这一趟一块都没选；读回来不能变成 `None`（旧 payload 才回退全部）。"""
+
+    _, rounds, _, _, uow = repos
+    round_ = make_round()
+    round_.note_web_selection(())
+    with uow:
+        rounds.save(round_)
+
+    loaded = rounds.get(round_.round_id)
+
+    assert loaded.web_selection == ()
+
+
 def test_round_payload_without_nominations_still_loads():
     """老行（没有 nominated_seats 键）必须读得回来：给空名单，不炸。"""
 
