@@ -4,9 +4,18 @@
 （以及 `RoundBusy`，那条映射已由 `test_routes.py` 钉住）。
 """
 
+import asyncio
+
+import pytest
+
 from pmstudio.api.app import create_app
+from pmstudio.application.errors import WebRequestNotPending
+from pmstudio.application.use_cases import DecideWebRequest
+from pmstudio.application.web_research import WebResearch
 from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.round.web import WebRequest, WebRequestState
+from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import EvidenceId
 from tests.support.api_client import async_client
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_claim, make_web_packet
@@ -213,6 +222,7 @@ async def test_a_tool_level_failure_lands_as_failed_with_note_and_drop():
     assert harness.rounds.get(ROUND_ID).materials == ()
     assert [item.source.value for item in harness.rounds.get(ROUND_ID).dropped] == ["tool"]
     assert harness.web_search.calls == [(QUERY, 5)]
+    assert harness.events.names.count("round.updated") == 1
 
 
 async def test_repeating_the_approval_never_executes_twice():
@@ -235,3 +245,217 @@ async def test_repeating_the_approval_never_executes_twice():
     assert second.status_code == 409
     assert second.json()["code"] == "web_request_not_pending"
     assert harness.web_search.calls == [(QUERY, 5)]
+
+
+async def test_an_invalid_decision_body_is_422_and_leaves_the_request_proposed():
+    harness = Harness(replies={}, seat_replies={})
+    _seed(harness, [_request()])
+
+    async with async_client(_app(harness)) as client:
+        response = await client.post(
+            DECISION_URL.format(request_id="w1"), json={"decision": "maybe"}
+        )
+
+    assert response.status_code == 422
+    round_ = harness.rounds.get(ROUND_ID)
+    assert round_.web_requests[0].state is WebRequestState.PROPOSED
+    assert harness.web_search.calls == []
+
+
+class BlockingWebSearch(RecordingWebSearch):
+    """第一次检索卡住，用来把 decision 钉在"正在处理中"。"""
+
+    def __init__(self) -> None:
+        super().__init__(returns=(make_web_packet(),))
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def search(self, *, query: str, limit: int):  # type: ignore[no-untyped-def]
+        self.calls.append((query, limit))
+        self.entered.set()
+        await self.release.wait()
+        return self.returns
+
+
+async def test_a_second_decision_on_the_same_round_is_409_round_busy():
+    search = BlockingWebSearch()
+    harness = Harness(replies={}, seat_replies={}, web_search=search)
+    _seed(harness, [_request()])
+    app = _app(harness)
+
+    async with async_client(app) as client:
+        first = asyncio.create_task(
+            client.post(DECISION_URL.format(request_id="w1"), json={"decision": "approve"})
+        )
+        await asyncio.wait_for(search.entered.wait(), timeout=5)
+        try:
+            second = await client.post(
+                DECISION_URL.format(request_id="w1"), json={"decision": "approve"}
+            )
+        finally:
+            search.release.set()
+        first_response = await asyncio.wait_for(first, timeout=5)
+
+    assert first_response.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["code"] == "round_busy"
+    assert harness.web_search.calls == [(QUERY, 5)]
+
+
+async def test_a_non_tool_exception_is_500_failed_without_an_event_or_second_run():
+    harness = Harness(
+        replies={},
+        seat_replies={},
+        web_search=RecordingWebSearch(failure=RuntimeError("boom")),
+    )
+    _seed(harness, [_request()])
+
+    async with async_client(_app(harness), raise_app_exceptions=False) as client:
+        response = await client.post(
+            DECISION_URL.format(request_id="w1"), json={"decision": "approve"}
+        )
+        read_back = await client.get(f"/api/rounds/{ROUND_ID}")
+        second = await client.post(
+            DECISION_URL.format(request_id="w1"), json={"decision": "approve"}
+        )
+
+    assert response.status_code == 500
+    request = read_back.json()["web_requests"][0]
+    assert request["state"] == "failed"
+    assert "boom" in request["result_note"]
+    assert harness.web_search.calls == [(QUERY, 5)]
+    # R17：非工具异常不补发 round.updated；客户端收到错误后自己 refetch
+    assert harness.events.names.count("round.updated") == 0
+    assert second.status_code == 409
+    assert second.json()["code"] == "web_request_not_pending"
+    assert harness.web_search.calls == [(QUERY, 5)]
+
+
+async def test_cancelling_a_decision_fails_the_request_without_an_event():
+    search = BlockingWebSearch()
+    harness = Harness(replies={}, seat_replies={}, web_search=search)
+    _seed(harness, [_request()])
+    use_case = DecideWebRequest(
+        rounds=harness.rounds,
+        round_writer=harness.rounds,
+        evidence=harness.evidences,
+        evidence_writer=harness.evidences,
+        tools=harness.tools,
+        available_tool_keys=harness.available_tool_keys,
+        web_research=harness.web_research(),
+        uow=harness.uow,
+        clock=harness.clock,
+        events=harness.events,
+    )
+
+    task = asyncio.create_task(
+        use_case(round_id=ROUND_ID, request_id="w1", decision="approve")
+    )
+    await asyncio.wait_for(search.entered.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    round_ = harness.rounds.get(ROUND_ID)
+    assert round_.web_requests[0].state is WebRequestState.FAILED
+    assert "执行中断" in (round_.web_requests[0].result_note or "")
+    assert [item.source.value for item in round_.dropped] == ["tool"]
+    assert harness.events.published == []
+    assert search.calls == [(QUERY, 5)]
+
+    with pytest.raises(WebRequestNotPending):
+        await use_case(round_id=ROUND_ID, request_id="w1", decision="approve")
+    assert search.calls == [(QUERY, 5)]
+
+
+async def test_an_unknown_request_on_a_terminal_round_is_still_404():
+    harness = Harness(replies={}, seat_replies={})
+    _seed(harness, [_request()])
+    round_ = harness.rounds.get(ROUND_ID)
+    round_.abandon("不做了")
+    harness.rounds.save(round_)
+
+    async with async_client(_app(harness)) as client:
+        response = await client.post(
+            DECISION_URL.format(request_id="w-nope"), json={"decision": "approve"}
+        )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "unknown_web_request"
+
+
+async def test_allow_web_defaults_to_false():
+    harness = Harness(replies={}, seat_replies={})
+    _seed(harness, [_request()])
+
+    async with async_client(_app(harness)) as client:
+        read_back = await client.get(f"/api/rounds/{ROUND_ID}")
+
+    assert read_back.json()["allow_web"] is False
+
+
+async def test_decision_tool_drop_uses_the_current_seat_pass():
+    harness = Harness(replies={}, seat_replies={})
+    harness.seed_project()
+    round_ = Round(
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        user_input="想做个订单导出的功能",
+        created_at=NOW,
+        step=Step.SEATS_RUNNING,
+        waiting_on=WaitingOn.NONE,
+        seats=(SEAT,),
+        seat_round_count=2,
+        web_requests=(_request(),),
+    )
+    harness.rounds.seed(round_)
+
+    async with async_client(_app(harness)) as client:
+        response = await client.post(
+            DECISION_URL.format(request_id="w1"), json={"decision": "approve"}
+        )
+
+    assert response.status_code == 200
+    dropped = harness.rounds.get(ROUND_ID).dropped
+    assert [(item.source.value, item.pass_index) for item in dropped] == [("tool", 2)]
+
+
+async def test_an_unwired_gateway_is_refused_before_the_claim():
+    """目录说工具可用、实例却没接网关：装配错不能留下 approved 占名额。"""
+
+    harness = Harness(replies={}, seat_replies={})
+    _seed(harness, [_request()])
+    research = WebResearch(
+        rounds=harness.rounds,
+        round_writer=harness.rounds,
+        evidence=harness.evidences,
+        evidence_writer=harness.evidences,
+        materials=harness.materials,
+        tools=harness.tools,
+        available_tool_keys=harness.available_tool_keys,
+        web_search=None,
+        index=harness.material_index,
+        uow=harness.uow,
+        clock=harness.clock,
+    )
+    use_case = DecideWebRequest(
+        rounds=harness.rounds,
+        round_writer=harness.rounds,
+        evidence=harness.evidences,
+        evidence_writer=harness.evidences,
+        tools=harness.tools,
+        available_tool_keys=harness.available_tool_keys,
+        web_research=research,
+        uow=harness.uow,
+        clock=harness.clock,
+        events=harness.events,
+    )
+
+    with pytest.raises(ShapeError):
+        await use_case(round_id=ROUND_ID, request_id="w1", decision="approve")
+
+    round_ = harness.rounds.get(ROUND_ID)
+    assert round_.web_requests[0].state is WebRequestState.PROPOSED
+    assert round_.materials == ()
+    assert harness.events.published == []
+    assert harness.web_search.calls == []

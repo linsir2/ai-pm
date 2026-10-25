@@ -36,14 +36,18 @@ def _harness_user() -> UserView:
 
 
 @asynccontextmanager
-async def async_client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+async def async_client(
+    app: FastAPI, *, raise_app_exceptions: bool = True
+) -> AsyncIterator[httpx.AsyncClient]:
     if not hasattr(app.state, "auth"):
         # 静态 Harness 应用：显式装一个测试身份 + owner 上下文（真链接口要用）。
         app.dependency_overrides.setdefault(require_user, _harness_user)
         if not hasattr(app.state, "owner_scope"):
             app.state.owner_scope = owner_scope
     cookies = getattr(app.state, "test_cookie", None)
-    transport = httpx.ASGITransport(app=app)
+    transport = httpx.ASGITransport(
+        app=app, raise_app_exceptions=raise_app_exceptions
+    )
     async with httpx.AsyncClient(
         transport=transport, base_url="http://test", cookies=cookies
     ) as client:

@@ -317,6 +317,27 @@ def test_submit_opening_acceptable_already_approved_id_but_rejects_unknown_or_re
     assert snapshot(rejected) == before
 
 
+def test_submit_opening_treats_done_and_failed_ids_as_already_approved():
+    """逐条批准并执行过的 id 再来开轮是 no-op——与旧 `web_queries` 通道一致。
+
+    B5 的本地勾选状态可能还没清：`done` / `failed` 不是"没批过"，不能 422。
+    """
+
+    round_ = opening_round()
+    round_.attach_web_requests([request("w1", "一"), request("w2", "二")])
+    round_.decide_web_request("w1", approve=True)
+    round_.mark_web_request("w1", state=WebRequestState.DONE, result_note="3 条结果")
+    round_.decide_web_request("w2", approve=True)
+    round_.mark_web_request("w2", state=WebRequestState.FAILED, result_note="超时")
+
+    round_.submit_opening(seats=(SEAT,), approved_request_ids=("w1", "w2"))
+
+    assert [(item.request_id, item.state) for item in round_.web_requests] == [
+        ("w1", WebRequestState.DONE),
+        ("w2", WebRequestState.FAILED),
+    ]
+
+
 def test_submit_opening_rejects_a_free_query_when_analyzer_is_full_without_mutating():
     round_ = opening_round()
     round_.attach_web_requests(three("analyzer"))

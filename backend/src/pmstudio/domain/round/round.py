@@ -883,9 +883,17 @@ class Round:
             current = requests[position]
             if current.state is WebRequestState.PROPOSED:
                 requests[position] = replace(current, state=WebRequestState.APPROVED)
-            elif current.state is not WebRequestState.APPROVED:
+            elif current.state in (
+                WebRequestState.APPROVED,
+                WebRequestState.DONE,
+                WebRequestState.FAILED,
+            ):
+                # 已经批准过（含已执行）的申请是 no-op：与旧 `web_queries` 通道一致。
+                # 前端本地勾选状态没清干净时，不能因为"批准过了"把整张开场卡 422。
+                continue
+            else:
                 raise ShapeError(
-                    "只有待批准或已批准的联网申请能在开场卡上批准",
+                    "被拒绝的联网申请不能在开场卡上重新批准",
                     request_id=request_id,
                     state=current.state,
                 )

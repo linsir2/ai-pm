@@ -235,7 +235,6 @@ from pmstudio.application.sim_review import (
     review_source_ref,
 )
 from pmstudio.application.web_research import (
-    MAX_WEB_EXECUTIONS,
     WEB_ORIGIN,
     WEB_SEARCH_KIND,
     WebResearch,
@@ -1223,7 +1222,9 @@ class SubmitOpening:
                     tool_id=WEB_SEARCH_KIND,
                 )
             # 每轮执行名额是硬上限；预检不通过就不联网。
-            limit = min(tool_limit(tool, "max_queries"), MAX_WEB_EXECUTIONS)
+            limit = web_execution_limit(
+                self._tools, keys=self._available_tool_keys
+            )
             if len(approved) > limit:
                 raise ShapeError(
                     f"这一轮最多执行 {limit} 条联网申请，这次批准了 {len(approved)} 条",
@@ -1265,9 +1266,13 @@ class DecideWebRequest:
     1. 读轮 → 404（申请不存在）/ 409（轮终态、已决策、名额满）；
     2. 一个 UoW 把 `proposed → approved` 落库（这就是 claim，单 worker 口径）；
     3. 联网（事务外）；工具级失败由 `WebResearch` 记成 `failed` + note + TOOL 留痕，
-       非工具异常由它先标失败再原样抛出；
+       非工具异常 / 取消由它先标失败、留痕，再原样抛出；
     4. 一个 UoW 写材料/E 号/`done|failed`/留痕 + `round.updated`。
        拒绝只走一个 UoW，**不联网**。
+
+    **非工具异常 / 取消不补发 `round.updated`**（与 B3 执行点一致）：状态已在
+    `WebResearch` 自己的 UoW 里落成 `failed`，客户端收到错误/取消后必须**主动
+    refetch**（`GET /rounds/{id}`），不要等 SSE。工具级失败仍是正常返回，带事件。
     """
 
     def __init__(
@@ -1331,10 +1336,8 @@ class DecideWebRequest:
             return
 
         # 执行名额：`approved/done/failed` 占位，`proposed/rejected` 不占。
+        # 网关没接上属于装配错——在 claim 之前抛，不能留下一条占名额的 approved。
         tool = web_search_tool(self._tools, keys=self._available_tool_keys)
-        limit = web_execution_limit(
-            self._tools, keys=self._available_tool_keys
-        )
         used = sum(
             1
             for item in round_.web_requests
@@ -1345,12 +1348,20 @@ class DecideWebRequest:
                 WebRequestState.FAILED,
             )
         )
+        if tool is None:
+            raise WebExecutionLimitReached(
+                round_id=round_id,
+                limit=0,
+                used=used,
+                tool_available=False,
+            )
+        limit = self._web_research.ensure_ready("执行联网申请")
         if used >= limit:
             raise WebExecutionLimitReached(
                 round_id=round_id,
                 limit=limit,
                 used=used,
-                tool_available=tool is not None,
+                tool_available=True,
             )
 
         # claim：先落 approved 再联网——这样即便网络中途崩掉，名额也已经被占住，

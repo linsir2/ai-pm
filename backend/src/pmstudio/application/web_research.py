@@ -188,6 +188,16 @@ class WebResearch:
 
     # —— 对外：执行 ——
 
+    def ensure_ready(self, action: str) -> int:
+        """就绪检查（不联网、不写库）：工具声明与网关实例都在时返回生效名额。
+
+        决策在 claim **之前**调它：目录说工具可用、实例却没接上网关属于装配错，
+        必须当场抛出，不能先落一条 `approved` 把执行名额永久占住。
+        """
+
+        self._require_tool(action)
+        return web_execution_limit(self._tools, keys=self._available_tool_keys)
+
     async def execute(
         self,
         round_id: RoundId,
@@ -392,6 +402,9 @@ class WebResearch:
         **不回退 approved**：名额已经花掉，用户要重试就重新提申请。
         若请求在真实轮次里还没批准（opening 的联网前预演），这里没有可标的状态，
         只跳过——网络崩溃时轮次仍停在 opening。
+
+        **不在这里发事件**：调用方拿到异常后，客户端要主动 refetch（与 B3 执行点
+        同一口径）；只有正常返回的执行才由调用方发 `round.updated`。
         """
 
         note = f"执行中断：{type(error).__name__}: {error}"
@@ -445,10 +458,7 @@ class WebResearch:
         )
         if not approved and not (round_.allow_web and auto_candidates):
             return None
-        self._require_tool("执行联网申请")
-        limit = web_execution_limit(
-            self._tools, keys=self._available_tool_keys
-        )
+        limit = self.ensure_ready("执行联网申请")
         used = sum(
             1
             for item in round_.web_requests
