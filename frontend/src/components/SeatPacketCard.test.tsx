@@ -179,7 +179,6 @@ describe("SeatPacketCard 跳过", () => {
           query: "导出权限",
           hit_count: 3,
           selected_count: 2,
-          chunk_ids: [],
           ok: true,
           error: null,
           created_at: null,

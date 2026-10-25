@@ -15,7 +15,6 @@ function trace(over: Partial<RetrievalView> = {}): RetrievalView {
     query: "导出权限",
     hit_count: 3,
     selected_count: 2,
-    chunk_ids: ["m1#c00", "m1#c01"],
     ok: true,
     error: null,
     created_at: null,

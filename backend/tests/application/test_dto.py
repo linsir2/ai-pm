@@ -1,3 +1,4 @@
+import dataclasses
 from types import SimpleNamespace
 
 from pmstudio.application import dto
@@ -1346,9 +1347,13 @@ def test_round_view_projects_retrievals_and_pinned_materials():
     one = view.retrievals[0]
     assert (one.stage, one.pass_index, one.query) == ("seat", 1, "导出权限")
     assert (one.hit_count, one.selected_count) == (2, 1)
-    assert one.chunk_ids == ("m1#c01",)
     assert one.ok is True and one.error is None
     assert one.created_at == NOW
+
+
+def test_retrieval_view_does_not_expose_chunk_ids():
+    fields = {field.name for field in dataclasses.fields(dto.RetrievalView)}
+    assert "chunk_ids" not in fields
 
 
 def test_an_old_round_projects_empty_retrievals():

@@ -392,8 +392,6 @@ class RetrievalView:
     query: str
     hit_count: int
     selected_count: int
-    #: 真正带进本步提示词的块（有 E 号）；界面据此跳转与打来源徽标。
-    chunk_ids: tuple[str, ...]
     ok: bool
     error: str | None
     created_at: datetime | None
@@ -1518,7 +1516,6 @@ def round_view(
                 query=trace.query,
                 hit_count=len(trace.hits),
                 selected_count=len(trace.selected),
-                chunk_ids=tuple(hit.chunk_id for hit in trace.selected),
                 ok=trace.ok,
                 error=trace.error,
                 created_at=trace.created_at,

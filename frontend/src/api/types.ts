@@ -186,7 +186,6 @@ export interface RetrievalView {
   query: string;
   hit_count: number;
   selected_count: number;
-  chunk_ids: string[];
   ok: boolean;
   error: string | null;
   created_at: string | null;
