@@ -103,7 +103,7 @@ async def _admin_cookie(client):
 async def test_a_real_round_writes_tool_calls_and_serves_them_with_injected_tool_double(
     make_app, monkeypatch
 ):
-    """P：真 SQLite + 真 `_search` 路径 + 真端点；工具侧是注入的替身（本环境无 Tavily key）。"""
+    """P：真 SQLite + 真执行层路径 + 真端点；工具侧是注入的替身（本环境无 Tavily key）。"""
 
     monkeypatch.setattr(
         container_module, "_web_search_gateway", _injected_web_search((make_web_packet(url="https://a"),))

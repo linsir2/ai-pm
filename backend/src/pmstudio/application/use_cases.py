@@ -9,7 +9,6 @@ import hashlib
 import logging
 import math
 import secrets
-import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
@@ -66,8 +65,6 @@ from pmstudio.application.context import (
     MATERIAL_BUDGET,
     NO_MATERIAL_TEXT,
     SECTION_OVERHEAD,
-    WEB_BUDGET,
-    WEB_SECTION_OVERHEAD,
     answer_eids,
     budget_drop_line,
     build_project_context,
@@ -99,7 +96,6 @@ from pmstudio.application.context import (
     render_web_results,
     seat_entry_handle,
     select_chunks,
-    web_block_cost,
 )
 from pmstudio.application.context_pool import (
     PINNED_BUDGET_SHARE,
@@ -123,7 +119,6 @@ from pmstudio.application.document_window import (
     visible_eids,
 )
 from pmstudio.application.dto import (
-    NO_SOURCE_REF,
     SEARCH_LIMIT,
     DiffView,
     EvidenceLookupView,
@@ -236,6 +231,14 @@ from pmstudio.application.sim_review import (
     review_issues,
     review_source_ref,
 )
+from pmstudio.application.web_research import (
+    MAX_WEB_EXECUTIONS,
+    WEB_ORIGIN,
+    WEB_SEARCH_KIND,
+    WebResearch,
+    tool_limit,
+    web_search_tool,
+)
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.authoring.readiness import ReadinessChecker
@@ -319,6 +322,7 @@ from pmstudio.domain.round.web import (
     MAX_WEB_QUERIES,
     WebOrigin,
     WebRequest,
+    WebRequestState,
     normalized_query,
 )
 from pmstudio.domain.services.assigner import EvidenceAssigner
@@ -362,10 +366,8 @@ from pmstudio.harness.errors import (
     ModelCallFailed,
     PacketParseError,
     RateLimited,
-    ToolCallFailed,
 )
 from pmstudio.harness.events import Event, EventPublisher
-from pmstudio.harness.model import failure
 from pmstudio.harness.model.envelope import Envelope
 from pmstudio.harness.tools.recorder import ToolCallRecorder
 from pmstudio.harness.tools.registry import ToolCatalog, ToolDefinition
@@ -952,11 +954,6 @@ class StartRound:
         _publish(self._events, self._clock, round_)
 
 
-#: 工具目录里"联网搜索"的 kind（`web_search.toml` 写的就是它）
-WEB_SEARCH_KIND = "web_search"
-#: 联网结果在信息包里的 origin（`TavilySearchGateway` 盖的就是它）
-WEB_ORIGIN = "web_search"
-
 #: 一轮最多手动带进几块 / 一次最多几块（登记在 `02 §11.0.90`）。
 MAX_MANUAL_CHUNKS = 10
 MAX_MANUAL_CHUNKS_PER_CALL = 3
@@ -1063,41 +1060,6 @@ def _web_requests_for(
     return tuple(kept), tuple(dropped)
 
 
-def _declared(tool: ToolDefinition, field: str) -> int:
-    """读联网工具的上限，**目录必须声明**。
-
-    为什么不再兜底：M5 之前这里是 `tool.max_queries or DEFAULT_WEB_QUERY_LIMIT`，
-    而 `DEFAULT_WEB_QUERY_LIMIT = 3` 与 `web_search.toml` 里的 `max_queries = 3`
-    **同一个数字写在两处**——改 TOML 忘了改 Python（或反过来）就静默用了旧值。
-    兜底已删（2026-10-04），现在"目录声明的值"是唯一真相。
-
-    缺声明时报**声明坏了**，而不是"你超了 0 条"：后者会让人以为是自己勾多了。
-    `attachment.toml` 没有这两个字段是对的——它不是联网工具，本来就用不到。
-    """
-
-    value = getattr(tool, field)
-    if value <= 0:
-        raise ShapeError(
-            f"工具声明 {tool.tool_id} 缺 {field}：联网工具必须声明这一轮的上限",
-            tool_id=tool.tool_id,
-            field=field,
-        )
-    return value
-
-
-def web_search_tool(tools: ToolCatalog, *, keys: frozenset[str]) -> ToolDefinition | None:
-    """当前配置下**真的能用**的联网工具；没配密钥（或目录里没有）就是 None。
-
-    "能不能用"只有一个判据：目录说 `requires` 都满足了。所以复述卡上的那一栏、
-    与用例里的那两道校验，看的是同一件事——不是三处各判一次。
-    """
-
-    for item in tools.available(has=keys):
-        if item.kind == WEB_SEARCH_KIND:
-            return item
-    return None
-
-
 def _checked_queries(
     queries: Sequence[str], *, tools: ToolCatalog, keys: frozenset[str]
 ) -> tuple[tuple[str, ...], ToolDefinition | None]:
@@ -1115,7 +1077,7 @@ def _checked_queries(
             "这一轮勾了联网检索，但服务端没有配好联网工具（没配密钥，或工具被停用）",
             tool_ids=[item.tool_id for item in tools.all()],
         )
-    limit = _declared(tool, "max_queries")
+    limit = tool_limit(tool, "max_queries")
     if len(chosen) > limit:
         raise ShapeError(
             f"这一轮勾了 {len(chosen)} 条检索词，最多只允许 {limit} 条",
@@ -1123,26 +1085,6 @@ def _checked_queries(
             chosen=len(chosen),
         )
     return chosen, tool
-
-
-async def _search_one(
-    web_search: WebSearchGateway, *, query: str, limit: int
-) -> tuple[object, int]:
-    """一条 query 的检索：**异常当值 + 单独量耗时**（毫秒）。
-
-    与 `asyncio.gather(return_exceptions=True)` 同一条口径（一条坏了不连累后面），
-    但那层 gather 收不到「每条多久」——所以包一层把耗时一起当值带回来（留样要用）。
-    """
-
-    started = time.monotonic()
-    try:
-        result = await web_search.search(query=query, limit=limit)
-    except BaseException as error:  # noqa: BLE001 —— 异常当值，调用方按类型分派
-        # **`BaseException` 是刻意的，别顺手改成 `Exception`**：`CancelledError` 也要当值
-        # 返回、由调用方 `raise` 传播——这与原来的 `asyncio.gather(return_exceptions=True)`
-        # 同口径（gather 同样把取消当值）。改成 `Exception` 会把取消吞掉，语义变了。
-        return error, int((time.monotonic() - started) * 1000)
-    return result, int((time.monotonic() - started) * 1000)
 
 
 class SubmitOpening:
@@ -1164,6 +1106,7 @@ class SubmitOpening:
         events: EventPublisher,
         vectors: MaterialVectorIndex = NO_VECTORS,
         tool_recorder: ToolCallRecorder | None = None,
+        web_research: WebResearch | None = None,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -1184,6 +1127,22 @@ class SubmitOpening:
         self._vectors = vectors
         # 工具留样（可观测性 v2）：默认 None = 什么都不记（与模型留样同一条纪律）。
         self._tool_recorder = tool_recorder
+        # 执行层与老字段共享同一组依赖；直接构造用例的测试不传也能工作。
+        self._web_research = web_research or WebResearch(
+            rounds=rounds,
+            round_writer=round_writer,
+            evidence=evidence,
+            evidence_writer=evidence_writer,
+            materials=materials,
+            tools=tools,
+            available_tool_keys=available_tool_keys,
+            web_search=web_search,
+            index=index,
+            uow=uow,
+            clock=clock,
+            vectors=vectors,
+            tool_recorder=tool_recorder,
+        )
 
     async def __call__(
         self,
@@ -1192,297 +1151,91 @@ class SubmitOpening:
         seats: Sequence[str],
         claim_edits: Sequence[ClaimEdit] = (),
         web_queries: Sequence[str] = (),
+        allow_web: bool = False,
+        approved_request_ids: Sequence[str] = (),
     ) -> None:
-        # 校验全部在**写之前**：请求不对（422）就不该留下半推半就的状态。
+        # 校验全部在**联网之前**：请求不对（422）就不该留下半推半就的状态，
+        # 更不该先花一次网络调用再报错。
         chosen, tool = _checked_queries(
             web_queries, tools=self._tools, keys=self._available_tool_keys
         )
-        if chosen and self._web_search is None:
+        approved_ids = tuple(
+            str(item).strip() for item in approved_request_ids if str(item).strip()
+        )
+        if approved_ids or allow_web:
+            # 旧字符串路径只在勾了词时才查工具；新载体即使没勾词也要知道有没有工具。
+            tool = web_search_tool(self._tools, keys=self._available_tool_keys)
+        if (approved_ids or allow_web) and tool is None:
+            raise ShapeError(
+                "这一轮开了自动联网或批准了联网申请，但服务端没有配好联网工具"
+                "（没配密钥，或工具被停用）",
+                tool_ids=[item.tool_id for item in self._tools.all()],
+            )
+        if (chosen or approved_ids or allow_web) and self._web_search is None:
             # 目录说工具可用、组装点却没接上实现：这是装配错误，必须当场响，不能悄悄跳过
             raise ShapeError(
                 "联网工具声明可用，但组装点没有接上实现（这一轮先别勾联网）",
                 tool_id=WEB_SEARCH_KIND,
             )
-        # **先查后写**：工具调用必须在事务外；查完（或查失败）之后，一次事务把
-        # 复述卡、勾选、出处、材料引用一起落下去。顺序理由见 `P17b` §6：
-        # 先写的话，进程崩在查的中间时重试会直接进席位轮，用户授权的检索被静默跳过。
-        project_id = self._rounds.get(round_id).project_id
-        picks, failure = await self._search(
-            round_id=round_id, project_id=project_id, chosen=chosen, tool=tool
+        # 席位必须在注册表里：不然它会一路走到 `catalog.by_id` 才炸成 500。
+        known = {seat.seat_id for seat in self._catalog.all()}
+        unknown = [seat_id for seat_id in seats if seat_id not in known]
+        if unknown:
+            raise ShapeError(
+                f"这些席位不在注册表里：{'、'.join(sorted(set(unknown)))}",
+                seat_ids=sorted(set(unknown)),
+            )
+        # 授权与 claim 编辑先在一份**副本**上跑一遍：这一步不写库，只把
+        # "这组请求会不会被拒"提前到联网之前。真正的写入仍在一个 UoW 里。
+        round_before = self._rounds.get(round_id)
+        preview = deepcopy(round_before)
+        if claim_edits:
+            preview.revise_claims(_apply_claim_edits(preview, claim_edits))
+        preview.submit_opening(
+            seats=tuple(seats),
+            allow_web=allow_web,
+            approved_request_ids=approved_ids,
+            web_queries_chosen=chosen,
         )
+        approved = tuple(
+            item
+            for item in preview.web_requests
+            if item.state is WebRequestState.APPROVED
+        )
+        if approved:
+            # 每轮执行名额是硬上限；预检不通过就不联网。
+            limit = min(tool_limit(tool, "max_queries"), MAX_WEB_EXECUTIONS)
+            if len(approved) > limit:
+                raise ShapeError(
+                    f"这一轮最多执行 {limit} 条联网申请，这次批准了 {len(approved)} 条",
+                    limit=limit,
+                    approved=len(approved),
+                )
+        # **先查后写**：工具调用必须在事务外；查完（或查失败）之后，一次事务把
+        # 复述卡、申请状态、出处、材料引用一起落下去。网络中途崩溃仍停在复述卡上，
+        # 不会留下 approved 让下一步重跑（`P3a` §0.1）。
+        execution = await self._web_research.execute(round_id, approved)
         with self._uow:
             round_ = self._rounds.get(round_id)
-            # 席位必须在注册表里：不然它会一路走到 `catalog.by_id` 才炸成 500。
-            # 这是"你给的 id 不对"（422），不是领域不变量被破坏（409），所以用 ShapeError。
-            known = {seat.seat_id for seat in self._catalog.all()}
-            unknown = [seat_id for seat_id in seats if seat_id not in known]
-            if unknown:
-                raise ShapeError(
-                    f"这些席位不在注册表里：{'、'.join(sorted(set(unknown)))}",
-                    seat_ids=sorted(set(unknown)),
-                )
             if claim_edits:
                 round_.revise_claims(_apply_claim_edits(round_, claim_edits))
-            round_.submit_opening(seats=tuple(seats), web_queries_chosen=chosen)
-            if picks:
-                # 与附件同一条规则：**只给选中的块发号**（没选中的块仍在材料表里，F6 搜得到）
-                ledger = self._evidence.get(project_id)
-                material_refs: list[MaterialRef] = []
-                # **一条联网结果 = 一个编号**（2026-10-19 决策）：结果可能切成好几段，
-                # 但它是一个来源、一个出处——各段共享同一个编号。
-                # 编号的正文 = 这一条结果**被选中的那些段**拼起来
-                # （必须与提示词里渲染的那段**逐字相同**，否则就是"发号却没进提示词"）。
-                picked_by_material: dict[str, list[MaterialChunk]] = {}
-                packets_by_id: dict[str, MaterialPacket] = {}
-                for packet, chunk in picks:
-                    picked_by_material.setdefault(packet.material_id, []).append(chunk)
-                    packets_by_id[packet.material_id] = packet
-                for material_id, chunks in picked_by_material.items():
-                    packet = packets_by_id[material_id]
-                    eid = ledger.record(
-                        kind=_material_kind(packet),
-                        text="\n".join(chunk.text for chunk in chunks),
-                        source=EvidenceSource(external_ref=_external_ref(packet, chunks[0])),
-                        now=self._clock.now(),
-                    )
-                    for chunk in chunks:
-                        material_refs.append(
-                            MaterialRef(
-                                material_id=material_id,
-                                chunk_id=chunk.chunk_id,
-                                eid=eid,
-                            )
-                        )
-                round_.add_materials(material_refs)
+            round_.submit_opening(
+                seats=tuple(seats),
+                allow_web=allow_web,
+                approved_request_ids=approved_ids,
+                web_queries_chosen=chosen,
+            )
+            if execution is not None:
+                ledger = self._evidence.get(round_.project_id)
+                self._web_research.apply(round_, ledger, execution)
                 self._evidence_writer.save(ledger)
-            round_.note_dropped(failure)
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
 
-    async def _search(
-        self,
-        *,
-        round_id: RoundId,
-        project_id: ProjectId,
-        chosen: tuple[str, ...],
-        tool: ToolDefinition | None,
-    ) -> tuple[tuple[tuple[MaterialPacket, MaterialChunk], ...], tuple[DroppedItem, ...]]:
-        """**事务外**：查 → 盖章 → 选块。返回（选中的块，要留痕的那几条）。
-
-        失败不抛出去：工具这一趟没成，是**这一轮的留痕**，不是整轮的失败（`P17b` §6）。
-
-        顺带把这一趟**留样**（可观测性 v2）：每条 query 一行（成功/失败/炸了都记），
-        **只加旁路调用**——`packets` / `drops` / 顺序 / 预算一个字不动，recorder 为 None 时零写入。
-        """
-
-        drops: list[DroppedItem] = []
-        packets: list[MaterialPacket] = []
-        drafts: list[ParsedMaterial] = []
-        if not chosen or tool is None or self._web_search is None:
-            return (), ()
-        limit = _declared(tool, "max_results")
-        # 局部绑定：类型收窄（下面 genexp 里 `self._web_search` 会被当成可能 None）。
-        web_search = self._web_search
-        # 多条 query **并发发出**（工具韧性 P2）——原来是串行 for-await（3 条 = 3× 延迟）。
-        # 异常当值（不是整批取消）：一条坏了不连累后面，与失败隔离同一条口径。
-        # **耗时逐条量**（`_search_one` 包一层）：留样要答「这一步慢不慢」，
-        # 所以每条 query 的耗时单独记，不是整批一个数。
-        outcomes = await asyncio.gather(
-            *(_search_one(web_search, query=query, limit=limit) for query in chosen)
-        )
-        # **按勾选序 settle**（循环顺序执行）：`packets` 的顺序必须等于勾选序——
-        # `select_chunks(query="")` 是 **in-order first-fit**（预算选哪几块依赖顺序），
-        # 出处的 E 编号也按 `picks` 序发（顺序一变，E1/E2 就换人）。
-        # 所以只并行"搜"、不并行"落"。
-        # （注意：`material_id` 生产是 `UuidIdGenerator` 的随机 `m-<hex>`，**不是**顺序计数器，
-        #  它不构成"必须保序"的理由；真正的理由只有上面两条。）
-        for query, (result, duration_ms) in zip(chosen, outcomes, strict=True):
-            if isinstance(result, ToolCallFailed):
-                self._record_tool_call(
-                    round_id,
-                    query=query,
-                    limit=limit,
-                    duration_ms=duration_ms,
-                    ok=False,
-                    result_note=result.message,
-                    error=result.message,
-                    error_kind=failure.classify(result).value,
-                )
-                drops.append(_tool_drop(f"联网检索 {query}", f"检索失败：{result.message}"))
-                continue  # 一条坏了不连累后面（工具韧性 P1）：各记各的痕
-            if isinstance(result, BaseException):
-                # **非工具异常也先记一笔再 raise**：这次调用确实炸了，不留痕就是盲区
-                # （评审 #2）。`raise result` 的语义一个字不改（gather 只是把它当成了值）。
-                self._record_tool_call(
-                    round_id,
-                    query=query,
-                    limit=limit,
-                    duration_ms=duration_ms,
-                    ok=False,
-                    result_note=str(result),
-                    error=str(result),
-                )
-                raise result
-            self._record_tool_call(
-                round_id,
-                query=query,
-                limit=limit,
-                duration_ms=duration_ms,
-                ok=True,
-                result_note=f"{len(result)} 条",
-            )
-            if not result:
-                drops.append(_tool_drop(f"联网检索 {query}", "没有搜到结果"))
-            drafts.extend(result)
-        for draft in drafts:
-            packets.append(self._keep(project_id, draft))
-        picked, _ = select_chunks(
-            packets,
-            budget=WEB_BUDGET,
-            cost=web_block_cost,
-            section_overhead=WEB_SECTION_OVERHEAD,
-        )
-        selected_results = {material_id for material_id, _ in picked}
-        if len(selected_results) < len(packets):
-            missed = len(packets) - len(selected_results)
-            drops.append(
-                _tool_drop(
-                    f"联网检索结果 {len(packets)} 条",
-                    f"预算只带得下 {len(selected_results)} 条，"
-                    f"还有 {missed} 条没带进去"
-                    "（材料表里留着，搜得到）",
-                )
-            )
-        by_id = {packet.material_id: packet for packet in packets}
-        # 同一块只发一个号：两条查询搜到同一个网址时，包是同一个（URL 去重），
-        # 这里再按 (material_id, chunk_id) 收一次，否则账本里会出现两条指向同一块的出处。
-        unique: dict[tuple[str, str], tuple[MaterialPacket, MaterialChunk]] = {}
-        for material_id, chunk in picked:
-            unique.setdefault((material_id, chunk.chunk_id), (by_id[material_id], chunk))
-        return (
-            tuple(unique.values()),
-            tuple(drops),
-        )
-
-    def _record_tool_call(
-        self,
-        round_id: RoundId,
-        *,
-        query: str,
-        limit: int,
-        duration_ms: int,
-        ok: bool,
-        result_note: str,
-        error: str | None = None,
-        error_kind: str | None = None,
-    ) -> None:
-        """工具这一趟的留样（**旁路**）：recorder 为 None 时零写入，业务路径一个字不改。"""
-
-        if self._tool_recorder is None:
-            return
-        self._tool_recorder.record(
-            trace_id=str(round_id),
-            tool_id=WEB_SEARCH_KIND,
-            # **两个参数都记**：只记 query 答不出「这次只回 3 条是 limit=3 还是上游只给了 3 条」。
-            arguments={"query": query, "limit": limit},
-            result_note=result_note,
-            duration_ms=duration_ms,
-            created_at=self._clock.now(),
-            ok=ok,
-            error=error,
-            error_kind=error_kind,
-        )
-
     def _keep(self, project_id: ProjectId, draft: ParsedMaterial) -> MaterialPacket:
-        """一条检索结果入库：**去重键是 URL**（同一网址不重复入库），原始字节=摘要文本。
+        """兼容委托：老测试直接调 `SubmitOpening._keep`。"""
 
-        **老档位的材料就地升级**（2026-10-20 批 6c）：联网材料的入库口径换了
-        （`tavily-rest-v1` 的 query 片段 → `tavily-rest-v2-raw` 的整页），
-        而"同一 URL 已存在就返回既有份"这条规则会让**老材料永远停在旧档位**——
-        用户再次搜到同一个网址，拿到的还是片段版：页面主体依旧搜不到。
-
-        修法是**用这次已经搜到的整页内容把它换掉**（内容就在手里，用户本来就在搜，
-        **不额外花一次额度**）。三条纪律照 `FetchMaterial` 的分支模式：
-
-        ① 已被编号引用的**不就地改**（那些编号指着它里面的块）→ 另出一份变体；
-        ② 同一档位的**不重写**（重写一遍只是白花 ONNX 推理；真缺向量由幂等回填兜）；
-        ③ 升级换了正文 → 旧向量作废，先删后重算。
-        """
-        content = "\n".join(chunk.text for chunk in draft.chunks).encode("utf-8")
-        digest = _web_key(draft.source_ref, content)
-        existing = self._materials.find_by_sha(project_id, digest)
-        if existing is None:
-            packet = self._materials.put(
-                project_id=project_id,
-                parsed=draft,
-                sha256=digest,
-                content=content,
-                now=self._clock.now(),
-            )
-            # 写向量（检索阶段 2）：**联网结果也要能被语义召回**。
-            # 这里是**事务外**（`_search` 整段都在 `with self._uow:` 之前），
-            # 所以推理不占着写锁——与上传路径"主事务提交后再写"是同一条纪律。
-            self._vectors.write(packet.material_id)
-            return packet
-        if not _is_other_parser_version(existing.parsed, draft):
-            # 同一网址已经收过，且是同一档位：材料与它的向量都已经在库里，
-            # 重写一遍只是白花 ONNX 推理。真缺向量的情况由启动时的幂等回填兜着。
-            return existing
-        # 老档位 → 用这次的整页内容升级它
-        if self._index.material_references(project_id).get(existing.material_id, ()):
-            # 发过编号：不就地改（那些编号指着它里面的块）——另出一份，旧的冻结留着
-            packet = self._materials.put(
-                project_id=project_id,
-                parsed=draft,
-                sha256=_web_variant_key(draft.source_ref, content),
-                content=content,
-                now=self._clock.now(),
-            )
-        else:
-            packet = self._materials.refresh(
-                existing.material_id, parsed=draft, content=content
-            )
-            # 就地刷新换了正文：旧向量作废（块数变了也会留下孤儿向量），
-            # 先删掉（不跑推理）再重算。
-            self._vectors.drop(packet.material_id)
-        self._vectors.write(packet.material_id)
-        return packet
-
-
-def _web_key(source_ref: str, content: bytes) -> str:
-    """联网材料的去重键。
-
-    - **有 URL** → 按 URL（同一网址不重复入库）；
-    - **没有 URL**（`NO_SOURCE_REF`）→ 按**内容指纹**。否则所有无链接结果共用
-      一把键，后一条会被 `_keep` 当成"已存在"**静默丢弃**——2026-10-20 核验
-      实测：两条无链接结果只入库一份（"乙"消失）。
-    """
-    if source_ref and source_ref != NO_SOURCE_REF:
-        return hashlib.sha256(f"web:{source_ref}".encode()).hexdigest()
-    fingerprint = hashlib.sha256(content).hexdigest()
-    return hashlib.sha256(f"web-nourl:{fingerprint}".encode()).hexdigest()
-
-
-def _web_variant_key(source_ref: str, content: bytes) -> str:
-    """已被编号引用的老材料换新内容时的**变体键**（带内容指纹保幂等）。
-
-    与 `FetchMaterial._refetch_key` 同一把尺子：同一 URL + 同一内容 → 同一个键
-    → 反复刷不会堆出一堆变体。
-    """
-    fingerprint = hashlib.sha256(content).hexdigest()[:12]
-    return hashlib.sha256(f"web:{source_ref}|{fingerprint}".encode()).hexdigest()
-
-
-def _is_other_parser_version(existing: ParsedMaterial, draft: ParsedMaterial) -> bool:
-    """已入库的那份是**另一个解析器档位**读的吗（同一 parser、版本不同）。
-
-    为什么不用"哪个版本更新"来比：新材料来自**当前**网关，它的版本就是当前版本
-    → 版本不同就意味着已入库那份更旧（档位只增不改）。
-    """
-    return (
-        existing.parser_id == draft.parser_id
-        and existing.parser_version != draft.parser_version
-    )
+        return self._web_research.keep(project_id, draft)
 
 
 class RunSeatRound:
@@ -1512,6 +1265,7 @@ class RunSeatRound:
         memory: MemoryReader,
         observations_repo: ObservationRepository = NO_OBSERVATIONS,
         preparer: RoundContextPreparer | None = None,
+        web_research: WebResearch | None = None,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -1529,8 +1283,13 @@ class RunSeatRound:
         self._memory = memory
         self._observations_repo = observations_repo
         self._preparer = preparer
+        self._web_research = web_research
 
     async def __call__(self, *, round_id: RoundId) -> None:
+        # 执行点必须在**第一次读 round 之前**：新 E 号与本步 web_selection
+        # 要在 prepare 时就能看见。
+        if self._web_research is not None:
+            await self._web_research.execute_approved(round_id)
         # 读取阶段不开事务：模型调用绝不能包在事务里。
         round_ = self._rounds.get(round_id)
         document = self._documents.get(round_.project_id)
@@ -2382,6 +2141,7 @@ class IntegrateRound:
         digest_repo: DigestRepository = NO_DIGESTS,
         inspiration_repo: InspirationRepository = NO_INSPIRATIONS,
         preparer: RoundContextPreparer | None = None,
+        web_research: WebResearch | None = None,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -2403,8 +2163,13 @@ class IntegrateRound:
         self._digest_repo = digest_repo
         self._inspiration_repo = inspiration_repo
         self._preparer = preparer
+        self._web_research = web_research
 
     async def __call__(self, *, round_id: RoundId) -> None:
+        # 早于 `_integrate_with_repair` 的第一次读 round / `retry_hint`：
+        # 已批准 + allow_web 自动批准的申请都该在本步 prepare 前执行完。
+        if self._web_research is not None:
+            await self._web_research.execute_approved(round_id)
         result = await self._integrate_with_repair(round_id=round_id)
         assembled, gaps = result.assembled, result.gaps
         # 记忆整理（M6）：**出草案那一刻**跑一次小调用。它必须在这一行——
@@ -4967,6 +4732,11 @@ def external_material_text(
     uploads: list[tuple[MaterialPacket, dict[str, EvidenceId]]] = []
     found: list[tuple[MaterialPacket, list[MaterialChunk], EvidenceId]] = []
     missing: list[str] = []
+    selected_web = (
+        None
+        if round_.web_selection is None
+        else frozenset(round_.web_selection)
+    )
     for material_id, eids in by_material.items():
         packet = store.get(material_id)
         if packet is None or packet.project_id != str(round_.project_id):
@@ -4977,9 +4747,18 @@ def external_material_text(
             # 联网结果：一条结果 = **一个编号**（多段共享它），渲染时把
             # **这一条结果被选中的每一段**都拼出来。`eids` 是 {块 id: 编号}——
             # 一条结果的各段共用同一个编号，所以取任意一个即可。
-            picked = [chunk for chunk in packet.parsed.chunks if chunk.chunk_id in eids]
+            # 新 payload 还受本步 `web_selection` 约束：没选中的旧块只当历史留着。
+            picked = [
+                chunk
+                for chunk in packet.parsed.chunks
+                if chunk.chunk_id in eids
+                and (
+                    selected_web is None
+                    or (material_id, chunk.chunk_id) in selected_web
+                )
+            ]
             if picked and eids:
-                found.append((packet, picked, next(iter(eids.values()))))
+                found.append((packet, picked, eids[picked[0].chunk_id]))
         else:
             uploads.append((packet, eids))
 

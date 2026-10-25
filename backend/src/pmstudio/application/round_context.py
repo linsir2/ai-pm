@@ -362,10 +362,12 @@ class RoundContextPreparer:
                 continue
             if packet.parsed.origin == WEB_ORIGIN:
                 # 联网材料：只保留"已发号的那些块"给 web 段；不进材料池。
+                selected = _selected_web_chunks(round_)
                 web_by_material[material_id] = {
                     chunk_id: eid_of[(material_id, chunk_id)]
                     for chunk_id in allowed.pop(material_id)
                     if (material_id, chunk_id) in eid_of
+                    and (selected is None or (material_id, chunk_id) in selected)
                 }
                 continue
             packets[material_id] = packet
@@ -447,3 +449,13 @@ class RoundContextPreparer:
             pool_count=pool_count,
             skipped_manual=selection.skipped_manual,
         )
+
+
+def _selected_web_chunks(round_: Round) -> frozenset[tuple[str, str]] | None:
+    """本步 web 快照：`None` = 旧 payload，渲染层回退到全部旧 web refs。"""
+
+    return (
+        None
+        if round_.web_selection is None
+        else frozenset(round_.web_selection)
+    )

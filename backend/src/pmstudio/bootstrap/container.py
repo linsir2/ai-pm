@@ -88,6 +88,7 @@ from pmstudio.application.use_cases import (
     UploadMaterial,
     web_search_tool,
 )
+from pmstudio.application.web_research import WebResearch
 from pmstudio.bootstrap.maintenance import MaterialMaintenance
 from pmstudio.bootstrap.settings import Settings
 from pmstudio.domain.authoring.readiness import ReadinessChecker
@@ -397,6 +398,22 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         # 不另造一个实例——两处口径必须一致（换实现也只改 `material_search` 那一行）。
         retriever=material_search,
     )
+    # 联网执行层：opening 与席位/整合共用同一个实例（单 worker 口径）。
+    web_research = WebResearch(
+        rounds=rounds,
+        round_writer=rounds,
+        evidence=evidences,
+        evidence_writer=evidences,
+        materials=materials,
+        tools=tools,
+        available_tool_keys=available_tool_keys,
+        web_search=web_search,
+        index=index,
+        uow=uow,
+        clock=clock,
+        vectors=vector_index,
+        tool_recorder=tool_recorder,
+    )
     submit_opening = SubmitOpening(
         rounds=rounds,
         round_writer=rounds,
@@ -416,6 +433,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         vectors=vector_index,
         # 工具留样（可观测性 v2）：默认 None = 什么都不记
         tool_recorder=tool_recorder,
+        web_research=web_research,
     )
     # 每步投影：席位轮/整合共用同一个实例（无状态，只读装配依赖）。
     round_context = RoundContextPreparer(
@@ -445,6 +463,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         memory=memory,
         observations_repo=observations_repo,
         preparer=round_context,
+        web_research=web_research,
     )
     integrate_round = IntegrateRound(
         rounds=rounds,
@@ -467,6 +486,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         digest_repo=digest_repo,
         inspiration_repo=inspiration_repo,
         preparer=round_context,
+        web_research=web_research,
     )
     submit_answers = SubmitAnswers(
         rounds=rounds,

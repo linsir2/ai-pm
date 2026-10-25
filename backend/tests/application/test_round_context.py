@@ -460,3 +460,74 @@ def test_retrying_at_the_retrieval_cap_does_not_duplicate_the_manual_drop():
         if item.source is DropSource.TOOL
     ]
     assert len(drops) == 1, drops
+
+
+def test_web_selection_filters_the_numbered_web_chunks_rendered():
+    """新 payload 只渲染本步选中的 web 块；没选中的旧编号留在轮次里当历史。"""
+
+    first = make_material("第一份联网正文", material_id="w1")
+    first = replace(first, parsed=replace(first.parsed, origin="web_search"))
+    second = make_material("第二份联网正文", material_id="w2")
+    second = replace(second, parsed=replace(second.parsed, origin="web_search"))
+    harness = seeded_harness(first, second)
+    ledger = harness.evidences.get(PROJECT)
+    first_eid = ledger.record(
+        kind=EvidenceKind.EXTERNAL,
+        text="第一份联网正文",
+        source=EvidenceSource(external_ref="https://example.com/first"),
+        now=NOW,
+    )
+    second_eid = ledger.record(
+        kind=EvidenceKind.EXTERNAL,
+        text="第二份联网正文",
+        source=EvidenceSource(external_ref="https://example.com/second"),
+        now=NOW,
+    )
+    harness.evidences.save(ledger)
+    round_ = make_round()
+    round_.add_materials(
+        (
+            MaterialRef(first.material_id, first.parsed.chunks[0].chunk_id, first_eid),
+            MaterialRef(second.material_id, second.parsed.chunks[0].chunk_id, second_eid),
+        )
+    )
+    round_.note_web_selection(((first.material_id, first.parsed.chunks[0].chunk_id),))
+    harness.rounds.seed(round_)
+
+    prepared = preparer(harness, RecordingMaterialRetriever(returns=())).prepare(
+        round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="联网"
+    )
+
+    assert str(first_eid) in prepared.text
+    assert str(second_eid) not in prepared.text
+    assert "第二份联网正文" not in prepared.text
+
+
+def test_old_payload_without_web_selection_still_renders_every_web_ref():
+    first = make_material("第一份联网正文", material_id="w1")
+    first = replace(first, parsed=replace(first.parsed, origin="web_search"))
+    second = make_material("第二份联网正文", material_id="w2")
+    second = replace(second, parsed=replace(second.parsed, origin="web_search"))
+    harness = seeded_harness(first, second)
+    ledger = harness.evidences.get(PROJECT)
+    refs = []
+    for packet, url in ((first, "https://example.com/first"), (second, "https://example.com/second")):
+        eid = ledger.record(
+            kind=EvidenceKind.EXTERNAL,
+            text=packet.parsed.chunks[0].text,
+            source=EvidenceSource(external_ref=url),
+            now=NOW,
+        )
+        refs.append(MaterialRef(packet.material_id, packet.parsed.chunks[0].chunk_id, eid))
+    harness.evidences.save(ledger)
+    round_ = make_round()
+    round_.add_materials(refs)
+    harness.rounds.seed(round_)
+    assert harness.rounds.get(ROUND_ID).web_selection is None
+
+    prepared = preparer(harness, RecordingMaterialRetriever(returns=())).prepare(
+        round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="联网"
+    )
+
+    assert "第一份联网正文" in prepared.text
+    assert "第二份联网正文" in prepared.text

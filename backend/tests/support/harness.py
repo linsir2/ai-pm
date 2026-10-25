@@ -651,6 +651,26 @@ class Harness:
             return ListDiscussions(discussions=self.discussions)
         return ListDiscussions(discussions=self.discussions, limit=limit)
 
+    def web_research(self):  # type: ignore[no-untyped-def]
+        """联网执行层：三个用例共用同一个实例（与生产 container 同口径）。"""
+
+        from pmstudio.application.web_research import WebResearch
+
+        return WebResearch(
+            rounds=self.rounds,
+            round_writer=self.rounds,
+            evidence=self.evidences,
+            evidence_writer=self.evidences,
+            materials=self.materials,
+            tools=self.tools,
+            available_tool_keys=self.available_tool_keys,
+            web_search=self.web_search,
+            index=self.material_index,
+            uow=self.uow,
+            clock=self.clock,
+            tool_recorder=self.tool_recorder,
+        )
+
     def submit_opening(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import SubmitOpening
 
@@ -671,6 +691,7 @@ class Harness:
             clock=self.clock,
             events=self.events,
             tool_recorder=self.tool_recorder,
+            web_research=self.web_research(),
         )
 
     def attach_materials(self):  # type: ignore[no-untyped-def]
@@ -703,6 +724,7 @@ class Harness:
             memory=self.memory,
             observations_repo=self.observations,
             preparer=preparer,
+            web_research=self.web_research(),
         )
 
     def integrate_round(self, *, preparer=None):  # type: ignore[no-untyped-def]
@@ -729,6 +751,7 @@ class Harness:
             digest_repo=self.digests,
             inspiration_repo=self.inspirations,
             preparer=preparer,
+            web_research=self.web_research(),
         )
 
     def submit_answers(self):  # type: ignore[no-untyped-def]
