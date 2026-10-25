@@ -10,6 +10,7 @@ from pmstudio.application.context_pool import (
     PROJECTION_SLOTS_PER_MATERIAL,
     build_stage_query,
     select_projection,
+    split_material_budget,
 )
 from pmstudio.application.dto import MaterialChunk, MaterialPacket, ParsedMaterial
 from pmstudio.application.ports import SeatDefinition
@@ -164,6 +165,37 @@ def test_seed_has_no_stage_query():
         build_stage_query(RetrievalStage.SEED, round_=make_round())
 
 
+# —— split_material_budget ——
+
+
+def test_auto_reserve_is_the_remainder_after_pinned_cap():
+    split = split_material_budget(usable=1000, pinned_share=0.6, auto_costs=(400,))
+
+    assert split.usable == 1000
+    assert split.auto_feasible is True
+    assert split.pinned_cap == 600
+    assert split.usable - split.pinned_cap == 400
+
+
+def test_no_auto_candidates_does_not_reserve():
+    split = split_material_budget(usable=1000, pinned_share=0.6, auto_costs=())
+
+    assert split.auto_feasible is False
+    assert split.pinned_cap == 1000
+
+
+def test_auto_candidate_that_cannot_fit_does_not_reserve():
+    split = split_material_budget(usable=1000, pinned_share=0.6, auto_costs=(401,))
+
+    assert split.auto_feasible is False
+    assert split.pinned_cap == 1000
+
+
+def test_pinned_share_is_bounded():
+    with pytest.raises(ValueError):
+        split_material_budget(usable=1000, pinned_share=1.1, auto_costs=())
+
+
 # —— select_projection ——
 
 
@@ -183,10 +215,12 @@ def hit(packet: MaterialPacket, index: int, score: float = 1.0) -> RetrievalHit:
     return RetrievalHit(packet.material_id, chunk.chunk_id, score)
 
 
-def spent_on(selection, packets) -> int:
+def spent_on(selection, packets, *, only: set[str] | None = None) -> int:
     seen: set[str] = set()
     total = 0
     for material_id, chunk in selection.chunks:
+        if only is not None and material_id not in only:
+            continue
         first = material_id not in seen
         seen.add(material_id)
         total += material_block_cost(
@@ -212,11 +246,13 @@ def test_manual_chunks_are_selected_first():
     assert selection.chunks[0] == ("m2", manual_packet.parsed.chunks[0])
 
 
-def test_pinned_materials_never_exceed_the_global_share():
+def test_pinned_materials_never_exceed_the_share_when_auto_candidates_exist():
     pinned = make_material(*[f"第 {index} 段" * 10 for index in range(10)], material_id="m1")
+    auto = make_material("自动材料" * 20, material_id="m2")
+    packets = packets_of(pinned, auto)
     selection = select_projection(
-        packets=packets_of(pinned),
-        pool=pool_of(pinned),
+        packets=packets,
+        pool=pool_of(pinned, auto),
         pinned=("m1",),
         manual=(),
         stage_hits=(),
@@ -226,8 +262,67 @@ def test_pinned_materials_never_exceed_the_global_share():
         pinned_share=0.6,
     )
 
-    assert selection.chunks
-    assert spent_on(selection, packets_of(pinned)) <= 600
+    assert spent_on(selection, packets, only={"m1"}) <= 600
+    assert any(material_id == "m2" for material_id, _ in selection.chunks)
+
+
+def test_no_auto_candidates_lets_pinned_use_full_budget():
+    pinned = make_material("字" * 800, material_id="m1")
+    selection = select_projection(
+        packets=packets_of(pinned),
+        pool=pool_of(pinned),
+        pinned=("m1",),
+        manual=(),
+        stage_hits=(),
+        query="字",
+        budget=1000,
+        section_overhead=0,
+        pinned_share=0.6,
+    )
+
+    assert [chunk.chunk_id for _, chunk in selection.chunks] == ["m1#c00"]
+    assert spent_on(selection, packets_of(pinned)) > 600
+
+
+def test_manual_over_the_cap_is_skipped_when_auto_candidates_exist():
+    manual = make_material("手动" * 300, material_id="m1")
+    auto = make_material("自动", material_id="m2")
+    packets = packets_of(manual, auto)
+    selection = select_projection(
+        packets=packets,
+        pool=pool_of(manual, auto),
+        pinned=("m1",),
+        manual=(ManualChunk("m1", manual.parsed.chunks[0].chunk_id),),
+        stage_hits=(),
+        query="",
+        budget=1000,
+        section_overhead=0,
+        pinned_share=0.6,
+    )
+
+    assert selection.skipped_manual == ("m1#c00",)
+    assert all(material_id != "m1" for material_id, _ in selection.chunks)
+
+
+def test_a_second_pinned_material_is_not_forced_over_the_cap():
+    first = make_material(*[f"甲 {index} " + "字" * 100 for index in range(10)], material_id="m1")
+    second = make_material("乙 " + "字" * 100, material_id="m2")
+    auto = make_material("自动", material_id="m3")
+    packets = packets_of(first, second, auto)
+    selection = select_projection(
+        packets=packets,
+        pool=pool_of(first, second, auto),
+        pinned=("m1", "m2"),
+        manual=(),
+        stage_hits=(),
+        query="甲 乙",
+        budget=1000,
+        section_overhead=0,
+        pinned_share=0.6,
+    )
+
+    assert spent_on(selection, packets, only={"m1", "m2"}) <= 600
+    assert any(material_id == "m3" for material_id, _ in selection.chunks)
 
 
 def test_stage_hits_come_before_the_rest_of_the_pool():

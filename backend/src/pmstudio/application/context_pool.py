@@ -38,6 +38,38 @@ PROJECTION_SLOTS_PER_MATERIAL = 2
 _MAX_STAGE_QUERY_CHARS = 300
 
 
+@dataclass(frozen=True, slots=True)
+class BudgetSplit:
+    """手勾/自动的预算切分：有可行的自动候选时手勾硬上限，否则手勾可用满。"""
+
+    usable: int
+    pinned_cap: int
+    auto_feasible: bool
+
+
+def split_material_budget(
+    *,
+    usable: int,
+    pinned_share: float,
+    auto_costs: Sequence[int],
+) -> BudgetSplit:
+    """手勾/自动的预算切分。纯函数；不读库、不读 round。
+
+    `auto_costs` 只许传**已过滤的自动候选**成本；调用方负责排除手勾、web_search、
+    跨项目、已删除材料。自动候选存在且有一块能装进余量时才给自动段留位置；
+    否则手勾可以用满预算（不人为留一段空预算）。
+    """
+
+    if not 0.0 <= pinned_share <= 1.0:
+        raise ValueError("pinned_share 必须在 [0, 1]")
+    pinned_cap = int(usable * pinned_share)
+    reserve = usable - pinned_cap
+    feasible = bool(auto_costs) and any(cost <= reserve for cost in auto_costs)
+    if not feasible:
+        return BudgetSplit(usable=usable, pinned_cap=usable, auto_feasible=False)
+    return BudgetSplit(usable=usable, pinned_cap=pinned_cap, auto_feasible=True)
+
+
 def build_stage_query(
     stage: RetrievalStage,
     *,
@@ -133,8 +165,10 @@ def select_projection(
     **前提**：`packets` / `pool` 只含可投影材料（调用方负责排除 `web_search`：
     它一条一个号、走 `WEB_BUDGET`，混进来会破"编号==进提示词的块"）。
 
-    选块顺序：manual（硬保）→ 每份手勾至少一块（地板，用总预算）→
-    手勾按相关度（全局 ≤`pinned_share`）→ 本步命中 → 池里其余。
+    选块顺序：manual（硬保）→ 每份手勾至少一块（地板）→
+    手勾按相关度 → 本步命中 → 池里其余。
+    手勾/手动合计受 `split_material_budget` 的 `pinned_cap` 约束：池里有可行的
+    自动候选时是 `pinned_share`（默认 60%），没有时就是整个可用预算。
     装不下就跳过（继续试后面的块），不 break——高分块贵、后面的便宜块还该有机会。
     """
 
@@ -142,7 +176,6 @@ def select_projection(
     pinned_order = tuple(dict.fromkeys(pinned))
     # 手动带的材料也算"手勾来源"：不占用户预算，但必须计入同一个 60% 闸。
     pinned_set = frozenset(pinned_order) | frozenset(item.material_id for item in manual)
-    pinned_cap = usable if pinned_share >= 1.0 else int(usable * pinned_share)
 
     picked: list[tuple[str, MaterialChunk]] = []
     taken: set[str] = set()
@@ -158,6 +191,18 @@ def select_projection(
             return ()
         allowed = pool.get(material_id, frozenset())
         return tuple(chunk for chunk in packet.parsed.chunks if chunk.chunk_id in allowed)
+
+    # 自动候选只算**非手勾**材料的块；每块都按"作为该材料第一块"渲染成本判断。
+    auto_costs = [
+        material_block_cost(packet, chunk, first_of_material=True)
+        for material_id, packet in packets.items()
+        if material_id not in pinned_set
+        for chunk in chunks_of(material_id)
+    ]
+    split = split_material_budget(
+        usable=usable, pinned_share=pinned_share, auto_costs=auto_costs
+    )
+    pinned_cap = split.pinned_cap
 
     def take(
         material_id: str, chunk: MaterialChunk, *, respect_pinned_cap: bool = True
@@ -197,8 +242,9 @@ def select_projection(
         if not take(item.material_id, chunk) and chunk.chunk_id not in taken:
             skipped_manual.append(item.chunk_id)
 
-    # ② 地板：每份手勾材料至少露一块（用**总预算**，不受 60% 闸）。
-    #    没有这一步，两份手勾材料时第一份长文能吃满 60%，第二份每一步都进不来。
+    # ② 地板：每份手勾材料至少露一块，但**不越过 `pinned_cap`**。
+    #    没有这一步，两份手勾材料时第一份长文能吃满 cap，第二份每一步都进不来。
+    #    连最便宜的一块都放不进 cap → 当步不选，也不写 per-step drop（它仍在池里）。
     for material_id in pinned_order:
         if any(mid == material_id for mid, _ in picked):
             continue
@@ -207,10 +253,10 @@ def select_projection(
         ]
         candidates.sort(key=lambda chunk: (-block_score(chunk.text, query), chunk.ordinal))
         for chunk in candidates:
-            if take(material_id, chunk, respect_pinned_cap=False):
+            if take(material_id, chunk):
                 break
 
-    # ③ 手勾材料：按本步 query 的相关度取，受全局 60% 闸。
+    # ③ 手勾材料：按本步 query 的相关度取，仍受 `pinned_cap` 闸。
     for material_id in pinned_order:
         candidates = [
             chunk for chunk in chunks_of(material_id) if chunk.chunk_id not in taken
@@ -257,7 +303,7 @@ def select_projection(
         if take(material_id, chunk) and material_id not in pinned_set:
             auto_slots[material_id] = auto_slots.get(material_id, 0) + 1
 
-    # 地板可能把 `①` 里记下的 manual 块又装回来（总预算够、60% 闸不够）：
+    # 后续阶段可能把 `①` 里记下的 manual 块又装回来：
     # 已经 `taken` 的不再算"没进来"，否则提示词/留痕会说反话。
     skipped_manual = [chunk_id for chunk_id in skipped_manual if chunk_id not in taken]
     return Selection(

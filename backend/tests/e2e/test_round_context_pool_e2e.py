@@ -24,6 +24,7 @@ from pmstudio.application.use_cases import (
 from pmstudio.bootstrap.container import UuidIdGenerator
 from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.round.retrieval import RetrievalStage
+from pmstudio.domain.round.round import Round
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.template import standard_template
 from pmstudio.infrastructure.sqlite.database import connect
@@ -42,7 +43,7 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
-from tests.support.builders import NOW, PROJECT, SEAT
+from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT
 from tests.support.doubles import FixedClock, RecordingPublisher
 from tests.support.harness import Harness
 
@@ -391,4 +392,38 @@ async def test_the_whole_context_chain_is_real_and_idempotent(tmp_path):
     ]
     assert [trace.pass_index for trace in final.retrievals] == [0, 1, 1, 2, 2]
     assert final.draft is not None, "第二次整合是草案回复"
+    connection.close()
+
+
+def test_a_handpicked_block_over_the_share_is_not_put_in_the_prompt(tmp_path):
+    connection = connect(tmp_path / "context_budget_e2e.db")
+    ids = UuidIdGenerator()
+    store = SqliteMaterialStore(connection, ids=ids)
+    rounds = SqliteRoundRepository(connection)
+    evidences = SqliteEvidenceRepository(connection)
+    SqliteProjectFactory(connection, ids=ids).create(
+        project_id=PROJECT, title="预算投影 e2e", now=NOW, template=standard_template()
+    )
+    handpicked = put(store, "手勾" * 1500, "手勾长文.md")
+    put(store, "自动材料" * 175, "自动短材料.md")
+    round_ = Round.start(
+        round_id=ROUND_ID, project_id=PROJECT, user_input="自动材料", now=NOW
+    )
+    round_.pin_materials((handpicked.material_id,))
+    rounds.save(round_)
+
+    prepared = RoundContextPreparer(
+        rounds=rounds,
+        round_writer=rounds,
+        evidence=evidences,
+        evidence_writer=evidences,
+        materials=store,
+        retriever=SqliteFtsRetriever(connection),
+        uow=SqliteUnitOfWork(connection),
+        clock=FixedClock(),
+    ).prepare(round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="自动材料")
+
+    assert "自动材料" * 175 in prepared.text
+    assert "手勾" * 1500 not in prepared.text
+    assert len(prepared.text) <= 4000
     connection.close()
