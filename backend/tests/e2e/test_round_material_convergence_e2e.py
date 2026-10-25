@@ -1,7 +1,9 @@
-"""P（生产·真跑）：真 SQLite + 真 `SqliteHybridRetriever` + 真 `StartRound`。
+"""P（生产·真跑）：真 SQLite + FTS fallback + 真 `StartRound`。
 
 只验**上下文形状**（哪些块进了这一轮、预算守不守得住），**不烧真模型答题**——
-正确率的对照实验在 `experiment-v5`。
+正确率的对照实验在 `experiment-v5`。这里用 `SqliteHybridRetriever(connection, None)`：
+没有 embedder，向量分支必然失败并退回纯 FTS5——**不是真 hybrid**（真 hybrid 见
+`test_round_context_pool_hybrid_e2e.py`）。
 
 **为什么不放 `tests/application/`**：那里的 harness 材料仓是内存的、检索器是替身；
 真检索器返回的 `material_id` 在内存仓里查不到 → 自动材料会被全部过滤，

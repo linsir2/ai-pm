@@ -36,8 +36,13 @@ from pmstudio.infrastructure.sqlite.repositories import (
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.api.test_routes import QUESTION_REPLY
 from tests.application.test_materials import make_material
-from tests.application.test_seat_round import SEAT_REPLY, claims_reply, started_round
-from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_round
+from tests.application.test_seat_round import (
+    SEAT_REPLY,
+    SECOND_SEAT,
+    claims_reply,
+    started_round,
+)
+from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_round, make_seat
 from tests.support.doubles import FixedClock, RecordingMaterialRetriever
 from tests.support.harness import Harness
 
@@ -338,6 +343,39 @@ async def test_seat_round_uses_the_prepared_text():
         one for one in harness.gateway.requests if one.purpose == "seat_review"
     )
     assert any("【本步投影】" in message.content for message in request.messages)
+
+
+async def test_every_pending_seat_sees_the_same_external_material_text():
+    """多席位共用**同一份**投影文本：不是每个席位各渲染一遍（那会漂）。"""
+
+    packet = make_material("权限：管理员才能导出")
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={SEAT: SEAT_REPLY, SECOND_SEAT: SEAT_REPLY},
+        seats=(make_seat(), make_seat(SECOND_SEAT, title="权限与角色")),
+    )
+    harness.seed_project()
+    harness.materials.seed(packet)
+    round_id = await started_round(harness)
+    round_ = harness.rounds.get(round_id)
+    round_.pin_materials((packet.material_id,))
+    harness.rounds.seed(round_)
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT, SECOND_SEAT))
+
+    await harness.run_seat_round(
+        preparer=preparer(
+            harness,
+            RecordingMaterialRetriever(returns=(material_hit(packet, 0),)),
+        )
+    )(round_id=round_id)
+
+    seat_calls = [
+        slots for name, slots in harness.prompts.calls if name == "seat_review"
+    ]
+    assert len(seat_calls) == 2, seat_calls
+    texts = [slots["external_material"] for slots in seat_calls]
+    assert texts[0] == texts[1], "两个席位必须看到逐字相同的外部材料文本"
+    assert "权限：管理员才能导出" in texts[0], "投影里该有材料正文"
 
 
 async def test_integrate_round_uses_the_prepared_text():
