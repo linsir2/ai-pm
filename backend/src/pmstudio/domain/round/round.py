@@ -171,6 +171,8 @@ class DroppedItem:
 
     为什么带 `pass_index`：同一轮里席位会跑好几趟（答案回来再跑一次），而 `local_id`
     每趟都从 O1 重新开始；只有加上趟数，界面才知道这行该挂在哪个席位包下面。
+    **非席位来源**（analyzer / integrator 的 TOOL 留痕）没有席位趟，写 1 只是哨兵；
+    消费方在 `seat_id is None` 时不要拿它当"第 1 趟席位轮"分组。
     """
 
     handle: str

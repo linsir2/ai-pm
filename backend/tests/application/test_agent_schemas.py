@@ -529,3 +529,24 @@ def test_integration_packet_accepts_four_web_requests_without_capping_them():
     assert discarded == ()
     schema = schemas.IntegrationPacket.model_json_schema()
     assert "maxItems" not in schema["properties"]["web_requests"]
+
+
+def test_web_request_draft_tolerates_missing_fields_so_the_use_case_can_drop_one():
+    """缺 query / why 不该整包重装：默认空串交给用例层丢那一条 + 留痕。"""
+
+    seat = schemas.SeatPacket.model_validate(
+        {
+            "basis": "读了文档",
+            "opinions": [],
+            "web_requests": [{"query": "缺 why"}],
+        }
+    )
+    integration = schemas.IntegrationPacket.model_validate(
+        {"web_requests": [{"why": "缺 query"}, {}]}
+    )
+
+    assert (seat.web_requests[0].query, seat.web_requests[0].why) == ("缺 why", "")
+    assert [(item.query, item.why) for item in integration.web_requests] == [
+        ("", "缺 query"),
+        ("", ""),
+    ]

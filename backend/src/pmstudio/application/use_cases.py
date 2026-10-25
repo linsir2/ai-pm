@@ -975,6 +975,12 @@ def _tool_drop(handle: str, reason: str) -> DroppedItem:
     )
 
 
+#: 非席位来源（analyzer / integrator）没有"第几趟席位轮"；`DroppedItem` 要求
+#: `pass_index >= 1`，所以 TOOL 留痕写 1 只作哨兵。消费方在 `seat_id is None` 时
+#: 不要拿它当"第 1 趟席位轮"分组（按 `packet_id` / origin 归组）。
+_NO_SEAT_PASS_INDEX = 1
+
+
 def _web_requests_for(
     round_: Round,
     *,
@@ -1013,7 +1019,9 @@ def _web_requests_for(
                     ),
                     source=DropSource.TOOL,
                     seat_id=seat_id,
-                    pass_index=pass_index or 1,
+                    pass_index=(
+                        pass_index if pass_index is not None else _NO_SEAT_PASS_INDEX
+                    ),
                     packet_id=packet_id,
                 )
             )
@@ -1038,7 +1046,9 @@ def _web_requests_for(
                     reason=f"这条联网申请过不了领域校验：{error.message}",
                     source=DropSource.TOOL,
                     seat_id=seat_id,
-                    pass_index=pass_index or 1,
+                    pass_index=(
+                        pass_index if pass_index is not None else _NO_SEAT_PASS_INDEX
+                    ),
                     packet_id=packet_id,
                 )
             )
@@ -2164,6 +2174,7 @@ _DISCARD_TITLES = {
     "list_items": "清单项",
     "proposals": "提案",
     "dropped_opinions": "未申报丢弃",
+    "web_requests": "联网申请",
 }
 
 

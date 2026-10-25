@@ -210,7 +210,9 @@ class ClaimAnalyzer(Agent[Analysis, schemas.ClaimsPacket]):
         contradictions, contradiction_drops = contradictions_from_packet(
             packet, claims=claims, positions=positions
         )
-        web_queries, query_drops = web_queries_from_packet(packet)
+        web_queries, query_drops = web_queries_from_packet(
+            packet, packet_id=outcome.packet_id
+        )
         # 留痕统一在**出口**补 `packet_id`：9 处构造点散在 6+ 个函数里，穿参数要改
         # 6+ 个签名；而这里 envelope 就在手边，一处 `replace()` 覆盖全部。
         # 不区分 source——它们都来自这一包（analyzer 的留痕全是"模型交回的东西没被采纳"）。
@@ -544,12 +546,14 @@ def contradictions_from_packet(
 
 
 def web_queries_from_packet(
-    packet: schemas.ClaimsPacket,
+    packet: schemas.ClaimsPacket, *, packet_id: str | None = None
 ) -> tuple[tuple[WebQuery, ...], tuple[DroppedItem, ...]]:
     """报文的检索词提名 → 领域值对象；写多了 / 写歪了的**丢那一条 + 留痕**。
 
     与"未知席位提名""互斥对子序号越界"同一个口径：一条判断写歪，不该让整轮重跑
     （真跑一次重装几十秒）。三种写歪：超过 `MAX_WEB_QUERIES`、没写"为什么"、检索词为空。
+
+    `packet_id` 让 TOOL 留痕能挂回提出方（与席位 / 整合者的联网申请留痕同一契约）。
     """
 
     keep: list[WebQuery] = []
@@ -567,7 +571,9 @@ def web_queries_from_packet(
                     ),
                     source=DropSource.TOOL,
                     seat_id=None,
+                    # 非席位来源：1 只是 DroppedItem 的哨兵值，不代表第 1 趟席位轮。
                     pass_index=1,
+                    packet_id=packet_id,
                 )
             )
             continue
@@ -582,7 +588,9 @@ def web_queries_from_packet(
                     reason=f"这条检索词过不了领域校验：{error.message}",
                     source=DropSource.ASSEMBLY,
                     seat_id=None,
+                    # 非席位来源：同上，1 只是哨兵。
                     pass_index=1,
+                    packet_id=packet_id,
                 )
             )
             continue

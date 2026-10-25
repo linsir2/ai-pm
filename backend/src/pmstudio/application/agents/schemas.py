@@ -98,12 +98,15 @@ class WebRequestDraft(BaseModel):
     #:    上限不写进 schema：模型多写一条的既定口径是**丢那一条 + 留痕**，
     #:    不是整包重装。名额由用例层在 `attach_web_requests` 之前按方取前 3。
 
-    query: str = Field(description="要拿去搜的一句话（像人问的那样，别堆关键词）")
+    query: str = Field(
+        default="", description="要拿去搜的一句话（像人问的那样，别堆关键词）"
+    )
     why: str = Field(
+        default="",
         description=(
             "为什么需要**外部客观事实**——文档里没有、材料里没有、用户也答不了的那种"
             "（行业标准、法规条款、第三方接口的既有做法）"
-        )
+        ),
     )
 
 
