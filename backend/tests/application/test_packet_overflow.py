@@ -180,7 +180,13 @@ def test_array_with_an_unclassifiable_element_still_fails_with_a_shape_hint():
 
     assert exc.value.details["packet_shape"] == {
         "got": "array",
-        "expected_keys": ("questions", "list_items", "proposals", "dropped_opinions"),
+        "expected_keys": (
+            "questions",
+            "list_items",
+            "proposals",
+            "dropped_opinions",
+            "web_requests",
+        ),
     }
 
 

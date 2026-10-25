@@ -967,18 +967,22 @@ logger = logging.getLogger(__name__)
 
 
 
+#: 非席位来源（analyzer / integrator / 工具）没有"第几趟席位轮"；`DroppedItem` 要求
+#: `pass_index >= 1`，所以 TOOL 留痕写 1 只作哨兵。消费方在 `seat_id is None` 时
+#: 不要拿它当"第 1 趟席位轮"分组（按 `packet_id` / origin 归组）。
+_NO_SEAT_PASS_INDEX = 1
+
+
 def _tool_drop(handle: str, reason: str) -> DroppedItem:
     """工具这一趟的留痕：与席位意见无关，所以 `seat_id` 恒为 None（闭环区单列一句）。"""
 
     return DroppedItem(
-        handle=handle, reason=reason, source=DropSource.TOOL, seat_id=None, pass_index=1
+        handle=handle,
+        reason=reason,
+        source=DropSource.TOOL,
+        seat_id=None,
+        pass_index=_NO_SEAT_PASS_INDEX,
     )
-
-
-#: 非席位来源（analyzer / integrator）没有"第几趟席位轮"；`DroppedItem` 要求
-#: `pass_index >= 1`，所以 TOOL 留痕写 1 只作哨兵。消费方在 `seat_id is None` 时
-#: 不要拿它当"第 1 趟席位轮"分组（按 `packet_id` / origin 归组）。
-_NO_SEAT_PASS_INDEX = 1
 
 
 def _web_requests_for(
