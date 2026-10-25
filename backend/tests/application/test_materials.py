@@ -20,7 +20,7 @@ from pmstudio.application.use_cases import _unreferenced_materials_for, external
 from pmstudio.domain.authoring.instruction import WriteInstruction  # noqa: F401
 from pmstudio.domain.provenance.evidence import EvidenceKind
 from pmstudio.domain.round.draft import Origin, OriginType, Proposal
-from pmstudio.domain.round.round import DropSource, MaterialRef, Round
+from pmstudio.domain.round.round import DroppedItem, DropSource, MaterialRef, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, RoundId
@@ -466,7 +466,9 @@ async def test_materials_the_budget_cannot_fit_are_said_out():
     round_ = harness.rounds.get(RoundId(round_id))
     drops = [item for item in round_.dropped if item.source == DropSource.MATERIAL]
     assert len(drops) == 1, f"预算挤掉的材料要留一条痕：{round_.dropped}"
-    assert "2 份材料一块都没带进来" in drops[0].reason, drops[0].reason
+    assert "开局只带得下 1 份" in drops[0].reason, drops[0].reason
+    assert "还有 2 份材料仍在材料池里" in drops[0].reason, drops[0].reason
+    assert "后续步骤可能补进来" in drops[0].reason, drops[0].reason
 
     # 提示词里也要说给模型听（模型得知道"还有材料没带进来"）
     prompt = external_material_text(round_, store=harness.materials)
@@ -474,10 +476,11 @@ async def test_materials_the_budget_cannot_fit_are_said_out():
     assert "在材料表里，查得到，但这一轮没读" in prompt, prompt
 
 
-async def test_the_budget_dropped_trace_is_unchanged():
-    """R（回归）：手勾路（无自动检索）的 `missed` 文案**逐字不变**——F0 不许动老路的话术。
+async def test_the_budget_dropped_trace_uses_honest_wording():
+    """R（回归）：手勾路（无自动检索）的 `missed` 文案改为诚实措辞。
 
-    口径：这里没有自动检索，`missed` 的列表与两个计数都只数手勾的材料。
+    旧文案"一块都没带进来"在后续步骤可能把材料补进来时是假话；SEED 的聚合留痕
+    只说明"开局没带下"，不再断言整轮都没读。
     """
 
     harness = Harness(replies={"claims": claims_reply()})
@@ -494,8 +497,37 @@ async def test_the_budget_dropped_trace_is_unchanged():
     assert len(drops) == 1, f"预算挤掉的材料要留一条痕：{round_.dropped}"
     assert drops[0].handle == "材料 3 份"
     assert drops[0].reason == (
-        "预算只带得下 1 份，还有 2 份材料一块都没带进来（材料表里留着，搜得到）"
+        "开局只带得下 1 份；还有 2 份材料仍在材料池里，后续步骤可能补进来"
     )
+
+
+async def test_a_seed_miss_that_later_enters_is_not_called_unread():
+    """R（评审 C1）：SEED 漏掉、后续补进来的材料，提示词不许说"这一轮没读"。"""
+
+    harness = harness_with_material("后来补进来的材料")
+    round_ = make_round()
+    round_.pin_materials(("m1",))
+    round_.add_materials(
+        [MaterialRef(material_id="m1", chunk_id="m1#c00", eid=EvidenceId("E9"))]
+    )
+    round_.note_dropped(
+        [
+            DroppedItem(
+                handle="材料 1 份",
+                reason="开局只带得下 0 份；还有 1 份材料仍在材料池里，后续步骤可能补进来",
+                source=DropSource.MATERIAL,
+                seat_id=None,
+                pass_index=1,
+            )
+        ]
+    )
+
+    prompt = external_material_text(round_, store=harness.materials)
+
+    assert "另有" not in prompt, prompt
+    assert "这一轮没读" not in prompt, prompt
+    assert "份材料因预算没带进来" not in prompt, prompt
+    assert "后来补进来的材料" in prompt, "它确实在这一轮里"
 
 
 async def test_starting_a_round_rejects_a_web_search_material():

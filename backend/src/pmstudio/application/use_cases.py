@@ -72,6 +72,7 @@ from pmstudio.application.context import (
     build_project_context,
     build_round_digest,
     extract_observations_from_reviews,
+    material_block_cost,
     material_header,
     missing_line,
     render_answers,
@@ -99,7 +100,11 @@ from pmstudio.application.context import (
     select_chunks,
     web_block_cost,
 )
-from pmstudio.application.context_pool import PINNED_BUDGET_SHARE, build_stage_query
+from pmstudio.application.context_pool import (
+    PINNED_BUDGET_SHARE,
+    build_stage_query,
+    split_material_budget,
+)
 from pmstudio.application.deliverable import (
     Deliverable,
     iter_document_entries,
@@ -572,9 +577,9 @@ class StartRound:
                         DroppedItem(
                             handle=f"材料 {len(handpicked)} 份",
                             reason=(
-                                f"预算只带得下 {kept} 份，"
-                                f"还有 {len(missed)} 份材料一块都没带进来"
-                                "（材料表里留着，搜得到）"
+                                f"开局只带得下 {kept} 份；"
+                                f"还有 {len(missed)} 份材料仍在材料池里，"
+                                "后续步骤可能补进来"
                             ),
                             source=DropSource.MATERIAL,
                             seat_id=None,
@@ -644,17 +649,82 @@ class StartRound:
                 # 逐块发号、只渲染一个号——"编号 == 进提示词的块"那条红线。
                 raise WebMaterialNotAttachable(material_id=material_id)
             packets[material_id] = packet
-        # 手勾来源**合计**最多 60%：自动段从此有位置（长文不再吃满 4000）。
+        # 自动段**先查**：`split_material_budget` 要知道有没有装得进余量的自动候选，
+        # 才能决定手勾是硬上限 60% 还是可用满整个预算。检索器没注入 = 没查。
+        hits: tuple[MaterialHit, ...] = ()
+        failure: str | None = None
+        attempted = False
+        auto: dict[str, MaterialPacket] = {}
+        if self._retriever is not None:
+            attempted = True
+            try:
+                hits = self._retriever.search(
+                    project_id=project_id, query=query, limit=SEARCH_LIMIT
+                )
+                # 观测（P0.4）：建轮自动检索与顶栏搜索共用检索器，必须能分开。
+                logger.info(
+                    "material_search caller=round stage=seed project=%s query=%r"
+                    " limit=%d hits=%d",
+                    project_id,
+                    query,
+                    SEARCH_LIMIT,
+                    len(hits),
+                )
+            except Exception as error:
+                # 检索是**增强项**：它挂了不该让这一轮起不来——回退到"只有勾的材料"，
+                # 也就是改前的行为。**但要说一声**：静默降级会让"检索器永久坏了"和
+                # "这轮确实没搜到"完全无法区分（评审 B）。
+                logger.warning(
+                    "material_search caller=round stage=seed project=%s ok=False"
+                    "（材料检索失败，本轮只用勾的材料）",
+                    project_id,
+                    exc_info=True,
+                )
+                hits = ()
+                failure = f"{type(error).__name__}: {error}"
+            else:
+                # 同一份材料可能在命中里占两槽（`_MATERIAL_SLOTS=2`）→ 按材料去重。
+                # **先过滤再算成本**：web/手勾/跨项目/已删除的命中不是自动候选，
+                # 不许触发 40% reserve（评审 C4）。
+                for material_id in dict.fromkeys(hit.material_id for hit in hits):
+                    if material_id in packets:
+                        continue
+                    packet = self._materials.get(material_id)
+                    if packet is None or packet.project_id != str(project_id):
+                        continue
+                    if packet.parsed.origin == WEB_ORIGIN:
+                        # **联网结果走另一条渲染路**：一条结果一个号、预算 `WEB_BUDGET`、
+                        # 由 `render_web_results` 出正文。混进材料段会按块发号、按材料预算算，
+                        # 结果就是"有号但提示词里一个字没有"——"编号 == 带进提示词的块"那条红线。
+                        continue
+                    auto[material_id] = packet
+        auto_hits = [item for item in hits if item.material_id in auto]
+        auto_costs: list[int] = []
+        for item in auto_hits:
+            packet = auto[item.material_id]
+            chunk = next(
+                (one for one in packet.parsed.chunks if one.chunk_id == item.chunk_id),
+                None,
+            )
+            if chunk is None:
+                continue
+            auto_costs.append(
+                material_block_cost(packet, chunk, first_of_material=True)
+            )
+        split = split_material_budget(
+            usable=MATERIAL_BUDGET - SECTION_OVERHEAD,
+            pinned_share=PINNED_BUDGET_SHARE,
+            auto_costs=auto_costs,
+        )
         picked, used = select_chunks(
             [packets[item] for item in handpicked],
             query=query,
-            budget=int(MATERIAL_BUDGET * PINNED_BUDGET_SHARE),
-            section_overhead=SECTION_OVERHEAD,
+            budget=split.pinned_cap,
+            section_overhead=0,
         )
-        # **地板**：每份手勾材料至少要有机会露一块。单块就可能比 60% 预算还大
-        # （实测 3000 字的块 > 2400）——只有上限没有地板，会出现"一份手勾都进不来"，
-        # 那是比"自动段被饿死"更糟的回归。地板仍受**总预算**约束，所以自动段至少
-        # 还能拿到剩下的零头。
+        # **地板**：每份手勾材料至少要有机会露一块，但**只在 `pinned_cap` 内**。
+        # 单块就可能比 60% 预算还大（实测 3000 字的块 > 2400）——只有上限没有地板，
+        # 会出现"一份手勾都进不来"；但地板越过 cap 就会把自动段饿死（A2 前的回归）。
         selected_floor = {material_id for material_id, _ in picked}
         floor_packets = [
             packets[item] for item in handpicked if item not in selected_floor
@@ -663,80 +733,35 @@ class StartRound:
             floor_picked, floor_used = select_chunks(
                 floor_packets,
                 query=query,
-                budget=max(0, MATERIAL_BUDGET - used - SECTION_OVERHEAD),
+                budget=max(0, split.pinned_cap - used),
                 section_overhead=0,
             )
             picked = picked + floor_picked
             used += floor_used
         order = list(handpicked)
-        remaining = MATERIAL_BUDGET - used - SECTION_OVERHEAD
-        # 预算已经被手勾的用光就别检索了：`search` 在向量路会跑同步推理，
-        # 白跑一趟还会阻塞事件循环（收益恒为 0）。
-        if self._retriever is None or remaining <= 0:
-            return _Picked(picked=picked, packets=packets, order=tuple(order))
-        try:
-            hits = self._retriever.search(
-                project_id=project_id, query=query, limit=SEARCH_LIMIT
+        remaining = split.usable - used
+        if auto:
+            # `scores` 以 `chunk_id` 为键——前提是它**全局唯一**（生产由 `_restamp` 保证：
+            # `{material_id}#cNN`）。只留自动材料的分：手勾的那些已经进过第一段了。
+            scores = {
+                item.chunk_id: item.score for item in auto_hits
+            }
+            more, _ = select_chunks(
+                list(auto.values()),
+                scores=scores,
+                budget=remaining,
+                section_overhead=0,
             )
-            # 观测（P0.4）：建轮自动检索与顶栏搜索共用检索器，必须能分开。
-            logger.info(
-                "material_search caller=round stage=seed project=%s query=%r"
-                " limit=%d hits=%d",
-                project_id,
-                query,
-                SEARCH_LIMIT,
-                len(hits),
-            )
-        except Exception as error:
-            # 检索是**增强项**：它挂了不该让这一轮起不来——回退到"只有勾的材料"，
-            # 也就是改前的行为。**但要说一声**：静默降级会让"检索器永久坏了"和
-            # "这轮确实没搜到"完全无法区分（评审 B）。
-            logger.warning(
-                "material_search caller=round stage=seed project=%s ok=False"
-                "（材料检索失败，本轮只用勾的材料）",
-                project_id,
-                exc_info=True,
-            )
-            return _Picked(
-                picked=picked,
-                packets=packets,
-                order=tuple(order),
-                error=f"{type(error).__name__}: {error}",
-                attempted=True,
-            )
-        # 同一份材料可能在命中里占两槽（`_MATERIAL_SLOTS=2`）→ 按材料去重。
-        auto: dict[str, MaterialPacket] = {}
-        for material_id in dict.fromkeys(hit.material_id for hit in hits):
-            if material_id in packets:
-                continue
-            packet = self._materials.get(material_id)
-            if packet is None or packet.project_id != str(project_id):
-                continue
-            if packet.parsed.origin == WEB_ORIGIN:
-                # **联网结果走另一条渲染路**：一条结果一个号、预算 `WEB_BUDGET`、
-                # 由 `render_web_results` 出正文。混进材料段会按块发号、按材料预算算，
-                # 结果就是"有号但提示词里一个字没有"——"编号 == 带进提示词的块"那条红线。
-                continue
-            auto[material_id] = packet
-        # `scores` 以 `chunk_id` 为键——前提是它**全局唯一**（生产由 `_restamp` 保证：
-        # `{material_id}#cNN`）。只留自动材料的分：手勾的那些已经进过第一段了。
-        scores = {
-            hit.chunk_id: hit.score for hit in hits if hit.material_id in auto
-        }
-        more, _ = select_chunks(
-            list(auto.values()),
-            scores=scores,
-            budget=remaining,
-        )
-        picked = picked + more
-        packets.update(auto)
-        order += list(auto)
+            picked = picked + more
+            packets.update(auto)
+            order += list(auto)
         return _Picked(
             picked=picked,
             packets=packets,
             order=tuple(order),
             hits=tuple(hits),
-            attempted=True,
+            error=failure,
+            attempted=attempted,
         )
 
     def _resolve_seeds(
@@ -4845,13 +4870,6 @@ def external_material_text(
     ]
     if missed_materials:
         parts.append(budget_drop_line(len(missed_materials)))
-    elif any(item.source == DropSource.MATERIAL for item in round_.dropped):
-        # 老 payload 只有聚合留痕、没有 pinned 明细：退回条目数（至少不说反话）
-        parts.append(
-            budget_drop_line(
-                sum(1 for item in round_.dropped if item.source == DropSource.MATERIAL)
-            )
-        )
     return "\n\n".join(parts) if parts else NO_MATERIAL_TEXT
 
 

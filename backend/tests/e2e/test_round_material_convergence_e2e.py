@@ -153,3 +153,56 @@ async def test_a_real_round_converges_from_the_whole_library(tmp_path):
     )
     # 成本尺子也要与渲染对得上（上界），否则下一轮又会静默超
     assert selection_cost(store, round_) + SECTION_OVERHEAD <= context.MATERIAL_BUDGET
+
+
+async def test_a_real_round_caps_a_huge_pinned_block_and_keeps_the_auto_segment(tmp_path):
+    """P：真 SQLite + 真 FTS——SEED 先检索自动段，再按同一个 split 选块。
+
+    合成单块 3000 字手勾装不进手勾 cap（60%），自动段 700 字装得进余量：
+    手勾不该靠地板复活，自动段必须进得来，两者合计 + 收尾 ≤ 4000。
+    """
+
+    set_owner_scope(OWNER)
+    connection = connect(tmp_path / "convergence-split.db")
+    ids = UuidIdGenerator()
+    store = SqliteMaterialStore(connection, ids=ids)
+    documents = SqliteDocumentRepository(connection)
+    rounds = SqliteRoundRepository(connection)
+    evidences = SqliteEvidenceRepository(connection)
+    SqliteProjectFactory(connection, ids=ids).create(
+        project_id=PROJECT, title="切分核验", now=NOW, template=standard_template()
+    )
+
+    pinned = put(store, "字" * 3000, "超大手勾块.md")
+    auto = put(store, "导出权限怎么定：" + "细" * 700, "自动材料.md")
+
+    start = StartRound(
+        documents=documents,
+        rounds=rounds,
+        round_writer=rounds,
+        evidence=evidences,
+        evidence_writer=evidences,
+        uow=SqliteUnitOfWork(connection),
+        analyzer=_UnusedAnalyzer(),  # type: ignore[arg-type]
+        assigner=EvidenceAssigner(),
+        checker=ReadinessChecker(),
+        clock=FixedClock(),
+        ids=ids,
+        events=RecordingPublisher(),
+        materials=store,
+        explorations=SqliteExplorationRepository(connection),
+        discussions=SqliteDiscussionRepository(connection),
+        retriever=SqliteHybridRetriever(connection, None),
+    )
+
+    round_id = await start.create(
+        project_id=PROJECT, user_input=INPUT, material_ids=[pinned.material_id]
+    )
+
+    round_ = rounds.get(round_id)
+    selected = {ref.material_id for ref in round_.materials}
+    assert auto.material_id in selected, (
+        f"自动段该进得来（实际：{selected}）"
+    )
+    assert pinned.material_id not in selected, "超出手勾 cap 的单块不许靠地板复活"
+    assert selection_cost(store, round_) + SECTION_OVERHEAD <= context.MATERIAL_BUDGET

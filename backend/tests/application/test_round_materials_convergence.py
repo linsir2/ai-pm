@@ -14,12 +14,13 @@ from dataclasses import replace
 import pytest
 
 from pmstudio.application import context
+from pmstudio.application.context_pool import PINNED_BUDGET_SHARE, split_material_budget
 from pmstudio.application.dto import MaterialHit
 from pmstudio.application.use_cases import SECTION_OVERHEAD, external_material_text
 from pmstudio.domain.round.retrieval import RetrievalStage
 from pmstudio.domain.shared.errors import ShapeError
 from tests.application.test_materials import make_material
-from tests.support.builders import PROJECT
+from tests.support.builders import PROJECT, make_material_packet
 from tests.support.doubles import RecordingMaterialRetriever
 from tests.support.harness import Harness
 
@@ -63,6 +64,23 @@ def selection_cost(harness: Harness, round_) -> int:
     total = 0
     first_seen: set[str] = set()
     for ref in round_.materials:
+        packet = harness.materials.get(ref.material_id)
+        chunk = next(c for c in packet.parsed.chunks if c.chunk_id == ref.chunk_id)
+        first = ref.material_id not in first_seen
+        first_seen.add(ref.material_id)
+        total += context.material_block_cost(packet, chunk, first_of_material=first)
+    return total
+
+
+def pinned_selection_cost(harness: Harness, round_) -> int:
+    """只累计 `round_.pinned_materials` 里的 ref 成本（手勾来源合计）。"""
+
+    pinned = set(round_.pinned_materials)
+    total = 0
+    first_seen: set[str] = set()
+    for ref in round_.materials:
+        if ref.material_id not in pinned:
+            continue
         packet = harness.materials.get(ref.material_id)
         chunk = next(c for c in packet.parsed.chunks if c.chunk_id == ref.chunk_id)
         first = ref.material_id not in first_seen
@@ -294,6 +312,77 @@ async def test_the_round_digest_does_not_call_auto_materials_dropped():
     assert "被丢掉的" not in digest, digest
 
 
+async def test_a_pinned_block_over_the_cap_does_not_starve_the_auto_segment():
+    """R：自动段有可行候选时，超大的手勾单块**不许**从地板绕过 60% 上限。
+
+    旧代码先按 60% 选手勾、再用总预算补地板——3000 字的手勾块会被地板救回来，
+    自动段反而被挤掉。新顺序先检索/过滤自动段，再按同一个 split 切预算。
+    """
+
+    pinned = make_material("超" * 3000, material_id="m1")
+    auto = make_material("自动材料", material_id="m2")
+    harness = harness_with(pinned, auto)
+
+    round_id = await harness.start_round(
+        retriever=RecordingMaterialRetriever(returns=(hit(auto, 0, 1.0),))
+    ).create(project_id=PROJECT, user_input=INPUT, material_ids=["m1"])
+
+    round_ = harness.rounds.get(round_id)
+    selected = {ref.material_id for ref in round_.materials}
+    assert "m2" in selected, "自动段必须进得来"
+    assert "m1" not in selected, "超出手勾 cap 的单块不许靠地板复活"
+    assert selection_cost(harness, round_) + SECTION_OVERHEAD <= context.MATERIAL_BUDGET
+
+
+async def test_a_web_hit_does_not_trigger_the_auto_reserve():
+    """R2 护栏：web_search 命中不是自动候选，不该把手勾的 60% 上限拉下来。"""
+
+    pinned = make_material("超" * 3000, material_id="m1")
+    web = make_material_packet("联网结果", material_id="w1", origin="web_search")
+    harness = harness_with(pinned, web)
+
+    round_id = await harness.start_round(
+        retriever=RecordingMaterialRetriever(returns=(hit(web, 0, 1.0),))
+    ).create(project_id=PROJECT, user_input=INPUT, material_ids=["m1"])
+
+    round_ = harness.rounds.get(round_id)
+    assert {ref.material_id for ref in round_.materials} == {"m1"}
+
+
+async def test_a_handpicked_hit_does_not_trigger_the_auto_reserve():
+    """R2 护栏：手勾材料自己的命中不是自动候选，不许因此把 cap 降到 60%。
+
+    如果 `small` 的手勾 hit 被错算成 auto，pinned_cap 会降到 2277，3000 字的 big
+    会被挤掉。
+    """
+
+    big = make_material("超" * 3000, material_id="m1")
+    small = make_material("小材料", material_id="m2")
+    harness = harness_with(big, small)
+
+    round_id = await harness.start_round(
+        retriever=RecordingMaterialRetriever(returns=(hit(small, 0, 1.0),))
+    ).create(project_id=PROJECT, user_input=INPUT, material_ids=["m1", "m2"])
+
+    round_ = harness.rounds.get(round_id)
+    assert {ref.material_id for ref in round_.materials} == {"m1", "m2"}
+
+
+async def test_an_auto_candidate_too_large_for_the_reserve_keeps_pinned_full():
+    """R2 护栏：自动候选装不进 40% 余量 → 手勾可用满预算，不人为留空。"""
+
+    pinned = make_material("字" * 3000, material_id="m1")
+    auto = make_material("超" * 5000, material_id="m2")
+    harness = harness_with(pinned, auto)
+
+    round_id = await harness.start_round(
+        retriever=RecordingMaterialRetriever(returns=(hit(auto, 0, 1.0),))
+    ).create(project_id=PROJECT, user_input=INPUT, material_ids=["m1"])
+
+    round_ = harness.rounds.get(round_id)
+    assert {ref.material_id for ref in round_.materials} == {"m1"}
+
+
 async def test_seed_pins_handpicked_and_caps_their_share():
     """P2.4：手勾来源合计 ≤60%（长文不再把自动段饿死），并留下 SEED trace。"""
 
@@ -316,6 +405,13 @@ async def test_seed_pins_handpicked_and_caps_their_share():
     assert "m2" in picked_ids, "自动段必须还有位置"
     assert len([ref for ref in round_.materials if ref.material_id == "m1"]) < 100
     assert selection_cost(harness, round_) <= 4000
+    pinned_cost = pinned_selection_cost(harness, round_)
+    cap = split_material_budget(
+        usable=context.MATERIAL_BUDGET - SECTION_OVERHEAD,
+        pinned_share=PINNED_BUDGET_SHARE,
+        auto_costs=(1,),  # 只用于拿到 pinned_cap；不参与选择
+    ).pinned_cap
+    assert pinned_cost <= cap
 
 
 async def test_no_retriever_means_no_seed_trace():
