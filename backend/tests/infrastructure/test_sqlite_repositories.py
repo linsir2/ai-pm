@@ -738,5 +738,5 @@ def test_material_references_counts_pinned_and_manual_chunks(tmp_path):
     finally:
         connection.close()
 
-    assert references.get("m7"), "手勾材料必须算被引用"
-    assert references.get("m8"), "手动带进的块必须算被引用"
+    assert references.get("m7") == ("手勾",), "手勾材料必须算被引用"
+    assert references.get("m8") == ("手动带料",), "手动带进的块必须算被引用"
