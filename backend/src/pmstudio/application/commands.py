@@ -22,6 +22,14 @@ class RoundCommand:
     seats: tuple[str, ...] = ()
     #: 用户在本轮复述卡上勾中的联网检索词；空 = 不联网（默认）
     web_queries: tuple[str, ...] = ()
+    #: 逐条批准/拒绝的联网申请 id（`w1`…）；只用于 `decide_web_request`
+    request_id: str = ""
+    #: `approve` | `reject`；只用于 `decide_web_request`
+    decision: str = ""
+    #: 开场卡上的自动联网开关（只自动批准 seat/integrator 的后续申请）
+    allow_web: bool = False
+    #: 开场卡上逐条批准的新载体（与旧 `web_queries` 取并集、幂等）
+    approved_request_ids: tuple[str, ...] = ()
     claim_edits: tuple[ClaimEdit, ...] = ()
     answers: tuple[AnswerInput, ...] = ()
     skipped: tuple[str, ...] = ()

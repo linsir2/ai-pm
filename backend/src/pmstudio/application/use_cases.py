@@ -165,8 +165,11 @@ from pmstudio.application.errors import (
     UnknownExploration,
     UnknownMaterial,
     UnknownRole,
+    UnknownWebRequest,
     UnsupportedMaterial,
+    WebExecutionLimitReached,
     WebMaterialNotAttachable,
+    WebRequestNotPending,
 )
 from pmstudio.application.events import (
     DOC_CHANGED,
@@ -237,6 +240,7 @@ from pmstudio.application.web_research import (
     WEB_SEARCH_KIND,
     WebResearch,
     tool_limit,
+    web_execution_limit,
     web_search_tool,
 )
 from pmstudio.domain.authoring.document import Document
@@ -1251,6 +1255,135 @@ class SubmitOpening:
         """兼容委托：老测试直接调 `SubmitOpening._keep`。"""
 
         return self._web_research.keep(project_id, draft)
+
+
+class DecideWebRequest:
+    """逐条批准 / 拒绝联网申请。**批准即执行**（网络在 UoW 外）。
+
+    写路径与其它动作同一条纪律：
+
+    1. 读轮 → 404（申请不存在）/ 409（轮终态、已决策、名额满）；
+    2. 一个 UoW 把 `proposed → approved` 落库（这就是 claim，单 worker 口径）；
+    3. 联网（事务外）；工具级失败由 `WebResearch` 记成 `failed` + note + TOOL 留痕，
+       非工具异常由它先标失败再原样抛出；
+    4. 一个 UoW 写材料/E 号/`done|failed`/留痕 + `round.updated`。
+       拒绝只走一个 UoW，**不联网**。
+    """
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        evidence: EvidenceReader,
+        evidence_writer: EvidenceWriter,
+        tools: ToolCatalog,
+        available_tool_keys: frozenset[str],
+        web_research: WebResearch,
+        uow: UnitOfWork,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._evidence = evidence
+        self._evidence_writer = evidence_writer
+        self._tools = tools
+        self._available_tool_keys = available_tool_keys
+        self._web_research = web_research
+        self._uow = uow
+        self._clock = clock
+        self._events = events
+
+    async def __call__(
+        self, *, round_id: RoundId, request_id: str, decision: str
+    ) -> None:
+        if decision not in ("approve", "reject"):
+            raise ShapeError(
+                "联网申请只能批准或拒绝", decision=decision, request_id=request_id
+            )
+        round_ = self._rounds.get(round_id)
+        current = next(
+            (item for item in round_.web_requests if item.request_id == request_id),
+            None,
+        )
+        if current is None:
+            raise UnknownWebRequest(request_id, round_id=round_id)
+        if round_.step in (Step.DONE, Step.FAILED, Step.ABANDONED):
+            raise WebRequestNotPending(
+                "这一轮已经结束，不能再决策联网申请",
+                round_id=str(round_id),
+                step=str(round_.step),
+                request_id=request_id,
+            )
+        if current.state is not WebRequestState.PROPOSED:
+            raise WebRequestNotPending(
+                "这条联网申请已经决策过了",
+                request_id=request_id,
+                state=str(current.state),
+            )
+        if decision == "reject":
+            with self._uow:
+                target = self._rounds.get(round_id)
+                target.decide_web_request(request_id, approve=False)
+                self._round_writer.save(target)
+            _publish(self._events, self._clock, target)
+            return
+
+        # 执行名额：`approved/done/failed` 占位，`proposed/rejected` 不占。
+        tool = web_search_tool(self._tools, keys=self._available_tool_keys)
+        limit = web_execution_limit(
+            self._tools, keys=self._available_tool_keys
+        )
+        used = sum(
+            1
+            for item in round_.web_requests
+            if item.state
+            in (
+                WebRequestState.APPROVED,
+                WebRequestState.DONE,
+                WebRequestState.FAILED,
+            )
+        )
+        if used >= limit:
+            raise WebExecutionLimitReached(
+                round_id=round_id,
+                limit=limit,
+                used=used,
+                tool_available=tool is not None,
+            )
+
+        # claim：先落 approved 再联网——这样即便网络中途崩掉，名额也已经被占住，
+        # 下一次决策不会把同一条申请再执行一遍（B3 R14）。
+        with self._uow:
+            target = self._rounds.get(round_id)
+            target.decide_web_request(request_id, approve=True)
+            self._round_writer.save(target)
+        approved = next(
+            item for item in target.web_requests if item.request_id == request_id
+        )
+        execution = await self._web_research.execute(
+            round_id, (approved,), _decision_pass_index(round_)
+        )
+        if execution is None:  # pragma: no cover —— 有 approved 就不会是 None
+            return
+        with self._uow:
+            target = self._rounds.get(round_id)
+            ledger = self._evidence.get(target.project_id)
+            self._web_research.apply(target, ledger, execution)
+            self._evidence_writer.save(ledger)
+            self._round_writer.save(target)
+        _publish(self._events, self._clock, target)
+
+
+def _decision_pass_index(round_: Round) -> int:
+    """决策这一趟的趟号（只用于 TOOL 留痕分组）：席位轮看席位趟，草案卡看刚完成的整合。"""
+
+    if round_.step in (Step.SEATS_RUNNING, Step.AWAITING_ANSWERS):
+        return max(1, round_.seat_round_count)
+    if round_.step is Step.AWAITING_CONFIRM:
+        return max(1, round_.integration_seq)
+    return max(1, round_.seat_round_count, round_.integration_seq)
 
 
 class RunSeatRound:
@@ -4333,16 +4466,28 @@ class GetSchema:
         discussion_roles: tuple = (),
         personas: tuple = (),
         templates: tuple = (),
+        tools: ToolCatalog | None = None,
+        available_tool_keys: frozenset[str] = frozenset(),
     ) -> None:
         self._discussion_roles = discussion_roles
         self._personas = personas
         self._templates = templates
+        # 工具目录不是仓储：只回答"这个进程里联网能不能用、名额几条"。
+        self._tools = tools
+        self._available_tool_keys = available_tool_keys
 
     async def __call__(self) -> SchemaView:
         return schema_view(
             discussion_roles=self._discussion_roles,
             personas=self._personas,
             templates=self._templates,
+            max_web_executions=(
+                0
+                if self._tools is None
+                else web_execution_limit(
+                    self._tools, keys=self._available_tool_keys
+                )
+            ),
         )
 
 

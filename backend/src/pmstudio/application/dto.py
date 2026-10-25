@@ -1121,6 +1121,9 @@ class LimitsView:
     max_sim_review_features: int
     #: 讨论线程的 turn 上限（M13）：讨论 tab 的"还能说几轮"读这里，不再离线抄
     max_discussion_turns: int
+    #: 联网执行名额（P3a）：**生效值** = `min(tool.max_queries, 3)`；没配工具是 0。
+    #: 前端据此显示剩余名额并禁用批准，不硬编码 3。
+    max_web_executions: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1257,7 +1260,11 @@ class SchemaView:
 
 
 def schema_view(
-    *, discussion_roles: tuple = (), personas: tuple = (), templates: tuple = ()
+    *,
+    discussion_roles: tuple = (),
+    personas: tuple = (),
+    templates: tuple = (),
+    max_web_executions: int = 0,
 ) -> SchemaView:
     """把三张表、三个常量与讨论角色读出来。纯函数：无 IO、不开事务、不碰任何仓储。
 
@@ -1297,6 +1304,7 @@ def schema_view(
             max_sim_review_personas=MAX_SIM_REVIEW_PERSONAS,
             max_sim_review_features=MAX_SIM_REVIEW_FEATURES,
             max_discussion_turns=MAX_DISCUSSION_TURNS,
+            max_web_executions=max_web_executions,
         ),
         discussion_roles=tuple(
             RoleSchemaView(role_id=role.role_id, title=role.title, focus=role.focus)

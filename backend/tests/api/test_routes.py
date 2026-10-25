@@ -463,6 +463,8 @@ async def test_schema_endpoint_returns_the_13_sections_and_the_limits():
         "max_sim_review_personas": 3,
         "max_sim_review_features": 2,
         "max_discussion_turns": 30,
+        # P3a：**生效值**（工具声明 ∩ 每轮 3 条执行名额）；没配工具时是 0
+        "max_web_executions": 3,
     }
 
 
@@ -543,6 +545,75 @@ async def test_opening_records_the_queries_the_user_checked():
         for item in read_back.json()["web_queries"]
     ] == [("RBAC 权限模型", "要查行业通行做法", True)]
     assert read_back.json()["web_search_available"] is True
+
+
+async def test_opening_accepts_approved_request_ids_and_unions_legacy_queries():
+    """新载体与旧字符串指向同一条申请：只执行一次，不重复批准/发号。
+
+    `allow_web` 只在开场卡设置；读回来的投影里要能看到它（B5 的开关状态）。
+    """
+
+    harness = Harness(
+        replies={"claims": CLAIMS_REPLY_WITH_QUERY, "integration": QUESTION_REPLY},
+        seat_replies={"seat.data_scale": SEAT_REPLY},
+    )
+    app = create_app(_services(harness))
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        round_id = (
+            await client.post(
+                f"/api/projects/{project_id}/rounds", json={"input": "想做个订单导出的功能"}
+            )
+        ).json()["round_id"]
+        opened = await client.post(
+            f"/api/rounds/{round_id}/opening",
+            json={
+                "seats": ["seat.data_scale"],
+                "claim_edits": [],
+                "allow_web": True,
+                "approved_request_ids": ["w1"],
+                "web_queries": ["RBAC 权限模型"],
+            },
+        )
+        read_back = await client.get(f"/api/rounds/{round_id}")
+
+    assert opened.status_code == 200
+    body = read_back.json()
+    assert body["allow_web"] is True
+    assert [
+        (item["request_id"], item["query"], item["state"])
+        for item in body["web_requests"]
+    ] == [("w1", "RBAC 权限模型", "done")]
+    assert harness.web_search.calls == [("RBAC 权限模型", 5)]
+
+
+async def test_opening_still_rejects_four_legacy_queries_with_422():
+    """旧字段的第四条仍是"请求不对"（422）——兼容不等于放开上限。"""
+
+    app, harness = make_client()
+    async with async_client(app) as client:
+        project_id = (
+            await client.post("/api/projects", json={"title": "订单中台"})
+        ).json()["project_id"]
+        round_id = (
+            await client.post(
+                f"/api/projects/{project_id}/rounds", json={"input": "想做个订单导出的功能"}
+            )
+        ).json()["round_id"]
+        response = await client.post(
+            f"/api/rounds/{round_id}/opening",
+            json={
+                "seats": ["seat.data_scale"],
+                "claim_edits": [],
+                "web_queries": ["a", "b", "c", "d"],
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "shape_error"
+    assert harness.web_search.calls == []
 
 
 async def test_opening_with_an_unknown_seat_is_a_422_not_a_500():

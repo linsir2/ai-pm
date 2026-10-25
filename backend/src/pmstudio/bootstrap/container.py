@@ -29,6 +29,7 @@ from pmstudio.application.use_cases import (
     ConfirmDraft,
     CreateProject,
     CreateTemplate,
+    DecideWebRequest,
     DeleteMaterial,
     DeleteTemplate,
     DigRound,
@@ -574,6 +575,18 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     attach_materials = AttachMaterials(
         rounds=rounds, round_writer=rounds, materials=materials, uow=uow
     )
+    decide_web_request = DecideWebRequest(
+        rounds=rounds,
+        round_writer=rounds,
+        evidence=evidences,
+        evidence_writer=evidences,
+        tools=tools,
+        available_tool_keys=available_tool_keys,
+        web_research=web_research,
+        uow=uow,
+        clock=clock,
+        events=bus,
+    )
     runner = RoundRunner(
         start_round=start_round,
         submit_opening=submit_opening,
@@ -587,6 +600,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         run_sim_inquiry=run_sim_inquiry,
         run_sim_review=run_sim_review,
         attach_materials=attach_materials,
+        decide_web_request=decide_web_request,
     )
     run_inquiry = RunInquiry(
         documents=documents,
@@ -774,6 +788,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         get_schema=GetSchema(
             discussion_roles=discussion_roles,
             personas=personas,
+            tools=tools,
+            available_tool_keys=available_tool_keys,
             # 取 `.template`：`schema_view` 按鸭子类型读 DocumentTemplate（.template_id/
             # .title/.sections[]），/schema 只投影结构、不需要 builtin 标记。
             templates=tuple(entry.template for entry in template_repo.list()),

@@ -32,6 +32,10 @@ CODE_STATUS = {
     "model_call_failed": 502,
     "model_packet_unparsable": 502,
     "round_busy": 409,
+    # 联网申请决策（P3a）：申请不在这一轮 = 404；已决策 / 轮终态 / 名额满 = 409
+    "unknown_web_request": 404,
+    "web_request_not_pending": 409,
+    "web_execution_limit_reached": 409,
     # 探索（M8）：找不到 / 同一项目已经有一趟在跑 / 用户指的条目不存在
     "unknown_exploration": 404,
     "unknown_entry": 404,

@@ -12,6 +12,7 @@ from pmstudio.api.schemas import (
     AttachMaterialRequest,
     ConfirmRequest,
     CreateProjectRequest,
+    DecisionRequest,
     EditEntryRequest,
     FetchRequest,
     JoinPanelRequest,
@@ -387,6 +388,33 @@ async def submit_opening(request: Request, round_id: str, body: OpeningRequest, 
             seats=tuple(body.seats),
             web_queries=tuple(body.web_queries),
             claim_edits=edits,
+            allow_web=body.allow_web,
+            approved_request_ids=tuple(body.approved_request_ids),
+        )
+    )
+    return as_json(view)
+
+
+@router.post("/rounds/{round_id}/web-requests/{request_id}/decision")
+async def decide_web_request(  # type: ignore[no-untyped-def]
+    request: Request,
+    round_id: str,
+    request_id: str,
+    body: DecisionRequest,
+    user: CurrentUser,
+):
+    """逐条批准/拒绝联网申请（P3a）。**批准即执行**：结果与请求状态一次返回。
+
+    走 `RoundRunner` 的轮内动作（不碰 step）：同一个 round 的其它动作仍被串行化，
+    重复批准由用例层按 `proposed` 状态挡成 409。
+    """
+
+    view = await services_of(request).runner.run(
+        RoundCommand(
+            kind="decide_web_request",
+            round_id=round_id,
+            request_id=request_id,
+            decision=body.decision,
         )
     )
     return as_json(view)

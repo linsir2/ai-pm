@@ -137,6 +137,16 @@ class OpeningRequest(BaseModel):
     claim_edits: list[ClaimEditRequest] = Field(default_factory=list)
     #: 复述卡上勾中的联网检索词（工具层 C-2b）。空 = 不联网——**默认就是空**。
     web_queries: list[str] = Field(default_factory=list)
+    #: 新载体：逐条批准的分析者申请 id（`w1`…）。与旧 `web_queries` 取并集、幂等。
+    approved_request_ids: list[str] = Field(default_factory=list)
+    #: 后续席位/整合者申请是否自动批准（只在开场卡设置；默认关）。
+    allow_web: bool = False
+
+
+class DecisionRequest(BaseModel):
+    """逐条决策联网申请：批准（立即联网）或拒绝（不联网）。"""
+
+    decision: Literal["approve", "reject"]
 
 
 class AttachMaterialRequest(BaseModel):

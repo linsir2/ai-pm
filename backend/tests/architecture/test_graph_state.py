@@ -38,6 +38,12 @@ def test_round_command_holds_no_business_state():
         # 「带进本轮」（P1.3）：材料 id + 块 id，同样是"本次动作的参数"
         "material_id",
         "chunk_ids",
+        # 联网申请决策（P3a）：哪一条、批还是拒——本次动作的参数，不是聚合字段
+        "request_id",
+        "decision",
+        # 开场卡上的自动联网开关与逐条批准列表（P3a）：同样是本次动作的参数
+        "allow_web",
+        "approved_request_ids",
     }
 
 
@@ -56,6 +62,7 @@ def test_every_graph_node_and_router_is_async():
         "node_sim_inquiry",
         "node_sim_review",
         "node_attach_materials",
+        "node_decide_web_request",
         "route_by_command",
         "route_after_resume",
     ):

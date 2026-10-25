@@ -704,6 +704,22 @@ class Harness:
             uow=self.uow,
         )
 
+    def decide_web_request(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import DecideWebRequest
+
+        return DecideWebRequest(
+            rounds=self.rounds,
+            round_writer=self.rounds,
+            evidence=self.evidences,
+            evidence_writer=self.evidences,
+            tools=self.tools,
+            available_tool_keys=self.available_tool_keys,
+            web_research=self.web_research(),
+            uow=self.uow,
+            clock=self.clock,
+            events=self.events,
+        )
+
     def run_seat_round(self, *, preparer=None):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import RunSeatRound
 
@@ -915,6 +931,8 @@ class Harness:
             discussion_roles=self.discussion_roles,
             personas=self.personas,
             templates=tuple(entry.template for entry in self.templates.list()),
+            tools=self.tools,
+            available_tool_keys=self.available_tool_keys,
         )
 
     def list_rounds(self):  # type: ignore[no-untyped-def]
@@ -1032,6 +1050,7 @@ class Harness:
                 run_sim_inquiry=self.run_sim_inquiry(),
                 run_sim_review=self.run_sim_review(),
                 attach_materials=self.attach_materials(),
+                decide_web_request=self.decide_web_request(),
                 get_round=GetRound(
                     rounds=self.rounds,
                     evidence=self.evidences,

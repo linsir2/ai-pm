@@ -249,6 +249,64 @@ class UnknownExploration(ApplicationError):
         )
 
 
+class UnknownWebRequest(ApplicationError):
+    """这一轮里没有这条联网申请——资源不在，404。"""
+
+    def __init__(self, request_id: object, *, round_id: object | None = None) -> None:
+        super().__init__(
+            f"这一轮没有这条联网申请：{request_id}",
+            code="unknown_web_request",
+            request_id=str(request_id),
+            round_id=None if round_id is None else str(round_id),
+        )
+
+
+class WebRequestNotPending(ApplicationError):
+    """这条申请已经越过 `proposed`（已批准/已拒绝/已执行），或轮次已经结束——409。
+
+    与 `SeatAlreadyReviewed` 同一侧："请求本身合法、状态不允许"。决策只能发生一次；
+    第二次点批准不能让已执行的结果再跑一遍网络。
+    """
+
+    def __init__(self, message: str, **details: object) -> None:
+        super().__init__(message, code="web_request_not_pending", **details)
+
+
+class WebExecutionLimitReached(ApplicationError):
+    """这一轮的联网执行名额已经用满（或根本没有可用工具）——409。
+
+    `approved/done/failed` 占名额；`proposed/rejected` 不占。上限是
+    `min(tool.max_queries, MAX_WEB_EXECUTIONS)`，没配工具时生效值是 0。
+    """
+
+    def __init__(
+        self,
+        *,
+        round_id: object,
+        limit: int,
+        used: int,
+        tool_available: bool,
+    ) -> None:
+        if not tool_available:
+            message = (
+                "服务端没有配好联网工具（没配密钥，或工具被停用），"
+                "这一轮不能批准联网申请"
+            )
+        else:
+            message = (
+                f"这一轮最多执行 {limit} 条联网申请，已有 {used} 条批准或执行记录"
+                "——名额用满了，不能再批准"
+            )
+        super().__init__(
+            message,
+            code="web_execution_limit_reached",
+            round_id=str(round_id),
+            limit=limit,
+            used=used,
+            tool_available=tool_available,
+        )
+
+
 class UnknownDiscussion(ApplicationError):
     """查询/操作一条不存在的讨论线程——资源不在，404。"""
 

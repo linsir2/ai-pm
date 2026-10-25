@@ -831,6 +831,8 @@ def test_schema_view_freezes_the_shape():
         max_sim_review_personas=3,
         max_sim_review_features=2,
         max_discussion_turns=30,
+        # 纯函数 `schema_view()` 没有工具目录：生效值是 0（前端据此禁用开关）
+        max_web_executions=0,
     )
 
 

@@ -42,6 +42,8 @@ EXPECTED_PATHS = {
     # 可观测性 v2：这一轮的外部调用轨迹（模型 + 工具，时间序）
     "/api/rounds/{round_id}/calls",
     "/api/rounds/{round_id}/opening",
+    # P3a：逐条批准/拒绝联网申请（批准即执行）
+    "/api/rounds/{round_id}/web-requests/{request_id}/decision",
     "/api/rounds/{round_id}/materials",
     "/api/rounds/{round_id}/answers",
     "/api/rounds/{round_id}/confirm",

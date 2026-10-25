@@ -124,6 +124,19 @@ def web_search_tool(tools: ToolCatalog, *, keys: frozenset[str]) -> ToolDefiniti
     return None
 
 
+def web_execution_limit(tools: ToolCatalog, *, keys: frozenset[str]) -> int:
+    """本进程**生效**的每轮联网执行名额：`min(tool.max_queries, 3)`；没工具是 0。
+
+    唯一的算法：决策、执行点与 `/schema.limits.max_web_executions` 都读它，
+    前端不抄数字。工具声明坏了（`max_queries <= 0`）时与执行点同样当场报。
+    """
+
+    tool = web_search_tool(tools, keys=keys)
+    if tool is None:
+        return 0
+    return min(tool_limit(tool, "max_queries"), MAX_WEB_EXECUTIONS)
+
+
 async def search_one(
     web_search: WebSearchGateway, *, query: str, limit: int
 ) -> tuple[object, int]:
@@ -203,7 +216,9 @@ class WebResearch:
                 "只有已批准的联网申请能被执行", request_ids=not_approved
             )
         tool = self._require_tool("执行联网申请")
-        limit = min(tool_limit(tool, "max_queries"), MAX_WEB_EXECUTIONS)
+        limit = web_execution_limit(
+            self._tools, keys=self._available_tool_keys
+        )
         if len(requests) > limit:
             raise ShapeError(
                 f"这一轮最多执行 {limit} 条联网申请，这次要执行 {len(requests)} 条",
@@ -430,8 +445,10 @@ class WebResearch:
         )
         if not approved and not (round_.allow_web and auto_candidates):
             return None
-        tool = self._require_tool("执行联网申请")
-        limit = min(tool_limit(tool, "max_queries"), MAX_WEB_EXECUTIONS)
+        self._require_tool("执行联网申请")
+        limit = web_execution_limit(
+            self._tools, keys=self._available_tool_keys
+        )
         used = sum(
             1
             for item in round_.web_requests
