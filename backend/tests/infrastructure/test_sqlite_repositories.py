@@ -21,6 +21,7 @@ from pmstudio.domain.round.round import (
     SeatNomination,
 )
 from pmstudio.domain.round.step import Step, WaitingOn
+from pmstudio.domain.round.web import WebRequest, WebRequestState
 from pmstudio.domain.shared.ids import (
     DocumentId,
     EntryId,
@@ -134,6 +135,77 @@ def test_round_round_trips_every_field(repos):
         ("seat.export_import", "你说到导出"),
         ("seat.permissions", "导出涉及数据外流"),
     ]
+
+
+def test_web_requests_and_step_selection_round_trip(repos):
+    _, rounds, _, _, uow = repos
+    round_ = make_round()
+    round_.attach_web_requests(
+        (
+            WebRequest(
+                request_id="w1",
+                query="行业取数口径",
+                why="要查行业通行做法",
+                origin="analyzer",
+                created_at=NOW,
+            ),
+            WebRequest(
+                request_id="w2",
+                query="配额上限",
+                why="席位需要外部事实",
+                origin="seat",
+                seat_id="seat.data_scale",
+                pass_index=1,
+            ),
+        )
+    )
+    round_.decide_web_request("w1", approve=True)
+    round_.mark_web_request("w1", state=WebRequestState.DONE, result_note="2 条结果")
+    round_.note_web_selection((("m1", "m1#c00"), ("m2", "m2#c00")))
+    with uow:
+        rounds.save(round_)
+
+    loaded = rounds.get(round_.round_id)
+
+    assert [
+        (
+            item.request_id,
+            item.query,
+            item.why,
+            item.origin,
+            item.seat_id,
+            item.pass_index,
+            item.state,
+            item.result_note,
+            item.created_at,
+        )
+        for item in loaded.web_requests
+    ] == [
+        (
+            "w1",
+            "行业取数口径",
+            "要查行业通行做法",
+            "analyzer",
+            None,
+            None,
+            WebRequestState.DONE,
+            "2 条结果",
+            NOW,
+        ),
+        (
+            "w2",
+            "配额上限",
+            "席位需要外部事实",
+            "seat",
+            "seat.data_scale",
+            1,
+            WebRequestState.PROPOSED,
+            None,
+            None,
+        ),
+    ]
+    assert loaded.allow_web is False
+    assert loaded.web_selection == (("m1", "m1#c00"), ("m2", "m2#c00"))
 
 
 def test_round_payload_without_nominations_still_loads():

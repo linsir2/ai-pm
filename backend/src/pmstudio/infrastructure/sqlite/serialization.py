@@ -67,7 +67,13 @@ from pmstudio.domain.round.round import (
     SeedRef,
 )
 from pmstudio.domain.round.step import Step, WaitingOn
-from pmstudio.domain.round.web_query import WebQuery
+from pmstudio.domain.round.web import (
+    LEGACY_REQUEST_WHY,
+    MAX_WEB_QUERIES,
+    WebRequest,
+    WebRequestState,
+    normalized_query,
+)
 from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
@@ -661,7 +667,7 @@ def _failure_from_json(data: dict | None) -> Failure | None:
 
 
 def round_to_payload(round_: Round) -> dict:
-    return {
+    payload = {
         "user_input": round_.user_input,
         "analysis_basis": round_.analysis_basis,
         "claims": [claim_to_json(claim) for claim in round_.claims],
@@ -775,12 +781,25 @@ def round_to_payload(round_: Round) -> dict:
             {"origin": item.origin, "ref_id": item.ref_id, "item_id": item.item_id}
             for item in round_.seeds
         ],
-        # 分析者提名的检索词（老行没有这把键 → 读侧回落空）
-        "web_queries": [
-            {"query": item.query, "why": item.why} for item in round_.web_queries
+        # 三方结构化联网申请（P3a；老行没有这把键 → 读侧按 step 从旧两把键迁移）
+        "web_requests": [
+            {
+                "request_id": item.request_id,
+                "query": item.query,
+                "why": item.why,
+                "origin": item.origin,
+                "seat_id": item.seat_id,
+                "pass_index": item.pass_index,
+                "state": item.state.value,
+                "result_note": item.result_note,
+                "created_at": (
+                    _when(item.created_at) if item.created_at is not None else None
+                ),
+            }
+            for item in round_.web_requests
         ],
-        # 用户在复述卡上勾中的（老行没有这把键 → 空 = 不联网）
-        "web_queries_chosen": list(round_.web_queries_chosen),
+        # 是否允许后续申请自动批准（老行没有 → False）
+        "allow_web": round_.allow_web,
         # 这一轮攒下的记忆提议（老行没有这把键 → 空：那时候还没有记忆这回事）
         "memory_proposals": [
             {
@@ -801,6 +820,12 @@ def round_to_payload(round_: Round) -> dict:
         "sim_review": dict(round_.sim_review) if round_.sim_review is not None else None,
         "sim_review_runs": round_.sim_review_runs,
     }
+    # `None` = 旧 payload / 还没执行过联网：不写这个键，读侧回退"全部旧 web refs"。
+    if round_.web_selection is not None:
+        payload["web_selection"] = [
+            [material_id, chunk_id] for material_id, chunk_id in round_.web_selection
+        ]
+    return payload
 
 
 def round_from_payload(
@@ -816,6 +841,14 @@ def round_from_payload(
         None
         if payload["questionnaire"] is None
         else questionnaire_from_json(payload["questionnaire"])
+    )
+    web_requests, legacy_web_drops = _web_requests_from_payload(payload, step=step)
+    web_selection = (
+        None
+        if payload.get("web_selection") is None
+        else tuple(
+            (str(pair[0]), str(pair[1])) for pair in payload["web_selection"]
+        )
     )
     return Round(
         round_id=round_id,
@@ -926,12 +959,10 @@ def round_from_payload(
             )
             for item in payload.get("seeds") or ()
         ),
-        # 老行里没有这两把键（联网检索词是后加的）：空——不联网、也不编"它建议查过"
-        web_queries=tuple(
-            WebQuery(query=str(item["query"]), why=str(item["why"]))
-            for item in payload.get("web_queries") or ()
-        ),
-        web_queries_chosen=tuple(str(item) for item in payload.get("web_queries_chosen") or ()),
+        # 三方结构化联网申请；老行没有这个键 → 按 step 从旧两把检索词键迁移（不重跑已执行的）
+        web_requests=web_requests,
+        allow_web=bool(payload.get("allow_web", False)),
+        web_selection=web_selection,
         answer_sets=tuple(answer_set_from_json(item) for item in payload["answer_sets"]),
         draft=None if payload["draft"] is None else draft_from_json(payload["draft"]),
         seat_round_count=payload["seat_round_count"],
@@ -939,7 +970,7 @@ def round_from_payload(
             FeatureSlug(slug): EvidenceId(eid)
             for slug, eid in payload["authorized_new_features"].items()
         },
-        dropped=_dropped_from_payload(payload),
+        dropped=_dropped_from_payload(payload) + legacy_web_drops,
         failure=_failure_from_json(payload["failure"]),
         confirmed_version_no=payload["confirmed_version_no"],
         # 老行里没有这个键（放弃是后加的）
@@ -974,6 +1005,107 @@ def round_from_payload(
         sim_review=dict(payload["sim_review"]) if payload.get("sim_review") else None,
         sim_review_runs=int(payload.get("sim_review_runs") or 0),
     )
+
+
+def _web_requests_from_payload(
+    payload: dict, *, step: Step
+) -> tuple[tuple[WebRequest, ...], tuple[DroppedItem, ...]]:
+    """联网申请：新行读 `web_requests`；老行按 step 从旧两把检索词键迁移。
+
+    旧语义只有"分析者提名 + 用户勾选"，所以迁移出来的全是 analyzer 申请：
+
+    - 停在复述卡（`claims_ready`）：勾中的是 approved（还没执行）；
+    - 已经走过复述卡：勾中的是 done（**不重跑**），没勾的是 proposed。
+
+    未提名的勾选补一条 analyzer 申请；补完仍按每方 3 条截断，余下 TOOL 留痕
+    （旧版 UI 允许勾一条分析者没提名的词，不补就等于把用户的选择静默丢掉）。
+    """
+
+    if "web_requests" in payload:
+        return (
+            tuple(
+                WebRequest(
+                    request_id=str(item["request_id"]),
+                    query=str(item["query"]),
+                    why=str(item["why"]),
+                    origin=str(item["origin"]),
+                    seat_id=item.get("seat_id"),
+                    pass_index=item.get("pass_index"),
+                    state=WebRequestState(str(item["state"])),
+                    result_note=item.get("result_note"),
+                    created_at=(
+                        _unwhen(item["created_at"])
+                        if item.get("created_at")
+                        else None
+                    ),
+                )
+                for item in payload.get("web_requests") or ()
+                if isinstance(item, dict)
+            ),
+            (),
+        )
+
+    chosen_keys = {
+        normalized_query(str(item))
+        for item in payload.get("web_queries_chosen") or ()
+        if str(item).strip()
+    }
+    chosen_state = (
+        WebRequestState.APPROVED
+        if step is Step.CLAIMS_READY
+        else WebRequestState.DONE
+    )
+    requests: list[WebRequest] = []
+    declared: set[str] = set()
+    for item in payload.get("web_queries") or ():
+        query = str(item["query"])
+        key = normalized_query(query)
+        if key in declared:
+            continue
+        declared.add(key)
+        requests.append(
+            WebRequest(
+                request_id=f"w{len(requests) + 1}",
+                query=query,
+                why=str(item["why"]),
+                origin="analyzer",
+                state=chosen_state if key in chosen_keys else WebRequestState.PROPOSED,
+            )
+        )
+
+    for raw in payload.get("web_queries_chosen") or ():
+        query = str(raw).strip()
+        if not query:
+            continue
+        key = normalized_query(query)
+        if key in declared:
+            continue
+        declared.add(key)
+        requests.append(
+            WebRequest(
+                request_id=f"w{len(requests) + 1}",
+                query=query,
+                why=LEGACY_REQUEST_WHY,
+                origin="analyzer",
+                state=chosen_state,
+            )
+        )
+
+    if len(requests) <= MAX_WEB_QUERIES:
+        return tuple(requests), ()
+
+    pass_index = int(payload.get("seat_round_count") or 1)
+    drops = tuple(
+        DroppedItem(
+            handle=f"联网申请 {item.query}",
+            reason=f"每方最多 {MAX_WEB_QUERIES} 条提案，多出来的旧版勾选没补进本轮",
+            source=DropSource.TOOL,
+            seat_id=None,
+            pass_index=pass_index,
+        )
+        for item in requests[MAX_WEB_QUERIES:]
+    )
+    return tuple(requests[:MAX_WEB_QUERIES]), drops
 
 
 def _dropped_from_payload(payload: dict) -> tuple[DroppedItem, ...]:

@@ -28,6 +28,7 @@ from pmstudio.domain.round.round import (
     Round,
     SeatNomination,
 )
+from pmstudio.domain.round.web import WebRequest
 from pmstudio.domain.round.web_query import WebQuery
 from pmstudio.domain.shared.ids import (
     DocumentId,
@@ -586,6 +587,76 @@ def test_round_view_carries_the_nominated_queries_and_what_the_user_picked():
         ("订单导出的行业规范", "要查行业标准", True),
     ]
     assert view.web_search_available is True
+
+
+def test_round_view_carries_requests_and_allow_web():
+    """新复述卡/申请卡要能看到三方申请、状态与 allow_web；旧 web_queries 仍是派生。"""
+
+    round_ = _opening_round()
+    round_.attach_web_requests(
+        (
+            WebRequest(
+                request_id="w1",
+                query="行业取数口径",
+                why="要查行业通行做法",
+                origin="analyzer",
+            ),
+            WebRequest(
+                request_id="w2",
+                query="配额上限",
+                why="席位需要外部事实",
+                origin="seat",
+                seat_id="seat.export_import",
+                pass_index=2,
+            ),
+        )
+    )
+    round_.decide_web_request("w1", approve=True)
+    round_.submit_opening(seats=(SEAT,), allow_web=True)
+
+    view = dto.round_view(round_)
+
+    assert view.allow_web is True
+    assert [
+        (
+            item.request_id,
+            item.query,
+            item.why,
+            item.origin,
+            item.seat_id,
+            item.pass_index,
+            item.state,
+            item.result_note,
+            item.created_at,
+        )
+        for item in view.web_requests
+    ] == [
+        (
+            "w1",
+            "行业取数口径",
+            "要查行业通行做法",
+            "analyzer",
+            None,
+            None,
+            "approved",
+            None,
+            None,
+        ),
+        (
+            "w2",
+            "配额上限",
+            "席位需要外部事实",
+            "seat",
+            "seat.export_import",
+            2,
+            "proposed",
+            None,
+            None,
+        ),
+    ]
+    assert [(item.query, item.chosen) for item in view.web_queries] == [
+        ("行业取数口径", True)
+    ]
 
 
 def test_web_search_is_unavailable_unless_somebody_says_otherwise():

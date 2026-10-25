@@ -97,12 +97,17 @@ def test_submit_opening_records_what_the_user_checked():
     assert round_.seats == (SEAT,)
 
 
-def test_payload_roundtrip_keeps_both_and_old_rows_fall_back():
+def test_payload_roundtrip_derives_both_and_truly_old_rows_fall_back():
     round_ = nominated(
         WebQuery(query="RBAC 权限模型", why="要查行业通行做法"),
         WebQuery(query="订单导出的行业规范", why="要查行业标准"),
     )
     round_.submit_opening(seats=(SEAT,), web_queries_chosen=("订单导出的行业规范",))
+
+    payload = round_to_payload(round_)
+    # 新轮只写新键；旧的两把键是读侧派生用的，不落库
+    assert "web_queries" not in payload
+    assert "web_queries_chosen" not in payload
 
     again = restored(round_)
 
@@ -112,9 +117,10 @@ def test_payload_roundtrip_keeps_both_and_old_rows_fall_back():
     ]
     assert again.web_queries_chosen == ("订单导出的行业规范",)
 
-    old = round_to_payload(round_)
-    del old["web_queries"]           # 老行：没有这两把键
-    del old["web_queries_chosen"]
+    old = dict(payload)
+    old.pop("web_requests")       # 老行：新键一个都没有
+    old.pop("allow_web")
+    old.pop("web_selection", None)
     back = round_from_payload(
         old,
         round_id=ROUND_ID,

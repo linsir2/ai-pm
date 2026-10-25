@@ -11,7 +11,14 @@ from pmstudio.domain.round.opinion import Opinion, SeatReview
 from pmstudio.domain.round.questionnaire import AnswerSet, ListItem, Question, Questionnaire
 from pmstudio.domain.round.retrieval import ManualChunk, RetrievalStage, RetrievalTrace
 from pmstudio.domain.round.step import LEGAL_ADVANCES, MAX_SEAT_ROUNDS, Step, WaitingOn
-from pmstudio.domain.round.web_query import MAX_WEB_QUERIES, WebQuery
+from pmstudio.domain.round.web import (
+    LEGACY_REQUEST_WHY,
+    MAX_WEB_QUERIES,
+    WebRequest,
+    WebRequestState,
+    normalized_query,
+)
+from pmstudio.domain.round.web_query import WebQuery
 from pmstudio.domain.shared.errors import (
     AlreadyAnswered,
     ContentWithoutEvidence,
@@ -257,8 +264,11 @@ class Round:
         manual_chunks: tuple[ManualChunk, ...] = (),
         unreferenced_materials: tuple[str, ...] = (),
         seeds: tuple[SeedRef, ...] = (),
-        web_queries: tuple[WebQuery, ...] = (),
-        web_queries_chosen: tuple[str, ...] = (),
+        web_requests: tuple[WebRequest, ...] = (),
+        allow_web: bool = False,
+        #: 最近一趟联网执行**选中**的块（(material_id, chunk_id)，步级快照）。
+        #: `None` = 旧 payload：渲染层回退到全部旧 web refs（B3）。
+        web_selection: tuple[tuple[str, str], ...] | None = None,
         memory_proposals: tuple[MemoryProposal, ...] = (),
         accepted_memory_ids: tuple[str, ...] = (),
         sim_slices: tuple[dict, ...] = (),
@@ -311,10 +321,16 @@ class Round:
         self._unreferenced_materials = tuple(unreferenced_materials)
         #: 这一轮带进来的过目产物（M8 调研种子 / M12 灵感箱）；空 = 不是从过目产物来的
         self._seeds = tuple(seeds)
-        #: 分析者提名的检索词（它只提名，查不查由用户在复述卡上定）
-        self._web_queries = tuple(web_queries)
-        #: 用户在复述卡上勾中的那几条（没勾就是空 = 一次网络调用都没有）
-        self._web_queries_chosen = tuple(web_queries_chosen)
+        #: 三方结构化联网申请（P3a）：提名、批准、执行状态都在这里
+        self._web_requests = tuple(web_requests)
+        #: 用户是否允许后续申请自动批准（只在开场卡上设置）
+        self._allow_web = bool(allow_web)
+        #: 最近一趟执行选中的 web 块；None = 旧 payload（渲染层回退全部旧 web refs）
+        self._web_selection = (
+            None
+            if web_selection is None
+            else tuple((str(material_id), str(chunk_id)) for material_id, chunk_id in web_selection)
+        )
         #: 这一轮攒下的记忆提议（草案卡上那一档）；确认时才可能生效（M6）
         self._memory_proposals = tuple(memory_proposals)
         #: 确认时用户勾了哪几条记忆提议（身份，不只是数量）
@@ -636,36 +652,190 @@ class Round:
         self._nominated_seats = tuple(unique.values())
 
     @property
-    def web_queries(self) -> tuple[WebQuery, ...]:
-        """分析者提名的检索词（带"为什么"）。它**不是**"要查的"——那要看勾选。"""
+    def web_requests(self) -> tuple[WebRequest, ...]:
+        """三方结构化联网申请（提名 / 批准 / 执行结果都在这里）。"""
 
-        return self._web_queries
+        return self._web_requests
+
+    @property
+    def allow_web(self) -> bool:
+        """用户在开场卡上是否允许后续申请自动批准（默认关）。"""
+
+        return self._allow_web
+
+    @property
+    def web_selection(self) -> tuple[tuple[str, str], ...] | None:
+        """最近一趟联网执行选中的块（步级快照）；`None` = 旧 payload。"""
+
+        return self._web_selection
+
+    @property
+    def web_queries(self) -> tuple[WebQuery, ...]:
+        """旧口径派生：分析者提名的检索词（带"为什么"），只读。"""
+
+        return tuple(
+            WebQuery(query=item.query, why=item.why)
+            for item in self._web_requests
+            if item.origin == "analyzer"
+        )
 
     @property
     def web_queries_chosen(self) -> tuple[str, ...]:
-        """用户在复述卡上勾中的检索词（空 = 不联网）。"""
+        """旧口径派生：用户批准过（含已执行）的分析者检索词，只读。
 
-        return self._web_queries_chosen
+        `proposed` 还没批、`rejected` 是被拒的，都不算"勾中"。
+        """
+
+        return tuple(
+            item.query
+            for item in self._web_requests
+            if item.origin == "analyzer"
+            and item.state in (
+                WebRequestState.APPROVED,
+                WebRequestState.DONE,
+                WebRequestState.FAILED,
+            )
+        )
+
+    def next_web_request_id(self) -> str:
+        """三方共用的下一个编号：扫描已有 `wN`，返回 `w{max+1}`。"""
+
+        return f"w{self._next_request_number(self._web_requests)}"
+
+    @staticmethod
+    def _next_request_number(requests: Sequence[WebRequest]) -> int:
+        used = [
+            int(item.request_id[1:])
+            for item in requests
+            if item.request_id.startswith("w") and item.request_id[1:].isdigit()
+        ]
+        return max(used, default=0) + 1
+
+    def attach_web_requests(
+        self, items: tuple[WebRequest, ...] | list[WebRequest]
+    ) -> None:
+        """挂上一批申请：按 `(origin, seat_id, 归一化 query)` 去重、保序、每方最多 3 条。
+
+        超过每方名额是**编程错误**：用例层已经按方取前 3 条并把余下的 TOOL 留痕
+        （解析层也丢过一轮），这里拦住手搓的调用方，不静默截断。
+        """
+
+        incoming = tuple(items)
+        ids = [item.request_id for item in incoming]
+        if len(set(ids)) != len(ids):
+            raise ShapeError("联网申请 id 不能重复", request_ids=ids)
+        known = {item.request_id for item in self._web_requests}
+        collisions = [request_id for request_id in ids if request_id in known]
+        if collisions:
+            raise ShapeError("联网申请 id 已经存在", request_ids=collisions)
+
+        keys = {
+            (item.origin, item.seat_id, normalized_query(item.query))
+            for item in self._web_requests
+        }
+        fresh: list[WebRequest] = []
+        for item in incoming:
+            key = (item.origin, item.seat_id, normalized_query(item.query))
+            if key in keys:
+                continue
+            keys.add(key)
+            fresh.append(item)
+
+        merged = self._web_requests + tuple(fresh)
+        for origin in ("analyzer", "seat", "integrator"):
+            count = sum(1 for item in merged if item.origin == origin)
+            if count > MAX_WEB_QUERIES:
+                raise ShapeError(
+                    f"每方最多 {MAX_WEB_QUERIES} 条联网申请", origin=origin, count=count
+                )
+        self._web_requests = merged
 
     def attach_web_queries(self, items: tuple[WebQuery, ...] | list[WebQuery]) -> None:
-        """挂上分析者提名的检索词：按 query 去重、保序。
-
-        超过 `MAX_WEB_QUERIES` 是**编程错误**（解析层已经丢过一轮并留痕），这里拦住手搓的调用方。
-        """
+        """旧入口兼容包装：分析者提名的检索词 → analyzer 申请（proposed）。"""
 
         unique: dict[str, WebQuery] = {}
         for item in items:
-            unique.setdefault(item.query, item)
-        if len(unique) > MAX_WEB_QUERIES:
+            unique.setdefault(normalized_query(item.query), item)
+        start = self._next_request_number(self._web_requests)
+        self.attach_web_requests(
+            [
+                WebRequest(
+                    request_id=f"w{start + index}",
+                    query=item.query,
+                    why=item.why,
+                    origin="analyzer",
+                )
+                for index, item in enumerate(unique.values())
+            ]
+        )
+
+    def decide_web_request(self, request_id: str, *, approve: bool) -> None:
+        """决策只动 `proposed`：批准 → approved，拒绝 → rejected。"""
+
+        position = self._web_request_position(request_id)
+        current = self._web_requests[position]
+        if current.state is not WebRequestState.PROPOSED:
             raise ShapeError(
-                f"一轮最多 {MAX_WEB_QUERIES} 条检索词提名", count=len(unique)
+                "只有待批准的联网申请能被决策", request_id=request_id, state=current.state
             )
-        self._web_queries = tuple(unique.values())
+        target = WebRequestState.APPROVED if approve else WebRequestState.REJECTED
+        updated = list(self._web_requests)
+        updated[position] = replace(current, state=target)
+        self._web_requests = tuple(updated)
+
+    def mark_web_request(
+        self,
+        request_id: str,
+        state: WebRequestState,
+        *,
+        result_note: str | None = None,
+    ) -> None:
+        """执行结果只动 `approved`：成功 → done，失败 → failed（可带一句说明）。"""
+
+        if state not in (WebRequestState.DONE, WebRequestState.FAILED):
+            raise ShapeError("联网申请的结果只能是 done 或 failed", state=state)
+        position = self._web_request_position(request_id)
+        current = self._web_requests[position]
+        if current.state is not WebRequestState.APPROVED:
+            raise ShapeError(
+                "只有已批准的联网申请能记结果",
+                request_id=request_id,
+                state=current.state,
+            )
+        updated = list(self._web_requests)
+        updated[position] = replace(current, state=state, result_note=result_note)
+        self._web_requests = tuple(updated)
+
+    def _web_request_position(self, request_id: str) -> int:
+        for position, item in enumerate(self._web_requests):
+            if item.request_id == request_id:
+                return position
+        raise ShapeError("没有这条联网申请", request_id=request_id)
+
+    def note_web_selection(
+        self, items: tuple[tuple[str, str], ...] | list[tuple[str, str]]
+    ) -> None:
+        """记下这一趟执行选中的块（去重、保序）；`()` 表示"这一趟一块都没选"。"""
+
+        unique: dict[tuple[str, str], None] = {}
+        for material_id, chunk_id in items:
+            material_id, chunk_id = str(material_id), str(chunk_id)
+            if not material_id.strip() or not chunk_id.strip():
+                raise ShapeError("web 选块必须带 material_id 与 chunk_id")
+            unique.setdefault((material_id, chunk_id))
+        self._web_selection = tuple(unique)
+
+    def clear_web_selection(self) -> None:
+        """回到"没有本步快照"（旧 payload 语义：渲染层回退全部旧 web refs）。"""
+
+        self._web_selection = None
 
     def submit_opening(
         self,
         *,
         seats: tuple[str, ...] | list[str],
+        allow_web: bool = False,
+        approved_request_ids: tuple[str, ...] | list[str] = (),
         web_queries_chosen: tuple[str, ...] | list[str] = (),
     ) -> None:
         self._require_step(Step.CLAIMS_READY)
@@ -673,14 +843,82 @@ class Round:
         unique_seats = tuple(dict.fromkeys(seats))
         if not unique_seats:
             raise ShapeError("席位编制不能为空")
+        # 先把新/旧两套授权一次性核完再落任何字段：请求不对就不该留下半推半就的状态。
+        web_requests = self._approve_at_opening(
+            list(self._web_requests),
+            approved_request_ids=approved_request_ids,
+            web_queries_chosen=web_queries_chosen,
+        )
         self._seats = unique_seats
         self._active_seats = unique_seats  # 开场卡确认：这一趟就是用户编制
-        # 勾选的检索词：去重、去空白、保序（前端可能会手滑，或同一句被勾两次）
-        self._web_queries_chosen = tuple(
-            dict.fromkeys(item.strip() for item in web_queries_chosen if item.strip())
-        )
+        self._allow_web = bool(allow_web)
+        self._web_requests = tuple(web_requests)
         self._begin_seat_round()
         self._advance_to(Step.SEATS_RUNNING)
+
+    def _approve_at_opening(
+        self,
+        requests: list[WebRequest],
+        *,
+        approved_request_ids: tuple[str, ...] | list[str],
+        web_queries_chosen: tuple[str, ...] | list[str],
+    ) -> list[WebRequest]:
+        positions = {item.request_id: index for index, item in enumerate(requests)}
+        for raw in approved_request_ids:
+            request_id = str(raw).strip()
+            if not request_id:
+                continue
+            if request_id not in positions:
+                raise ShapeError("没有这条联网申请", request_id=request_id)
+            position = positions[request_id]
+            current = requests[position]
+            if current.state is WebRequestState.PROPOSED:
+                requests[position] = replace(current, state=WebRequestState.APPROVED)
+            elif current.state is not WebRequestState.APPROVED:
+                raise ShapeError(
+                    "只有待批准或已批准的联网申请能在开场卡上批准",
+                    request_id=request_id,
+                    state=current.state,
+                )
+
+        seen: set[str] = set()
+        for raw in web_queries_chosen:
+            query = str(raw).strip()
+            if not query:
+                continue
+            key = normalized_query(query)
+            if key in seen:
+                continue
+            seen.add(key)
+            matched = next(
+                (
+                    position
+                    for position, item in enumerate(requests)
+                    if item.origin == "analyzer" and normalized_query(item.query) == key
+                ),
+                None,
+            )
+            if matched is None:
+                # 旧版复述卡允许勾一条分析者没提名的词：补成一条 approved analyzer 申请，
+                # 否则"用户勾了"这件事在新载体里没有地方可存。
+                request_id = f"w{self._next_request_number(requests)}"
+                requests.append(
+                    WebRequest(
+                        request_id=request_id,
+                        query=query,
+                        why=LEGACY_REQUEST_WHY,
+                        origin="analyzer",
+                        state=WebRequestState.APPROVED,
+                    )
+                )
+                positions[request_id] = len(requests) - 1
+                continue
+            current = requests[matched]
+            if current.state is WebRequestState.PROPOSED:
+                requests[matched] = replace(current, state=WebRequestState.APPROVED)
+            elif current.state is WebRequestState.REJECTED:
+                raise ShapeError("这条检索词已被拒绝，不能再勾选", query=query)
+        return requests
 
     def attest(self, review: SeatReview, *, packet_id: str | None = None) -> None:
         self._require_step(Step.SEATS_RUNNING)

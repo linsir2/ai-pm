@@ -241,6 +241,21 @@ class WebQueryView:
 
 
 @dataclass(frozen=True, slots=True)
+class WebRequestView:
+    """一条联网申请：谁提的、为什么、批没批、执行结果。"""
+
+    request_id: str
+    query: str
+    why: str
+    origin: str
+    seat_id: str | None
+    pass_index: int | None
+    state: str
+    result_note: str | None
+    created_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class SimSliceView:
     """模拟抽屉里的一条处境切片：分组展示 + 锚点可跳回原文。"""
 
@@ -448,6 +463,10 @@ class RoundView:
     unreferenced_materials: tuple[str, ...] = ()
     #: 分析者提名的检索词（**只是提名**；勾了才会真去查）
     web_queries: tuple[WebQueryView, ...] = ()
+    #: 三方结构化联网申请（P3a）：提名 / 批准 / 执行结果
+    web_requests: tuple[WebRequestView, ...] = ()
+    #: 用户是否允许后续申请自动批准
+    allow_web: bool = False
     #: 模拟调研产物（没跑过是 None；抽屉与 eval 读它）
     sim_inquiry: SimInquiryView | None = None
     #: 模拟评测产物（M11；没跑过是 None）
@@ -1493,6 +1512,8 @@ def round_view(
         materials=round_material_views(round_, materials=materials),
         unreferenced_materials=tuple(round_.unreferenced_materials),
         web_queries=_web_query_views(round_),
+        web_requests=_web_request_views(round_),
+        allow_web=round_.allow_web,
         sim_inquiry=_sim_inquiry_view(round_),
         sim_review=_sim_review_view(round_),
         web_search_available=web_search_available,
@@ -1649,6 +1670,23 @@ def _sim_inquiry_view(round_: Round) -> SimInquiryView | None:
         ),
         runs=round_.sim_inquiry_runs,
         chosen=tuple(round_.sim_inquiry_chosen),
+    )
+
+
+def _web_request_views(round_: Round) -> tuple[WebRequestView, ...]:
+    return tuple(
+        WebRequestView(
+            request_id=item.request_id,
+            query=item.query,
+            why=item.why,
+            origin=item.origin,
+            seat_id=item.seat_id,
+            pass_index=item.pass_index,
+            state=item.state.value,
+            result_note=item.result_note,
+            created_at=item.created_at,
+        )
+        for item in round_.web_requests
     )
 
 
