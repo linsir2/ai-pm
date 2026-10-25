@@ -508,3 +508,36 @@ def test_the_proposal_limit_fits_the_output_budget():
         INTEGRATION_MAX_PROPOSALS * INTEGRATION_PROPOSAL_TOKEN_P95 <= INTEGRATION_MAX_TOKENS
     ), "条数上限与输出预算对不上 → 又会事后截断"
     assert INTEGRATION_MAX_PROPOSALS <= 60, "schema 的硬上限是 60，不许破"
+
+
+async def test_integration_outcome_exposes_web_requests_from_the_envelope():
+    """请求只活在信封报文里；Outcome 是读窗口，最终 UoW 也从这里取。"""
+
+    reply = json.dumps(
+        {
+            "questions": [],
+            "list_items": [],
+            "proposals": [],
+            "web_requests": [
+                {"query": "ISO 8601 日期格式", "why": "要查导出文件的行业格式"}
+            ],
+        },
+        ensure_ascii=False,
+    )
+    gateway = ScriptedModelGateway(replies={"integration": reply})
+    integrator = Integrator(model=gateway, prompts=RecordingPrompts())
+
+    outcome = await integrator.integrate(
+        adapter=STD,
+        document_state="# 文档",
+        claims="…",
+        opinions="…",
+        answered="…",
+        skipped="…",
+        entry_ids="…",
+    )
+
+    assert [(item.query, item.why) for item in outcome.web_requests] == [
+        ("ISO 8601 日期格式", "要查导出文件的行业格式")
+    ]
+    assert outcome.web_requests[0] is outcome.envelope.packet.web_requests[0]

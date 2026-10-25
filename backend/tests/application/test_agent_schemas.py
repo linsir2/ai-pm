@@ -468,3 +468,64 @@ def test_sim_review_schema_has_no_demographic_or_numeric_fields():
         schemas.SimReviewPacket,
     ):
         assert not (set(model.model_fields) & banned), model.__name__
+
+
+def test_seat_packet_accepts_four_web_requests_without_capping_them():
+    """schema 只解析：上限由用例层在 attach 前按方截断（不在这里丢）。"""
+
+    packet, overflow, discarded = schemas.parse_packet_lenient(
+        json.dumps(
+            {
+                "basis": "读了文档",
+                "opinions": [],
+                "web_requests": [
+                    {"query": f"第{index}条", "why": "要查外部事实"}
+                    for index in range(1, 5)
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        schemas.SeatPacket,
+        purpose="seat_review",
+    )
+
+    assert [item.query for item in packet.web_requests] == [
+        "第1条",
+        "第2条",
+        "第3条",
+        "第4条",
+    ]
+    assert overflow == ()
+    assert discarded == ()
+    schema = schemas.SeatPacket.model_json_schema()
+    assert "maxItems" not in schema["properties"]["web_requests"]
+
+
+def test_integration_packet_accepts_four_web_requests_without_capping_them():
+    packet, overflow, discarded = schemas.parse_packet_lenient(
+        json.dumps(
+            {
+                "questions": [],
+                "list_items": [],
+                "proposals": [],
+                "web_requests": [
+                    {"query": f"第{index}条", "why": "要查外部事实"}
+                    for index in range(1, 5)
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        schemas.IntegrationPacket,
+        purpose="integration",
+    )
+
+    assert [item.query for item in packet.web_requests] == [
+        "第1条",
+        "第2条",
+        "第3条",
+        "第4条",
+    ]
+    assert overflow == ()
+    assert discarded == ()
+    schema = schemas.IntegrationPacket.model_json_schema()
+    assert "maxItems" not in schema["properties"]["web_requests"]

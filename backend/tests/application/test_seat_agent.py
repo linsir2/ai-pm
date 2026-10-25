@@ -355,3 +355,33 @@ async def test_seat_reviewer_lenient_salvages_unknown_ref_keeping_the_opinion():
     assert opinion.evidence_refs == (EvidenceId("E4"),)  # E23 摘掉、E4 留下
     assert "E23" in (opinion.basis_note or "")
     assert [(item.local_id, item.dropped) for item in outcome.salvaged] == [("O1", ("E23",))]
+
+
+async def test_seat_outcome_exposes_web_requests_from_the_envelope():
+    """申请挂在信封的报文上——Outcome 只是读窗口，不另存一份。"""
+
+    reply = json.dumps(
+        {
+            "basis": "读了文档",
+            "opinions": [],
+            "web_requests": [
+                {"query": "ISO 8601 日期格式", "why": "要查导出文件的行业格式"}
+            ],
+        },
+        ensure_ascii=False,
+    )
+    reviewer = SeatReviewer(model=gateway_for(reply), prompts=RecordingPrompts())
+
+    outcome = await reviewer.review(
+        seat=make_seat(),
+        document_state="# 文档",
+        claims="…",
+        opinions_so_far="…",
+        answered="…",
+        known_eids=KNOWN,
+    )
+
+    assert [(item.query, item.why) for item in outcome.web_requests] == [
+        ("ISO 8601 日期格式", "要查导出文件的行业格式")
+    ]
+    assert outcome.web_requests[0] is outcome.envelope.packet.web_requests[0]

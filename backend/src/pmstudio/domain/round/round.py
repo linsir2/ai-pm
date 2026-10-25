@@ -111,8 +111,9 @@ class DropSource(StrEnum):
     INTEGRATOR = "integrator"  # 模型在报文里申报的（原因它自己写）
     ASSEMBLY = "assembly"  # 装配层算出来的：归因对不上号
     UNACCOUNTED = "unaccounted"  # 装配层核出来的：既没说丢、也没交代落到哪儿
-    #: 工具这一趟的：检索失败 / 没搜到结果 / 搜到了但预算带不进去（C-2b）。
-    #: 与席位意见无关，所以 `seat_id` 恒为 None——闭环区会把它单列一句。
+    #: 工具这一趟的：检索失败 / 没搜到结果 / 搜到了但预算带不进去（C-2b），
+    #: 以及联网申请超过每方名额（P3a）。检索结果那些与席位意见无关（`seat_id=None`）；
+    #: 名额丢弃则带提出方身份（`seat_id` / `pass_index`），界面要挂回对应席位包下。
     TOOL = "tool"
     #: **材料这一趟**的：用户勾了材料，但预算装不下（整份材料一块都没进来）。
     #: 与工具那一趟是同一类事（"本来要带、预算带不下"），但**不是工具**——
@@ -179,9 +180,9 @@ class DroppedItem:
     pass_index: int
     #: 这一条来自哪一包（§4.4 信封的 `packet_id`）。
     #:
-    #: **可选，默认 `None`**：留痕有四个来源（integrator / assembly / unaccounted / tool），
-    #: 其中 tool 来源本来就没有 agent 包（是联网检索失败，不是模型回包），
-    #: assembly 的"归因对不上号"也挂不到席位包下。所以 `None` 的含义是
+    #: **可选，默认 `None`**：多数 tool 来源没有 agent 包（联网检索失败不是模型回包），
+    #: assembly 的"归因对不上号"也挂不到席位包下；但联网申请超名额的 TOOL 留痕
+    #: **来自模型回包**，会带上 `packet_id`。所以 `None` 的含义是
     #: **"不来自模型回包"**，不是"没填"——这个区别必须写清，否则半年后没人分得清。
     #:
     #: `__post_init__` **不校验**它：那三条（handle / reason / pass_index）是

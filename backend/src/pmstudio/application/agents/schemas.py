@@ -92,6 +92,21 @@ class WebQueryDraft(BaseModel):
     )
 
 
+class WebRequestDraft(BaseModel):
+    #: 三方共用的结构化联网申请（P3a）：**只提名，不联网**。
+    #:
+    #:    上限不写进 schema：模型多写一条的既定口径是**丢那一条 + 留痕**，
+    #:    不是整包重装。名额由用例层在 `attach_web_requests` 之前按方取前 3。
+
+    query: str = Field(description="要拿去搜的一句话（像人问的那样，别堆关键词）")
+    why: str = Field(
+        description=(
+            "为什么需要**外部客观事实**——文档里没有、材料里没有、用户也答不了的那种"
+            "（行业标准、法规条款、第三方接口的既有做法）"
+        )
+    )
+
+
 class ContradictionDraft(BaseModel):
     #: 一对**立场互斥**的主张。写的是**第几条**（从 1 开始），不是 `c1`。
     #:
@@ -150,6 +165,13 @@ class SeatPacket(BaseModel):
     #: 上限跟着提示词走：`seat_review.md` 允许"最多 5 条判断"，加上疑问一共 12 条。
     #: 真跑实测：5 判断 + 5 疑问 = 10 条，旧的 8 条上限直接把整轮打死（报告 F4）。
     opinions: list[OpinionDraft] = Field(default_factory=list, max_length=12)
+    web_requests: list[WebRequestDraft] = Field(
+        default_factory=list,
+        description=(
+            "本席位想查的外部客观事实（最多 3 条；**只提名，不联网**，"
+            "是否批准由用户决定）。没有就给空数组"
+        ),
+    )
 
 
 class HypothesisDraft(BaseModel):
@@ -494,6 +516,13 @@ class IntegrationPacket(BaseModel):
         #: 7 个席位 × 单席位 12 条 = 84——"一条都不许默默丢掉"要在数学上成立（报告 F11）。
         max_length=84,
         description="你没采用的席位意见：给出地址与原因；**一条都不许默默丢掉**",
+    )
+    web_requests: list[WebRequestDraft] = Field(
+        default_factory=list,
+        description=(
+            "本轮需要核对的**外部客观事实**（最多 3 条；只提名，不联网，"
+            "不产生 E 编号，不能当依据引用）。没有就给空数组"
+        ),
     )
 
 

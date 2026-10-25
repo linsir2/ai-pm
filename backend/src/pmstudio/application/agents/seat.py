@@ -59,6 +59,13 @@ class SeatOutcome:
     def discarded(self) -> tuple[schemas.Discarded, ...]:
         return self.envelope.discarded
 
+    @property
+    def web_requests(self) -> tuple[schemas.WebRequestDraft, ...]:
+        """本趟交回的联网申请——**只读信封报文**，Outcome 不另存一份。"""
+
+        packet = self.envelope.packet
+        return tuple(packet.web_requests) if isinstance(packet, schemas.SeatPacket) else ()
+
 
 class SeatReviewer(Agent[SeatOutcome, schemas.SeatPacket]):
     definition = SEAT_REVIEWER

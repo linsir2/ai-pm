@@ -27,6 +27,7 @@ from pmstudio.application.agents.schemas import (
     DispositionsPacket,
     IntegrationPacket,
     Overflow,
+    WebRequestDraft,
 )
 from pmstudio.application.agents.seat import SalvagedRef, SeatReviewer
 from pmstudio.application.agents.sim_inquirer import (
@@ -314,6 +315,12 @@ from pmstudio.domain.round.round import (
     SeedRef,
 )
 from pmstudio.domain.round.step import Step, WaitingOn
+from pmstudio.domain.round.web import (
+    MAX_WEB_QUERIES,
+    WebOrigin,
+    WebRequest,
+    normalized_query,
+)
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import (
     CommitResult,
@@ -359,6 +366,7 @@ from pmstudio.harness.errors import (
 )
 from pmstudio.harness.events import Event, EventPublisher
 from pmstudio.harness.model import failure
+from pmstudio.harness.model.envelope import Envelope
 from pmstudio.harness.tools.recorder import ToolCallRecorder
 from pmstudio.harness.tools.registry import ToolCatalog, ToolDefinition
 
@@ -924,10 +932,20 @@ class StartRound:
             round_.attach_contradictions(analysis.contradictions)
             # 席位名单跟着主张一起落：它是这一次判断的产物，重试/刷新都该看得见
             round_.nominate(analysis.seats)
-            # 联网检索词也是这次判断的产物：**只提名**，勾不勾由用户在复述卡上定（C-2b）
-            round_.attach_web_queries(analysis.web_queries)
-            # 被丢掉的提名（目录里没有的席位）留痕：丢人不丢轮，但要说清丢了谁
-            round_.note_dropped(analysis.dropped)
+            # 联网申请也是这次判断的产物：**只提名**，批不批由用户定（P3a）。
+            # 旧 `web_queries` 由领域层只读派生，这里只写新键。
+            web_requests, web_request_drops = _web_requests_for(
+                round_,
+                requests=[(item.query, item.why) for item in analysis.web_queries],
+                origin="analyzer",
+                seat_id=None,
+                pass_index=None,
+                now=self._clock.now(),
+            )
+            round_.attach_web_requests(web_requests)
+            # 被丢掉的提名（目录里没有的席位 / 超名额的检索词）留痕：
+            # 丢人不丢轮，但要说清丢了谁
+            round_.note_dropped(analysis.dropped + web_request_drops)
             authorize_named_features(round_, assigned, document=document)
             self._evidence_writer.save(ledger)
             self._round_writer.save(round_)
@@ -955,6 +973,80 @@ def _tool_drop(handle: str, reason: str) -> DroppedItem:
     return DroppedItem(
         handle=handle, reason=reason, source=DropSource.TOOL, seat_id=None, pass_index=1
     )
+
+
+def _web_requests_for(
+    round_: Round,
+    *,
+    requests: Sequence[tuple[str, str]],
+    origin: WebOrigin,
+    seat_id: str | None,
+    pass_index: int | None,
+    now: datetime,
+    packet_id: str | None = None,
+) -> tuple[tuple[WebRequest, ...], tuple[DroppedItem, ...]]:
+    """把一方报文里的联网申请变成领域对象：**按方取前 3，余下 TOOL 留痕**。
+
+    schema 不设 `max_length`（模型多写一条不该整包重装）；名额只在挂载前这一处算。
+    id 从 `Round.next_web_request_id()` 起，`created_at` 用调用方的钟——
+    领域对象不自己造编号或时间。
+    """
+
+    existing = sum(1 for item in round_.web_requests if item.origin == origin)
+    remaining = max(0, MAX_WEB_QUERIES - existing)
+    seen = {
+        (item.origin, item.seat_id, normalized_query(item.query))
+        for item in round_.web_requests
+    }
+    next_number = int(round_.next_web_request_id()[1:])
+    kept: list[WebRequest] = []
+    dropped: list[DroppedItem] = []
+    for query, why in requests:
+        text = query.strip()
+        handle = f"联网申请 {text or '(空)'}"
+        if len(kept) >= remaining:
+            dropped.append(
+                DroppedItem(
+                    handle=handle,
+                    reason=(
+                        f"每方最多 {MAX_WEB_QUERIES} 条联网申请，多出来的这一条已丢弃"
+                    ),
+                    source=DropSource.TOOL,
+                    seat_id=seat_id,
+                    pass_index=pass_index or 1,
+                    packet_id=packet_id,
+                )
+            )
+            continue
+        key = (origin, seat_id, normalized_query(text))
+        if key in seen:
+            continue
+        try:
+            request = WebRequest(
+                request_id=f"w{next_number}",
+                query=text,
+                why=why,
+                origin=origin,
+                seat_id=seat_id,
+                pass_index=pass_index,
+                created_at=now,
+            )
+        except DomainError as error:
+            dropped.append(
+                DroppedItem(
+                    handle=handle,
+                    reason=f"这条联网申请过不了领域校验：{error.message}",
+                    source=DropSource.TOOL,
+                    seat_id=seat_id,
+                    pass_index=pass_index or 1,
+                    packet_id=packet_id,
+                )
+            )
+            continue
+        seen.add(key)
+        kept.append(request)
+        next_number += 1
+    return tuple(kept), tuple(dropped)
 
 
 def _declared(tool: ToolDefinition, field: str) -> int:
@@ -1747,6 +1839,19 @@ class RunSeatRound:
                 self._round_writer.save(round_)
                 return
             round_.attest(review, packet_id=outcome.envelope.packet_id)
+            # 席位提名的联网申请：只挂载、不执行（批不批由用户 / allow_web 决定）；
+            # 名额在挂载前按方截断，余下 TOOL 留痕。
+            web_requests, web_request_drops = _web_requests_for(
+                round_,
+                requests=[(item.query, item.why) for item in outcome.web_requests],
+                origin="seat",
+                seat_id=review.seat_id,
+                pass_index=round_.seat_round_count,
+                now=self._clock.now(),
+                packet_id=outcome.envelope.packet_id,
+            )
+            round_.attach_web_requests(web_requests)
+            round_.note_dropped(web_request_drops)
             # 被截断掉的意见要留痕（"一条都不许默默丢掉"）——它没进卡片，但要说清为什么。
             round_.note_dropped(
                 _truncation_items(
@@ -1844,6 +1949,21 @@ class IntegrationResult:
     carried_from_queue: tuple[Question, ...] = ()
     #: 来自**文档 s11 未决条目**的题（要记住来源：答完撤下那条条目）
     carried_from_open_items: tuple[Question, ...] = ()
+    #: **最终**（含补交代合并后的）信封。降级路径没有可用报文，所以是 `None`。
+    envelope: Envelope | None = None
+
+    @property
+    def web_requests(self) -> tuple[WebRequestDraft, ...]:
+        """从**最终信封**派生的联网申请——不另存一份（避免第二真相源）。"""
+
+        if self.envelope is None:
+            return ()
+        packet = self.envelope.packet
+        return (
+            tuple(packet.web_requests)
+            if isinstance(packet, IntegrationPacket)
+            else ()
+        )
 
 def _retire_answered_open_items(
     round_: Round, *, ledger: EvidenceLedger, start_index: int, adapter: TemplateAdapter
@@ -2282,6 +2402,19 @@ class IntegrateRound:
             document = self._documents.get(round_.project_id)
             adapter = adapt(document.template)
             now = self._clock.now()
+            # 整合者提名的联网申请：**最终 UoW 才挂载**，本轮不执行（P3a）。
+            # 请求从最终信封派生（补交代合并后），不另存一份。
+            web_requests, web_request_drops = _web_requests_for(
+                round_,
+                requests=[(item.query, item.why) for item in result.web_requests],
+                origin="integrator",
+                seat_id=None,
+                pass_index=None,
+                now=now,
+                packet_id=None if result.envelope is None else result.envelope.packet_id,
+            )
+            round_.attach_web_requests(web_requests)
+            round_.note_dropped(web_request_drops)
             # 只有**真被问出去**的那几条才从轮内队列出队（carried 里还混着 s11 来的题）
             asked = {question_key(item) for item in assembled.questions}
             round_.take_deferred(
@@ -3013,6 +3146,7 @@ class IntegrateRound:
             gaps=gaps,
             carried_from_queue=carried_from_queue,
             carried_from_open_items=carried_from_open_items,
+            envelope=outcome.envelope,
         )
 
 

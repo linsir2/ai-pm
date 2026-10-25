@@ -565,7 +565,7 @@ def web_queries_from_packet(
                     reason=(
                         f"一轮最多 {MAX_WEB_QUERIES} 条检索词提名，多出来的这一条已丢弃"
                     ),
-                    source=DropSource.ASSEMBLY,
+                    source=DropSource.TOOL,
                     seat_id=None,
                     pass_index=1,
                 )
