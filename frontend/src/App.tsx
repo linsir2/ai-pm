@@ -631,7 +631,7 @@ function Workspace() {
                 data.decideWebRequest(round.round_id, requestId, decision);
               }
             }}
-            pendingWebRequestId={data.pendingWebRequestId}
+            pendingWebRequest={data.pendingWebRequest}
             onSubmitOpening={() =>
               round !== null &&
               void data.submitOpening(

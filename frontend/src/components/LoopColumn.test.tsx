@@ -76,7 +76,7 @@ function drawColumn(over: Partial<Parameters<typeof LoopColumn>[0]> = {}) {
     onToggleWebRequest: noop,
     onToggleAllowWeb: noop,
     onDecideWebRequest: noop,
-    pendingWebRequestId: null,
+    pendingWebRequest: null as { requestId: string; decision: "approve" | "reject" } | null,
     ...over,
   };
   render(<LoopColumn {...props} />);
@@ -151,6 +151,15 @@ const openingDrafts = {
   setCollapsed: vi.fn(),
 };
 
+const schemaWithLimits = {
+  limits: {
+    max_seat_rounds: 3,
+    max_questionnaires: 2,
+    max_open_items_per_batch: 3,
+    max_web_executions: 3,
+  },
+} as never;
+
 describe("LoopColumn 折叠态（rail，06 §2.4 §3）", () => {
   it("折叠态只剩 rail：按钮含徽标数，不渲染页签/composer", () => {
     const onExpand = vi.fn();
@@ -196,6 +205,7 @@ describe("LoopColumn · 联网授权与决策（P3a）", () => {
     drawColumn({
       round: openingRound(),
       mode: "opening",
+      schema: schemaWithLimits,
       drafts: { ...openingDrafts } as never,
       onToggleWebRequest,
       onToggleAllowWeb,
@@ -212,6 +222,7 @@ describe("LoopColumn · 联网授权与决策（P3a）", () => {
     drawColumn({
       round: openingRound(),
       mode: "opening",
+      schema: schemaWithLimits,
       drafts: { ...openingDrafts } as never,
       approvedRequestIds: ["w1"],
       allowWeb: true,

@@ -3868,7 +3868,7 @@ details.loop__group[open] > summary::before {
 }
 
 .web-request + .web-request {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 .web-request__head {

@@ -19,6 +19,8 @@ import {
   integrationSummary,
   materialHitNotice,
   materialHitTarget,
+  openingApprovedRequestIds,
+  openingWebRequestChoice,
   openingWebRequests,
   searchHitAction,
   selectableLabels,
@@ -305,8 +307,15 @@ describe("buildOpeningBody", () => {
   });
 
   it("逐条批准的申请 id 与 allow_web 随 body 一起走（旧字段同时保留）", () => {
+    const view = {
+      ...round,
+      web_requests: [
+        { request_id: "w1", state: "proposed" },
+        { request_id: "w2", state: "approved" },
+      ],
+    } as unknown as RoundView;
     const body = buildOpeningBody(
-      round,
+      view,
       ["seat.data_scale"],
       {},
       ["RBAC 权限模型"],
@@ -317,6 +326,47 @@ describe("buildOpeningBody", () => {
     expect(body.approved_request_ids).toEqual(["w1", "w2"]);
     expect(body.allow_web).toBe(true);
     expect(body.web_queries).toEqual(["RBAC 权限模型"]);
+  });
+
+  it("body 只发当前仍可批的 proposed/approved id（R24）", () => {
+    const view = {
+      ...round,
+      web_requests: [
+        { request_id: "w1", state: "proposed" },
+        { request_id: "w2", state: "approved" },
+        { request_id: "w3", state: "rejected" },
+        { request_id: "w4", state: "done" },
+        { request_id: "w5", state: "failed" },
+      ],
+    } as unknown as RoundView;
+    const body = buildOpeningBody(
+      view,
+      ["seat.data_scale"],
+      {},
+      [],
+      ["w1", "w2", "w3", "w4", "w5"],
+    );
+
+    expect(body.approved_request_ids).toEqual(["w1", "w2"]);
+  });
+
+  it("勾选后同轮刷新变 rejected：body 里不再带那个 id（R24）", () => {
+    const afterRefresh = {
+      ...round,
+      web_requests: [
+        { request_id: "w1", state: "rejected" },
+        { request_id: "w2", state: "proposed" },
+      ],
+    } as unknown as RoundView;
+    const body = buildOpeningBody(
+      afterRefresh,
+      ["seat.data_scale"],
+      {},
+      [],
+      ["w1", "w2"],
+    );
+
+    expect(body.approved_request_ids).toEqual(["w2"]);
   });
 });
 
@@ -358,6 +408,114 @@ describe("openingWebRequests（新结构优先，旧检索词不重复渲染）"
     const opening = openingWebRequests(view);
     expect(opening.requests).toEqual([]);
     expect(opening.legacy.map((item) => item.query)).toEqual(["旧检索词"]);
+  });
+});
+
+describe("openingApprovedRequestIds（开场卡只发仍可批的 id）", () => {
+  it("按当前 round 过滤：rejected/done/failed 不发，proposed/approved 保留", () => {
+    const view = {
+      ...round,
+      web_requests: [
+        { request_id: "w1", state: "proposed" },
+        { request_id: "w2", state: "approved" },
+        { request_id: "w3", state: "rejected" },
+        { request_id: "w4", state: "done" },
+        { request_id: "w5", state: "failed" },
+      ],
+    } as unknown as RoundView;
+
+    expect(openingApprovedRequestIds(view, ["w1", "w2", "w3", "w4", "w5"])).toEqual([
+      "w1",
+      "w2",
+    ]);
+    expect(openingApprovedRequestIds(view, ["w3", "w4", "w5"])).toEqual([]);
+    expect(openingApprovedRequestIds(view, ["missing"])).toEqual([]);
+  });
+});
+
+describe("openingWebRequestChoice（开场卡名额）", () => {
+  function request(over: Partial<WebRequestView> = {}): WebRequestView {
+    return {
+      request_id: "w1",
+      query: "RBAC 权限模型",
+      why: "要查行业通行做法",
+      origin: "analyzer",
+      seat_id: null,
+      pass_index: null,
+      state: "proposed",
+      result_note: null,
+      created_at: null,
+      ...over,
+    };
+  }
+
+  const ready = {
+    used: 0,
+    selected: 0,
+    limit: 2,
+    available: true,
+    pending: false,
+  };
+
+  it("limit=2 已勾 2 条：第 3 条未勾项禁用并说明剩余 0", () => {
+    const choice = openingWebRequestChoice(request({ request_id: "w3" }), false, {
+      ...ready,
+      selected: 2,
+    });
+
+    expect(choice.disabled).toBe(true);
+    expect(choice.reason).toContain("名额已用完");
+  });
+
+  it("已勾的条目仍可取消（名额满不把已勾项锁死）", () => {
+    const choice = openingWebRequestChoice(request(), true, { ...ready, selected: 2 });
+    expect(choice.disabled).toBe(false);
+  });
+
+  it("limit 没读到：未勾禁用并说明；已勾仍能取消", () => {
+    const unchecked = openingWebRequestChoice(request(), false, { ...ready, limit: null });
+    expect(unchecked.disabled).toBe(true);
+    expect(unchecked.reason).toContain("还没读到");
+
+    const checked = openingWebRequestChoice(request(), true, { ...ready, limit: null });
+    expect(checked.disabled).toBe(false);
+  });
+
+  it("没有联网工具：禁用并说明", () => {
+    const choice = openingWebRequestChoice(request(), false, {
+      ...ready,
+      available: false,
+    });
+    expect(choice.disabled).toBe(true);
+    expect(choice.reason).toContain("没配联网工具");
+  });
+
+  it("提交中：禁用并说明", () => {
+    const choice = openingWebRequestChoice(request(), false, { ...ready, pending: true });
+    expect(choice.disabled).toBe(true);
+    expect(choice.reason).toContain("正在提交");
+  });
+
+  it("服务端已批准：勾着且只读；rejected 等终态：未勾且只读", () => {
+    const approved = openingWebRequestChoice(request({ state: "approved" }), false, ready);
+    expect(approved.checked).toBe(true);
+    expect(approved.disabled).toBe(true);
+    expect(approved.stateLabel).toBe("已批准，等待执行");
+
+    const rejected = openingWebRequestChoice(request({ state: "rejected" }), false, ready);
+    expect(rejected.checked).toBe(false);
+    expect(rejected.disabled).toBe(true);
+    expect(rejected.stateLabel).toBe("已拒绝");
+  });
+
+  it("还有名额：未勾项可勾（limit=3、已用 1 时还剩 2）", () => {
+    const choice = openingWebRequestChoice(request(), false, {
+      ...ready,
+      used: 1,
+      limit: 3,
+    });
+    expect(choice.disabled).toBe(false);
+    expect(choice.reason).toBeNull();
   });
 });
 

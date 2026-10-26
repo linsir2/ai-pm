@@ -74,8 +74,11 @@ export function useWorkspaceData() {
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
-  /** 正在决策的那一条联网申请 id（按钮显示"处理中"用；一次只跑一条）。 */
-  const [pendingWebRequestId, setPendingWebRequestId] = useState<string | null>(null);
+  /** 正在决策的那一条联网申请与被点的动作（只让那颗按钮显示"处理中"）。 */
+  const [pendingWebRequest, setPendingWebRequest] = useState<{
+    requestId: string;
+    decision: "approve" | "reject";
+  } | null>(null);
   // 现行结构（`GET /schema`）：一次会话拉一次。拉不到不影响主流程，界面回落旧默认值。
   const [schema, setSchemaState] = useState<SchemaView | null>(null);
   // 这个项目走过的轮次（F4）：跟着工作区一起刷新——它只读，事件说"这一轮变了"就该重读。
@@ -764,23 +767,27 @@ export function useWorkspaceData() {
       if (pending !== null) return;
       // 批准会真联网，可能跑几十秒；切走项目后回包不许倒灌到新项目。
       const projectId = selected.current;
-      setPendingWebRequestId(requestId);
+      setPendingWebRequest({ requestId, decision });
       void run("web_request", async () => {
         try {
           const fresh = await api.decideWebRequest(roundId, requestId, decision);
           if (selected.current === projectId) {
-            dispatch({ type: "round", round: fresh });
+            dispatch({ type: "round", round: fresh, expectRoundId: roundId });
           }
         } catch (error) {
           if (selected.current !== projectId) return;
           try {
-            dispatch({ type: "round", round: await api.getRound(roundId) });
+            dispatch({
+              type: "round",
+              round: await api.getRound(roundId),
+              expectRoundId: roundId,
+            });
           } catch {
             // 原始错误已经由 run() 的 banner 显示；这里只是补读真相。
           }
           throw error;
         }
-      }).finally(() => setPendingWebRequestId(null));
+      }).finally(() => setPendingWebRequest(null));
     },
     [pending, run],
   );
@@ -1013,7 +1020,7 @@ export function useWorkspaceData() {
     startRound,
     submitOpening,
     submitAnswers,
-    pendingWebRequestId,
+    pendingWebRequest,
     decideWebRequest,
     confirm,
     retry,

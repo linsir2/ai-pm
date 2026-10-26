@@ -1,6 +1,8 @@
 /* 一条联网申请（P3a）：谁提的、查什么、为什么、到哪一步了。
    批准即执行；能不能批由 `webRequestAction` 判，组件只照结果画。 */
 
+import { useId } from "react";
+
 import { webOriginText, webRequestAction, webRequestStateText } from "../api/payload";
 import type { WebRequestView } from "../api/types";
 
@@ -10,7 +12,7 @@ export function WebRequestCard({
   limit,
   available,
   busy,
-  pending,
+  pendingDecision,
   historical,
   terminal,
   networkAccess,
@@ -25,8 +27,8 @@ export function WebRequestCard({
   available: boolean;
   /** 轮内还有别的动作在跑。 */
   busy: boolean;
-  /** 这一条自己的决策请求在途。 */
-  pending: boolean;
+  /** 这一条自己的决策请求在途，以及被点的是哪一个动作。 */
+  pendingDecision: "approve" | "reject" | null;
   /** 正在看历史轮（只读）。 */
   historical: boolean;
   /** 轮已终态。 */
@@ -35,6 +37,7 @@ export function WebRequestCard({
   networkAccess: boolean;
   onDecide: (decision: "approve" | "reject") => void;
 }) {
+  const pending = pendingDecision !== null;
   const action = webRequestAction(request, {
     used,
     limit,
@@ -44,6 +47,9 @@ export function WebRequestCard({
     historical,
     terminal,
   });
+  const reasonId = useId();
+  const describedBy = (reason: string | null) =>
+    !pending && reason !== null ? reasonId : undefined;
   const meta = [
     webOriginText(request.origin),
     request.seat_id,
@@ -83,25 +89,33 @@ export function WebRequestCard({
             type="button"
             className="btn btn--primary btn--sm"
             disabled={!action.approve.enabled || pending}
+            aria-describedby={describedBy(action.approve.reason)}
             title={action.approve.reason ?? undefined}
             onClick={() => onDecide("approve")}
           >
-            {pending ? "处理中…" : "批准并查"}
+            {pendingDecision === "approve" ? "处理中…" : "批准并查"}
           </button>
           <button
             type="button"
             className="btn btn--sm"
             disabled={!action.reject.enabled || pending}
+            aria-describedby={describedBy(action.reject.reason)}
             title={action.reject.reason ?? undefined}
             onClick={() => onDecide("reject")}
           >
-            拒绝
+            {pendingDecision === "reject" ? "处理中…" : "拒绝"}
           </button>
-          {reasons.map((reason) => (
-            <span className="web-request__reason muted small" key={reason}>
-              {reason}
+          {pendingDecision !== null ? (
+            <span className="web-request__reason muted small" role="status" aria-live="polite">
+              正在处理：{pendingDecision === "approve" ? "批准" : "拒绝"}…
             </span>
-          ))}
+          ) : (
+            reasons.length > 0 && (
+              <span className="web-request__reason muted small" id={reasonId}>
+                {reasons.join("；")}
+              </span>
+            )
+          )}
         </div>
       )}
     </article>

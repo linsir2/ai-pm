@@ -32,7 +32,7 @@ function draw(over: Partial<Parameters<typeof WebRequestCard>[0]> = {}) {
     limit: 3,
     available: true,
     busy: false,
-    pending: false,
+    pendingDecision: null as "approve" | "reject" | null,
     historical: false,
     terminal: false,
     networkAccess: false,
@@ -90,10 +90,14 @@ describe("WebRequestCard · 决策", () => {
     expect(approve.disabled).toBe(true);
     expect(reject.disabled).toBe(false);
     expect(screen.getByText(/联网名额已用完/)).toBeTruthy();
+
+    const describedBy = approve.getAttribute("aria-describedby");
+    expect(describedBy).not.toBeNull();
+    expect(document.getElementById(describedBy!)?.textContent).toContain("联网名额已用完");
   });
 
-  it("这一条在跑：两个按钮都禁用，并显示处理中", () => {
-    draw({ pending: true });
+  it("批准在途：只有批准按钮显示处理中（R25）", () => {
+    draw({ pendingDecision: "approve" });
 
     expect(
       (screen.getByRole("button", { name: "处理中…" }) as HTMLButtonElement).disabled,
@@ -101,7 +105,17 @@ describe("WebRequestCard · 决策", () => {
     expect((screen.getByRole("button", { name: "拒绝" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    expect(screen.getByText(/正在处理/)).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("批准");
+  });
+
+  it("拒绝在途：只有拒绝按钮显示处理中，批准按钮文案不变（R25）", () => {
+    draw({ pendingDecision: "reject" });
+
+    const approve = screen.getByRole("button", { name: "批准并查" }) as HTMLButtonElement;
+    const reject = screen.getByRole("button", { name: "处理中…" }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    expect(reject.disabled).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain("拒绝");
   });
 
   it("轮忙：两个按钮都禁用并写原因", () => {

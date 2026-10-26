@@ -70,6 +70,7 @@ function draw(over: Partial<Parameters<typeof OpeningCard>[0]> = {}) {
     webQueries: [] as string[],
     approvedRequestIds: [] as string[],
     allowWeb: false,
+    limit: 3 as number | null,
     pending: false,
     onChangeClaim: vi.fn(),
     onToggleSeat: vi.fn(),
@@ -115,10 +116,12 @@ describe("OpeningCard · 联网检索词", () => {
     expect(screen.getByText(/没配联网工具/)).toBeTruthy();
   });
 
-  it("没提名检索词就整栏不出现", () => {
-    draw({ round: round({ web_queries: [] }) });
+  it("没有联网提案：列表不出现，但 allow_web 仍可见（R22）", () => {
+    draw({ round: round({ web_queries: [], web_requests: [] }) });
 
-    expect(screen.queryByText(/联网检索/)).toBeNull();
+    expect(screen.queryByText(/分析席位建议查/)).toBeNull();
+    expect(screen.queryByText(/分析席位提了/)).toBeNull();
+    expect(screen.getByRole("checkbox", { name: /自动批准/ })).toBeTruthy();
   });
 
   it("联网工具声明会外发时，授权处要说清检索词发给第三方", () => {
@@ -228,6 +231,80 @@ describe("OpeningCard · 结构化联网申请（P3a）", () => {
     expect(
       (screen.getByRole("checkbox", { name: /自动批准/ }) as HTMLInputElement).disabled,
     ).toBe(true);
+  });
+
+  it("没有提案也没有工具：allow_web 仍渲染，但禁用并说明（R22）", () => {
+    draw({
+      round: round({
+        web_queries: [],
+        web_requests: [],
+        web_search_available: false,
+      }),
+    });
+
+    const allow = screen.getByRole("checkbox", { name: /自动批准/ }) as HTMLInputElement;
+    expect(allow.disabled).toBe(true);
+    expect(screen.getByText(/没配联网工具/)).toBeTruthy();
+  });
+
+  it("limit=2、已勾 2 条：第 3 条禁用，并显示剩余 0/2（R23）", () => {
+    draw({
+      round: round({
+        web_requests: [
+          webRequest({ request_id: "w1", query: "第一条" }),
+          webRequest({ request_id: "w2", query: "第二条" }),
+          webRequest({ request_id: "w3", query: "第三条" }),
+        ],
+      }),
+      approvedRequestIds: ["w1", "w2"],
+      limit: 2,
+    });
+
+    const third = screen.getByRole("checkbox", { name: /第三条/ }) as HTMLInputElement;
+    expect(third.disabled).toBe(true);
+    expect(third.checked).toBe(false);
+    expect(screen.getByText(/剩余 0\/2/)).toBeTruthy();
+
+    const id = third.getAttribute("aria-describedby");
+    expect(id).not.toBeNull();
+    expect(document.getElementById(id!)?.textContent).toContain("名额已用完");
+  });
+
+  it("已有一条 approved：剩余 2/3，未勾项仍可勾（R23）", () => {
+    draw({
+      round: round({
+        web_requests: [
+          webRequest({ request_id: "w1", state: "approved" }),
+          webRequest({ request_id: "w2", query: "第二条" }),
+        ],
+      }),
+      limit: 3,
+    });
+
+    expect(screen.getByText(/剩余 2\/3/)).toBeTruthy();
+    const second = screen.getByRole("checkbox", { name: /第二条/ }) as HTMLInputElement;
+    expect(second.disabled).toBe(false);
+  });
+
+  it("limit 没读到：未勾项禁用并说明（R23）", () => {
+    draw({
+      round: round({ web_requests: [webRequest()] }),
+      limit: null,
+    });
+
+    const box = screen.getByRole("checkbox", { name: /RBAC 权限模型/ }) as HTMLInputElement;
+    expect(box.disabled).toBe(true);
+    expect(screen.getByText(/还没读到/)).toBeTruthy();
+  });
+
+  it("勾选框的可访问名保留可见的「为什么查」文字", () => {
+    draw({ round: round({ web_requests: [webRequest()] }) });
+
+    expect(
+      screen.getByRole("checkbox", {
+        name: /RBAC 权限模型.*要查行业通行做法/,
+      }),
+    ).toBeTruthy();
   });
 });
 

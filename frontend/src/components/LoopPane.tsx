@@ -37,7 +37,7 @@ export function LoopPane({
   elapsed = null,
   historyNav,
   historical = false,
-  pendingWebRequestId = null,
+  pendingWebRequest = null,
   onRetry,
   onAbandon,
   onSkipSeat,
@@ -57,8 +57,8 @@ export function LoopPane({
   historyNav?: ReactNode;
   /** 正在看历史轮（只读）：联网申请只能看，不能批。 */
   historical?: boolean;
-  /** 哪一条申请的决策请求在途（按钮显示处理中）。 */
-  pendingWebRequestId?: string | null;
+  /** 哪一条申请的哪个决策在途（只让被点的按钮显示处理中）。 */
+  pendingWebRequest?: { requestId: string; decision: "approve" | "reject" } | null;
   onRetry: () => void;
   onAbandon: () => void;
   /** 跳过一个席位（LoopColumn 从 App 接过来；卡片只负责点，判能不能点在下面）。 */
@@ -137,7 +137,11 @@ export function LoopPane({
                 limit={webLimit}
                 available={round.web_search_available}
                 busy={running}
-                pending={pendingWebRequestId === request.request_id}
+                pendingDecision={
+                  pendingWebRequest?.requestId === request.request_id
+                    ? pendingWebRequest.decision
+                    : null
+                }
                 historical={historical}
                 terminal={terminal}
                 networkAccess={round.web_search_network_access}

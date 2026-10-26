@@ -104,6 +104,26 @@ export function executedWebRequestCount(round: RoundView | null): number {
   ).length;
 }
 
+export interface WebExecutionSlots {
+  used: number;
+  selected: number;
+  /** 剩余可批准/勾选的条数；limit 没读到时是 null（不猜）。 */
+  remaining: number | null;
+}
+
+/** 开场卡显示“剩余 N/M”：已用（approved/done/failed）+ 已勾（本地草稿）。 */
+export function webExecutionSlots(
+  used: number,
+  selected: number,
+  limit: number | null,
+): WebExecutionSlots {
+  return {
+    used,
+    selected,
+    remaining: limit === null ? null : Math.max(0, limit - used - selected),
+  };
+}
+
 /** 闭环区那一行徽标：0 条不渲染（返回 null）。 */
 export function webRequestBadge(round: RoundView | null): string | null {
   const count = openWebRequests(round).length;

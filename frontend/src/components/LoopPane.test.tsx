@@ -66,7 +66,7 @@ function draw(
     pending?: string | null;
     limits?: LimitsView | null;
     historical?: boolean;
-    pendingWebRequestId?: string | null;
+    pendingWebRequest?: { requestId: string; decision: "approve" | "reject" } | null;
     onDecideWebRequest?: (requestId: string, decision: "approve" | "reject") => void;
   } = {},
 ) {
@@ -78,7 +78,7 @@ function draw(
         limits={props.limits ?? null}
         elapsed={props.elapsed ?? null}
         historical={props.historical ?? false}
-        pendingWebRequestId={props.pendingWebRequestId ?? null}
+        pendingWebRequest={props.pendingWebRequest ?? null}
         onDecideWebRequest={props.onDecideWebRequest}
         onRetry={() => undefined}
         onAbandon={() => undefined}
@@ -468,6 +468,19 @@ describe("联网申请（P3a）", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "批准并查" }));
     expect(calls).toEqual([["w1", "approve"]]);
+  });
+
+  it("拒绝在途：只有拒绝按钮显示处理中（R25）", () => {
+    draw(round({ web_requests: [webRequest()], web_search_available: true }), {
+      limits,
+      pendingWebRequest: { requestId: "w1", decision: "reject" },
+    });
+
+    expect(screen.getByRole("button", { name: "批准并查" })).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "处理中…" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain("拒绝");
   });
 
   it("历史轮只读：按钮禁用并写原因", () => {

@@ -236,9 +236,28 @@ export function buildOpeningBody(
     seats,
     claim_edits: buildClaimEdits(round, edits),
     web_queries: [...webQueries],
-    approved_request_ids: [...approvedRequestIds],
+    // 同轮刷新可能已把某条改成 rejected/done/failed：只发当前仍可批的 id（R24）。
+    approved_request_ids: openingApprovedRequestIds(round, approvedRequestIds),
     allow_web: allowWeb,
   };
+}
+
+/**
+ * 开场卡真正能提交的申请 id：仍在当前轮、且状态是 proposed/approved。
+ * 本地草稿不清空是有意的（同轮刷新不丢勾选）；对账放在提交这一处。
+ */
+export function openingApprovedRequestIds(
+  round: RoundView,
+  selectedIds: readonly string[],
+): string[] {
+  const selected = new Set(selectedIds);
+  return (round.web_requests ?? [])
+    .filter(
+      (item) =>
+        selected.has(item.request_id) &&
+        (item.state === "proposed" || item.state === "approved"),
+    )
+    .map((item) => item.request_id);
 }
 
 /** 复述卡上的 analyzer 申请（新载体）。 */
@@ -350,6 +369,72 @@ export function webRequestAction(
     visible: true,
     approve: { enabled: approveReason === null, reason: approveReason },
     reject: { enabled: true, reason: null },
+  };
+}
+
+export interface WebSelectionGateOptions {
+  /** 本轮已占用的执行名额。 */
+  used: number;
+  /** 当前已勾选的提议数。 */
+  selected: number;
+  /** `/schema.limits.max_web_executions`；null = 还没读到。 */
+  limit: number | null;
+  /** 服务端现在有没有可用的联网工具。 */
+  available: boolean;
+  /** 开场卡正在提交。 */
+  pending: boolean;
+}
+
+/**
+ * 开场卡上一个提议能不能勾 / 取消。返回 null = 可以操作；否则是禁用原因。
+ *
+ * 名额满只挡**未勾项**：已勾的必须还能取消，否则用户无法腾出名额。
+ * 上限没读到同理——未勾项不敢放行，已勾项仍可撤。
+ */
+export function webSelectionBlockReason(
+  checked: boolean,
+  options: WebSelectionGateOptions,
+): string | null {
+  if (options.pending) return "正在提交这一轮…";
+  if (!options.available) return "服务端没配联网工具（缺密钥），批准也查不了";
+  if (options.limit === null) {
+    return checked ? null : "还没读到本轮联网名额上限（刷新一下）";
+  }
+  if (!checked && options.used + options.selected >= options.limit) {
+    return "本轮联网名额已用完";
+  }
+  return null;
+}
+
+export interface OpeningWebRequestChoice {
+  checked: boolean;
+  disabled: boolean;
+  /** 禁用原因（可操作时为 null）。 */
+  reason: string | null;
+  /** 固定状态（approved/rejected/…）的中文短句；可勾时为 null。 */
+  stateLabel: string | null;
+}
+
+/** 复述卡上一张结构化申请的选择态：默认不勾，服务端已批准的勾着只读。 */
+export function openingWebRequestChoice(
+  request: WebRequestView,
+  selected: boolean,
+  options: WebSelectionGateOptions,
+): OpeningWebRequestChoice {
+  if (request.state !== "proposed") {
+    return {
+      checked: request.state === "approved",
+      disabled: true,
+      reason: null,
+      stateLabel: webRequestStateText(request.state),
+    };
+  }
+  const reason = webSelectionBlockReason(selected, options);
+  return {
+    checked: selected,
+    disabled: reason !== null,
+    reason,
+    stateLabel: null,
   };
 }
 

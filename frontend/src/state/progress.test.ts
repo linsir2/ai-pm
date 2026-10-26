@@ -10,6 +10,7 @@ import {
   roundElapsed,
   roundOrdinal,
   statusText,
+  webExecutionSlots,
   webRequestBadge,
 } from "./progress";
 
@@ -215,6 +216,17 @@ describe("联网申请徽标（P3a）", () => {
 
     expect(executedWebRequestCount(view)).toBe(3);
     expect(executedWebRequestCount(null)).toBe(0);
+  });
+
+  it("剩余名额 = limit − 已用 − 已勾；limit 没读到时是 null", () => {
+    expect(webExecutionSlots(0, 2, 2)).toEqual({ used: 0, selected: 2, remaining: 0 });
+    expect(webExecutionSlots(1, 0, 3)).toEqual({ used: 1, selected: 0, remaining: 2 });
+    expect(webExecutionSlots(3, 1, 3)).toEqual({ used: 3, selected: 1, remaining: 0 });
+    expect(webExecutionSlots(0, 0, null)).toEqual({
+      used: 0,
+      selected: 0,
+      remaining: null,
+    });
   });
 });
 

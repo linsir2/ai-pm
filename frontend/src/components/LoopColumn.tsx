@@ -58,7 +58,7 @@ export function LoopColumn({
   onToggleWebRequest,
   onToggleAllowWeb,
   onDecideWebRequest,
-  pendingWebRequestId,
+  pendingWebRequest,
   onSubmitOpening,
   onSubmitAnswers,
   onSkipAll,
@@ -143,8 +143,8 @@ export function LoopColumn({
   onToggleAllowWeb: (allow: boolean) => void;
   /** 时间线上的联网申请逐条决策（批准即执行）。 */
   onDecideWebRequest: (requestId: string, decision: "approve" | "reject") => void;
-  /** 哪一条申请的决策在途。 */
-  pendingWebRequestId: string | null;
+  /** 哪一条申请的哪个决策在途。 */
+  pendingWebRequest: { requestId: string; decision: "approve" | "reject" } | null;
   onSubmitOpening: () => void;
   onSubmitAnswers: () => void;
   onSkipAll: () => void;
@@ -358,6 +358,7 @@ export function LoopColumn({
               webQueries={drafts.webQueries}
               approvedRequestIds={approvedRequestIds}
               allowWeb={allowWeb}
+              limit={schema?.limits.max_web_executions ?? null}
               pending={pending === "opening"}
               historyNav={historyNav}
               onChangeClaim={drafts.changeClaim}
@@ -385,7 +386,7 @@ export function LoopColumn({
               elapsed={roundElapsed(rounds, round.round_id, Date.now())}
               historyNav={historyNav}
               historical={history !== null || mode === null}
-              pendingWebRequestId={pendingWebRequestId}
+              pendingWebRequest={pendingWebRequest}
               onRetry={onRetry}
               onAbandon={onAbandon}
               onSkipSeat={onSkipSeat}

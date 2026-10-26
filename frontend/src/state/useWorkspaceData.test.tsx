@@ -72,6 +72,7 @@ function exploration(): ExplorationView {
 beforeEach(() => {
   vi.clearAllMocks();
   keepCandidate.mockResolvedValue(exploration());
+  rounds.mockResolvedValue([]);
 });
 
 it("keep 成功才把种子文本与 id 落进输入框", async () => {
@@ -262,10 +263,26 @@ function decidedRound(state: string, note: string | null = null): RoundView {
   } as unknown as RoundView;
 }
 
+async function seedRound(
+  result: { current: ReturnType<typeof useWorkspaceData> },
+): Promise<void> {
+  startRound.mockResolvedValueOnce(decidedRound("proposed"));
+  await act(async () => {
+    result.current.selectProject("p1");
+  });
+  await act(async () => {
+    result.current.setRoundInput("想法");
+  });
+  await act(async () => {
+    await result.current.startRound();
+  });
+}
+
 it("决策成功：用返回的 RoundView 换掉当前这一轮，并清掉在途申请", async () => {
   decideWebRequest.mockResolvedValueOnce(decidedRound("done", "搜到 3 条结果"));
   const { result } = renderHook(() => useWorkspaceData());
   await act(async () => {});
+  await seedRound(result);
 
   await act(async () => {
     await result.current.decideWebRequest("r1", "w1", "approve");
@@ -274,8 +291,35 @@ it("决策成功：用返回的 RoundView 换掉当前这一轮，并清掉在�
   expect(decideWebRequest).toHaveBeenCalledWith("r1", "w1", "approve");
   expect(result.current.state.round?.web_requests[0]?.state).toBe("done");
   expect(result.current.state.round?.web_requests[0]?.result_note).toBe("搜到 3 条结果");
-  expect(result.current.pendingWebRequestId).toBeNull();
+  expect(result.current.pendingWebRequest).toBeNull();
   expect(result.current.state.error).toBeNull();
+});
+
+it("拒绝在途：pendingWebRequest 记住被点的是 reject（R25）", async () => {
+  let resolveDecision!: (view: RoundView) => void;
+  decideWebRequest.mockReturnValueOnce(
+    new Promise<RoundView>((resolve) => {
+      resolveDecision = resolve;
+    }),
+  );
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+  await seedRound(result);
+
+  act(() => {
+    result.current.decideWebRequest("r1", "w1", "reject");
+  });
+
+  expect(result.current.pendingWebRequest).toEqual({
+    requestId: "w1",
+    decision: "reject",
+  });
+
+  await act(async () => {
+    resolveDecision(decidedRound("rejected"));
+    await Promise.resolve();
+  });
+  expect(result.current.pendingWebRequest).toBeNull();
 });
 
 it("非工具失败：错误可见，并主动 refetch 把 failed 的真实状态读回来（R17）", async () => {
@@ -283,6 +327,7 @@ it("非工具失败：错误可见，并主动 refetch 把 failed 的真实状�
   getRound.mockResolvedValueOnce(decidedRound("failed", "执行中断"));
   const { result } = renderHook(() => useWorkspaceData());
   await act(async () => {});
+  await seedRound(result);
 
   await act(async () => {
     await result.current.decideWebRequest("r1", "w1", "approve");
@@ -292,5 +337,5 @@ it("非工具失败：错误可见，并主动 refetch 把 failed 的真实状�
   expect(result.current.state.round?.web_requests[0]?.state).toBe("failed");
   expect(result.current.state.round?.web_requests[0]?.result_note).toBe("执行中断");
   expect(result.current.state.error).toContain("执行中断");
-  expect(result.current.pendingWebRequestId).toBeNull();
+  expect(result.current.pendingWebRequest).toBeNull();
 });
