@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import json
 import os
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -25,6 +26,16 @@ from pathlib import Path
 import httpx
 
 from pmstudio.api.deps import SESSION_COOKIE
+from pmstudio.application.errors import LeaseLost
+from pmstudio.application.lease import (
+    LeaseScope,
+    clear_lease_scope,
+    set_lease_scope,
+    wall_clock_ms,
+)
+from pmstudio.domain.shared.ids import RoundId, UserId
+from pmstudio.domain.shared.lease import LeaseKind, LeaseToken
+from pmstudio.infrastructure.sqlite.repositories import SqliteRoundRepository
 
 BACKEND = Path(__file__).resolve().parents[2]
 USERNAME = "multiworker-admin"
@@ -231,6 +242,80 @@ def _evidence_count(db: Path, project_id: str) -> int:
         connection.close()
 
 
+def _round_lease_row(db: Path, round_id: str) -> sqlite3.Row:
+    connection = sqlite3.connect(db, timeout=10.0)
+    connection.row_factory = sqlite3.Row
+    try:
+        row = connection.execute(
+            "SELECT owner_id, lease_owner, lease_token, lease_expires_at"
+            " FROM rounds WHERE round_id = ?",
+            (round_id,),
+        ).fetchone()
+        assert row is not None, f"找不到轮次 {round_id}"
+        return row
+    finally:
+        connection.close()
+
+
+def _expire_round_lease(db: Path, round_id: str) -> None:
+    """测试里直接把租约置为过去，不等待生产 TTL。"""
+
+    connection = sqlite3.connect(db, timeout=10.0)
+    try:
+        cursor = connection.execute(
+            "UPDATE rounds SET lease_expires_at = ? WHERE round_id = ?",
+            (wall_clock_ms() - 1_000, round_id),
+        )
+        connection.commit()
+        assert cursor.rowcount == 1, f"没有更新到轮次 {round_id} 的租约"
+    finally:
+        connection.close()
+
+
+def _round_step(db: Path, round_id: str) -> str:
+    connection = sqlite3.connect(db, timeout=10.0)
+    try:
+        row = connection.execute(
+            "SELECT step FROM rounds WHERE round_id = ?", (round_id,)
+        ).fetchone()
+        assert row is not None, f"找不到轮次 {round_id}"
+        return str(row[0])
+    finally:
+        connection.close()
+
+
+def _assert_old_token_fenced(db: Path, round_id: str, old: sqlite3.Row) -> None:
+    """用旧 worker 的 token 走一次真仓储 save：必须被 `LeaseLost` 挡住。"""
+
+    owner = UserId(str(old["owner_id"]))
+    token = LeaseToken(
+        kind=LeaseKind.ROUND,
+        target_id=round_id,
+        user_id=str(owner),
+        holder=str(old["lease_owner"]),
+        token=int(old["lease_token"]),
+        expires_at_ms=int(old["lease_expires_at"]),
+    )
+    connection = sqlite3.connect(db, timeout=10.0)
+    connection.row_factory = sqlite3.Row
+    try:
+        repository = SqliteRoundRepository(connection)
+        round_ = repository.get(RoundId(round_id), owner=owner)
+        scope = LeaseScope(holder=token.holder, owner=owner)
+        scope.bind(token)
+        context_token = set_lease_scope(scope)
+        try:
+            try:
+                repository.save(round_, owner=owner)
+            except LeaseLost:
+                return
+            raise AssertionError("旧 token 的 save 没有被 fence（竟然写进去了）")
+        finally:
+            clear_lease_scope(context_token)
+    finally:
+        connection.close()
+
+
 async def test_two_uvicorn_workers_share_one_round_lease(tmp_path: Path) -> None:
     script = tmp_path / "script.json"
     script.write_text(
@@ -321,6 +406,151 @@ async def test_two_uvicorn_workers_share_one_round_lease(tmp_path: Path) -> None
                 assert _evidence_count(db, project_id) == 2, (
                     "一条用户主张 + 一条整合者判断；第二个请求没进图，不该多出 E"
                 )
+        finally:
+            gate.release.set()
+            _stop(procs)
+
+
+async def test_sigkill_worker_takeover_fences_old_token(tmp_path: Path) -> None:
+    """SIGKILL 后把租约置为过期：另一个 worker 接管，旧 token 不能写。"""
+
+    script = tmp_path / "script.json"
+    script.write_text(
+        json.dumps(
+            {
+                "replies": {"claims": CLAIMS_REPLY, "integration": INTEGRATION_REPLY},
+                "seat_replies": {SEAT: SEAT_REPLY},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    db = tmp_path / "pmstudio.db"
+    ports = [_free_port(), _free_port()]
+    logs = [tmp_path / "worker-a.log", tmp_path / "worker-b.log"]
+
+    async with _socket_gate() as (gate, gate_port):
+        procs = [
+            _spawn(port, db, script, gate_port, log)
+            for port, log in zip(ports, logs, strict=True)
+        ]
+        try:
+            async with (
+                httpx.AsyncClient(timeout=30.0) as client_a,
+                httpx.AsyncClient(timeout=30.0) as client_b,
+            ):
+                await asyncio.gather(
+                    _wait_healthy(client_a, ports[0], procs[0], logs[0]),
+                    _wait_healthy(client_b, ports[1], procs[1], logs[1]),
+                )
+
+                login = await client_a.post(
+                    f"http://127.0.0.1:{ports[0]}/api/auth/login",
+                    json={"username": USERNAME, "password": PASSWORD},
+                )
+                assert login.status_code == 200, login.text[:500]
+                token = login.cookies.get(SESSION_COOKIE)
+                assert token, "登录没有下发会话 cookie"
+                client_a.cookies.set(SESSION_COOKIE, token)
+                client_b.cookies.set(SESSION_COOKIE, token)
+
+                created = await client_a.post(
+                    f"http://127.0.0.1:{ports[0]}/api/projects",
+                    json={"title": "SIGKILL 过期接管"},
+                )
+                assert created.status_code == 201, created.text[:500]
+                project_id = created.json()["project_id"]
+
+                started = await client_a.post(
+                    f"http://127.0.0.1:{ports[0]}/api/projects/{project_id}/rounds",
+                    json={"input": "想做个订单导出的功能"},
+                )
+                assert started.status_code == 200, started.text[:500]
+                round_id = started.json()["round_id"]
+
+                opening = asyncio.create_task(
+                    client_a.post(
+                        f"http://127.0.0.1:{ports[0]}/api/rounds/{round_id}/opening",
+                        json={"seats": [SEAT]},
+                    )
+                )
+                await asyncio.wait_for(gate.arrived.wait(), timeout=30.0)
+                assert not opening.done(), "闸门到达时 opening 不该已经结束"
+
+                old = _round_lease_row(db, round_id)
+                assert old["lease_owner"] is not None, "被杀的 worker 应持有 round lease"
+                assert old["lease_expires_at"] is not None, "被杀的 worker 应写过期时间"
+
+                procs[0].kill()
+                await asyncio.to_thread(procs[0].wait, 10)
+                assert procs[0].returncode == -signal.SIGKILL, (
+                    f"worker 不是被 SIGKILL 收掉的：returncode={procs[0].returncode}"
+                )
+                try:
+                    response = await asyncio.wait_for(opening, timeout=15.0)
+                except (TimeoutError, httpx.HTTPError):
+                    pass
+                else:
+                    raise AssertionError(
+                        f"worker 被 SIGKILL 后 opening 仍返回 {response.status_code}"
+                    )
+
+                _expire_round_lease(db, round_id)
+                expired = _round_lease_row(db, round_id)
+                assert int(expired["lease_token"]) == int(old["lease_token"]), (
+                    "过期阶段不该有人换过 token"
+                )
+                assert int(expired["lease_expires_at"]) <= wall_clock_ms()
+
+                gate.release.set()
+                takeover = await client_b.post(
+                    f"http://127.0.0.1:{ports[1]}/api/rounds/{round_id}/retry"
+                )
+                assert takeover.status_code == 200, takeover.text[:500]
+                assert takeover.json()["waiting_on"] == "draft_card"
+
+                after = _round_lease_row(db, round_id)
+                assert int(after["lease_token"]) > int(old["lease_token"]), (
+                    "接管应换 token（新 worker 拿到更大的 token）"
+                )
+                assert after["lease_owner"] != old["lease_owner"], (
+                    "接管后 lease_owner 应换人"
+                )
+
+                _assert_old_token_fenced(db, round_id, old)
+
+                view = (
+                    await client_b.get(
+                        f"http://127.0.0.1:{ports[1]}/api/rounds/{round_id}",
+                    )
+                ).json()
+                assert view["step"] == "awaiting_confirm"
+                assert len(view["seat_packets"]) == 1
+                assert view["seat_packets"][0]["status"] == "completed"
+                assert len(view["draft"]["proposals"]) == 1
+
+                materials = _count(
+                    db,
+                    "SELECT COUNT(*) FROM materials WHERE project_id = ?",
+                    (project_id,),
+                )
+                assert materials == 0, "没有联网/材料来源的一轮不该落材料"
+                assert _evidence_count(db, project_id) == 2, (
+                    "一条用户主张 + 一条整合者判断；接管不该重复编号"
+                )
+
+                abandoned = await client_b.post(
+                    f"http://127.0.0.1:{ports[1]}/api/rounds/{round_id}/abandon"
+                )
+                assert abandoned.status_code == 200, abandoned.text[:500]
+                assert abandoned.json()["step"] == "abandoned"
+
+                retried = await client_b.post(
+                    f"http://127.0.0.1:{ports[1]}/api/rounds/{round_id}/retry"
+                )
+                assert retried.status_code == 200, retried.text[:500]
+                assert retried.json()["step"] == "abandoned", "retry 把 abandoned 复活了"
+                assert _round_step(db, round_id) == "abandoned"
         finally:
             gate.release.set()
             _stop(procs)
