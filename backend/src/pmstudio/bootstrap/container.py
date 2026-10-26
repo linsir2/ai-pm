@@ -622,6 +622,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         clock=clock,
         ids=ids,
         events=bus,
+        # create 在同一 UoW INSERT + acquire；不注入就退化成无租约。
+        leases=leases,
     )
     retry_exploration = RetryExploration(
         explorations=explorations,
@@ -629,11 +631,15 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         uow=uow,
         clock=clock,
         events=bus,
+        # resume 同 UoW 置 RUNNING + acquire。
+        leases=leases,
     )
     exploration_runner = ExplorationRunner(
         run_inquiry=run_inquiry,
         retry_exploration=retry_exploration,
         explorations=explorations,
+        # 心跳续租 / 失租 409 的唯一真相源。
+        leases=leases,
     )
     start_discussion = StartDiscussion(
         documents=documents,
@@ -731,6 +737,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             clock=clock,
             events=bus,
             canceller=exploration_runner,
+            # force_acquire + 同一 UoW 写 ABANDONED：旧 worker 的下一次 save 被 fence。
+            leases=leases,
         ),
         keep_candidate=KeepCandidate(
             explorations=explorations,

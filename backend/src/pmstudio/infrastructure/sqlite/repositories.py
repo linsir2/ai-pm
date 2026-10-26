@@ -18,6 +18,7 @@ from pmstudio.application.dto import (
     round_head_view,
 )
 from pmstudio.application.errors import (
+    ExplorationBusy,
     LeaseLost,
     UnknownDiscussion,
     UnknownExploration,
@@ -58,6 +59,15 @@ def _now() -> str:
 
 def _now_ms() -> int:
     return time.time_ns() // 1_000_000
+
+
+def _running_conflict(error: sqlite3.IntegrityError) -> bool:
+    """这条完整性错误是不是"同一项目已有 running"的部分唯一索引？"""
+
+    text = str(error)
+    return "idx_explorations_running" in text or (
+        "UNIQUE constraint failed" in text and "explorations.project_id" in text
+    )
 
 
 def _matching_lease(
@@ -339,8 +349,13 @@ class SqliteExplorationRepository:
     def save(self, exploration: Exploration, *, owner: UserId | None = None) -> None:
         """写一趟探索；existing 行的 fencing 契约与轮次仓储逐字相同。
 
-        INSERT 允许无租约（Task 3 会在同一 UoW 里写 token=1）；running 行的部分唯一索引
-        冲突**不**在这里翻译——Task 3 的用例层统一转 `ExplorationBusy`。
+        INSERT 允许无租约（create 在同一 UoW 紧接着 `acquire` 写 token=1）。
+        旧的 running 行（清僵壳 / 完成 / 失败 / 放弃）必须持有租约；**两端都不是
+        running** 的短控制写（收下 / 删掉候选）显式豁免——它们只在终态行上发生，
+        没有长动作会同时写它。
+
+        项目内唯一 running 的部分索引冲突在这里统一翻成 `ExplorationBusy`：
+        create / retry 的调用方不需要知道 sqlite 的约束名。
         """
 
         resolved = require_owner(owner)
@@ -348,13 +363,10 @@ class SqliteExplorationRepository:
         payload = json.dumps(
             ser.exploration_to_payload(exploration), ensure_ascii=False
         )
-        exists = (
-            self._connection.execute(
-                "SELECT 1 FROM explorations WHERE exploration_id = ?", (target_id,)
-            ).fetchone()
-            is not None
-        )
-        if not exists:
+        existing = self._connection.execute(
+            "SELECT status FROM explorations WHERE exploration_id = ?", (target_id,)
+        ).fetchone()
+        if existing is None:
             try:
                 self._connection.execute(
                     """
@@ -373,7 +385,7 @@ class SqliteExplorationRepository:
                         _now(),
                     ),
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as error:
                 if (
                     self._connection.execute(
                         "SELECT 1 FROM explorations WHERE exploration_id = ?",
@@ -384,33 +396,63 @@ class SqliteExplorationRepository:
                     raise LeaseLost(
                         kind=LeaseKind.EXPLORATION, target_id=target_id
                     ) from None
+                if _running_conflict(error):
+                    raise ExplorationBusy(exploration.project_id) from None
                 raise
+            return
+
+        if (
+            str(existing["status"]) != ExplorationStatus.RUNNING.value
+            and str(exploration.status) != ExplorationStatus.RUNNING.value
+        ):
+            cursor = self._connection.execute(
+                """
+                UPDATE explorations
+                SET kind = ?, status = ?, payload = ?, updated_at = ?
+                WHERE exploration_id = ? AND owner_id = ?
+                """,
+                (
+                    str(exploration.kind),
+                    str(exploration.status),
+                    payload,
+                    _now(),
+                    target_id,
+                    str(resolved),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LeaseLost(kind=LeaseKind.EXPLORATION, target_id=target_id)
             return
 
         now_ms = _now_ms()
         token = _matching_lease(LeaseKind.EXPLORATION, target_id, resolved)
         if token is None or not self._leases.holds(token, now_ms=now_ms):
             raise LeaseLost(kind=LeaseKind.EXPLORATION, target_id=target_id)
-        cursor = self._connection.execute(
-            """
-            UPDATE explorations
-            SET kind = ?, status = ?, payload = ?, updated_at = ?
-            WHERE exploration_id = ? AND owner_id = ?
-              AND lease_owner = ? AND lease_token = ?
-              AND lease_expires_at > ?
-            """,
-            (
-                str(exploration.kind),
-                str(exploration.status),
-                payload,
-                _now(),
-                target_id,
-                str(resolved),
-                token.holder,
-                token.token,
-                now_ms,
-            ),
-        )
+        try:
+            cursor = self._connection.execute(
+                """
+                UPDATE explorations
+                SET kind = ?, status = ?, payload = ?, updated_at = ?
+                WHERE exploration_id = ? AND owner_id = ?
+                  AND lease_owner = ? AND lease_token = ?
+                  AND lease_expires_at > ?
+                """,
+                (
+                    str(exploration.kind),
+                    str(exploration.status),
+                    payload,
+                    _now(),
+                    target_id,
+                    str(resolved),
+                    token.holder,
+                    token.token,
+                    now_ms,
+                ),
+            )
+        except sqlite3.IntegrityError as error:
+            if _running_conflict(error):
+                raise ExplorationBusy(exploration.project_id) from None
+            raise
         if cursor.rowcount != 1:
             raise LeaseLost(kind=LeaseKind.EXPLORATION, target_id=target_id)
 
@@ -429,6 +471,25 @@ class SqliteExplorationRepository:
                 found.append(self._from_row(row))
             except (json.JSONDecodeError, TypeError, KeyError, ValueError):
                 continue  # 坏行跳过不抛（与 list_rounds 同一条口径）
+        return tuple(found)
+
+    def list_running(
+        self, project_id: ProjectId, *, owner: UserId | None = None
+    ) -> tuple[Exploration, ...]:
+        """这一项目所有 `running` 行，**不带 LIMIT**（清僵壳看全量，不看最近 20 条）。"""
+
+        resolved = require_owner(owner)
+        rows = self._connection.execute(
+            "SELECT * FROM explorations WHERE project_id = ? AND owner_id = ?"
+            " AND status = 'running' ORDER BY created_at, rowid",
+            (str(project_id), str(resolved)),
+        ).fetchall()
+        found: list[Exploration] = []
+        for row in rows:
+            try:
+                found.append(self._from_row(row))
+            except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+                continue
         return tuple(found)
 
     def _from_row(self, row: sqlite3.Row) -> Exploration:

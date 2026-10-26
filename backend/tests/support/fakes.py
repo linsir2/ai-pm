@@ -17,7 +17,7 @@ from pmstudio.application.errors import (
 )
 from pmstudio.application.ports import TemplateEntry
 from pmstudio.domain.authoring.document import Document
-from pmstudio.domain.exploration.exploration import Exploration
+from pmstudio.domain.exploration.exploration import Exploration, ExplorationStatus
 from pmstudio.domain.memory.digest import RoundDigest
 from pmstudio.domain.memory.inspiration import InspirationItem
 from pmstudio.domain.memory.memory import ProjectMemory
@@ -113,6 +113,19 @@ class InMemoryExplorationRepository(_InMemoryRepository):
             if str(item.project_id) == str(project_id)
         ]
         return tuple(deepcopy(item) for item in items[::-1][:limit])
+
+    def list_running(
+        self, project_id: ProjectId, *, owner=None
+    ) -> tuple[Exploration, ...]:
+        """与真实现同口径：只回 running，且**不截断**（清僵壳看全量）。"""
+
+        items = [
+            item
+            for item in self._items.values()
+            if str(item.project_id) == str(project_id)
+            and item.status is ExplorationStatus.RUNNING
+        ]
+        return tuple(deepcopy(item) for item in items[::-1])
 
 
 class InMemoryMaterialStore:

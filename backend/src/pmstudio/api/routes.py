@@ -601,7 +601,8 @@ async def abandon_exploration(request: Request, exploration_id: str, user: Curre
 
     return as_json(
         await services_of(request).abandon_exploration(
-            exploration_id=ExplorationId(exploration_id)
+            exploration_id=ExplorationId(exploration_id),
+            owner=UserId(user.user_id),
         )
     )
 

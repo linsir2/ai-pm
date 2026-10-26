@@ -190,6 +190,8 @@ from pmstudio.application.exploration import (
 from pmstudio.application.lease import (
     LEASE_TTL_SECONDS,
     LeaseScope,
+    StartedExploration,
+    acquire_exploration_lease,
     clear_lease_scope,
     current_lease_scope,
     set_lease_scope,
@@ -370,7 +372,7 @@ from pmstudio.domain.shared.ids import (
     UserId,
 )
 from pmstudio.domain.shared.label import ClaimLabel, Zone
-from pmstudio.domain.shared.lease import LeaseKind
+from pmstudio.domain.shared.lease import LeaseKind, LeaseToken
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template import STANDARD_TEMPLATE_ID, template_from_dict
 from pmstudio.domain.shared.template_adapter import TemplateAdapter, adapt
@@ -5299,6 +5301,8 @@ class RunInquiry:
         clock: Clock,
         ids: IdGenerator,
         events: EventPublisher,
+        leases: LeaseStore | None = None,
+        lease_ttl_ms: int = LEASE_TTL_SECONDS * 1000,
     ) -> None:
         self._documents = documents
         self._explorations = explorations
@@ -5311,10 +5315,17 @@ class RunInquiry:
         self._clock = clock
         self._ids = ids
         self._events = events
+        # 生产路径：INSERT 与 acquire 同一个 UoW（`create` 里）；不注入时只做旧行为。
+        self._leases = leases
+        self._lease_ttl_ms = lease_ttl_ms
 
     async def create(
-        self, *, project_id: ProjectId, scope: ExplorationScope
-    ) -> ExplorationId:
+        self,
+        *,
+        project_id: ProjectId,
+        scope: ExplorationScope,
+        owner: UserId | None = None,
+    ) -> StartedExploration:
         document = self._documents.get(project_id)
         view = document.view()
         if not document_has_content(view):
@@ -5330,24 +5341,75 @@ class RunInquiry:
                 now=self._clock.now(),
             )
             self._exploration_writer.save(exploration)
+            # 同一 UoW：INSERT 与租约一起提交。token 从 1 开始；被占用时
+            # `acquire_exploration_lease` 抛 `ExplorationBusy`，整笔回滚。
+            token = acquire_exploration_lease(
+                leases=self._leases,
+                project_id=project_id,
+                exploration_id=exploration_id,
+                owner=owner,
+                holder=f"exploration:{uuid.uuid4().hex}",
+                ttl_ms=self._lease_ttl_ms,
+            )
         _publish_exploration(self._events, self._clock, exploration)
-        return exploration_id
+        return StartedExploration(exploration_id=exploration_id, token=token)
 
-    async def clear_stale(self, project_id: ProjectId) -> None:
+    async def clear_stale(
+        self, project_id: ProjectId, *, owner: UserId | None = None
+    ) -> None:
         """把"挂着 running 但进程里没有任务"的僵壳就地判放弃（进程崩过）。
 
         只有 runner 确认过内存里没有这趟任务才能调它——否则会把真在跑的探索杀掉。
+        判据是**行上的租约**：活租约（别的 worker 正在跑）一律不动；过期或老库
+        `lease_expires_at IS NULL` 的才清。查询走 `list_running`（不截断 20 条），
+        每条都在自己的 UoW 里重新读状态并对租约做条件复核。
         """
 
-        for item in self._explorations.list_for_project(
-            project_id, limit=MAX_EXPLORATION_LIST
-        ):
-            if item.status is not ExplorationStatus.RUNNING:
-                continue
-            with self._uow:
-                stored = self._explorations.get(item.exploration_id)
-                stored.abandon("上一次运行没跑完（进程可能重启过）")
-                self._exploration_writer.save(stored)
+        for item in self._explorations.list_running(project_id, owner=owner):
+            scope_token = None
+            token = None
+            try:
+                with self._uow:
+                    stored = self._explorations.get(item.exploration_id)
+                    if stored.status is not ExplorationStatus.RUNNING:
+                        continue  # 另一个 worker 已经清过/跑完了
+                    if self._leases is not None:
+                        if owner is None:
+                            raise ApplicationError(
+                                "清理探索僵壳缺少 owner 上下文",
+                                code="missing_owner_scope",
+                            )
+                        holder = f"stale:{uuid.uuid4().hex}"
+                        # 条件复核：只接管**过期/无过期时间**的行；活租约（另一个
+                        # worker 正在跑）直接跳过——不把它翻成 409，让 create/resume
+                        # 在唯一索引上给出真正的原因。
+                        token = self._leases.acquire(
+                            LeaseKind.EXPLORATION,
+                            str(item.exploration_id),
+                            owner,
+                            holder,
+                            wall_clock_ms(),
+                            self._lease_ttl_ms,
+                        )
+                        if token is None:
+                            continue
+                        scope = LeaseScope(holder=holder, owner=owner)
+                        scope.bind(token)
+                        scope_token = set_lease_scope(scope)
+                    stored.abandon("上一次运行没跑完（进程可能重启过）")
+                    self._exploration_writer.save(stored)
+                    if token is not None:
+                        # 同一 UoW 内释放：提交前别人看不到"无租约"的中间态。
+                        self._leases.release(
+                            token.kind,
+                            token.target_id,
+                            UserId(token.user_id),
+                            token.holder,
+                            token.token,
+                        )
+            finally:
+                if scope_token is not None:
+                    clear_lease_scope(scope_token)
             _publish_exploration(self._events, self._clock, stored)
 
     async def execute(
@@ -5432,6 +5494,14 @@ class RunInquiry:
         return exploration_view(stored)
 
 
+@dataclass(frozen=True, slots=True)
+class ResumedExploration:
+    """retry 的返回：失败原因（给下一次尝试当 `validation_error`）+ 已绑定的租约。"""
+
+    hint: str | None
+    token: LeaseToken | None
+
+
 class RetryExploration:
     """把失败的一趟恢复成 RUNNING，并把失败原因交给重跑的第一次尝试当 `validation_error`。"""
 
@@ -5443,25 +5513,56 @@ class RetryExploration:
         uow: UnitOfWork,
         clock: Clock,
         events: EventPublisher,
+        leases: LeaseStore | None = None,
+        lease_ttl_ms: int = LEASE_TTL_SECONDS * 1000,
     ) -> None:
         self._explorations = explorations
         self._exploration_writer = exploration_writer
         self._uow = uow
         self._clock = clock
         self._events = events
+        self._leases = leases
+        self._lease_ttl_ms = lease_ttl_ms
 
-    async def resume(self, exploration_id: ExplorationId) -> str | None:
-        with self._uow:
-            stored = self._explorations.get(exploration_id)
-            hint = stored.failure.reason if stored.failure is not None else None
-            stored.resume()
-            self._exploration_writer.save(stored)
+    async def resume(
+        self, exploration_id: ExplorationId, *, owner: UserId | None = None
+    ) -> ResumedExploration:
+        scope_token = None
+        token = None
+        try:
+            with self._uow:
+                stored = self._explorations.get(exploration_id)
+                hint = stored.failure.reason if stored.failure is not None else None
+                holder = f"retry:{uuid.uuid4().hex}"
+                # 同一 UoW：置 RUNNING 之前先 acquire，避免"库里 running 但没人持锁"
+                # 的窗口；唯一 running 冲突由仓储统一翻成 ExplorationBusy。
+                token = acquire_exploration_lease(
+                    leases=self._leases,
+                    project_id=stored.project_id,
+                    exploration_id=exploration_id,
+                    owner=owner,
+                    holder=holder,
+                    ttl_ms=self._lease_ttl_ms,
+                )
+                if token is not None:
+                    scope = LeaseScope(holder=holder, owner=owner)
+                    scope.bind(token)
+                    scope_token = set_lease_scope(scope)
+                stored.resume()
+                self._exploration_writer.save(stored)
+        finally:
+            if scope_token is not None:
+                clear_lease_scope(scope_token)
         _publish_exploration(self._events, self._clock, stored)
-        return hint
+        return ResumedExploration(hint=hint, token=token)
 
 
 class AbandonExploration:
-    """放弃这一趟：**先写状态、再取消**（`AbandonRound` 同一条顺序与理由）。"""
+    """放弃这一趟：**先写状态、再取消**（`AbandonRound` 同一条顺序与理由）。
+
+    放弃必须赢过在跑的 worker：同一 UoW 里 `force_acquire` 接管租约、写 ABANDONED、
+    再释放；旧 worker 的下一次 save 被 token fence 掉。
+    """
 
     def __init__(
         self,
@@ -5472,6 +5573,8 @@ class AbandonExploration:
         clock: Clock,
         events: EventPublisher,
         canceller: ExplorationCanceller,
+        leases: LeaseStore | None = None,
+        lease_ttl_ms: int = LEASE_TTL_SECONDS * 1000,
     ) -> None:
         self._explorations = explorations
         self._exploration_writer = exploration_writer
@@ -5479,12 +5582,48 @@ class AbandonExploration:
         self._clock = clock
         self._events = events
         self._canceller = canceller
+        self._leases = leases
+        self._lease_ttl_ms = lease_ttl_ms
 
-    async def __call__(self, *, exploration_id: ExplorationId) -> ExplorationView:
-        with self._uow:
-            exploration = self._explorations.get(exploration_id)
-            exploration.abandon("用户放弃了这一趟调研")
-            self._exploration_writer.save(exploration)
+    async def __call__(
+        self, *, exploration_id: ExplorationId, owner: UserId | None = None
+    ) -> ExplorationView:
+        if self._leases is not None and owner is None:
+            raise ApplicationError(
+                "放弃探索缺少 owner 上下文",
+                code="missing_owner_scope",
+            )
+        scope_token = None
+        token = None
+        try:
+            with self._uow:
+                if self._leases is not None:
+                    holder = f"abandon-exploration:{uuid.uuid4().hex}"
+                    token = self._leases.force_acquire(
+                        LeaseKind.EXPLORATION,
+                        str(exploration_id),
+                        owner,
+                        holder,
+                        wall_clock_ms(),
+                        self._lease_ttl_ms,
+                    )
+                    scope = LeaseScope(holder=holder, owner=owner)
+                    scope.bind(token)
+                    scope_token = set_lease_scope(scope)
+                exploration = self._explorations.get(exploration_id)
+                exploration.abandon("用户放弃了这一趟调研")
+                self._exploration_writer.save(exploration)
+                if token is not None:
+                    self._leases.release(
+                        token.kind,
+                        token.target_id,
+                        UserId(token.user_id),
+                        token.holder,
+                        token.token,
+                    )
+        finally:
+            if scope_token is not None:
+                clear_lease_scope(scope_token)
         _publish_exploration(self._events, self._clock, exploration)
         await self._canceller.cancel(exploration_id)
         return exploration_view(self._explorations.get(exploration_id))

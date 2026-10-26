@@ -484,7 +484,9 @@ async def test_start_with_finding_exploration_snapshots_candidates() -> None:
     harness.seed_project()
     harness.documents.seed(document_with_feature())
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     await use.execute(xid)
 
     view = await harness.start_discussion()(
@@ -520,7 +522,9 @@ async def test_start_rejects_bad_finding_exploration() -> None:
         )
 
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     with pytest.raises(ShapeError):  # 还没跑完，不能当底稿
         await harness.start_discussion()(
             project_id=PROJECT,
@@ -538,7 +542,9 @@ async def test_say_renders_findings_into_the_prompt() -> None:
     harness.seed_project()
     harness.documents.seed(document_with_feature())
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     await use.execute(xid)
     started = await harness.start_discussion()(
         project_id=PROJECT,

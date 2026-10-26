@@ -15,11 +15,13 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
-from pmstudio.application.errors import LeaseLost
-from pmstudio.domain.shared.ids import UserId
-from pmstudio.domain.shared.lease import LeaseToken
+from pmstudio.application.errors import ExplorationBusy, LeaseLost
+from pmstudio.application.ports import LeaseStore
+from pmstudio.domain.shared.ids import ExplorationId, ProjectId, UserId
+from pmstudio.domain.shared.lease import LeaseKind, LeaseToken
+from pmstudio.harness.errors import ApplicationError
 
 #: 租约有效期；心跳按 `LEASE_HEARTBEAT_SECONDS` 续租（Task 2/3 接线）。
 LEASE_TTL_SECONDS = 90
@@ -30,6 +32,56 @@ def wall_clock_ms() -> int:
     """UTC epoch 毫秒。租约只用这一个时钟口径（跨进程共享系统时钟）。"""
 
     return time.time_ns() // 1_000_000
+
+
+@dataclass(frozen=True, slots=True)
+class StartedExploration:
+    """一次探索启动的返回：新 id + 同 UoW 拿到的租约。
+
+    `token` 只在注入了 lease store 时非空；runner 直接 `bind` 它，**不再 acquire**
+    （再 acquire 会与刚写下的 token 冲突，也会留下"建了行但没人持有"的窗口）。
+    Task 10 的 `StartWebResearch.create` 复用同一个值对象与 `acquire_exploration_lease`。
+    """
+
+    exploration_id: ExplorationId
+    token: LeaseToken | None
+
+
+def acquire_exploration_lease(
+    *,
+    leases: LeaseStore | None,
+    project_id: ProjectId,
+    exploration_id: ExplorationId,
+    owner: UserId | None,
+    holder: str,
+    ttl_ms: int,
+    now_ms: int | None = None,
+) -> LeaseToken | None:
+    """在调用方的 UoW 内给**已经存在**的探索行写租约（create / resume 共用）。
+
+    被占用（`acquire` 返回 None）统一翻成 `ExplorationBusy`：对 create 是同一项目
+    已有 running，对 resume 是另一个 worker 已经接手。未知 / 他人 target 仍由
+    `LeaseStore` 抛 `UnknownExploration`（404）。
+    """
+
+    if leases is None:
+        return None
+    if owner is None:
+        raise ApplicationError(
+            "启动探索时缺少 owner 上下文：调用方必须传当前用户",
+            code="missing_owner_scope",
+        )
+    token = leases.acquire(
+        LeaseKind.EXPLORATION,
+        str(exploration_id),
+        owner,
+        holder,
+        wall_clock_ms() if now_ms is None else now_ms,
+        ttl_ms,
+    )
+    if token is None:
+        raise ExplorationBusy(project_id)
+    return token
 
 
 class LeaseScope:

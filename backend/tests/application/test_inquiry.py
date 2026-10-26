@@ -123,9 +123,11 @@ async def test_create_with_unknown_entry_is_a_resource_error() -> None:
 async def test_create_persists_running_and_publishes_one_event() -> None:
     harness = Harness(replies={})
     _filled(harness)
-    xid = await harness.run_inquiry().create(
-        project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT)
-    )
+    xid = (
+        await harness.run_inquiry().create(
+            project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT)
+        )
+    ).exploration_id
     stored = harness.explorations.get(xid)
     assert stored.status.value == "running"
     assert harness.events.names == ["exploration.updated"]
@@ -137,10 +139,12 @@ async def test_execute_success_persists_candidates_and_scope_focus() -> None:
     _filled(harness)
     entry = next(iter_document_entries(harness.documents.get(PROJECT).view()))
     use = harness.run_inquiry()
-    xid = await use.create(
-        project_id=PROJECT,
-        scope=ExplorationScope(kind=ScopeKind.ENTRY, ref=str(entry.entry_id)),
-    )
+    xid = (
+        await use.create(
+            project_id=PROJECT,
+            scope=ExplorationScope(kind=ScopeKind.ENTRY, ref=str(entry.entry_id)),
+        )
+    ).exploration_id
     view = await use.execute(xid)
 
     assert view.status == "done"
@@ -165,7 +169,9 @@ async def test_invalid_ref_retries_once_then_salvages_instead_of_failing() -> No
     harness = Harness(replies={"inquiry": [_bad_ref_reply(), _bad_ref_reply()]})
     _filled(harness)
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     view = await use.execute(xid)
 
     assert view.status == "done"  # 不再 failed
@@ -180,7 +186,9 @@ async def test_numeric_claim_triggers_one_repair_then_succeeds() -> None:
     harness = Harness(replies={"inquiry": [_numeric_reply(), _good_reply()]})
     _filled(harness)
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     view = await use.execute(xid)
 
     assert view.status == "done"
@@ -192,7 +200,9 @@ async def test_empty_produce_is_not_success() -> None:
     harness = Harness(replies={"inquiry": [_empty_reply(), _empty_reply()]})
     _filled(harness)
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     view = await use.execute(xid)
     assert view.status == "failed"
     assert "空结果" in (view.failure_reason or "")
@@ -203,11 +213,14 @@ async def test_retry_resumes_failed_and_hands_the_reason_to_the_next_attempt() -
     harness = Harness(replies={"inquiry": [_empty_reply(), _empty_reply(), _good_reply()]})
     _filled(harness)
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     first = await use.execute(xid)
     assert first.status == "failed"
 
-    hint = await harness.retry_exploration().resume(xid)
+    resumed = await harness.retry_exploration().resume(xid)
+    hint = resumed.hint
     assert hint is not None and "空结果" in hint
     second = await use.execute(xid, retry_hint=hint)
     assert second.status == "done"
@@ -218,7 +231,9 @@ async def test_keep_as_material_creates_one_material_and_is_idempotent() -> None
     harness = Harness(replies={"inquiry": _good_reply()})
     _filled(harness)
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     await use.execute(xid)
 
     keep = harness.keep_candidate()
@@ -244,7 +259,9 @@ async def test_keep_as_seed_marks_without_material() -> None:
     harness = Harness(replies={"inquiry": _good_reply()})
     _filled(harness)
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     await use.execute(xid)
 
     view = await harness.keep_candidate()(exploration_id=xid, candidate_id="B1", as_="seed")
@@ -258,7 +275,9 @@ async def test_dismiss_is_terminal_and_keep_after_is_rejected() -> None:
     harness = Harness(replies={"inquiry": _good_reply()})
     _filled(harness)
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     await use.execute(xid)
 
     view = await harness.dismiss_candidate()(exploration_id=xid, candidate_id="B1")
@@ -274,7 +293,9 @@ async def test_start_round_records_kept_seeds_and_rejects_bad_ones() -> None:
     harness = Harness(replies={"inquiry": _good_reply()})
     _filled(harness)
     use = harness.run_inquiry()
-    xid = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    xid = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
     await use.execute(xid)
     await harness.keep_candidate()(exploration_id=xid, candidate_id="H1", as_="seed")
 
@@ -315,9 +336,11 @@ class _RecordingCanceller:
 async def test_abandon_writes_status_then_cancels() -> None:
     harness = Harness(replies={})
     _filled(harness)
-    xid = await harness.run_inquiry().create(
-        project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT)
-    )
+    xid = (
+        await harness.run_inquiry().create(
+            project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT)
+        )
+    ).exploration_id
     canceller = _RecordingCanceller()
     view = await harness.abandon_exploration(canceller=canceller)(exploration_id=xid)
 
@@ -330,8 +353,16 @@ async def test_list_returns_views_and_honours_the_limit() -> None:
     harness = Harness(replies={})
     _filled(harness)
     use = harness.run_inquiry()
-    first = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
-    second = await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    first = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
+    # 同一项目只许一趟 running（v17 部分唯一索引）：先结束第一趟，再建第二趟。
+    first_run = harness.explorations.get(first)
+    first_run.fail("测试用：先结束这一趟")
+    harness.explorations.save(first_run)
+    second = (
+        await use.create(project_id=PROJECT, scope=ExplorationScope(kind=ScopeKind.DOCUMENT))
+    ).exploration_id
 
     views = await harness.list_explorations()(project_id=PROJECT)
     assert [view.exploration_id for view in views] == [str(second), str(first)]

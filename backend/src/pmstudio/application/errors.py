@@ -392,6 +392,21 @@ class RoundLeaseLost(ApplicationError):
         )
 
 
+class ExplorationLeaseLost(ApplicationError):
+    """跑一趟探索的后台心跳发现租约已被接管：这次动作被取消，**不代表**探索失败。
+
+    与 `RoundLeaseLost` 同一条口径：`LeaseLost` 是 `save` 当场撞上的 fencing 失败，
+    这是心跳先发现、主动把在途模型调用停下来。两者都是 409。
+    """
+
+    def __init__(self, exploration_id: object) -> None:
+        super().__init__(
+            "这一趟探索的租约已被另一个进程接管，本次动作已停止",
+            code="exploration_lease_lost",
+            exploration_id=str(exploration_id),
+        )
+
+
 class DiscussionBusy(ApplicationError):
     """同一条讨论线程已经有一轮在跑。
 

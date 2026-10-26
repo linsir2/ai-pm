@@ -8,6 +8,7 @@ from pmstudio.domain.shared.ids import (
     ExplorationId,
     ProjectId,
     RoundId,
+    UserId,
 )
 
 if TYPE_CHECKING:
@@ -48,6 +49,13 @@ class ExplorationReader(Protocol):
     def list_for_project(
         self, project_id: ProjectId, *, limit: int = 20
     ) -> tuple["Exploration", ...]: ...
+
+    def list_running(
+        self, project_id: ProjectId, *, owner: UserId | None = None
+    ) -> tuple["Exploration", ...]:
+        """这一项目里所有 `running` 行（**不截断**：僵壳清理不能只看最近 20 条）。"""
+
+        ...
 
 
 @runtime_checkable
