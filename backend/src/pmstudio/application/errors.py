@@ -376,6 +376,22 @@ class LeaseLost(ApplicationError):
         )
 
 
+class RoundLeaseLost(ApplicationError):
+    """跑一轮的后台心跳发现租约已被接管：这次动作被取消，**不代表**轮次失败。
+
+    与 `LeaseLost` 分开：那是 `save` 当场撞上的 fencing 失败，这是心跳先发现、
+    主动把在途模型调用停下来。两者都是 409，但回调文案不同——用户要看到的是
+    "另一个 worker 接手了"，不是"你的数据写坏了"。
+    """
+
+    def __init__(self, round_id: object) -> None:
+        super().__init__(
+            "这一轮的租约已被另一个进程接管，本次动作已停止",
+            code="round_lease_lost",
+            round_id=str(round_id),
+        )
+
+
 class DiscussionBusy(ApplicationError):
     """同一条讨论线程已经有一轮在跑。
 

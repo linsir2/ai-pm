@@ -402,6 +402,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         # **同一个**检索器也交给建轮：建轮时用它宽召回、再按分数收敛进预算（stage 2）。
         # 不另造一个实例——两处口径必须一致（换实现也只改 `material_search` 那一行）。
         retriever=material_search,
+        # 建轮 INSERT 与 acquire 同 UoW（P3b）：跑起来之前就有一把 DB lease。
+        leases=leases,
     )
     # 联网执行层：opening 与席位/整合共用同一个实例（单 worker 口径）。
     web_research = WebResearch(
@@ -605,6 +607,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         run_sim_review=run_sim_review,
         attach_materials=attach_materials,
         decide_web_request=decide_web_request,
+        # 跨进程互斥的唯一真相源；心跳 30s / TTL 90s（`application/lease.py`）。
+        leases=leases,
     )
     run_inquiry = RunInquiry(
         documents=documents,
@@ -706,6 +710,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             clock=clock,
             events=bus,
             canceller=runner,
+            # force_acquire + 同一 UoW 写 ABANDONED：旧 worker 的下一次 save 会被 fence。
+            leases=leases,
         ),
         skip_seat=SkipSeat(
             rounds=rounds,
@@ -713,6 +719,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
             uow=uow,
             events=bus,
             clock=clock,
+            # 跑中跳过借用当前 action lease（不抢锁）；Task 4 改成 round_skips 控制行。
+            leases=leases,
             viewer=get_round,
         ),
         exploration_runner=exploration_runner,

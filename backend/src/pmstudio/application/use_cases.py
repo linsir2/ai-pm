@@ -158,6 +158,7 @@ from pmstudio.application.errors import (
     BuiltinTemplateProtected,
     MaterialFrozen,
     MaterialTooLarge,
+    RoundBusy,
     RoundNotAttachable,
     SeatAlreadyReviewed,
     UnknownEntryId,
@@ -186,6 +187,14 @@ from pmstudio.application.exploration import (
     scope_line,
     validate_inquiry,
 )
+from pmstudio.application.lease import (
+    LEASE_TTL_SECONDS,
+    LeaseScope,
+    clear_lease_scope,
+    current_lease_scope,
+    set_lease_scope,
+    wall_clock_ms,
+)
 from pmstudio.application.material_refs import external_ref as _external_ref
 from pmstudio.application.material_refs import material_kind as _material_kind
 from pmstudio.application.material_synthesis import (
@@ -196,6 +205,7 @@ from pmstudio.application.ports import (
     Clock,
     ExplorationCanceller,
     IdGenerator,
+    LeaseStore,
     LoginGuard,
     LoginVerdict,
     MaterialParser,
@@ -360,6 +370,7 @@ from pmstudio.domain.shared.ids import (
     UserId,
 )
 from pmstudio.domain.shared.label import ClaimLabel, Zone
+from pmstudio.domain.shared.lease import LeaseKind
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template import STANDARD_TEMPLATE_ID, template_from_dict
 from pmstudio.domain.shared.template_adapter import TemplateAdapter, adapt
@@ -450,6 +461,8 @@ class StartRound:
         discussions: DiscussionReader,
         memory: MemoryReader | None = None,
         retriever: MaterialRetriever | None = None,
+        leases: LeaseStore | None = None,
+        lease_ttl_ms: int = LEASE_TTL_SECONDS * 1000,
     ) -> None:
         self._documents = documents
         self._rounds = rounds
@@ -469,6 +482,10 @@ class StartRound:
         self._memory = memory
         # 库级检索是**增强项**：不给就只用手勾的材料（与改前逐字一致）。
         self._retriever = retriever
+        # 生产路径：INSERT 与 acquire 必须在同一个 UoW（见 `_acquire_lease`）。
+        # 直接调用例的测试可以不注入（内存仓储 / 老夹具），此时不建租约。
+        self._leases = leases
+        self._lease_ttl_ms = lease_ttl_ms
 
     async def create(
         self,
@@ -623,8 +640,32 @@ class StartRound:
                     ]
                 )
             self._round_writer.save(round_)
+            # 同一 UoW：INSERT 与租约一起提交。acquire 失败就整笔回滚——
+            # 不允许"库里已经有这一轮、但没人持有它"的窗口。
+            self._acquire_lease(round_id)
         _publish(self._events, self._clock, round_)
         return round_id
+
+    def _acquire_lease(self, round_id: RoundId) -> None:
+        if self._leases is None:
+            return
+        scope = current_lease_scope()
+        if scope is None or scope.owner is None or not scope.holder:
+            raise ApplicationError(
+                "建轮时缺少租约上下文：owner 或持有者没设",
+                code="missing_owner_scope",
+            )
+        token = self._leases.acquire(
+            LeaseKind.ROUND,
+            str(round_id),
+            scope.owner,
+            scope.holder,
+            wall_clock_ms(),
+            self._lease_ttl_ms,
+        )
+        if token is None:
+            raise RoundBusy(round_id)
+        scope.bind(token)
 
     def _pick_materials(
         self,
@@ -4650,6 +4691,8 @@ class AbandonRound:
         clock: Clock,
         events: EventPublisher,
         canceller: RoundCanceller,
+        leases: LeaseStore | None = None,
+        lease_ttl_ms: int = LEASE_TTL_SECONDS * 1000,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -4657,14 +4700,53 @@ class AbandonRound:
         self._clock = clock
         self._events = events
         self._canceller = canceller
+        self._leases = leases
+        self._lease_ttl_ms = lease_ttl_ms
 
     async def __call__(
-        self, *, round_id: RoundId, reason: str = "用户放弃了这一轮"
+        self,
+        *,
+        round_id: RoundId,
+        reason: str = "用户放弃了这一轮",
+        owner: UserId | None = None,
     ) -> RoundView:
-        with self._uow:
-            round_ = self._rounds.get(round_id)
-            round_.abandon(reason)
-            self._round_writer.save(round_)
+        if self._leases is not None and owner is None:
+            raise ApplicationError(
+                "放弃轮次缺少 owner 上下文",
+                code="missing_owner_scope",
+            )
+        scope_token = None
+        token = None
+        try:
+            with self._uow:
+                if self._leases is not None:
+                    holder = f"abandon:{uuid.uuid4().hex}"
+                    token = self._leases.force_acquire(
+                        LeaseKind.ROUND,
+                        str(round_id),
+                        owner,
+                        holder,
+                        wall_clock_ms(),
+                        self._lease_ttl_ms,
+                    )
+                    scope = LeaseScope(holder=holder, owner=owner)
+                    scope.bind(token)
+                    scope_token = set_lease_scope(scope)
+                round_ = self._rounds.get(round_id)
+                round_.abandon(reason)
+                self._round_writer.save(round_)
+                if self._leases is not None and token is not None:
+                    # 同一 UoW 内释放：提交前别人看不到"无租约"的中间态。
+                    self._leases.release(
+                        token.kind,
+                        token.target_id,
+                        UserId(token.user_id),
+                        token.holder,
+                        token.token,
+                    )
+        finally:
+            if scope_token is not None:
+                clear_lease_scope(scope_token)
         _publish(self._events, self._clock, round_)
 
         # 写完了再取消：取消会把那个任务炸在 await 点，而它不会碰业务状态。
@@ -4755,6 +4837,8 @@ class SkipSeat:
         events: EventPublisher,
         clock: Clock,
         viewer: GetRound,
+        leases: LeaseStore | None = None,
+        lease_ttl_ms: int = LEASE_TTL_SECONDS * 1000,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -4762,39 +4846,82 @@ class SkipSeat:
         self._events = events
         self._clock = clock
         self._viewer = viewer
+        self._leases = leases
+        self._lease_ttl_ms = lease_ttl_ms
 
-    async def __call__(self, *, round_id: RoundId, seat_id: str) -> RoundView:
-        with self._uow:
-            round_ = self._rounds.get(round_id)
-            if seat_id in round_.skipped_seats:
-                # 幂等：已经跳过，直接返回 view——`note_dropped` 是追加语义，
-                # 不 guard 会多记一条留痕。
-                pass
-            else:
-                if any(
-                    review.seat_id == seat_id
-                    for review in round_.current_reviews
-                ):
-                    # 本趟已交回：拒。不是 UX 选项，是正确性必需（见类文档串）。
-                    raise SeatAlreadyReviewed(
-                        f"席位 {seat_id} 本趟已经交回，跳过没有意义",
-                        seat_id=seat_id,
-                    )
-                # 非成员 → UnknownSeat；非跑中 → IllegalStepTransition——都复用，一字不动。
-                round_.skip_seat(seat_id)
-                round_.note_dropped(
-                    (
-                        DroppedItem(
-                            handle=seat_id,
-                            reason=f"用户跳过了席位 {seat_id}，本轮不再请它",
-                            source=DropSource.USER_SKIPPED,
-                            seat_id=seat_id,
-                            pass_index=round_.seat_round_count,
-                            packet_id=None,
-                        ),
-                    )
+    async def __call__(
+        self, *, round_id: RoundId, seat_id: str, owner: UserId | None = None
+    ) -> RoundView:
+        if self._leases is not None and owner is None:
+            raise ApplicationError(
+                "跳过席位缺少 owner 上下文",
+                code="missing_owner_scope",
+            )
+        scope_token = None
+        forced = None
+        try:
+            if self._leases is not None:
+                # 跑中跳过**不抢 action lease**：借用当前持有者的 token 写这一条控制信息。
+                # 没有活租约（进程崩过 / 停在 seats_running）才接管一把，写完立刻释放。
+                token = self._leases.current_token(
+                    LeaseKind.ROUND, str(round_id), owner, now_ms=wall_clock_ms()
                 )
-                self._round_writer.save(round_)
+                if token is None:
+                    forced = self._leases.force_acquire(
+                        LeaseKind.ROUND,
+                        str(round_id),
+                        owner,
+                        f"skip:{uuid.uuid4().hex}",
+                        wall_clock_ms(),
+                        self._lease_ttl_ms,
+                    )
+                    token = forced
+                scope = LeaseScope()
+                scope.bind(token)
+                scope_token = set_lease_scope(scope)
+            with self._uow:
+                round_ = self._rounds.get(round_id)
+                if seat_id in round_.skipped_seats:
+                    # 幂等：已经跳过，直接返回 view——`note_dropped` 是追加语义，
+                    # 不 guard 会多记一条留痕。
+                    pass
+                else:
+                    if any(
+                        review.seat_id == seat_id
+                        for review in round_.current_reviews
+                    ):
+                        # 本趟已交回：拒。不是 UX 选项，是正确性必需（见类文档串）。
+                        raise SeatAlreadyReviewed(
+                            f"席位 {seat_id} 本趟已经交回，跳过没有意义",
+                            seat_id=seat_id,
+                        )
+                    # 非成员 → UnknownSeat；非跑中 → IllegalStepTransition——都复用，一字不动。
+                    round_.skip_seat(seat_id)
+                    round_.note_dropped(
+                        (
+                            DroppedItem(
+                                handle=seat_id,
+                                reason=f"用户跳过了席位 {seat_id}，本轮不再请它",
+                                source=DropSource.USER_SKIPPED,
+                                seat_id=seat_id,
+                                pass_index=round_.seat_round_count,
+                                packet_id=None,
+                            ),
+                        )
+                    )
+                    self._round_writer.save(round_)
+        finally:
+            if forced is not None:
+                # 接管来的锁只活到这次控制写结束；借用的锁**绝不释放**（那是长动作的）。
+                self._leases.release(
+                    forced.kind,
+                    forced.target_id,
+                    UserId(forced.user_id),
+                    forced.holder,
+                    forced.token,
+                )
+            if scope_token is not None:
+                clear_lease_scope(scope_token)
         _publish(self._events, self._clock, round_)
         return await self._viewer(round_id=round_id)
 class GetDocument:

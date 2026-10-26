@@ -15,10 +15,10 @@ TOML 实现搬进 `pmstudio.harness.tools.registry`——"一个工具有哪些�
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, NamedTuple, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, NamedTuple, Protocol, TypeVar, runtime_checkable
 
 from pmstudio.domain.shared.ids import (
     DiscussionId,
@@ -130,6 +130,18 @@ class LeaseStore(Protocol):
 
     def holds(self, token: LeaseToken, *, now_ms: int) -> bool:
         """这一行此刻是否仍归这把 token（owner + holder + token + 未过期）。"""
+
+        ...
+
+    def current_token(
+        self, kind: LeaseKind, target_id: str, user_id: UserId, *, now_ms: int
+    ) -> LeaseToken | None:
+        """读一行**当前有效**的租约（不改 token、不续期）。
+
+        给"轮内控制写"借用：`SkipSeat` 要在跑中的 action lease 下写控制信息，
+        但它不是那个长动作、也不该把锁抢走。Task 4 改成 `round_skips` 控制行后，
+        这个入口只保留给"借用已有租约"这一类显式场景。
+        """
 
         ...
 
@@ -366,14 +378,25 @@ class TemplateRepository(Protocol):
     def delete(self, template_id: str) -> None: ...
 
 
+_T = TypeVar("_T")
+
+
 @runtime_checkable
 class RoundOrchestrator(Protocol):
     """图的入口（实现是 infrastructure 里的 `RoundRunner`）。
 
     `api` 只认这个协议，所以它不必 import infrastructure——分层守卫因此能保持全绿。
+
+    `short_action` 是**非图**的轮内动作：拿同一把 round lease、跑完就释放，
+    用于返回自定义结果（`KeepSimInquiry` / 后续的 `AttachResearchSources`）。
+    它不把结果塞进 `RoundState`，也不新增图节点。
     """
 
     async def run(self, command: RoundCommand) -> RoundView: ...
+
+    async def short_action(
+        self, round_id: RoundId, action: Callable[[], Awaitable[_T]]
+    ) -> _T: ...
 
 
 @runtime_checkable

@@ -154,6 +154,31 @@ class SqliteLeaseStore:
             expires_at_ms=expires_at,
         )
 
+    def current_token(
+        self, kind: LeaseKind, target_id: str, user_id: UserId, *, now_ms: int
+    ) -> LeaseToken | None:
+        """只读当前有效租约；**不改行**（控制写借用，不抢锁）。"""
+
+        self._require_target(kind, target_id, user_id)
+        table, key = self._table(kind)
+        row = self._connection.execute(
+            f"""SELECT lease_owner, lease_token, lease_expires_at FROM {table}
+                WHERE {key} = ? AND owner_id = ?
+                  AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at > ?""",
+            (target_id, str(user_id), now_ms),
+        ).fetchone()
+        if row is None:
+            return None
+        return LeaseToken(
+            kind=kind,
+            target_id=target_id,
+            user_id=str(user_id),
+            holder=str(row["lease_owner"]),
+            token=int(row["lease_token"]),
+            expires_at_ms=int(row["lease_expires_at"]),
+        )
+
     def holds(self, token: LeaseToken, *, now_ms: int) -> bool:
         table, key = self._table(token.kind)
         row = self._connection.execute(

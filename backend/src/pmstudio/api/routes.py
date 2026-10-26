@@ -39,7 +39,7 @@ from pmstudio.application.use_cases import (
 from pmstudio.domain.discussion.thread import QuestionSnapshot
 from pmstudio.domain.exploration.exploration import ExplorationScope, ScopeKind
 from pmstudio.domain.memory.memory import MEMORY_USAGE_WINDOW
-from pmstudio.domain.shared.ids import DiscussionId, ExplorationId, ProjectId, RoundId
+from pmstudio.domain.shared.ids import DiscussionId, ExplorationId, ProjectId, RoundId, UserId
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
@@ -537,7 +537,9 @@ async def abandon_round(request: Request, round_id: str, user: CurrentUser):  # 
     它**不走 `runner.run()`**：被那条路拦住的正是"重试"，而放弃恰恰是重试之外的另一个出口。
     """
 
-    view = await services_of(request).abandon_round(round_id=RoundId(round_id))
+    view = await services_of(request).abandon_round(
+        round_id=RoundId(round_id), owner=UserId(user.user_id)
+    )
     return as_json(view)
 
 
@@ -549,7 +551,11 @@ async def skip_seat(request: Request, round_id: str, body: SkipSeatRequest, user
     走 runner 会被 `RoundBusy` 拦下。迟交的那个任务自然结束，交回即丢弃。
     """
 
-    view = await services_of(request).skip_seat(round_id=RoundId(round_id), seat_id=body.seat_id)
+    view = await services_of(request).skip_seat(
+        round_id=RoundId(round_id),
+        seat_id=body.seat_id,
+        owner=UserId(user.user_id),
+    )
     return as_json(view)
 
 

@@ -7,13 +7,27 @@
 """
 
 import asyncio
-from typing import Any, TypedDict
+import os
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
+from typing import Any, TypedDict, TypeVar
 
 from langgraph.graph import END, StateGraph
 
 from pmstudio.application.commands import RoundCommand
 from pmstudio.application.dto import RoundView
-from pmstudio.application.errors import RoundBusy
+from pmstudio.application.errors import RoundBusy, RoundLeaseLost
+from pmstudio.application.lease import (
+    LEASE_HEARTBEAT_SECONDS,
+    LEASE_TTL_SECONDS,
+    LeaseHeartbeat,
+    LeaseScope,
+    clear_lease_scope,
+    set_lease_scope,
+    wall_clock_ms,
+)
+from pmstudio.application.ports import LeaseStore
 from pmstudio.application.use_cases import (
     AttachMaterials,
     ConfirmDraft,
@@ -30,11 +44,14 @@ from pmstudio.application.use_cases import (
     SubmitOpening,
 )
 from pmstudio.domain.round.step import Step
-from pmstudio.domain.shared.ids import ProjectId, RoundId
+from pmstudio.domain.shared.ids import ProjectId, RoundId, UserId
+from pmstudio.domain.shared.lease import LeaseKind
+from pmstudio.infrastructure.sqlite.owner_scope import require_owner
 
 __all__ = ["RESUME_ROUTES", "RoundCommand", "RoundRunner", "RoundState", "build_graph"]
 
 CANCEL_WAIT_SECONDS = 5.0
+_T = TypeVar("_T")
 
 
 class RoundState(TypedDict, total=False):
@@ -95,6 +112,9 @@ class RoundRunner:
         run_sim_review: RunSimReview,
         attach_materials: AttachMaterials,
         decide_web_request: DecideWebRequest,
+        leases: LeaseStore | None = None,
+        lease_ttl_seconds: float = LEASE_TTL_SECONDS,
+        lease_heartbeat_seconds: float = LEASE_HEARTBEAT_SECONDS,
     ) -> None:
         self._start_round = start_round
         self._submit_opening = submit_opening
@@ -109,6 +129,9 @@ class RoundRunner:
         self._attach_materials = attach_materials
         self._decide_web_request = decide_web_request
         self._get_round = get_round
+        self._leases = leases
+        self._lease_ttl_seconds = lease_ttl_seconds
+        self._lease_heartbeat_seconds = lease_heartbeat_seconds
         self._running_rounds: set[str] = set()
         #: 这一轮正在跑的那个 asyncio 任务（`cancel()` 要按 round_id 找到它）
         self._tasks: dict[str, asyncio.Task[Any]] = {}
@@ -123,8 +146,12 @@ class RoundRunner:
     async def run(self, command: RoundCommand) -> RoundView:
         """跑一次用户动作。**同一个 round 同时只允许一个动作**。
 
-        双击"继续/重试"、两个标签页、前端重发都会撞上；真撞过一次，代价是那一轮永久锁死
-        （`04-未决.md` C9）。`start` 没有 round_id，不参与串行化——两轮新输入本来就互不相干。
+        两道闸：`_running_rounds` 只保护本进程（快路径）；真正的互斥是 SQLite 行上的
+        DB lease——两个 worker 各跑一个进程时，第二条请求在 `acquire` 处拿不到锁，
+        直接 409，不会进图、不会重复调模型。
+
+        `start` 没有 round_id，不参与串行化——两轮新输入本来就互不相干；
+        它的租约由 `StartRound.create` 在 INSERT 的同一个 UoW 里拿。
         """
 
         key = command.round_id or ""
@@ -136,13 +163,20 @@ class RoundRunner:
             if current is not None:
                 self._tasks[key] = current
         try:
-            final: dict[str, Any] = await self._graph.ainvoke(
-                {"command": command, "round_id": key, "view": None}
-            )
-        except asyncio.CancelledError:
-            # 取消**不吞**：谁取消的谁负责收尾（`AbandonRound` 先写 abandoned 再调 cancel），
-            # 吞掉会掩盖"进程正在关"这类外部取消。
-            raise
+            async with self._holding_round(key) as scope:
+                try:
+                    final: dict[str, Any] = await self._graph.ainvoke(
+                        {"command": command, "round_id": key, "view": None}
+                    )
+                except asyncio.CancelledError:
+                    if scope.lost:
+                        # 心跳先发现锁被接管，主动把在途模型调用停下：
+                        # 对调用方这是 409，不是"用户放弃了"。
+                        target = scope.token.target_id if scope.token is not None else key
+                        raise RoundLeaseLost(target) from None
+                    # 外部取消**不吞**：谁取消的谁负责收尾（`AbandonRound` 先写 abandoned
+                    # 再调 cancel），吞掉会掩盖"进程正在关"这类外部取消。
+                    raise
         finally:
             self._running_rounds.discard(key)
             self._tasks.pop(key, None)
@@ -155,6 +189,117 @@ class RoundRunner:
                 raise RuntimeError("这次调用既没有 round_id，也没有产生新的一轮")
             view = await self._get_round(round_id=RoundId(round_id))
         return view
+
+    async def short_action(
+        self, round_id: RoundId, action: Callable[[], Awaitable[_T]]
+    ) -> _T:
+        """非图的轮内动作：同一把 round lease 内跑 `action`，跑完释放。
+
+        与 `run` 的区别只在不经过 LangGraph、不把结果塞进 `RoundState`——
+        返回什么由调用方定（`KeepSimResult` / `RoundView`）。取消语义与 `run` 相同：
+        失租翻 409，外部取消原样抛。
+        """
+
+        key = str(round_id)
+        if key in self._running_rounds:
+            raise RoundBusy(round_id=key)
+        self._running_rounds.add(key)
+        current = asyncio.current_task()
+        if current is not None:
+            self._tasks[key] = current
+        try:
+            async with self._holding_round(key) as scope:
+                try:
+                    return await action()
+                except asyncio.CancelledError:
+                    if scope.lost:
+                        raise RoundLeaseLost(key) from None
+                    raise
+        finally:
+            self._running_rounds.discard(key)
+            self._tasks.pop(key, None)
+
+    @asynccontextmanager
+    async def _holding_round(self, round_id: str) -> AsyncIterator[LeaseScope]:
+        """把**同一个可变 scope** 放进 contextvar，并维护它的心跳与释放。
+
+        为什么是可变对象：LangGraph 节点会复制 context，但复制的是引用；
+        `StartRound.create` 在节点里 `bind` 的 token，`node_analyze` 的 save 必须看得见。
+        每一层重新 `set` 一个新 scope 会让节点拿到旧值。
+
+        没有注入 `leases` 时（Harness / 内存夹具）只放 scope，不做 DB 操作——
+        生产装配点永远注入真 store。
+        """
+
+        if self._leases is None:
+            scope = LeaseScope()
+            context_token = set_lease_scope(scope)
+            try:
+                yield scope
+            finally:
+                clear_lease_scope(context_token)
+            return
+
+        owner = require_owner(None)
+        holder = f"{os.getpid()}:{uuid.uuid4().hex}"
+        scope = LeaseScope(holder=holder, owner=owner)
+        ttl_ms = int(self._lease_ttl_seconds * 1000)
+        if round_id:
+            token = self._leases.acquire(
+                LeaseKind.ROUND,
+                round_id,
+                owner,
+                holder,
+                wall_clock_ms(),
+                ttl_ms,
+            )
+            if token is None:
+                raise RoundBusy(round_id=round_id)
+            scope.bind(token)
+        context_token = set_lease_scope(scope)
+        main = asyncio.current_task()
+
+        def _stop_main() -> None:
+            if main is not None and not main.done():
+                main.cancel()
+
+        heartbeat = asyncio.create_task(
+            LeaseHeartbeat(
+                scope=scope,
+                renew=lambda token, now_ms, _ttl: self._leases.renew(
+                    token.kind,
+                    token.target_id,
+                    UserId(token.user_id),
+                    token.holder,
+                    token.token,
+                    now_ms,
+                    _ttl,
+                ),
+                interval_seconds=self._lease_heartbeat_seconds,
+                ttl_ms=ttl_ms,
+                on_lost=_stop_main,
+            ).run()
+        )
+        try:
+            yield scope
+        finally:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await heartbeat
+            lease = scope.token
+            if lease is not None:
+                # 尽力而为：0 行（被接管/已过期）不是错误，也绝不报 409。
+                try:
+                    self._leases.release(
+                        lease.kind,
+                        lease.target_id,
+                        UserId(lease.user_id),
+                        lease.holder,
+                        lease.token,
+                    )
+                except Exception:  # noqa: BLE001 —— 收尾不许掩盖原异常
+                    pass
+            clear_lease_scope(context_token)
 
     async def cancel(self, round_id: RoundId) -> None:
         """取消这一轮正在跑的任务。没有在跑的直接返回（它可能停在等人，或进程崩过）。"""

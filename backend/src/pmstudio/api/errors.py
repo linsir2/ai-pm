@@ -32,6 +32,9 @@ CODE_STATUS = {
     "model_call_failed": 502,
     "model_packet_unparsable": 502,
     "round_busy": 409,
+    # 租约（P3b）：fencing 失败或心跳失租都是"同一个资源被别人接管了"——409。
+    "lease_lost": 409,
+    "round_lease_lost": 409,
     # 联网申请决策（P3a）：申请不在这一轮 = 404；已决策 / 轮终态 / 名额满 = 409
     "unknown_web_request": 404,
     "web_request_not_pending": 409,
