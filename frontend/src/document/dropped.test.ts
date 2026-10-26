@@ -64,7 +64,7 @@ describe("dropsFor", () => {
   });
 
   it("工具那几笔（检索失败 / 没带进去）单独拎出来：它们不是「去处写错的」", () => {
-    expect(toolDrops(dropped).map((item) => item.handle)).toEqual([
+    expect(toolDrops(dropped, [packet]).map((item) => item.handle)).toEqual([
       "联网检索 RBAC 权限模型",
     ]);
   });
@@ -78,11 +78,30 @@ describe("dropsFor", () => {
       source: "tool",
       packet_id: packet.packet_id ?? undefined,
     };
-    expect(toolDrops([...dropped, seatTool]).map((item) => item.handle)).toEqual([
+    expect(toolDrops([...dropped, seatTool], [packet]).map((item) => item.handle)).toEqual([
       "联网检索 RBAC 权限模型",
     ]);
     expect(dropsFor(packet, [seatTool]).map((item) => item.handle)).toEqual([
       "联网申请 第四条",
+    ]);
+  });
+
+  it("旧趟的席位级 TOOL 留痕挂不上当前席位包，但要在工具段可见（不许消失）", () => {
+    const oldSeatTool: DroppedView = {
+      handle: "联网申请 旧趟超名额",
+      seat_id: "seat.data_scale",
+      pass_index: 1,
+      reason: "每方最多 3 条联网申请，多出来的这一条已丢弃",
+      source: "tool",
+      packet_id: "pkt-r1-seat_review-seat.data_scale-p1a1",
+    };
+    const all = [...dropped, oldSeatTool];
+    expect(dropsFor(packet, all).map((item) => item.handle)).not.toContain(
+      "联网申请 旧趟超名额",
+    );
+    expect(toolDrops(all, [packet]).map((item) => item.handle)).toEqual([
+      "联网检索 RBAC 权限模型",
+      "联网申请 旧趟超名额",
     ]);
   });
 

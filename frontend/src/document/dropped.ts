@@ -32,13 +32,19 @@ export function unplacedDrops(
   return dropped.filter((item) => !packets.some((packet) => belongsTo(item, packet)));
 }
 
-/** 工具这一趟留下的（检索失败 / 没搜到结果 / 预算没带进去）。
+/** 工具这一步留下的（检索失败 / 没搜到结果 / 预算没带进去）。
 
-    只收 `seat_id == null` 的纯工具留痕：它们与席位意见无关，不许混进"去处写错的"
-    那一句里——闭环区单列一段，说清是**联网这一步**的事。带 `seat_id` 的 TOOL
-    留痕（每方超名额）已经由 `dropsFor` 挂到对应席位包下，这里再收一次会重复渲染。 */
-export function toolDrops(dropped: DroppedView[]): DroppedView[] {
-  return dropped.filter((item) => item.source === "tool" && item.seat_id == null);
+    收**挂不到当前这趟任何席位包上**的 TOOL 留痕：纯工具（`seat_id == null`），
+    以及更早那趟的席位级 TOOL（如每方超名额）。它们与当前席位意见无关，闭环区单列一段，
+    说清是**联网这一步**的事。当前趟的席位级 TOOL 已由 `dropsFor` 挂到对应席位包下，
+    这里排除，避免重复渲染。 */
+export function toolDrops(
+  dropped: DroppedView[],
+  packets: SeatPacketView[],
+): DroppedView[] {
+  return dropped.filter(
+    (item) => item.source === "tool" && !packets.some((packet) => belongsTo(item, packet)),
+  );
 }
 
 export function dropHeadline(packet: SeatPacketView, drops: DroppedView[]): string {

@@ -84,7 +84,7 @@ export function LoopPane({
   const unplaced = unplacedDrops(round.dropped, round.seat_packets).filter(
     (item) => item.source !== "tool" && item.source !== "material_auto",
   );
-  const toolNotes = toolDrops(round.dropped);
+  const toolNotes = toolDrops(round.dropped, round.seat_packets);
   const dupItems = round.list_items.length - new Set(round.list_items).size;
   // 整合节点：两个动作各自只在"现在真能做"时出现（等答 / 等确认），做完不留死按钮。
   const actionable =
@@ -362,7 +362,10 @@ export function LoopPane({
               <summary className="muted small">工具 {toolNotes.length} 条</summary>
               <ul className="drops">
                 {toolNotes.map((item, index) => (
-                  <li className="drop" key={`${item.handle}-${item.reason}-${index}`}>
+                  <li
+                    className="drop"
+                    key={`${item.seat_id ?? "tool"}-${item.handle}-${item.reason}-${index}`}
+                  >
                     <span className="mono small">{item.handle}</span>
                     <span className="drop__reason">{item.reason}</span>
                   </li>

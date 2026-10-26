@@ -156,6 +156,62 @@ describe("闭环区的列表（P29 F1/F2）", () => {
     spy.mockRestore();
   });
 
+  it("旧趟的席位级工具留痕只进工具段一次；当前趟仍挂在席位包下", () => {
+    const currentPacket = {
+      seat_id: "seat.a",
+      title: "业务规则",
+      status: "completed",
+      pass_index: 2,
+      packet_id: "pkt-cur",
+      basis: "读了文档",
+      opinions: [],
+      judgment_count: 0,
+      question_count: 0,
+    };
+    const oldSeatTool: DroppedView = {
+      handle: "联网申请 旧趟超名额",
+      seat_id: "seat.a",
+      pass_index: 1,
+      reason: "每方最多 3 条联网申请，多出来的这一条已丢弃",
+      source: "tool",
+      packet_id: "pkt-old",
+    };
+    const currentSeatTool: DroppedView = {
+      handle: "联网申请 当前趟超名额",
+      seat_id: "seat.a",
+      pass_index: 2,
+      reason: "每方最多 3 条联网申请，多出来的这一条已丢弃",
+      source: "tool",
+      packet_id: "pkt-cur",
+    };
+    const pureTool: DroppedView = {
+      handle: "web_search",
+      reason: "没搜到结果",
+      source: "tool",
+      seat_id: null,
+      pass_index: 2,
+    };
+    const { container } = draw(
+      round({
+        seats: ["seat.a"],
+        active_seats: ["seat.a"],
+        seat_packets: [currentPacket as never],
+        dropped: [oldSeatTool, currentSeatTool, pureTool],
+      }),
+    );
+
+    const toolFold = screen.getByText("工具 2 条").closest("details")!;
+    expect(within(toolFold).getByText("联网申请 旧趟超名额")).toBeTruthy();
+    expect(within(toolFold).getByText("web_search")).toBeTruthy();
+    expect(within(toolFold).queryByText("联网申请 当前趟超名额")).toBeNull();
+    // 历史那条只在工具段出现一次；当前趟那条只在席位包里出现一次
+    expect(container.textContent!.match(/旧趟超名额/g)).toHaveLength(1);
+    expect(container.textContent!.match(/当前趟超名额/g)).toHaveLength(1);
+    expect(
+      within(container.querySelector("article.packet")!).getByText("联网申请 当前趟超名额"),
+    ).toBeTruthy();
+  });
+
   it("自动检索进来的材料不算「留痕」：不进那句「去处写错的」，也不挤占工具的条数", () => {
     const { container } = draw(
       round({
