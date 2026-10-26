@@ -12,6 +12,7 @@ import { claimLabelText, compactTarget } from "../labels";
 import {
   executedWebRequestCount,
   labelCounts,
+  overLimitWebRequestCount,
   rewritesOf,
   webRequestBadge,
 } from "../state/progress";
@@ -27,7 +28,7 @@ import { RoundMaterials } from "./RoundMaterials";
 import { RoundRetrieval } from "./RoundRetrieval";
 import { RoundStatus } from "./RoundStatus";
 import { SeatPacketCard } from "./SeatPacketCard";
-import { WebRequestCard } from "./WebRequestCard";
+import { WebRequestCard, type WebRequestPendingAction } from "./WebRequestCard";
 
 export function LoopPane({
   round,
@@ -44,6 +45,7 @@ export function LoopPane({
   onOpenQuestionnaire,
   onOpenDraft,
   onDecideWebRequest,
+  onRecoverWebRequest,
 }: {
   round: RoundView;
   pending: string | null;
@@ -57,8 +59,8 @@ export function LoopPane({
   historyNav?: ReactNode;
   /** 正在看历史轮（只读）：联网申请只能看，不能批。 */
   historical?: boolean;
-  /** 哪一条申请的哪个决策在途（只让被点的按钮显示处理中）。 */
-  pendingWebRequest?: { requestId: string; decision: "approve" | "reject" } | null;
+  /** 哪一条申请的哪个决策/恢复在途（只让被点的按钮显示处理中）。 */
+  pendingWebRequest?: { requestId: string; decision: WebRequestPendingAction } | null;
   onRetry: () => void;
   onAbandon: () => void;
   /** 跳过一个席位（LoopColumn 从 App 接过来；卡片只负责点，判能不能点在下面）。 */
@@ -67,6 +69,8 @@ export function LoopPane({
   onOpenDraft: () => void;
   /** 逐条决策联网申请（P3a）：批准即执行。 */
   onDecideWebRequest?: (requestId: string, decision: "approve" | "reject") => void;
+  /** 超额 approved 的逐条恢复（P3b）：执行一次或放弃。 */
+  onRecoverWebRequest?: (requestId: string, action: "execute" | "abandon") => void;
 }) {
   const maxSeatRounds = limits?.max_seat_rounds ?? limitsOf().max_seat_rounds;
   const running = pending !== null;
@@ -92,6 +96,7 @@ export function LoopPane({
   const webBadge = webRequestBadge(round);
   const webUsed = executedWebRequestCount(round);
   const webLimit = limits?.max_web_executions ?? null;
+  const overLimitCount = overLimitWebRequestCount(round, webLimit);
   const terminal = ["done", "failed", "abandoned"].includes(round.step);
 
   return (
@@ -128,6 +133,9 @@ export function LoopPane({
             <div className="web-requests__head">
               <h3 className="web-requests__title">联网申请</h3>
               {webBadge !== null && <span className="tag">{webBadge}</span>}
+              {overLimitCount > 0 && (
+                <span className="tag">{overLimitCount} 条超额待恢复</span>
+              )}
             </div>
             {webRequests.map((request) => (
               <WebRequestCard
@@ -147,6 +155,9 @@ export function LoopPane({
                 networkAccess={round.web_search_network_access}
                 onDecide={(decision) => {
                   onDecideWebRequest?.(request.request_id, decision);
+                }}
+                onRecover={(recoveryAction) => {
+                  onRecoverWebRequest?.(request.request_id, recoveryAction);
                 }}
               />
             ))}

@@ -6,6 +6,7 @@ import {
   labelCounts,
   loopBadgeCount,
   needsLoopAttention,
+  overLimitWebRequestCount,
   rewritesOf,
   roundElapsed,
   roundOrdinal,
@@ -216,6 +217,22 @@ describe("联网申请徽标（P3a）", () => {
 
     expect(executedWebRequestCount(view)).toBe(3);
     expect(executedWebRequestCount(null)).toBe(0);
+  });
+
+  it("超额待恢复 = used>limit 时仍 approved 的条数；没超额 / limit 未知是 0", () => {
+    const view = round([
+      request("w1", "done"),
+      request("w2", "done"),
+      request("w3", "done"),
+      request("w4", "approved"),
+      request("w5", "approved"),
+      request("w6", "rejected"),
+    ]);
+
+    expect(overLimitWebRequestCount(view, 3)).toBe(2);
+    expect(overLimitWebRequestCount(view, 5)).toBe(0);
+    expect(overLimitWebRequestCount(view, null)).toBe(0);
+    expect(overLimitWebRequestCount(null, 3)).toBe(0);
   });
 
   it("剩余名额 = limit − 已用 − 已勾；limit 没读到时是 null", () => {

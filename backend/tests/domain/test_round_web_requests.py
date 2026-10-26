@@ -580,3 +580,25 @@ def test_old_keys_are_ignored_when_the_new_key_is_present():
     assert loaded.web_requests == ()
     assert loaded.web_queries == ()
     assert loaded.web_queries_chosen == ()
+
+
+def test_cancel_approved_web_request_only_moves_approved_to_rejected_with_note():
+    round_ = opening_round()
+    round_.attach_web_requests(
+        [request("w1", "第一条"), request("w2", "第二条"), request("w3", "第三条")]
+    )
+    round_.decide_web_request("w1", approve=True)
+    round_.decide_web_request("w2", approve=False)
+
+    round_.cancel_approved_web_request("w1", note="超额恢复：用户放弃执行")
+
+    items = {item.request_id: item for item in round_.web_requests}
+    assert items["w1"].state is WebRequestState.REJECTED
+    assert items["w1"].result_note == "超额恢复：用户放弃执行"
+    # 五态没有扩：拒绝仍是不占名额的 rejected，不是 failed。
+    assert items["w2"].state is WebRequestState.REJECTED
+    assert items["w3"].state is WebRequestState.PROPOSED
+
+    for request_id in ("w1", "w2", "w3"):
+        with pytest.raises(ShapeError):
+            round_.cancel_approved_web_request(request_id, note="再放弃一次")

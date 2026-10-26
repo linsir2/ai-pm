@@ -602,6 +602,17 @@ export const api = {
       { method: "POST", body: JSON.stringify({ decision }) },
     ),
 
+  /** 超额 approved 的逐条恢复（P3b）：执行一次或放弃（改判 rejected）。 */
+  recoverWebRequest: (
+    roundId: string,
+    requestId: string,
+    action: "execute" | "abandon",
+  ) =>
+    request<RoundView>(
+      `/rounds/${roundId}/web-requests/${encodeURIComponent(requestId)}/recovery`,
+      { method: "POST", body: JSON.stringify({ action }) },
+    ),
+
   submitAnswers: (roundId: string, body: AnswersBody) =>
     request<RoundView>(`/rounds/${roundId}/answers`, {
       method: "POST",

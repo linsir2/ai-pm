@@ -9,6 +9,9 @@
 每方最多 `MAX_WEB_QUERIES` 条**提案**。执行名额（每轮 3 条）由应用层算，不在这个对象上。
 """
 
+from __future__ import annotations
+
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -40,6 +43,19 @@ def normalized_query(query: str) -> str:
     return " ".join(query.split()).casefold()
 
 
+#: 占执行名额的三态：批准即占位，执行完换成 done/failed 仍然占。
+#: `proposed` 只是提名、`rejected` 是用户不要了，都不占。
+USED_WEB_STATES = frozenset(
+    (WebRequestState.APPROVED, WebRequestState.DONE, WebRequestState.FAILED)
+)
+
+
+def used_web_request_count(requests: Iterable[WebRequest]) -> int:
+    """这一轮已经占了多少条执行名额（`approved + done + failed`）。"""
+
+    return sum(1 for item in requests if item.state in USED_WEB_STATES)
+
+
 @dataclass(frozen=True, slots=True)
 class WebRequest:
     """一条联网申请：查什么、为什么、谁提的、现在到哪一步了。"""
@@ -68,8 +84,10 @@ class WebRequest:
 __all__ = [
     "LEGACY_REQUEST_WHY",
     "MAX_WEB_QUERIES",
+    "USED_WEB_STATES",
     "WebOrigin",
     "WebRequest",
     "WebRequestState",
     "normalized_query",
+    "used_web_request_count",
 ]

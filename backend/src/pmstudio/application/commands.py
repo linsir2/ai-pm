@@ -26,6 +26,8 @@ class RoundCommand:
     request_id: str = ""
     #: `approve` | `reject`；只用于 `decide_web_request`
     decision: str = ""
+    #: `execute` | `abandon`；只用于 `recover_web_request`
+    recovery_action: str = ""
     #: 开场卡上的自动联网开关（只自动批准 seat/integrator 的后续申请）
     allow_web: bool = False
     #: 开场卡上逐条批准的新载体（与旧 `web_queries` 取并集、幂等）

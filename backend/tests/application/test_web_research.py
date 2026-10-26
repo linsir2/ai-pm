@@ -16,11 +16,18 @@ import json
 import pytest
 
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
+from pmstudio.application.errors import (
+    WebRequestNotRecoverable,
+    WebRequestRecoveryRequired,
+)
+from pmstudio.application.use_cases import RECOVERY_ABANDON_NOTE
+from pmstudio.bootstrap.container import UuidIdGenerator
 from pmstudio.domain.provenance.evidence import EvidenceKind
-from pmstudio.domain.round.round import DropSource
+from pmstudio.domain.round.round import DropSource, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.round.web import LEGACY_REQUEST_WHY, WebRequest, WebRequestState
 from pmstudio.domain.shared.errors import ShapeError
+from pmstudio.domain.shared.template import standard_template
 from pmstudio.harness.errors import ToolCallFailed
 from pmstudio.harness.tools.registry import ToolDefinition
 from tests.support.builders import PROJECT, SEAT, make_web_packet
@@ -501,7 +508,7 @@ async def test_a_preapproved_request_is_executed_even_without_resending_its_id()
     assert [ref.chunk_id for ref in harness.rounds.get(round_id).materials] == ["m1#c00"]
 
 
-async def test_a_preapproved_request_without_a_tool_is_a_shape_error_and_changes_nothing():
+async def test_a_preapproved_request_without_a_tool_asks_for_recovery_and_changes_nothing():
     harness = Harness(
         replies={"claims": claims_reply({"query": QUERY_A, "why": "要查行业做法"})},
         available_tool_keys=frozenset(),
@@ -520,11 +527,11 @@ async def test_a_preapproved_request_without_a_tool_is_a_shape_error_and_changes
         before.materials,
     )
 
-    with pytest.raises(ShapeError) as error:
+    with pytest.raises(WebRequestRecoveryRequired) as error:
         await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
 
-    assert "已批准" in error.value.message
-    assert "联网工具" in error.value.message
+    assert error.value.details["used"] == 1
+    assert error.value.details["limit"] == 0
     assert harness.web_search.calls == []
     after = harness.rounds.get(round_id)
     assert (
@@ -726,3 +733,466 @@ async def test_the_integration_execution_point_uses_the_real_integration_pass():
     ]
     assert drops[-1].pass_index == 2
     assert QUERY_C in drops[-1].handle
+
+
+# —— P3b：名额在 claim UoW 内重算、used>limit 的逐条恢复 ——
+
+
+def seed_web_states(harness: Harness, round_id, entries):  # type: ignore[no-untyped-def]
+    """往本轮挂一批指定状态的申请（每方最多 3 条，超出的换 origin）。"""
+
+    round_ = harness.rounds.get(round_id)
+    requests: list[WebRequest] = []
+    counts = {"analyzer": 0, "seat": 0}
+    for index, (_state, query) in enumerate(entries):
+        origin = "analyzer" if counts["analyzer"] < 3 else "seat"
+        counts[origin] += 1
+        requests.append(
+            WebRequest(
+                request_id=f"w{100 + index}",
+                query=query,
+                why="P3b 恢复测试",
+                origin=origin,
+                seat_id=SEAT if origin == "seat" else None,
+                pass_index=1 if origin == "seat" else None,
+            )
+        )
+    round_.attach_web_requests(requests)
+    for item, (state, _query) in zip(requests, entries, strict=True):
+        if state is WebRequestState.PROPOSED:
+            continue
+        if state is WebRequestState.REJECTED:
+            round_.decide_web_request(item.request_id, approve=False)
+            continue
+        round_.decide_web_request(item.request_id, approve=True)
+        if state in (WebRequestState.DONE, WebRequestState.FAILED):
+            round_.mark_web_request(item.request_id, state, result_note="已记结果")
+    harness.rounds.save(round_)
+    return tuple(item.request_id for item in requests)
+
+
+def states_by_id(harness: Harness, round_id) -> dict[str, WebRequestState]:  # type: ignore[no-untyped-def]
+    return {
+        item.request_id: item.state
+        for item in harness.rounds.get(round_id).web_requests
+    }
+
+
+async def test_opening_with_over_limit_approved_requires_recovery():
+    harness = Harness(replies={"claims": claims_reply()})
+    round_id = await analyzed_round(harness)
+    seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.DONE, "q3"),
+            (WebRequestState.APPROVED, "q4"),
+        ],
+    )
+
+    with pytest.raises(WebRequestRecoveryRequired) as error:
+        await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    assert error.value.details["used"] == 4
+    assert error.value.details["limit"] == 3
+    assert harness.web_search.calls == []
+    assert harness.rounds.get(round_id).step is Step.CLAIMS_READY
+
+
+async def test_opening_refuses_a_new_approval_when_used_is_at_the_limit():
+    harness = Harness(replies={"claims": claims_reply()})
+    round_id = await analyzed_round(harness)
+    request_id = seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.DONE, "q3"),
+            (WebRequestState.PROPOSED, "q4"),
+        ],
+    )[-1]
+
+    with pytest.raises(ShapeError) as error:
+        await harness.submit_opening()(
+            round_id=round_id, seats=(SEAT,), approved_request_ids=(request_id,)
+        )
+
+    assert "先取消新勾选" in error.value.message
+    assert harness.web_search.calls == []
+    assert states_by_id(harness, round_id)[request_id] is WebRequestState.PROPOSED
+
+
+async def test_opening_refuses_new_approvals_beyond_the_remaining_slots():
+    harness = Harness(replies={"claims": claims_reply()})
+    round_id = await analyzed_round(harness)
+    (first, second) = seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.PROPOSED, "q3"),
+            (WebRequestState.PROPOSED, "q4"),
+        ],
+    )[-2:]
+
+    with pytest.raises(ShapeError) as error:
+        await harness.submit_opening()(
+            round_id=round_id,
+            seats=(SEAT,),
+            approved_request_ids=(first, second),
+        )
+
+    assert "已用 2 条" in error.value.message
+    assert harness.web_search.calls == []
+    assert states_by_id(harness, round_id)[first] is WebRequestState.PROPOSED
+    assert states_by_id(harness, round_id)[second] is WebRequestState.PROPOSED
+
+
+async def test_opening_with_over_limit_done_only_continues_with_zero_web():
+    harness = Harness(replies={"claims": claims_reply()})
+    round_id = await analyzed_round(harness)
+    seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.DONE, "q3"),
+            (WebRequestState.FAILED, "q4"),
+        ],
+    )
+
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+
+    assert harness.web_search.calls == []
+    assert harness.rounds.get(round_id).step is Step.SEATS_RUNNING
+
+
+async def test_a_stale_done_id_without_a_tool_opens_with_zero_web():
+    harness = Harness(
+        replies={"claims": claims_reply()}, available_tool_keys=frozenset()
+    )
+    round_id = await analyzed_round(harness)
+    (stale_id,) = seed_web_states(
+        harness, round_id, [(WebRequestState.DONE, "q1")]
+    )
+
+    await harness.submit_opening()(
+        round_id=round_id, seats=(SEAT,), approved_request_ids=(stale_id,)
+    )
+
+    assert harness.web_search.calls == []
+    assert harness.rounds.get(round_id).step is Step.SEATS_RUNNING
+
+
+async def test_execute_approved_over_limit_runs_only_the_within_limit_slots():
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.APPROVED, "q3"),
+            (WebRequestState.APPROVED, "q4"),
+        ],
+    )
+
+    await harness.web_research().execute_approved(round_id=round_id)
+
+    assert harness.web_search.calls == [("q3", 5)]
+    states = states_by_id(harness, round_id)
+    assert states["w102"] is WebRequestState.DONE
+    assert states["w103"] is WebRequestState.APPROVED
+
+
+async def test_execute_approved_over_limit_with_no_slot_does_not_raise_or_run():
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.DONE, "q3"),
+            (WebRequestState.FAILED, "q4"),
+            (WebRequestState.APPROVED, "q5"),
+        ],
+    )
+
+    await harness.web_research().execute_approved(round_id=round_id)
+
+    assert harness.web_search.calls == []
+    assert states_by_id(harness, round_id)["w104"] is WebRequestState.APPROVED
+
+
+async def test_execute_approved_at_the_limit_still_runs_existing_approved():
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.APPROVED, "q3"),
+        ],
+    )
+
+    await harness.web_research().execute_approved(round_id=round_id)
+
+    assert harness.web_search.calls == [("q3", 5)]
+    assert states_by_id(harness, round_id)["w102"] is WebRequestState.DONE
+
+
+async def test_recovery_abandon_frees_the_slot_and_opening_succeeds():
+    harness = Harness(replies={"claims": claims_reply()})
+    round_id = await analyzed_round(harness)
+    (over_id,) = seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.DONE, "q3"),
+            (WebRequestState.APPROVED, "q4"),
+        ],
+    )[-1:]
+
+    await harness.recover_web_request()(
+        round_id=round_id, request_id=over_id, action="abandon"
+    )
+
+    recovered = next(
+        item
+        for item in harness.rounds.get(round_id).web_requests
+        if item.request_id == over_id
+    )
+    assert recovered.state is WebRequestState.REJECTED
+    assert recovered.result_note == RECOVERY_ABANDON_NOTE
+
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+    assert harness.web_search.calls == []
+    assert harness.rounds.get(round_id).step is Step.SEATS_RUNNING
+
+
+async def test_recovery_execute_allows_one_temporary_overage_then_opening_zero_web():
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    (over_id,) = seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.DONE, "q3"),
+            (WebRequestState.APPROVED, "q4"),
+        ],
+    )[-1:]
+
+    await harness.recover_web_request()(
+        round_id=round_id, request_id=over_id, action="execute"
+    )
+
+    assert harness.web_search.calls == [("q4", 5)]
+    assert states_by_id(harness, round_id)[over_id] is WebRequestState.DONE
+
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,))
+    assert harness.web_search.calls == [("q4", 5)]
+    assert harness.rounds.get(round_id).step is Step.SEATS_RUNNING
+
+
+async def test_recovery_only_accepts_approved_requests_above_the_limit():
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    (within, proposed) = seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.APPROVED, "q3"),
+            (WebRequestState.PROPOSED, "q4"),
+        ],
+    )[-2:]
+
+    with pytest.raises(WebRequestNotRecoverable):
+        await harness.recover_web_request()(
+            round_id=round_id, request_id=within, action="execute"
+        )
+    with pytest.raises(WebRequestNotRecoverable):
+        await harness.recover_web_request()(
+            round_id=round_id, request_id=proposed, action="abandon"
+        )
+
+    assert harness.web_search.calls == []
+
+
+async def test_two_direct_decisions_on_different_requests_never_push_used_over_limit(
+    tmp_path,
+):
+    """不靠 RoundBusy：两边都拿着"used=2"的旧读去 claim，后写者必须在 fresh read 上停住。"""
+
+    import asyncio
+    from copy import deepcopy
+
+    from pmstudio.application.lease import LeaseScope, clear_lease_scope, set_lease_scope
+    from pmstudio.application.use_cases import DecideWebRequest
+    from pmstudio.application.web_research import WebResearch
+    from pmstudio.infrastructure.sqlite.database import connect
+    from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
+    from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
+    from pmstudio.infrastructure.sqlite.repositories import (
+        SqliteEvidenceRepository,
+        SqliteRoundRepository,
+        SqliteWorkspaceIndex,
+    )
+    from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
+    from tests.support.builders import NOW, PROJECT, ROUND_ID
+    from tests.support.leases import bind_round_lease
+
+    db_path = tmp_path / "claim.db"
+    setup = connect(db_path)
+    ids = UuidIdGenerator()
+    SqliteProjectFactory(setup, ids=ids).create(
+        project_id=PROJECT, title="并发 claim", now=NOW, template=standard_template()
+    )
+    round_ = Round.start(
+        round_id=ROUND_ID,
+        project_id=PROJECT,
+        user_input="想做个订单导出的功能",
+        now=NOW,
+    )
+    round_.attach_web_requests(
+        [
+            WebRequest(request_id="w1", query="q1", why="已查", origin="analyzer"),
+            WebRequest(request_id="w2", query="q2", why="已查", origin="analyzer"),
+            WebRequest(request_id="w3", query="q3", why="待批", origin="analyzer"),
+            WebRequest(
+                request_id="w4",
+                query="q4",
+                why="待批",
+                origin="seat",
+                seat_id=SEAT,
+                pass_index=1,
+            ),
+        ]
+    )
+    for request_id in ("w1", "w2"):
+        round_.decide_web_request(request_id, approve=True)
+        round_.mark_web_request(
+            request_id, WebRequestState.DONE, result_note="已查"
+        )
+    SqliteRoundRepository(setup).save(round_)
+    token = bind_round_lease(setup, ROUND_ID)
+    stale = deepcopy(round_)
+    setup.close()
+
+    base = Harness(
+        replies={},
+        seat_replies={},
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+
+    class StaleFirstRead:
+        """事务外的旧读：两个 decision 都看到 used=2 才进入 claim。"""
+
+        def __init__(self, inner):
+            self._inner = inner
+            self._first = True
+
+        def get(self, round_id, **kwargs):
+            if self._first:
+                self._first = False
+                return deepcopy(stale)
+            return self._inner.get(round_id, **kwargs)
+
+    def make_decider():
+        connection = connect(db_path)
+        rounds = SqliteRoundRepository(connection)
+        evidences = SqliteEvidenceRepository(connection)
+        web = WebResearch(
+            rounds=rounds,
+            round_writer=rounds,
+            evidence=evidences,
+            evidence_writer=evidences,
+            materials=SqliteMaterialStore(connection, ids=ids),
+            tools=base.tools,
+            available_tool_keys=base.available_tool_keys,
+            web_search=base.web_search,
+            index=SqliteWorkspaceIndex(connection),
+            uow=SqliteUnitOfWork(connection),
+            clock=base.clock,
+        )
+        return connection, DecideWebRequest(
+            rounds=StaleFirstRead(rounds),
+            round_writer=rounds,
+            evidence=evidences,
+            evidence_writer=evidences,
+            tools=base.tools,
+            available_tool_keys=base.available_tool_keys,
+            web_research=web,
+            uow=SqliteUnitOfWork(connection),
+            clock=base.clock,
+            events=base.events,
+        )
+
+    first_connection, first_decider = make_decider()
+    second_connection, second_decider = make_decider()
+
+    def run(connection, decider, request_id):
+        scope = LeaseScope()
+        scope.bind(token)
+        set_lease_scope(scope)
+        try:
+            asyncio.run(
+                decider(round_id=ROUND_ID, request_id=request_id, decision="approve")
+            )
+            return "ok"
+        except Exception as error:  # noqa: BLE001 —— 测试只关心分类
+            return type(error).__name__
+        finally:
+            clear_lease_scope()
+            connection.close()
+
+    first, second = await asyncio.gather(
+        asyncio.to_thread(run, first_connection, first_decider, "w3"),
+        asyncio.to_thread(run, second_connection, second_decider, "w4"),
+    )
+
+    assert sorted((first, second)) == ["WebExecutionLimitReached", "ok"]
+    final = SqliteRoundRepository(connect(db_path)).get(ROUND_ID)
+    assert (
+        sum(
+            1
+            for item in final.web_requests
+            if item.state
+            in (
+                WebRequestState.APPROVED,
+                WebRequestState.DONE,
+                WebRequestState.FAILED,
+            )
+        )
+        == 3
+    )

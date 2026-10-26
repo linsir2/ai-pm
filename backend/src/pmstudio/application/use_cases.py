@@ -172,6 +172,8 @@ from pmstudio.application.errors import (
     WebExecutionLimitReached,
     WebMaterialNotAttachable,
     WebRequestNotPending,
+    WebRequestNotRecoverable,
+    WebRequestRecoveryRequired,
 )
 from pmstudio.application.events import (
     DOC_CHANGED,
@@ -252,8 +254,9 @@ from pmstudio.application.web_research import (
     WEB_ORIGIN,
     WEB_SEARCH_KIND,
     WebResearch,
-    tool_limit,
+    claim_web_request,
     web_execution_limit,
+    web_requests_used,
     web_search_tool,
 )
 from pmstudio.domain.authoring.document import Document
@@ -389,7 +392,7 @@ from pmstudio.harness.errors import (
 from pmstudio.harness.events import Event, EventPublisher
 from pmstudio.harness.model.envelope import Envelope
 from pmstudio.harness.tools.recorder import ToolCallRecorder
-from pmstudio.harness.tools.registry import ToolCatalog, ToolDefinition
+from pmstudio.harness.tools.registry import ToolCatalog
 
 
 class _SimpleIdGen:
@@ -1109,31 +1112,14 @@ def _web_requests_for(
     return tuple(kept), tuple(dropped)
 
 
-def _checked_queries(
-    queries: Sequence[str], *, tools: ToolCatalog, keys: frozenset[str]
-) -> tuple[tuple[str, ...], ToolDefinition | None]:
-    """用户勾中的检索词过两道闸门（去重保序 → 上限 → "这里到底有没有这个工具"）。
+def _checked_queries(queries: Sequence[str]) -> tuple[str, ...]:
+    """用户勾中的检索词：只做去重保序。
 
-    返回 `(勾中的检索词, 可用的联网工具)`：一个都不勾就是 `((), None)`——没工具也不算错。
+    有没有工具、名额够不够，一律等 preview 把"这次真正新批了几条"算出来再判——
+    否则一把 DONE/FAILED 的旧 id 也会被误当成"这一轮要联网"。
     """
 
-    chosen = tuple(dict.fromkeys(item.strip() for item in queries if item.strip()))
-    if not chosen:
-        return (), None
-    tool = web_search_tool(tools, keys=keys)
-    if tool is None:
-        raise ShapeError(
-            "这一轮勾了联网检索，但服务端没有配好联网工具（没配密钥，或工具被停用）",
-            tool_ids=[item.tool_id for item in tools.all()],
-        )
-    limit = tool_limit(tool, "max_queries")
-    if len(chosen) > limit:
-        raise ShapeError(
-            f"这一轮勾了 {len(chosen)} 条检索词，最多只允许 {limit} 条",
-            limit=limit,
-            chosen=len(chosen),
-        )
-    return chosen, tool
+    return tuple(dict.fromkeys(item.strip() for item in queries if item.strip()))
 
 
 class SubmitOpening:
@@ -1205,27 +1191,10 @@ class SubmitOpening:
     ) -> None:
         # 校验全部在**联网之前**：请求不对（422）就不该留下半推半就的状态，
         # 更不该先花一次网络调用再报错。
-        chosen, tool = _checked_queries(
-            web_queries, tools=self._tools, keys=self._available_tool_keys
-        )
+        chosen = _checked_queries(web_queries)
         approved_ids = tuple(
             str(item).strip() for item in approved_request_ids if str(item).strip()
         )
-        if approved_ids or allow_web:
-            # 旧字符串路径只在勾了词时才查工具；新载体即使没勾词也要知道有没有工具。
-            tool = web_search_tool(self._tools, keys=self._available_tool_keys)
-        if (approved_ids or allow_web) and tool is None:
-            raise ShapeError(
-                "这一轮开了自动联网或批准了联网申请，但服务端没有配好联网工具"
-                "（没配密钥，或工具被停用）",
-                tool_ids=[item.tool_id for item in self._tools.all()],
-            )
-        if (chosen or approved_ids or allow_web) and self._web_search is None:
-            # 目录说工具可用、组装点却没接上实现：这是装配错误，必须当场响，不能悄悄跳过
-            raise ShapeError(
-                "联网工具声明可用，但组装点没有接上实现（这一轮先别勾联网）",
-                tool_id=WEB_SEARCH_KIND,
-            )
         # 席位必须在注册表里：不然它会一路走到 `catalog.by_id` 才炸成 500。
         known = {seat.seat_id for seat in self._catalog.all()}
         unknown = [seat_id for seat_id in seats if seat_id not in known]
@@ -1251,32 +1220,78 @@ class SubmitOpening:
             for item in preview.web_requests
             if item.state is WebRequestState.APPROVED
         )
-        if approved:
+        # 名额按 **preview 之前的库内状态** 算：`used_before` 是已经占位的
+        # approved/done/failed，`new_approved` 是这次 preview 新批的。
+        used_before = web_requests_used(round_before)
+        existing_approved = sum(
+            1
+            for item in round_before.web_requests
+            if item.state is WebRequestState.APPROVED
+        )
+        before_states = {item.request_id: item.state for item in round_before.web_requests}
+        new_approved = sum(
+            1
+            for item in preview.web_requests
+            if item.state is WebRequestState.APPROVED
+            and before_states.get(item.request_id)
+            not in (
+                WebRequestState.APPROVED,
+                WebRequestState.DONE,
+                WebRequestState.FAILED,
+            )
+        )
+        tool = web_search_tool(self._tools, keys=self._available_tool_keys)
+        limit = web_execution_limit(self._tools, keys=self._available_tool_keys)
+        if used_before > limit and existing_approved > 0:
+            raise WebRequestRecoveryRequired(
+                round_id=round_id,
+                limit=limit,
+                used=used_before,
+                approved=existing_approved,
+            )
+        if used_before >= limit and new_approved > 0:
+            raise ShapeError(
+                f"这一轮最多执行 {limit} 条联网申请，已有 {used_before} 条批准或执行记录"
+                "——先取消新勾选，或先把超额申请逐条恢复",
+                limit=limit,
+                used=used_before,
+                new_approved=new_approved,
+            )
+        if used_before < limit and new_approved > limit - used_before:
+            raise ShapeError(
+                f"这一轮最多执行 {limit} 条联网申请，已用 {used_before} 条，"
+                f"这次新批准了 {new_approved} 条",
+                limit=limit,
+                used=used_before,
+                new_approved=new_approved,
+            )
+        if approved and tool is None:
+            # 只有 done/failed 的旧 id 不算"这一轮要联网"；真有 approved 却没工具
+            # 仍是 422，不能先花掉一次网络调用或留下半推半就的状态。
+            raise ShapeError(
+                "这一轮有已批准的联网申请，但服务端没有配好联网工具"
+                "（没配密钥，或工具被停用）",
+                tool_ids=[item.tool_id for item in self._tools.all()],
+            )
+        if approved and self._web_search is None:
             # 已批准申请可能先于本次 opening 存在（旧 payload 迁移 / decision），
             # 此时 `chosen` / `approved_ids` 都是空的——工具必须在这里补解析。
-            if tool is None:
-                tool = web_search_tool(self._tools, keys=self._available_tool_keys)
-            if tool is None:
-                raise ShapeError(
-                    "这一轮有已批准的联网申请，但服务端没有配好联网工具"
-                    "（没配密钥，或工具被停用）",
-                    tool_ids=[item.tool_id for item in self._tools.all()],
-                )
-            if self._web_search is None:
-                raise ShapeError(
-                    "联网工具声明可用，但组装点没有接上实现（这一轮先别勾联网）",
-                    tool_id=WEB_SEARCH_KIND,
-                )
-            # 每轮执行名额是硬上限；预检不通过就不联网。
-            limit = web_execution_limit(
-                self._tools, keys=self._available_tool_keys
+            raise ShapeError(
+                "联网工具声明可用，但组装点没有接上实现（这一轮先别勾联网）",
+                tool_id=WEB_SEARCH_KIND,
             )
-            if len(approved) > limit:
-                raise ShapeError(
-                    f"这一轮最多执行 {limit} 条联网申请，这次批准了 {len(approved)} 条",
-                    limit=limit,
-                    approved=len(approved),
-                )
+        if allow_web and tool is None:
+            # 开场就打开自动联网：后面席位/整合者会自动批准并执行，工具必须现在可用。
+            raise ShapeError(
+                "这一轮开了自动联网，但服务端没有配好联网工具"
+                "（没配密钥，或工具被停用）",
+                tool_ids=[item.tool_id for item in self._tools.all()],
+            )
+        if allow_web and self._web_search is None:
+            raise ShapeError(
+                "联网工具声明可用，但组装点没有接上实现（这一轮先别勾联网）",
+                tool_id=WEB_SEARCH_KIND,
+            )
         # **先查后写**：工具调用必须在事务外；查完（或查失败）之后，一次事务把
         # 复述卡、申请状态、出处、材料引用一起落下去。网络中途崩溃仍停在复述卡上，
         # 不会留下 approved 让下一步重跑（`P3a` §0.1）。
@@ -1376,6 +1391,7 @@ class DecideWebRequest:
         if decision == "reject":
             with self._uow:
                 target = self._rounds.get(round_id)
+                self._require_pending(target, request_id)
                 target.decide_web_request(request_id, approve=False)
                 self._round_writer.save(target)
             _publish(self._events, self._clock, target)
@@ -1384,16 +1400,7 @@ class DecideWebRequest:
         # 执行名额：`approved/done/failed` 占位，`proposed/rejected` 不占。
         # 网关没接上属于装配错——在 claim 之前抛，不能留下一条占名额的 approved。
         tool = web_search_tool(self._tools, keys=self._available_tool_keys)
-        used = sum(
-            1
-            for item in round_.web_requests
-            if item.state
-            in (
-                WebRequestState.APPROVED,
-                WebRequestState.DONE,
-                WebRequestState.FAILED,
-            )
-        )
+        used = web_requests_used(round_)
         if tool is None:
             raise WebExecutionLimitReached(
                 round_id=round_id,
@@ -1410,14 +1417,16 @@ class DecideWebRequest:
                 tool_available=True,
             )
 
-        # claim：先落 approved 再联网——这样即便网络中途崩掉，名额也已经被占住，
-        # 下一次决策不会把同一条申请再执行一遍（B3 R14）。
-        with self._uow:
-            target = self._rounds.get(round_id)
-            target.decide_web_request(request_id, approve=True)
-            self._round_writer.save(target)
-        approved = next(
-            item for item in target.web_requests if item.request_id == request_id
+        # claim：在**同一个 UoW 里 fresh read 重算 used**。两个 decision 即便直接
+        # 并发（不靠 RoundBusy），后拿到写锁的那一个也会看到前者已提交的 approved，
+        # 在名额上停住——不会把 used 推过 limit。
+        approved = claim_web_request(
+            rounds=self._rounds,
+            round_writer=self._round_writer,
+            uow=self._uow,
+            round_id=round_id,
+            request_id=request_id,
+            limit=limit,
         )
         execution = await self._web_research.execute(
             round_id, (approved,), _decision_pass_index(round_)
@@ -1432,6 +1441,30 @@ class DecideWebRequest:
             self._round_writer.save(target)
         _publish(self._events, self._clock, target)
 
+    @staticmethod
+    def _require_pending(round_: Round, request_id: str) -> None:
+        """claim UoW 内的 fresh read 复核：404 与 409 与 pre-check 同口径。"""
+
+        current = next(
+            (item for item in round_.web_requests if item.request_id == request_id),
+            None,
+        )
+        if current is None:
+            raise UnknownWebRequest(request_id, round_id=round_.round_id)
+        if round_.step in (Step.DONE, Step.FAILED, Step.ABANDONED):
+            raise WebRequestNotPending(
+                "这一轮已经结束，不能再决策联网申请",
+                round_id=str(round_.round_id),
+                step=str(round_.step),
+                request_id=request_id,
+            )
+        if current.state is not WebRequestState.PROPOSED:
+            raise WebRequestNotPending(
+                "这条联网申请已经决策过了",
+                request_id=request_id,
+                state=str(current.state),
+            )
+
 
 def _decision_pass_index(round_: Round) -> int:
     """决策这一趟的趟号（只用于 TOOL 留痕分组）：席位轮看席位趟，草案卡看刚完成的整合。"""
@@ -1441,6 +1474,119 @@ def _decision_pass_index(round_: Round) -> int:
     if round_.step is Step.AWAITING_CONFIRM:
         return max(1, round_.integration_seq)
     return max(1, round_.seat_round_count, round_.integration_seq)
+
+
+#: 恢复里「放弃」写进 `result_note` 的原话：用户看得见，也不冒充失败。
+RECOVERY_ABANDON_NOTE = "超额恢复：用户放弃执行（不计入名额）"
+
+
+class RecoverWebRequest:
+    """逐条恢复超额 `approved`：执行这一次（承认临时超额）或放弃（改判 rejected）。
+
+    只处理 `used > limit` 且当前是 `approved` 的请求；网絡在 UoW 外，写入一个 UoW。
+    走 `RoundRunner`，与其它轮内动作共用同一把 round lease。
+    """
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        evidence: EvidenceReader,
+        evidence_writer: EvidenceWriter,
+        tools: ToolCatalog,
+        available_tool_keys: frozenset[str],
+        web_research: WebResearch,
+        uow: UnitOfWork,
+        clock: Clock,
+        events: EventPublisher,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._evidence = evidence
+        self._evidence_writer = evidence_writer
+        self._tools = tools
+        self._available_tool_keys = available_tool_keys
+        self._web_research = web_research
+        self._uow = uow
+        self._clock = clock
+        self._events = events
+
+    async def __call__(
+        self, *, round_id: RoundId, request_id: str, action: str
+    ) -> None:
+        if action not in ("execute", "abandon"):
+            raise ShapeError(
+                "超额恢复只能执行或放弃", action=action, request_id=request_id
+            )
+        round_ = self._rounds.get(round_id)
+        current = self._require_recoverable(round_, request_id)
+        if action == "abandon":
+            with self._uow:
+                target = self._rounds.get(round_id)
+                self._require_recoverable(target, request_id)
+                target.cancel_approved_web_request(
+                    request_id, note=RECOVERY_ABANDON_NOTE
+                )
+                self._round_writer.save(target)
+            _publish(self._events, self._clock, target)
+            return
+
+        # 执行：网关没接上属于装配错——在联网前抛，不能先花掉一次恢复机会。
+        tool = web_search_tool(self._tools, keys=self._available_tool_keys)
+        if tool is None:
+            raise WebExecutionLimitReached(
+                round_id=round_id,
+                limit=0,
+                used=web_requests_used(round_),
+                tool_available=False,
+            )
+        self._web_research.ensure_ready("执行联网申请")
+        execution = await self._web_research.execute(
+            round_id, (current,), _decision_pass_index(round_)
+        )
+        if execution is None:  # pragma: no cover —— 传进去的是 approved
+            return
+        with self._uow:
+            target = self._rounds.get(round_id)
+            ledger = self._evidence.get(target.project_id)
+            self._web_research.apply(target, ledger, execution)
+            self._evidence_writer.save(ledger)
+            self._round_writer.save(target)
+        _publish(self._events, self._clock, target)
+
+    def _require_recoverable(self, round_: Round, request_id: str) -> WebRequest:
+        current = next(
+            (item for item in round_.web_requests if item.request_id == request_id),
+            None,
+        )
+        if current is None:
+            raise UnknownWebRequest(request_id, round_id=round_.round_id)
+        if round_.step in (Step.DONE, Step.FAILED, Step.ABANDONED):
+            raise WebRequestNotRecoverable(
+                "这一轮已经结束，不能再恢复联网申请",
+                round_id=str(round_.round_id),
+                step=str(round_.step),
+                request_id=request_id,
+            )
+        if current.state is not WebRequestState.APPROVED:
+            raise WebRequestNotRecoverable(
+                "只有已批准的联网申请能逐条恢复",
+                request_id=request_id,
+                state=str(current.state),
+            )
+        if web_requests_used(round_) <= web_execution_limit(
+            self._tools, keys=self._available_tool_keys
+        ):
+            raise WebRequestNotRecoverable(
+                "这一轮没有超额，按正常决策处理即可",
+                request_id=request_id,
+                used=web_requests_used(round_),
+                limit=web_execution_limit(
+                    self._tools, keys=self._available_tool_keys
+                ),
+            )
+        return current
 
 
 class RunSeatRound:

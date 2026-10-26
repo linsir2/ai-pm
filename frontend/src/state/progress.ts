@@ -130,6 +130,19 @@ export function webRequestBadge(round: RoundView | null): string | null {
   return count === 0 ? null : `有 ${count} 条联网申请`;
 }
 
+/**
+ * 超额且仍是 `approved` 的条数：这些不能再自动执行，只能逐条恢复
+ * （执行一次临时超额 / 放弃腾名额）。`limit` 没读到时是 0——不猜。
+ */
+export function overLimitWebRequestCount(
+  round: RoundView | null,
+  limit: number | null,
+): number {
+  if (round === null || limit === null) return 0;
+  if (executedWebRequestCount(round) <= limit) return 0;
+  return (round.web_requests ?? []).filter((item) => item.state === "approved").length;
+}
+
 /** 主张的标签分布（分析者那一格要显示的"3 种标签"）。 */
 export function labelCounts(round: RoundView): [string, number][] {
   const counts = new Map<string, number>();

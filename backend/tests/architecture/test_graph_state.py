@@ -41,6 +41,8 @@ def test_round_command_holds_no_business_state():
         # 联网申请决策（P3a）：哪一条、批还是拒——本次动作的参数，不是聚合字段
         "request_id",
         "decision",
+        # 超额恢复（P3b）：同一条请求、执行还是放弃——也是本次动作的参数
+        "recovery_action",
         # 开场卡上的自动联网开关与逐条批准列表（P3a）：同样是本次动作的参数
         "allow_web",
         "approved_request_ids",
@@ -63,6 +65,7 @@ def test_every_graph_node_and_router_is_async():
         "node_sim_review",
         "node_attach_materials",
         "node_decide_web_request",
+        "node_recover_web_request",
         "route_by_command",
         "route_after_resume",
     ):

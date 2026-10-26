@@ -32,11 +32,17 @@ function draw(over: Partial<Parameters<typeof WebRequestCard>[0]> = {}) {
     limit: 3,
     available: true,
     busy: false,
-    pendingDecision: null as "approve" | "reject" | null,
+    pendingDecision: null as
+      | "approve"
+      | "reject"
+      | "execute"
+      | "abandon"
+      | null,
     historical: false,
     terminal: false,
     networkAccess: false,
     onDecide: vi.fn(),
+    onRecover: vi.fn(),
     ...over,
   };
   render(<WebRequestCard {...props} />);
@@ -170,6 +176,67 @@ describe("WebRequestCard · 决策", () => {
       false,
     );
     expect(screen.getByText(/没配联网工具/)).toBeTruthy();
+  });
+});
+
+describe("WebRequestCard · 超额恢复", () => {
+  it("超额 approved：显示执行与放弃，点击各自递出 action", () => {
+    const props = draw({
+      request: request({ state: "approved" }),
+      used: 4,
+      limit: 3,
+    });
+
+    expect(screen.getByText(/已超联网名额（4\/3）/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "执行（临时超额）" }));
+    expect(props.onRecover).toHaveBeenCalledWith("execute");
+    fireEvent.click(screen.getByRole("button", { name: "放弃（不计名额）" }));
+    expect(props.onRecover).toHaveBeenCalledWith("abandon");
+  });
+
+  it("没有超额时 approved 不显示恢复按钮", () => {
+    draw({ request: request({ state: "approved" }), used: 3, limit: 3 });
+
+    expect(screen.queryByRole("button", { name: "执行（临时超额）" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "放弃（不计名额）" })).toBeNull();
+  });
+
+  it("没配联网工具：执行禁用并说明，放弃仍可点（放弃不需要联网）", () => {
+    draw({
+      request: request({ state: "approved" }),
+      used: 4,
+      limit: 3,
+      available: false,
+    });
+
+    const execute = screen.getByRole("button", {
+      name: "执行（临时超额）",
+    }) as HTMLButtonElement;
+    const abandon = screen.getByRole("button", {
+      name: "放弃（不计名额）",
+    }) as HTMLButtonElement;
+    expect(execute.disabled).toBe(true);
+    expect(abandon.disabled).toBe(false);
+    expect(screen.getByText(/只能放弃/)).toBeTruthy();
+  });
+
+  it("恢复在途：两个按钮都禁用，状态行说清是哪一个动作", () => {
+    draw({
+      request: request({ state: "approved" }),
+      used: 4,
+      limit: 3,
+      pendingDecision: "abandon",
+    });
+
+    expect(
+      (screen.getByRole("button", { name: "处理中…" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", {
+        name: "执行（临时超额）",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain("放弃");
   });
 });
 

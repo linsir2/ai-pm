@@ -74,10 +74,10 @@ export function useWorkspaceData() {
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
-  /** 正在决策的那一条联网申请与被点的动作（只让那颗按钮显示"处理中"）。 */
+  /** 正在决策/恢复的那一条联网申请与被点的动作（只让那颗按钮显示"处理中"）。 */
   const [pendingWebRequest, setPendingWebRequest] = useState<{
     requestId: string;
-    decision: "approve" | "reject";
+    decision: "approve" | "reject" | "execute" | "abandon";
   } | null>(null);
   // 现行结构（`GET /schema`）：一次会话拉一次。拉不到不影响主流程，界面回落旧默认值。
   const [schema, setSchemaState] = useState<SchemaView | null>(null);
@@ -792,6 +792,40 @@ export function useWorkspaceData() {
     [pending, run],
   );
 
+  /**
+   * 超额 approved 的逐条恢复（P3b）：执行一次（临时超额）或放弃（改判 rejected）。
+   *
+   * 与 decision 同一条纪律：错误后主动 refetch 读回真相；切走项目后回包不许倒灌。
+   */
+  const recoverWebRequest = useCallback(
+    (roundId: string, requestId: string, action: "execute" | "abandon") => {
+      if (pending !== null) return;
+      const projectId = selected.current;
+      setPendingWebRequest({ requestId, decision: action });
+      void run("web_request", async () => {
+        try {
+          const fresh = await api.recoverWebRequest(roundId, requestId, action);
+          if (selected.current === projectId) {
+            dispatch({ type: "round", round: fresh, expectRoundId: roundId });
+          }
+        } catch (error) {
+          if (selected.current !== projectId) return;
+          try {
+            dispatch({
+              type: "round",
+              round: await api.getRound(roundId),
+              expectRoundId: roundId,
+            });
+          } catch {
+            // 原始错误已经由 run() 的 banner 显示；这里只是补读真相。
+          }
+          throw error;
+        }
+      }).finally(() => setPendingWebRequest(null));
+    },
+    [pending, run],
+  );
+
   const confirm = useCallback(
     (roundId: string, accepted: string[], acceptedMemory: string[] = []) =>
       run("confirm", async () => {
@@ -1022,6 +1056,7 @@ export function useWorkspaceData() {
     submitAnswers,
     pendingWebRequest,
     decideWebRequest,
+    recoverWebRequest,
     confirm,
     retry,
     dig,

@@ -58,6 +58,7 @@ export function LoopColumn({
   onToggleWebRequest,
   onToggleAllowWeb,
   onDecideWebRequest,
+  onRecoverWebRequest,
   pendingWebRequest,
   onSubmitOpening,
   onSubmitAnswers,
@@ -143,8 +144,13 @@ export function LoopColumn({
   onToggleAllowWeb: (allow: boolean) => void;
   /** 时间线上的联网申请逐条决策（批准即执行）。 */
   onDecideWebRequest: (requestId: string, decision: "approve" | "reject") => void;
-  /** 哪一条申请的哪个决策在途。 */
-  pendingWebRequest: { requestId: string; decision: "approve" | "reject" } | null;
+  /** 超额 approved 的逐条恢复（P3b）：执行一次或放弃。 */
+  onRecoverWebRequest?: (requestId: string, action: "execute" | "abandon") => void;
+  /** 哪一条申请的哪个决策/恢复在途。 */
+  pendingWebRequest: {
+    requestId: string;
+    decision: "approve" | "reject" | "execute" | "abandon";
+  } | null;
   onSubmitOpening: () => void;
   onSubmitAnswers: () => void;
   onSkipAll: () => void;
@@ -393,6 +399,7 @@ export function LoopColumn({
               onOpenQuestionnaire={() => drafts.setCollapsed(false)}
               onOpenDraft={() => drafts.setCollapsed(false)}
               onDecideWebRequest={onDecideWebRequest}
+              onRecoverWebRequest={onRecoverWebRequest}
             />
           )}
 

@@ -149,6 +149,12 @@ class DecisionRequest(BaseModel):
     decision: Literal["approve", "reject"]
 
 
+class RecoveryRequest(BaseModel):
+    """超额 approved 的逐条恢复：执行这一次（临时超额）或放弃。"""
+
+    action: Literal["execute", "abandon"]
+
+
 class AttachMaterialRequest(BaseModel):
     """搜索框「带进本轮」：材料 id + 要带的块（一次最多 3 块，用例层再挡）。"""
 

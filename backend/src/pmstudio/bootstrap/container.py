@@ -66,6 +66,7 @@ from pmstudio.application.use_cases import (
     ListUsers,
     LoginThrottle,
     LogoutUser,
+    RecoverWebRequest,
     RegisterUser,
     RejectUser,
     ReparseMaterial,
@@ -594,6 +595,18 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         clock=clock,
         events=bus,
     )
+    recover_web_request = RecoverWebRequest(
+        rounds=rounds,
+        round_writer=rounds,
+        evidence=evidences,
+        evidence_writer=evidences,
+        tools=tools,
+        available_tool_keys=available_tool_keys,
+        web_research=web_research,
+        uow=uow,
+        clock=clock,
+        events=bus,
+    )
     runner = RoundRunner(
         start_round=start_round,
         submit_opening=submit_opening,
@@ -608,6 +621,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         run_sim_review=run_sim_review,
         attach_materials=attach_materials,
         decide_web_request=decide_web_request,
+        recover_web_request=recover_web_request,
         # 跨进程互斥的唯一真相源；心跳 30s / TTL 90s（`application/lease.py`）。
         leases=leases,
     )
@@ -709,6 +723,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     )
     services = ApiServices(
         runner=runner,
+        recover_web_request=recover_web_request,
         dig_round=dig_round,
         abandon_round=AbandonRound(
             rounds=rounds,

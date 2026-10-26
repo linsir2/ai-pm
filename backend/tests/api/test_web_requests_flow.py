@@ -459,3 +459,136 @@ async def test_an_unwired_gateway_is_refused_before_the_claim():
     assert round_.materials == ()
     assert harness.events.published == []
     assert harness.web_search.calls == []
+
+
+RECOVERY_URL = f"/api/rounds/{ROUND_ID}/web-requests/{{request_id}}/recovery"
+
+
+def _over_limit_requests() -> list[WebRequest]:
+    return [
+        _request("w1", query="a", state=WebRequestState.DONE),
+        _request("w2", query="b", state=WebRequestState.DONE),
+        _request("w3", query="c", state=WebRequestState.DONE),
+        _request("w4", query="d", origin="seat", state=WebRequestState.APPROVED),
+    ]
+
+
+async def test_recovery_abandon_rejects_the_over_limit_approved_with_a_note():
+    harness = Harness(replies={}, seat_replies={})
+    _seed(harness, _over_limit_requests())
+
+    async with async_client(_app(harness)) as client:
+        response = await client.post(
+            RECOVERY_URL.format(request_id="w4"), json={"action": "abandon"}
+        )
+
+    assert response.status_code == 200
+    item = next(
+        entry for entry in response.json()["web_requests"] if entry["request_id"] == "w4"
+    )
+    assert item["state"] == "rejected"
+    assert "超额恢复" in item["result_note"]
+    assert harness.web_search.calls == []
+    assert harness.events.names.count("round.updated") == 1
+
+
+async def test_recovery_execute_allows_one_temporary_overage():
+    harness = Harness(
+        replies={},
+        seat_replies={},
+        web_search=RecordingWebSearch(returns=(make_web_packet(url="https://recover"),)),
+    )
+    _seed(harness, _over_limit_requests())
+
+    async with async_client(_app(harness)) as client:
+        response = await client.post(
+            RECOVERY_URL.format(request_id="w4"), json={"action": "execute"}
+        )
+
+    assert response.status_code == 200
+    item = next(
+        entry for entry in response.json()["web_requests"] if entry["request_id"] == "w4"
+    )
+    assert item["state"] == "done"
+    assert harness.web_search.calls == [("d", 5)]
+    # 执行不减少 used（approved → done 仍占名额），但这一条不再是超额 approved。
+    assert len(harness.rounds.get(ROUND_ID).materials) == 1
+
+
+async def test_recovery_refuses_an_approved_request_without_overage():
+    harness = Harness(replies={}, seat_replies={})
+    _seed(
+        harness,
+        [
+            _request("w1", query="a", state=WebRequestState.DONE),
+            _request("w2", query="b", state=WebRequestState.DONE),
+            _request("w3", query="c", state=WebRequestState.APPROVED),
+        ],
+    )
+
+    async with async_client(_app(harness)) as client:
+        response = await client.post(
+            RECOVERY_URL.format(request_id="w3"), json={"action": "execute"}
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "web_request_not_recoverable"
+    assert harness.web_search.calls == []
+
+
+async def test_recovery_refuses_proposed_and_terminal_requests():
+    harness = Harness(replies={}, seat_replies={})
+    _seed(
+        harness,
+        [
+            _request("w1", query="a", state=WebRequestState.DONE),
+            _request("w2", query="b", state=WebRequestState.DONE),
+            _request("w3", query="c", state=WebRequestState.DONE),
+            _request(
+                "w4",
+                query="d",
+                origin="seat",
+                state=WebRequestState.PROPOSED,
+            ),
+        ],
+    )
+
+    async with async_client(_app(harness)) as client:
+        proposed = await client.post(
+            RECOVERY_URL.format(request_id="w4"), json={"action": "abandon"}
+        )
+
+    assert proposed.status_code == 409
+    assert proposed.json()["code"] == "web_request_not_recoverable"
+
+    terminal_harness = Harness(replies={}, seat_replies={})
+    _seed(terminal_harness, _over_limit_requests())
+    round_ = terminal_harness.rounds.get(ROUND_ID)
+    round_.abandon("不做了")
+    terminal_harness.rounds.save(round_)
+
+    async with async_client(_app(terminal_harness)) as client:
+        terminal = await client.post(
+            RECOVERY_URL.format(request_id="w4"), json={"action": "abandon"}
+        )
+
+    assert terminal.status_code == 409
+    assert terminal.json()["code"] == "web_request_not_recoverable"
+
+
+async def test_recovery_unknown_request_is_404_and_bad_action_is_422():
+    harness = Harness(replies={}, seat_replies={})
+    _seed(harness, _over_limit_requests())
+
+    async with async_client(_app(harness)) as client:
+        unknown = await client.post(
+            RECOVERY_URL.format(request_id="w-nope"), json={"action": "abandon"}
+        )
+        bad_action = await client.post(
+            RECOVERY_URL.format(request_id="w4"), json={"action": "retry"}
+        )
+
+    assert unknown.status_code == 404
+    assert unknown.json()["code"] == "unknown_web_request"
+    assert bad_action.status_code == 422
+    assert harness.web_search.calls == []

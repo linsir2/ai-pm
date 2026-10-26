@@ -19,6 +19,7 @@ from pmstudio.api.schemas import (
     KeepRequest,
     KeepSimInquiryRequest,
     OpeningRequest,
+    RecoveryRequest,
     RunSimReviewRequest,
     SayRequest,
     SkipSeatRequest,
@@ -415,6 +416,31 @@ async def decide_web_request(  # type: ignore[no-untyped-def]
             round_id=round_id,
             request_id=request_id,
             decision=body.decision,
+        )
+    )
+    return as_json(view)
+
+
+@router.post("/rounds/{round_id}/web-requests/{request_id}/recovery")
+async def recover_web_request(  # type: ignore[no-untyped-def]
+    request: Request,
+    round_id: str,
+    request_id: str,
+    body: RecoveryRequest,
+    user: CurrentUser,
+):
+    """逐条恢复超额 approved（P3b）：执行一次（临时超额）或放弃（改判 rejected）。
+
+    只处理 `used > limit` 且当前是 `approved` 的请求；走 RoundRunner，
+    与其它轮内动作共用同一把 round lease。
+    """
+
+    view = await services_of(request).runner.run(
+        RoundCommand(
+            kind="recover_web_request",
+            round_id=round_id,
+            request_id=request_id,
+            recovery_action=body.action,
         )
     )
     return as_json(view)

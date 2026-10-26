@@ -307,6 +307,35 @@ class WebExecutionLimitReached(ApplicationError):
         )
 
 
+class WebRequestRecoveryRequired(ApplicationError):
+    """轮里已有超额 `approved`：开场前必须先逐条执行或放弃——409。"""
+
+    def __init__(
+        self,
+        *,
+        round_id: object,
+        limit: int,
+        used: int,
+        approved: int,
+    ) -> None:
+        super().__init__(
+            f"这一轮已有 {used} 条联网记录，超过名额 {limit}；"
+            f"请先逐条处理 {approved} 条已批准申请（执行或放弃）再开场",
+            code="web_request_recovery_required",
+            round_id=str(round_id),
+            limit=limit,
+            used=used,
+            approved=approved,
+        )
+
+
+class WebRequestNotRecoverable(ApplicationError):
+    """这条申请不在逐条恢复的适用面上（非 approved / 未超额 / 轮终态）——409。"""
+
+    def __init__(self, message: str, **details: object) -> None:
+        super().__init__(message, code="web_request_not_recoverable", **details)
+
+
 class UnknownDiscussion(ApplicationError):
     """查询/操作一条不存在的讨论线程——资源不在，404。"""
 

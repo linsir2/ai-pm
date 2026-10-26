@@ -53,6 +53,7 @@ from pmstudio.application.use_cases import (
     ListProjects,
     ListRounds,
     ListTemplates,
+    RecoverWebRequest,
     ReparseMaterial,
     RollbackVersion,
     SayToThread,
@@ -105,6 +106,7 @@ class BackgroundResource(Protocol):
 @dataclass(frozen=True, slots=True)
 class ApiServices:
     runner: RoundOrchestrator
+    recover_web_request: RecoverWebRequest
     dig_round: DigRound
     abandon_round: AbandonRound
     skip_seat: SkipSeat

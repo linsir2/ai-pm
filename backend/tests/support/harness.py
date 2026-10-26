@@ -720,6 +720,22 @@ class Harness:
             events=self.events,
         )
 
+    def recover_web_request(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import RecoverWebRequest
+
+        return RecoverWebRequest(
+            rounds=self.rounds,
+            round_writer=self.rounds,
+            evidence=self.evidences,
+            evidence_writer=self.evidences,
+            tools=self.tools,
+            available_tool_keys=self.available_tool_keys,
+            web_research=self.web_research(),
+            uow=self.uow,
+            clock=self.clock,
+            events=self.events,
+        )
+
     def run_seat_round(self, *, preparer=None):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import RunSeatRound
 
@@ -1051,6 +1067,7 @@ class Harness:
                 run_sim_review=self.run_sim_review(),
                 attach_materials=self.attach_materials(),
                 decide_web_request=self.decide_web_request(),
+                recover_web_request=self.recover_web_request(),
                 get_round=GetRound(
                     rounds=self.rounds,
                     evidence=self.evidences,
@@ -1091,6 +1108,7 @@ class Harness:
 
         return ApiServices(
             runner=self.runner(),
+            recover_web_request=self.recover_web_request(),
             dig_round=self.dig_round(),
             abandon_round=self.abandon_round(),
             skip_seat=self.skip_seat(),

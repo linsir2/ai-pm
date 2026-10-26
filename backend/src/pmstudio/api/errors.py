@@ -40,6 +40,9 @@ CODE_STATUS = {
     "unknown_web_request": 404,
     "web_request_not_pending": 409,
     "web_execution_limit_reached": 409,
+    # 超额已批准：先逐条恢复（执行 / 放弃）再继续；恢复动作本身不适用时也是 409
+    "web_request_recovery_required": 409,
+    "web_request_not_recoverable": 409,
     # 探索（M8）：找不到 / 同一项目已经有一趟在跑 / 用户指的条目不存在
     "unknown_exploration": 404,
     "unknown_entry": 404,

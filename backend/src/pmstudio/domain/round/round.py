@@ -843,6 +843,29 @@ class Round:
         updated[position] = replace(current, state=state, result_note=result_note)
         self._web_requests = tuple(updated)
 
+    def cancel_approved_web_request(self, request_id: str, *, note: str) -> None:
+        """逐条恢复的「放弃」：approved → rejected，并写清为什么没执行。
+
+        `rejected` 不占执行名额（与用户一开始就拒绝同语义）；它不是失败，
+        所以不走 `mark_web_request` 的 done/failed 通道。
+        """
+
+        if not note.strip():
+            raise ShapeError("放弃联网申请必须写清原因")
+        position = self._web_request_position(request_id)
+        current = self._web_requests[position]
+        if current.state is not WebRequestState.APPROVED:
+            raise ShapeError(
+                "只有已批准的联网申请能放弃执行",
+                request_id=request_id,
+                state=current.state,
+            )
+        updated = list(self._web_requests)
+        updated[position] = replace(
+            current, state=WebRequestState.REJECTED, result_note=note
+        )
+        self._web_requests = tuple(updated)
+
     def _web_request_position(self, request_id: str) -> int:
         for position, item in enumerate(self._web_requests):
             if item.request_id == request_id:

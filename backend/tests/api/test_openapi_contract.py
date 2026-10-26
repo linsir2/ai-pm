@@ -44,6 +44,8 @@ EXPECTED_PATHS = {
     "/api/rounds/{round_id}/opening",
     # P3a：逐条批准/拒绝联网申请（批准即执行）
     "/api/rounds/{round_id}/web-requests/{request_id}/decision",
+    # P3b：超额 approved 的逐条恢复（执行一次 / 放弃）
+    "/api/rounds/{round_id}/web-requests/{request_id}/recovery",
     "/api/rounds/{round_id}/materials",
     "/api/rounds/{round_id}/answers",
     "/api/rounds/{round_id}/confirm",

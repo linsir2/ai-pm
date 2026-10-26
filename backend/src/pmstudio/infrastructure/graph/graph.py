@@ -35,6 +35,7 @@ from pmstudio.application.use_cases import (
     DigRound,
     GetRound,
     IntegrateRound,
+    RecoverWebRequest,
     RetryRound,
     RunSeatRound,
     RunSimInquiry,
@@ -92,6 +93,8 @@ COMMAND_ROUTES: dict[str, str] = {
     "attach_materials": "attach_materials",
     # 逐条批准/拒绝联网申请（P3a）：批准即联网，轮内动作，不碰 step
     "decide_web_request": "decide_web_request",
+    # 超额 approved 的逐条恢复（P3b）：执行一次或放弃，轮内动作，不碰 step
+    "recover_web_request": "recover_web_request",
 }
 
 
@@ -112,6 +115,7 @@ class RoundRunner:
         run_sim_review: RunSimReview,
         attach_materials: AttachMaterials,
         decide_web_request: DecideWebRequest,
+        recover_web_request: RecoverWebRequest,
         leases: LeaseStore | None = None,
         lease_ttl_seconds: float = LEASE_TTL_SECONDS,
         lease_heartbeat_seconds: float = LEASE_HEARTBEAT_SECONDS,
@@ -128,6 +132,7 @@ class RoundRunner:
         self._run_sim_review = run_sim_review
         self._attach_materials = attach_materials
         self._decide_web_request = decide_web_request
+        self._recover_web_request = recover_web_request
         self._get_round = get_round
         self._leases = leases
         self._lease_ttl_seconds = lease_ttl_seconds
@@ -351,6 +356,16 @@ class RoundRunner:
         )
         return {"view": await self._get_round(round_id=round_id)}
 
+    async def node_recover_web_request(self, state: RoundState) -> dict[str, Any]:
+        command = state["command"]
+        round_id = RoundId(_round_id(state))
+        await self._recover_web_request(
+            round_id=round_id,
+            request_id=command.request_id,
+            action=command.recovery_action,
+        )
+        return {"view": await self._get_round(round_id=round_id)}
+
     async def node_attach_materials(self, state: RoundState) -> dict[str, Any]:
         command = state["command"]
         round_id = RoundId(_round_id(state))
@@ -448,6 +463,7 @@ def build_graph(runner: RoundRunner) -> Any:
     graph.add_node("sim_review", runner.node_sim_review)
     graph.add_node("attach_materials", runner.node_attach_materials)
     graph.add_node("decide_web_request", runner.node_decide_web_request)
+    graph.add_node("recover_web_request", runner.node_recover_web_request)
 
     graph.set_conditional_entry_point(runner.route_by_command, COMMAND_ROUTES)
     graph.add_edge("start", "analyze")
@@ -466,4 +482,6 @@ def build_graph(runner: RoundRunner) -> Any:
     graph.add_edge("attach_materials", END)
     # 决策是轮内动作：做完直接结束，界面读回最新投影（run() 的 view 回落）
     graph.add_edge("decide_web_request", END)
+    # 逐条恢复同理：不碰 step，做完直接结束
+    graph.add_edge("recover_web_request", END)
     return graph.compile()

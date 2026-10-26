@@ -607,6 +607,52 @@ describe("webRequestAction（能批不能批只在纯函数里判）", () => {
       expect(webRequestAction(request({ state }), ready).visible).toBe(false);
     },
   );
+
+  it("超额 approved：只出逐条恢复，执行与放弃都可点", () => {
+    const action = webRequestAction(request({ state: "approved" }), {
+      ...ready,
+      used: 4,
+    });
+    expect(action.recovery.visible).toBe(true);
+    expect(action.recovery.execute).toEqual({ enabled: true, reason: null });
+    expect(action.recovery.abandon).toEqual({ enabled: true, reason: null });
+  });
+
+  it("approved 但没超额：不出恢复（它还能被自动执行）", () => {
+    const action = webRequestAction(request({ state: "approved" }), {
+      ...ready,
+      used: 3,
+    });
+    expect(action.recovery.visible).toBe(false);
+  });
+
+  it("没配联网工具：恢复的执行禁用、放弃仍可点", () => {
+    const action = webRequestAction(request({ state: "approved" }), {
+      ...ready,
+      used: 4,
+      available: false,
+    });
+    expect(action.recovery.execute.enabled).toBe(false);
+    expect(action.recovery.execute.reason).toContain("只能放弃");
+    expect(action.recovery.abandon.enabled).toBe(true);
+  });
+
+  it.each([
+    ["busy" as const, "还有动作在跑"],
+    ["historical" as const, "历史轮次只读"],
+    ["terminal" as const, "已经结束"],
+    ["pending" as const, "正在处理"],
+  ])("%s：恢复两个动作都禁用并说明", (flag, text) => {
+    const action = webRequestAction(request({ state: "approved" }), {
+      ...ready,
+      used: 4,
+      [flag]: true,
+    });
+    expect(action.recovery.visible).toBe(true);
+    expect(action.recovery.execute.enabled).toBe(false);
+    expect(action.recovery.abandon.enabled).toBe(false);
+    expect(action.recovery.execute.reason).toContain(text);
+  });
 });
 
 describe("联网申请的展示词", () => {

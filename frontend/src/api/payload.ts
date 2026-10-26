@@ -321,27 +321,77 @@ export interface WebRequestActionOptions {
   terminal: boolean;
 }
 
+export interface WebRequestRecoveryView {
+  /** 只有"已批准 + 已超额"才需要逐条恢复。 */
+  visible: boolean;
+  execute: { enabled: boolean; reason: string | null };
+  abandon: { enabled: boolean; reason: string | null };
+}
+
 export interface WebRequestActionView {
   /** 非 proposed 不显示决策按钮（状态与结果照常显示）。 */
   visible: boolean;
   approve: { enabled: boolean; reason: string | null };
   reject: { enabled: boolean; reason: string | null };
+  /** 超额 approved 的逐条恢复（P3b）：执行一次或放弃。 */
+  recovery: WebRequestRecoveryView;
 }
 
+const NO_RECOVERY: WebRequestRecoveryView = {
+  visible: false,
+  execute: { enabled: false, reason: null },
+  abandon: { enabled: false, reason: null },
+};
+
 /**
- * 一条申请能不能批 / 能不能拒。组件只照这个画，不再自己判。
+ * 一条申请能不能批 / 能不能拒 / 能不能逐条恢复。组件只照这个画。
  *
  * 拒绝不占执行名额，所以名额满只挡批准；轮忙 / 只读 / 终态两边都挡。
+ * `used > limit` 时已批准的只能恢复：执行允许一次临时超额，放弃不占名额。
  */
 export function webRequestAction(
   request: Pick<WebRequestView, "state">,
   options: WebRequestActionOptions,
 ): WebRequestActionView {
+  const overLimit = options.limit !== null && options.used > options.limit;
   if (request.state !== "proposed") {
+    if (request.state !== "approved" || !overLimit) {
+      return {
+        visible: false,
+        approve: { enabled: false, reason: null },
+        reject: { enabled: false, reason: null },
+        recovery: NO_RECOVERY,
+      };
+    }
+    const blocked = (reason: string): WebRequestRecoveryView => ({
+      visible: true,
+      execute: { enabled: false, reason },
+      abandon: { enabled: false, reason },
+    });
+    let recovery: WebRequestRecoveryView;
+    if (options.historical) {
+      recovery = blocked("历史轮次只读，回到最新一轮再恢复");
+    } else if (options.pending) {
+      recovery = blocked("这一条正在处理中…");
+    } else if (options.busy) {
+      recovery = blocked("这一轮还有动作在跑，等它完成");
+    } else if (options.terminal) {
+      recovery = blocked("这一轮已经结束，不能再恢复");
+    } else {
+      const executeReason = options.available
+        ? null
+        : "服务端没配联网工具（缺密钥），这条只能放弃";
+      recovery = {
+        visible: true,
+        execute: { enabled: executeReason === null, reason: executeReason },
+        abandon: { enabled: true, reason: null },
+      };
+    }
     return {
       visible: false,
       approve: { enabled: false, reason: null },
       reject: { enabled: false, reason: null },
+      recovery,
     };
   }
 
@@ -349,6 +399,7 @@ export function webRequestAction(
     visible: true,
     approve: { enabled: false, reason },
     reject: { enabled: false, reason },
+    recovery: NO_RECOVERY,
   });
 
   if (options.historical) return blocked("历史轮次只读，回到最新一轮再决定");
@@ -369,6 +420,7 @@ export function webRequestAction(
     visible: true,
     approve: { enabled: approveReason === null, reason: approveReason },
     reject: { enabled: true, reason: null },
+    recovery: NO_RECOVERY,
   };
 }
 

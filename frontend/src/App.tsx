@@ -631,6 +631,11 @@ function Workspace() {
                 data.decideWebRequest(round.round_id, requestId, decision);
               }
             }}
+            onRecoverWebRequest={(requestId, action) => {
+              if (round !== null) {
+                void data.recoverWebRequest(round.round_id, requestId, action);
+              }
+            }}
             pendingWebRequest={data.pendingWebRequest}
             onSubmitOpening={() =>
               round !== null &&

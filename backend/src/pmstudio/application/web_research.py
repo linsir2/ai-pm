@@ -29,6 +29,11 @@ from pmstudio.application.dto import (
     MaterialPacket,
     ParsedMaterial,
 )
+from pmstudio.application.errors import (
+    UnknownWebRequest,
+    WebExecutionLimitReached,
+    WebRequestNotPending,
+)
 from pmstudio.application.material_refs import external_ref as _external_ref
 from pmstudio.application.material_refs import material_kind as _material_kind
 from pmstudio.application.ports import (
@@ -54,7 +59,12 @@ from pmstudio.domain.round.round import (
     MaterialRef,
     Round,
 )
-from pmstudio.domain.round.web import WebRequest, WebRequestState
+from pmstudio.domain.round.step import Step
+from pmstudio.domain.round.web import (
+    WebRequest,
+    WebRequestState,
+    used_web_request_count,
+)
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import EvidenceId, ProjectId, RoundId
 from pmstudio.harness.errors import ToolCallFailed
@@ -69,6 +79,29 @@ WEB_ORIGIN = "web_search"
 
 #: 每轮最多执行几条联网申请（`approved/done/failed` 计数；`proposed/rejected` 不占）。
 MAX_WEB_EXECUTIONS = 3
+
+def web_requests_used(round_: Round) -> int:
+    """这一轮已占用的联网执行名额（`approved + done + failed`）。"""
+
+    return used_web_request_count(round_.web_requests)
+
+
+def approved_within_limit(round_: Round, limit: int) -> tuple[WebRequest, ...]:
+    """超额时还能执行的 `approved`：先让 done/failed 占位，剩下的才轮到 approved。
+
+    顺序只认申请挂载顺序（没有单独的批准时间戳）；超出部分留给逐条恢复。
+    """
+
+    finished = sum(
+        1
+        for item in round_.web_requests
+        if item.state in (WebRequestState.DONE, WebRequestState.FAILED)
+    )
+    slots = max(0, limit - finished)
+    approved = tuple(
+        item for item in round_.web_requests if item.state is WebRequestState.APPROVED
+    )
+    return approved[:slots]
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +168,58 @@ def web_execution_limit(tools: ToolCatalog, *, keys: frozenset[str]) -> int:
     if tool is None:
         return 0
     return min(tool_limit(tool, "max_queries"), MAX_WEB_EXECUTIONS)
+
+
+def claim_web_request(
+    *,
+    rounds: RoundReader,
+    round_writer: RoundWriter,
+    uow: UnitOfWork,
+    round_id: RoundId,
+    request_id: str,
+    limit: int,
+) -> WebRequest:
+    """在**一个 UoW 内**把 `proposed → approved`：这就是 claim（P3b）。
+
+    名额必须在这里 fresh read 重算：另一个决策 / 开场可能刚把 used 推到上限，
+    事务外读到的旧值不能用来放行。`used >= limit` 409，且**不留 approved**；
+    `approved/done/failed` 都占名额，`proposed/rejected` 不占。
+    """
+
+    with uow:
+        target = rounds.get(round_id)
+        current = next(
+            (item for item in target.web_requests if item.request_id == request_id),
+            None,
+        )
+        if current is None:
+            raise UnknownWebRequest(request_id, round_id=round_id)
+        if target.step in (Step.DONE, Step.FAILED, Step.ABANDONED):
+            raise WebRequestNotPending(
+                "这一轮已经结束，不能再决策联网申请",
+                round_id=str(round_id),
+                step=str(target.step),
+                request_id=request_id,
+            )
+        if current.state is not WebRequestState.PROPOSED:
+            raise WebRequestNotPending(
+                "这条联网申请已经决策过了",
+                request_id=request_id,
+                state=str(current.state),
+            )
+        used = used_web_request_count(target.web_requests)
+        if used >= limit:
+            raise WebExecutionLimitReached(
+                round_id=round_id,
+                limit=limit,
+                used=used,
+                tool_available=True,
+            )
+        target.decide_web_request(request_id, approve=True)
+        round_writer.save(target)
+        return next(
+            item for item in target.web_requests if item.request_id == request_id
+        )
 
 
 async def search_one(
@@ -440,13 +525,18 @@ class WebResearch:
     async def execute_approved(
         self, round_id: RoundId, pass_index: int = 1
     ) -> WebExecution | None:
-        """执行当前已批准的申请；`allow_web` 时先自动批准 seat/integrator。
+        """执行当前已批准的申请；`allow_web` 且有名额时先自动批准 seat/integrator。
 
-        `approved` 就是 claim（单 worker 口径）：本方法不重复批准已有的申请，
-        只把 `proposed` 的 seat / integrator 按固定顺序补到名额满。
+        `approved` 就是 claim（P3b：同一 round 只有一个 lease 持有者）：
+        - `used < limit`：自动批准 seat/integrator 到名额满，再执行 approved；
+        - `used == limit`：不自动批准，仍执行 already approved（它们已计入 used）；
+        - `used > limit`：不自动批准、不抛 422，只执行仍在名额内的 approved；
+          超额的那几条留给逐条恢复（execute / abandon）。没有可执行的就零 web 继续。
         """
 
         round_ = self._rounds.get(round_id)
+        limit = web_execution_limit(self._tools, keys=self._available_tool_keys)
+        used = web_requests_used(round_)
         approved = tuple(
             item for item in round_.web_requests if item.state is WebRequestState.APPROVED
         )
@@ -458,38 +548,20 @@ class WebResearch:
         )
         if not approved and not (round_.allow_web and auto_candidates):
             return None
-        limit = self.ensure_ready("执行联网申请")
-        used = sum(
-            1
-            for item in round_.web_requests
-            if item.state in (
-                WebRequestState.APPROVED,
-                WebRequestState.DONE,
-                WebRequestState.FAILED,
-            )
-        )
         if used > limit:
-            raise ShapeError(
-                f"这一轮最多执行 {limit} 条联网申请，已有 {used} 条批准或执行记录",
-                limit=limit,
-                used=used,
-            )
+            approved = approved_within_limit(round_, limit)
+            if not approved:
+                return None
+            # 超额恢复态下，装配错误不能把后续每个模型步都打成 422；
+            # 无网关就零 web 继续，把执行留给逐条恢复。
+            if self._web_search is None:
+                return None
+        else:
+            self.ensure_ready("执行联网申请")
         if round_.allow_web and auto_candidates and used < limit:
             with self._uow:
                 target = self._rounds.get(round_id)
-                slots = max(
-                    0,
-                    limit
-                    - sum(
-                        1
-                        for item in target.web_requests
-                        if item.state in (
-                            WebRequestState.APPROVED,
-                            WebRequestState.DONE,
-                            WebRequestState.FAILED,
-                        )
-                    ),
-                )
+                slots = max(0, limit - web_requests_used(target))
                 for item in target.web_requests:
                     if slots <= 0:
                         break
