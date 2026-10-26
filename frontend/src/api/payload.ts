@@ -14,6 +14,8 @@ import type {
   RoundMaterialView,
   RoundView,
   SearchHitView,
+  WebQueryView,
+  WebRequestView,
 } from "./types";
 import { featureFields } from "../state/schema";
 
@@ -225,9 +227,130 @@ export function buildOpeningBody(
   seats: string[],
   edits: Record<string, ClaimEdit>,
   webQueries: string[] = [],
+  approvedRequestIds: string[] = [],
+  allowWeb = false,
 ) {
-  // 检索词默认空 = 不联网：这是"没勾就一次网络调用都没有"这条口径的起点
-  return { seats, claim_edits: buildClaimEdits(round, edits), web_queries: [...webQueries] };
+  // 检索词默认空 = 不联网：这是"没勾就一次网络调用都没有"这条口径的起点。
+  // 旧 `web_queries` 与新 `approved_request_ids` 同时带——后端取并集，旧轮次照旧能用。
+  return {
+    seats,
+    claim_edits: buildClaimEdits(round, edits),
+    web_queries: [...webQueries],
+    approved_request_ids: [...approvedRequestIds],
+    allow_web: allowWeb,
+  };
+}
+
+/** 复述卡上的 analyzer 申请（新载体）。 */
+export function analyzerWebRequests(round: RoundView): WebRequestView[] {
+  return (round.web_requests ?? []).filter((item) => item.origin === "analyzer");
+}
+
+/**
+ * 复述卡渲染哪一套：有 analyzer 结构化申请就**只**用新卡，否则回退旧 `web_queries`。
+ * 两套同时有也不重复渲染（迁移期后端两把都会投影）。
+ */
+export function openingWebRequests(round: RoundView): {
+  requests: WebRequestView[];
+  legacy: WebQueryView[];
+} {
+  const requests = analyzerWebRequests(round);
+  return {
+    requests,
+    legacy: requests.length > 0 ? [] : (round.web_queries ?? []),
+  };
+}
+
+const WEB_ORIGIN_TEXT: Record<string, string> = {
+  analyzer: "分析席位",
+  seat: "席位",
+  integrator: "整合者",
+};
+
+/** 申请是谁提的（认不出的来源照实显示原值，不猜）。 */
+export function webOriginText(origin: string): string {
+  return WEB_ORIGIN_TEXT[origin] ?? origin;
+}
+
+const WEB_REQUEST_STATE_TEXT: Record<string, string> = {
+  proposed: "待批准",
+  approved: "已批准，等待执行",
+  done: "已查完",
+  failed: "查失败",
+  rejected: "已拒绝",
+};
+
+/** 申请走到哪一步（认不出的状态照实显示原值）。 */
+export function webRequestStateText(state: string): string {
+  return WEB_REQUEST_STATE_TEXT[state] ?? state;
+}
+
+export interface WebRequestActionOptions {
+  /** 本轮已占用的执行名额（approved + done + failed）。 */
+  used: number;
+  /** `/schema.limits.max_web_executions`；null = 还没读到，不硬编码。 */
+  limit: number | null;
+  /** 服务端现在有没有可用的联网工具（没配密钥就是 false）。 */
+  available: boolean;
+  /** 轮内还有别的动作在跑。 */
+  busy: boolean;
+  /** 这一条自己的决策请求在途。 */
+  pending: boolean;
+  /** 正在看历史轮（只读）。 */
+  historical: boolean;
+  /** 轮已终态（done / failed / abandoned）。 */
+  terminal: boolean;
+}
+
+export interface WebRequestActionView {
+  /** 非 proposed 不显示决策按钮（状态与结果照常显示）。 */
+  visible: boolean;
+  approve: { enabled: boolean; reason: string | null };
+  reject: { enabled: boolean; reason: string | null };
+}
+
+/**
+ * 一条申请能不能批 / 能不能拒。组件只照这个画，不再自己判。
+ *
+ * 拒绝不占执行名额，所以名额满只挡批准；轮忙 / 只读 / 终态两边都挡。
+ */
+export function webRequestAction(
+  request: Pick<WebRequestView, "state">,
+  options: WebRequestActionOptions,
+): WebRequestActionView {
+  if (request.state !== "proposed") {
+    return {
+      visible: false,
+      approve: { enabled: false, reason: null },
+      reject: { enabled: false, reason: null },
+    };
+  }
+
+  const blocked = (reason: string): WebRequestActionView => ({
+    visible: true,
+    approve: { enabled: false, reason },
+    reject: { enabled: false, reason },
+  });
+
+  if (options.historical) return blocked("历史轮次只读，回到最新一轮再决定");
+  if (options.pending) return blocked("这一条正在处理中…");
+  if (options.busy) return blocked("这一轮还有动作在跑，等它完成");
+  if (options.terminal) return blocked("这一轮已经结束，不能再决策");
+
+  let approveReason: string | null = null;
+  if (!options.available) {
+    approveReason = "服务端没配联网工具（缺密钥），批准也查不了";
+  } else if (options.limit === null) {
+    approveReason = "还没读到本轮联网名额上限（刷新一下）";
+  } else if (options.used >= options.limit) {
+    approveReason = `本轮联网名额已用完（${options.used}/${options.limit}）`;
+  }
+
+  return {
+    visible: true,
+    approve: { enabled: approveReason === null, reason: approveReason },
+    reject: { enabled: true, reason: null },
+  };
 }
 
 /** 底部那一块该是什么：输入框 / 复述卡 / 抽屉 / 等数据 / 结束。 */

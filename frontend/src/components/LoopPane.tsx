@@ -9,7 +9,12 @@ import type { LimitsView, RoundView } from "../api/types";
 import { dropsFor, toolDrops, unplacedDrops } from "../document/dropped";
 import { canSkipSeat } from "../document/status";
 import { claimLabelText, compactTarget } from "../labels";
-import { labelCounts, rewritesOf } from "../state/progress";
+import {
+  executedWebRequestCount,
+  labelCounts,
+  rewritesOf,
+  webRequestBadge,
+} from "../state/progress";
 import {
   retrievalForIntegration,
   retrievalForPacket,
@@ -22,6 +27,7 @@ import { RoundMaterials } from "./RoundMaterials";
 import { RoundRetrieval } from "./RoundRetrieval";
 import { RoundStatus } from "./RoundStatus";
 import { SeatPacketCard } from "./SeatPacketCard";
+import { WebRequestCard } from "./WebRequestCard";
 
 export function LoopPane({
   round,
@@ -30,11 +36,14 @@ export function LoopPane({
   ordinal = null,
   elapsed = null,
   historyNav,
+  historical = false,
+  pendingWebRequestId = null,
   onRetry,
   onAbandon,
   onSkipSeat,
   onOpenQuestionnaire,
   onOpenDraft,
+  onDecideWebRequest,
 }: {
   round: RoundView;
   pending: string | null;
@@ -46,12 +55,18 @@ export function LoopPane({
   elapsed?: string | null;
   /** 头部右端的跨轮入口（"这个项目走过 N 轮"）；不传就不出。 */
   historyNav?: ReactNode;
+  /** 正在看历史轮（只读）：联网申请只能看，不能批。 */
+  historical?: boolean;
+  /** 哪一条申请的决策请求在途（按钮显示处理中）。 */
+  pendingWebRequestId?: string | null;
   onRetry: () => void;
   onAbandon: () => void;
   /** 跳过一个席位（LoopColumn 从 App 接过来；卡片只负责点，判能不能点在下面）。 */
   onSkipSeat: (seatId: string) => void;
   onOpenQuestionnaire: () => void;
   onOpenDraft: () => void;
+  /** 逐条决策联网申请（P3a）：批准即执行。 */
+  onDecideWebRequest?: (requestId: string, decision: "approve" | "reject") => void;
 }) {
   const maxSeatRounds = limits?.max_seat_rounds ?? limitsOf().max_seat_rounds;
   const running = pending !== null;
@@ -73,6 +88,11 @@ export function LoopPane({
     (round.waiting_on === "draft_card" && round.draft !== null);
   const seedRetrieval = retrievalForStage(round, "seed", 0);
   const integrateRetrieval = retrievalForIntegration(round);
+  const webRequests = round.web_requests ?? [];
+  const webBadge = webRequestBadge(round);
+  const webUsed = executedWebRequestCount(round);
+  const webLimit = limits?.max_web_executions ?? null;
+  const terminal = ["done", "failed", "abandoned"].includes(round.step);
 
   return (
     <div className="loop__round">
@@ -102,6 +122,32 @@ export function LoopPane({
 
         {/* 这一轮每一次外部调用（模型 + 工具）的时间序——只读，历史轮也显示。 */}
         <CallTrace roundId={round.round_id} />
+
+        {webRequests.length > 0 && (
+          <section className="web-requests" aria-label="联网申请">
+            <div className="web-requests__head">
+              <h3 className="web-requests__title">联网申请</h3>
+              {webBadge !== null && <span className="tag">{webBadge}</span>}
+            </div>
+            {webRequests.map((request) => (
+              <WebRequestCard
+                key={request.request_id}
+                request={request}
+                used={webUsed}
+                limit={webLimit}
+                available={round.web_search_available}
+                busy={running}
+                pending={pendingWebRequestId === request.request_id}
+                historical={historical}
+                terminal={terminal}
+                networkAccess={round.web_search_network_access}
+                onDecide={(decision) => {
+                  onDecideWebRequest?.(request.request_id, decision);
+                }}
+              />
+            ))}
+          </section>
+        )}
 
         <ol className="timeline">
           <Node actor="你" title="本轮输入" meta="本轮">

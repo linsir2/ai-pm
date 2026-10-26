@@ -53,6 +53,12 @@ export function LoopColumn({
   badgeCount = 0,
   onExpand,
   onCollapse,
+  approvedRequestIds,
+  allowWeb,
+  onToggleWebRequest,
+  onToggleAllowWeb,
+  onDecideWebRequest,
+  pendingWebRequestId,
   onSubmitOpening,
   onSubmitAnswers,
   onSkipAll,
@@ -129,6 +135,16 @@ export function LoopColumn({
   badgeCount?: number;
   onExpand?: () => void;
   onCollapse?: () => void;
+  /** 复述卡上勾中的 analyzer 申请 id（P3a）。 */
+  approvedRequestIds: string[];
+  /** 后续席位 / 整合者申请是否自动批准（默认关）。 */
+  allowWeb: boolean;
+  onToggleWebRequest: (requestId: string) => void;
+  onToggleAllowWeb: (allow: boolean) => void;
+  /** 时间线上的联网申请逐条决策（批准即执行）。 */
+  onDecideWebRequest: (requestId: string, decision: "approve" | "reject") => void;
+  /** 哪一条申请的决策在途。 */
+  pendingWebRequestId: string | null;
   onSubmitOpening: () => void;
   onSubmitAnswers: () => void;
   onSkipAll: () => void;
@@ -340,11 +356,15 @@ export function LoopColumn({
               edits={drafts.edits}
               seats={drafts.seats}
               webQueries={drafts.webQueries}
+              approvedRequestIds={approvedRequestIds}
+              allowWeb={allowWeb}
               pending={pending === "opening"}
               historyNav={historyNav}
               onChangeClaim={drafts.changeClaim}
               onToggleSeat={drafts.toggleSeat}
               onToggleWebQuery={drafts.toggleWebQuery}
+              onToggleWebRequest={onToggleWebRequest}
+              onToggleAllowWeb={onToggleAllowWeb}
               onSubmit={onSubmitOpening}
             />
           ) : round === null ? (
@@ -364,11 +384,14 @@ export function LoopColumn({
               ordinal={roundOrdinal(rounds, round.round_id)}
               elapsed={roundElapsed(rounds, round.round_id, Date.now())}
               historyNav={historyNav}
+              historical={history !== null || mode === null}
+              pendingWebRequestId={pendingWebRequestId}
               onRetry={onRetry}
               onAbandon={onAbandon}
               onSkipSeat={onSkipSeat}
               onOpenQuestionnaire={() => drafts.setCollapsed(false)}
               onOpenDraft={() => drafts.setCollapsed(false)}
+              onDecideWebRequest={onDecideWebRequest}
             />
           )}
 

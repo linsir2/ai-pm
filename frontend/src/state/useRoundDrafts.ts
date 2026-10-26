@@ -15,8 +15,12 @@ import type { RoundView } from "../api/types";
 export interface RoundDrafts {
   answers: Record<string, AnswerDraft>;
   seats: string[];
-  /** 复述卡上勾中的联网检索词：**默认不勾**（联网是花钱的事，要显式授权）。 */
+  /** 复述卡上勾中的联网检索词（旧载体）：**默认不勾**（联网是花钱的事，要显式授权）。 */
   webQueries: string[];
+  /** 复述卡上勾中的 analyzer 申请 id（新载体）：同样默认一条都不勾。 */
+  approvedRequestIds: string[];
+  /** 后续席位 / 整合者申请是否自动批准：默认关。 */
+  allowWeb: boolean;
   edits: Record<string, ClaimEdit>;
   accepted: string[];
   /** 草案卡上勾中的**记忆提议**（M6）：**默认一条都不勾**——记忆写错会污染以后每一轮。 */
@@ -26,6 +30,8 @@ export interface RoundDrafts {
   changeAnswer: (questionId: string, draft: AnswerDraft) => void;
   toggleSeat: (seatId: string) => void;
   toggleWebQuery: (query: string) => void;
+  toggleWebRequest: (requestId: string) => void;
+  setAllowWeb: (allow: boolean) => void;
   changeClaim: (claimId: string, edit: ClaimEdit) => void;
   toggleAccepted: (proposalId: string) => void;
   setAccepted: (proposalIds: string[]) => void;
@@ -36,6 +42,8 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
   const [answers, setAnswers] = useState<Record<string, AnswerDraft>>({});
   const [seats, setSeats] = useState<string[]>([]);
   const [webQueries, setWebQueries] = useState<string[]>([]);
+  const [approvedRequestIds, setApprovedRequestIds] = useState<string[]>([]);
+  const [allowWeb, setAllowWebState] = useState(false);
   const [edits, setEdits] = useState<Record<string, ClaimEdit>>({});
   const [accepted, setAccepted] = useState<string[]>([]);
   const [memoryAccepted, setMemoryAccepted] = useState<string[]>([]);
@@ -54,6 +62,9 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     setSeats(round === null ? [] : defaultSeats(round));
     // 默认一条都不勾：勾了才会真联网（后端也拿这个当唯一判据）
     setWebQueries([]);
+    setApprovedRequestIds([]);
+    // 自动批准是更宽的授权：换一轮必须重新关掉
+    setAllowWebState(false);
     setEdits(round === null ? {} : initialClaimEdits(round));
   }, [roundId]);
 
@@ -82,6 +93,18 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     setWebQueries((current) =>
       current.includes(query) ? current.filter((item) => item !== query) : [...current, query],
     );
+  }, []);
+
+  const toggleWebRequest = useCallback((requestId: string) => {
+    setApprovedRequestIds((current) =>
+      current.includes(requestId)
+        ? current.filter((item) => item !== requestId)
+        : [...current, requestId],
+    );
+  }, []);
+
+  const setAllowWeb = useCallback((allow: boolean) => {
+    setAllowWebState(allow);
   }, []);
 
   const changeClaim = useCallback((claimId: string, edit: ClaimEdit) => {
@@ -113,6 +136,8 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     answers,
     seats,
     webQueries,
+    approvedRequestIds,
+    allowWeb,
     edits,
     accepted,
     memoryAccepted,
@@ -121,6 +146,8 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     changeAnswer,
     toggleSeat,
     toggleWebQuery,
+    toggleWebRequest,
+    setAllowWeb,
     changeClaim,
     toggleAccepted,
     setAccepted: setAcceptedIds,

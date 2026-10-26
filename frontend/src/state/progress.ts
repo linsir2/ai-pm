@@ -1,7 +1,7 @@
 /* 本轮执行进度：全部从后端投影的字段推出来，不猜、不编。
    能读的就这几样：step / waiting_on / seat_round_count / claims / questions / draft。 */
 
-import type { RoundView } from "../api/types";
+import type { RoundView, WebRequestView } from "../api/types";
 import { stepText } from "../labels";
 
 /** 「轮到你」的那几件事（后端 `waiting_on` 的枚举）。`none` 不在其中——
@@ -87,6 +87,27 @@ export function roundElapsed(
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `开局 ${hours} 小时`;
   return `开局 ${Math.floor(hours / 24)} 天`;
+}
+
+/** 还没走完的联网申请（proposed / approved）：徽标只报需要留意的。 */
+export function openWebRequests(round: RoundView | null): WebRequestView[] {
+  return (round?.web_requests ?? []).filter(
+    (item) => item.state === "proposed" || item.state === "approved",
+  );
+}
+
+/** 已占用的联网执行名额：approved / done / failed 都算（proposed / rejected 不占）。 */
+export function executedWebRequestCount(round: RoundView | null): number {
+  return (round?.web_requests ?? []).filter(
+    (item) =>
+      item.state === "approved" || item.state === "done" || item.state === "failed",
+  ).length;
+}
+
+/** 闭环区那一行徽标：0 条不渲染（返回 null）。 */
+export function webRequestBadge(round: RoundView | null): string | null {
+  const count = openWebRequests(round).length;
+  return count === 0 ? null : `有 ${count} 条联网申请`;
 }
 
 /** 主张的标签分布（分析者那一格要显示的"3 种标签"）。 */

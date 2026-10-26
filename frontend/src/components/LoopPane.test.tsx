@@ -5,10 +5,10 @@
    旧写法拿文本当 React key → 控制台一串 "same key" 警告，行可能被丢掉或复制。
    这一份钉两件事：**所有行都画出来**，而且**不再出现重复 key 警告**。 */
 
-import { cleanup, render, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { DroppedView, RoundView } from "../api/types";
+import type { DroppedView, LimitsView, RoundView, WebRequestView } from "../api/types";
 import { LoopPane } from "./LoopPane";
 import { EvidenceScope } from "./EvidenceContext";
 
@@ -61,14 +61,25 @@ function round(over: Partial<RoundView>): RoundView {
 
 function draw(
   round_: RoundView,
-  props: { elapsed?: string | null; pending?: string | null } = {},
+  props: {
+    elapsed?: string | null;
+    pending?: string | null;
+    limits?: LimitsView | null;
+    historical?: boolean;
+    pendingWebRequestId?: string | null;
+    onDecideWebRequest?: (requestId: string, decision: "approve" | "reject") => void;
+  } = {},
 ) {
   return render(
     <EvidenceScope index={new Map()} onJump={() => undefined}>
       <LoopPane
         round={round_}
         pending={props.pending ?? null}
+        limits={props.limits ?? null}
         elapsed={props.elapsed ?? null}
+        historical={props.historical ?? false}
+        pendingWebRequestId={props.pendingWebRequestId ?? null}
+        onDecideWebRequest={props.onDecideWebRequest}
         onRetry={() => undefined}
         onAbandon={() => undefined}
         onSkipSeat={() => undefined}
@@ -77,6 +88,21 @@ function draw(
       />
     </EvidenceScope>,
   );
+}
+
+function webRequest(over: Partial<WebRequestView> = {}): WebRequestView {
+  return {
+    request_id: "w1",
+    query: "RBAC 权限模型",
+    why: "要查行业通行做法",
+    origin: "seat",
+    seat_id: "seat.permissions",
+    pass_index: 1,
+    state: "proposed",
+    result_note: null,
+    created_at: null,
+    ...over,
+  };
 }
 
 describe("闭环区的列表（P29 F1/F2）", () => {
@@ -408,5 +434,83 @@ describe("每步检索（P2.8b）", () => {
     expect(container.textContent).not.toContain("整合前取缺口证据");
     expect(container.textContent).not.toContain("上一次成功的查询");
     expect(container.textContent).not.toContain("命中 3 块 / 带进 2 块");
+  });
+});
+
+describe("联网申请（P3a）", () => {
+  const limits = {
+    max_seat_rounds: 3,
+    max_questionnaires: 2,
+    max_open_items_per_batch: 3,
+    max_web_executions: 3,
+  } as LimitsView;
+
+  it("申请卡出现，徽标报未走完的条数", () => {
+    const { container } = draw(
+      round({
+        web_requests: [webRequest(), webRequest({ request_id: "w2", state: "done" })],
+        web_search_available: true,
+      }),
+      { limits },
+    );
+
+    expect(container.textContent).toContain("联网申请");
+    expect(container.textContent).toContain("有 1 条联网申请");
+    expect(container.textContent).toContain("RBAC 权限模型");
+  });
+
+  it("点批准把 request_id 与 decision 递出去（非阻塞）", () => {
+    const calls: [string, "approve" | "reject"][] = [];
+    draw(round({ web_requests: [webRequest()], web_search_available: true }), {
+      limits,
+      onDecideWebRequest: (requestId, decision) => calls.push([requestId, decision]),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "批准并查" }));
+    expect(calls).toEqual([["w1", "approve"]]);
+  });
+
+  it("历史轮只读：按钮禁用并写原因", () => {
+    draw(round({ web_requests: [webRequest()], web_search_available: true }), {
+      limits,
+      historical: true,
+    });
+
+    const approve = screen.getByRole("button", { name: "批准并查" }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    expect(document.body.textContent).toContain("历史轮次只读");
+  });
+
+  it("名额满：批准禁用，原因可见", () => {
+    draw(
+      round({
+        web_search_available: true,
+        web_requests: [
+          webRequest({ request_id: "w1", state: "done" }),
+          webRequest({ request_id: "w2", state: "failed" }),
+          webRequest({ request_id: "w3", state: "approved" }),
+          webRequest({ request_id: "w4" }),
+        ],
+      }),
+      { limits },
+    );
+
+    const approve = screen.getByRole("button", { name: "批准并查" }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    expect(document.body.textContent).toContain("联网名额已用完（3/3）");
+  });
+
+  it("查完的申请把结果说明留在时间线上", () => {
+    const { container } = draw(
+      round({
+        web_search_available: true,
+        web_requests: [webRequest({ state: "done", result_note: "搜到 5 条结果" })],
+      }),
+      { limits },
+    );
+
+    expect(container.textContent).toContain("搜到 5 条结果");
+    expect(container.textContent).toContain("已查完");
+    expect(screen.queryByRole("button", { name: "批准并查" })).toBeNull();
   });
 });

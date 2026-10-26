@@ -249,8 +249,12 @@ async function download(path: string, fallbackName: string): Promise<void> {
 
 export interface OpeningBody {
   seats: string[];
-  /** 复述卡上勾中的联网检索词；空数组 = 这一轮不联网。 */
+  /** 复述卡上勾中的联网检索词（旧载体）；空数组 = 这一轮不联网。 */
   web_queries: string[];
+  /** 逐条批准的申请 id（新载体，`w1`…）；与旧 `web_queries` 取并集。 */
+  approved_request_ids: string[];
+  /** 后续席位 / 整合者申请是否自动批准（只在开场卡设置；默认关）。 */
+  allow_web: boolean;
   claim_edits: {
     claim_id: string;
     label: string;
@@ -586,6 +590,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  /** 逐条决策联网申请（P3a）：批准即执行，返回最新的一轮投影。 */
+  decideWebRequest: (
+    roundId: string,
+    requestId: string,
+    decision: "approve" | "reject",
+  ) =>
+    request<RoundView>(
+      `/rounds/${roundId}/web-requests/${encodeURIComponent(requestId)}/decision`,
+      { method: "POST", body: JSON.stringify({ decision }) },
+    ),
 
   submitAnswers: (roundId: string, body: AnswersBody) =>
     request<RoundView>(`/rounds/${roundId}/answers`, {

@@ -56,7 +56,9 @@ export type PendingAction =
   /** 模拟抽屉上的动作（M10）：跑一趟 / 收下勾选，同样串行不并发。 */
   | "simulation"
   /** 模拟评测上的动作（M11）：跑一趟——同样串行不并发。 */
-  | "sim_review";
+  | "sim_review"
+  /** 联网申请逐条决策（P3a）：批准即执行，串行不并发。 */
+  | "web_request";
 
 const PROJECT_PARAM = "project";
 
@@ -72,6 +74,8 @@ export function useWorkspaceData() {
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  /** 正在决策的那一条联网申请 id（按钮显示"处理中"用；一次只跑一条）。 */
+  const [pendingWebRequestId, setPendingWebRequestId] = useState<string | null>(null);
   // 现行结构（`GET /schema`）：一次会话拉一次。拉不到不影响主流程，界面回落旧默认值。
   const [schema, setSchemaState] = useState<SchemaView | null>(null);
   // 这个项目走过的轮次（F4）：跟着工作区一起刷新——它只读，事件说"这一轮变了"就该重读。
@@ -749,6 +753,38 @@ export function useWorkspaceData() {
     [run],
   );
 
+  /**
+   * 逐条决策联网申请（P3a）：批准即执行，回包就是最新一轮。
+   *
+   * R17：非工具失败 / 取消时后端不会补发 `round.updated`，客户端收到错误后**主动
+   * refetch**，把 `failed` + `result_note` 的真实状态读回来——不伪造事件。
+   */
+  const decideWebRequest = useCallback(
+    (roundId: string, requestId: string, decision: "approve" | "reject") => {
+      if (pending !== null) return;
+      // 批准会真联网，可能跑几十秒；切走项目后回包不许倒灌到新项目。
+      const projectId = selected.current;
+      setPendingWebRequestId(requestId);
+      void run("web_request", async () => {
+        try {
+          const fresh = await api.decideWebRequest(roundId, requestId, decision);
+          if (selected.current === projectId) {
+            dispatch({ type: "round", round: fresh });
+          }
+        } catch (error) {
+          if (selected.current !== projectId) return;
+          try {
+            dispatch({ type: "round", round: await api.getRound(roundId) });
+          } catch {
+            // 原始错误已经由 run() 的 banner 显示；这里只是补读真相。
+          }
+          throw error;
+        }
+      }).finally(() => setPendingWebRequestId(null));
+    },
+    [pending, run],
+  );
+
   const confirm = useCallback(
     (roundId: string, accepted: string[], acceptedMemory: string[] = []) =>
       run("confirm", async () => {
@@ -977,6 +1013,8 @@ export function useWorkspaceData() {
     startRound,
     submitOpening,
     submitAnswers,
+    pendingWebRequestId,
+    decideWebRequest,
     confirm,
     retry,
     dig,

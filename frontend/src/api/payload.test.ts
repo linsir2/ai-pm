@@ -19,6 +19,7 @@ import {
   integrationSummary,
   materialHitNotice,
   materialHitTarget,
+  openingWebRequests,
   searchHitAction,
   selectableLabels,
   seatNominationSummary,
@@ -26,6 +27,9 @@ import {
   targetBody,
   targetOptions,
   unansweredCount,
+  webOriginText,
+  webRequestAction,
+  webRequestStateText,
 } from "./payload";
 import type {
   DocumentView,
@@ -33,6 +37,7 @@ import type {
   RoundMaterialView,
   RoundView,
   SearchHitView,
+  WebRequestView,
 } from "./types";
 
 const round = {
@@ -286,6 +291,9 @@ describe("buildOpeningBody", () => {
       ],
       // 契约变更（工具层 C-2b）：起轮体多带一把 `web_queries`，不勾就是空数组
       web_queries: [],
+      // P3a：旧字段保留，新字段默认“不自动批准、没有逐条批准”
+      approved_request_ids: [],
+      allow_web: false,
     });
   });
 
@@ -294,6 +302,168 @@ describe("buildOpeningBody", () => {
 
     expect(body.web_queries).toEqual(["RBAC 权限模型"]);
     expect(buildOpeningBody(round, ["seat.data_scale"], {}).web_queries).toEqual([]);
+  });
+
+  it("逐条批准的申请 id 与 allow_web 随 body 一起走（旧字段同时保留）", () => {
+    const body = buildOpeningBody(
+      round,
+      ["seat.data_scale"],
+      {},
+      ["RBAC 权限模型"],
+      ["w1", "w2"],
+      true,
+    );
+
+    expect(body.approved_request_ids).toEqual(["w1", "w2"]);
+    expect(body.allow_web).toBe(true);
+    expect(body.web_queries).toEqual(["RBAC 权限模型"]);
+  });
+});
+
+describe("openingWebRequests（新结构优先，旧检索词不重复渲染）", () => {
+  function request(over: Partial<WebRequestView> = {}): WebRequestView {
+    return {
+      request_id: "w1",
+      query: "RBAC 权限模型",
+      why: "要查行业通行做法",
+      origin: "analyzer",
+      seat_id: null,
+      pass_index: null,
+      state: "proposed",
+      result_note: null,
+      created_at: null,
+      ...over,
+    };
+  }
+
+  it("有 analyzer 申请时只用新卡，旧 web_queries 回退为空", () => {
+    const view = {
+      ...round,
+      web_queries: [{ query: "旧检索词", why: "旧理由", chosen: false }],
+      web_requests: [request()],
+    } as unknown as RoundView;
+
+    const opening = openingWebRequests(view);
+    expect(opening.requests.map((item) => item.request_id)).toEqual(["w1"]);
+    expect(opening.legacy).toEqual([]);
+  });
+
+  it("没有 analyzer 申请时回退旧 web_queries", () => {
+    const view = {
+      ...round,
+      web_queries: [{ query: "旧检索词", why: "旧理由", chosen: false }],
+      web_requests: [request({ origin: "seat" })],
+    } as unknown as RoundView;
+
+    const opening = openingWebRequests(view);
+    expect(opening.requests).toEqual([]);
+    expect(opening.legacy.map((item) => item.query)).toEqual(["旧检索词"]);
+  });
+});
+
+describe("webRequestAction（能批不能批只在纯函数里判）", () => {
+  const ready = {
+    used: 0,
+    limit: 3,
+    available: true,
+    busy: false,
+    pending: false,
+    historical: false,
+    terminal: false,
+  };
+
+  function request(over: Partial<WebRequestView> = {}): WebRequestView {
+    return {
+      request_id: "w1",
+      query: "RBAC 权限模型",
+      why: "要查行业通行做法",
+      origin: "seat",
+      seat_id: "seat.permissions",
+      pass_index: 1,
+      state: "proposed",
+      result_note: null,
+      created_at: null,
+      ...over,
+    };
+  }
+
+  it("proposed：批准与拒绝都能点", () => {
+    const action = webRequestAction(request(), ready);
+    expect(action.visible).toBe(true);
+    expect(action.approve).toEqual({ enabled: true, reason: null });
+    expect(action.reject).toEqual({ enabled: true, reason: null });
+  });
+
+  it("名额用完：批准禁用并说明，拒绝仍可点", () => {
+    const action = webRequestAction(request(), { ...ready, used: 3 });
+    expect(action.visible).toBe(true);
+    expect(action.approve.enabled).toBe(false);
+    expect(action.approve.reason).toContain("名额已用完");
+    expect(action.reject.enabled).toBe(true);
+  });
+
+  it("还没读到名额：批准禁用，不硬编码 3", () => {
+    const action = webRequestAction(request(), { ...ready, limit: null });
+    expect(action.approve.enabled).toBe(false);
+    expect(action.approve.reason).toContain("还没读到");
+  });
+
+  it("服务端没有联网工具：批准禁用并说明，拒绝仍可点", () => {
+    const action = webRequestAction(request(), { ...ready, available: false });
+    expect(action.approve.enabled).toBe(false);
+    expect(action.approve.reason).toContain("没配联网工具");
+    expect(action.reject.enabled).toBe(true);
+  });
+
+  it("轮忙：批准与拒绝都禁用并说明", () => {
+    const action = webRequestAction(request(), { ...ready, busy: true });
+    expect(action.approve.enabled).toBe(false);
+    expect(action.reject.enabled).toBe(false);
+    expect(action.approve.reason).toContain("还有动作在跑");
+  });
+
+  it("这一条在处理：按钮禁用并说明", () => {
+    const action = webRequestAction(request(), { ...ready, pending: true });
+    expect(action.approve.enabled).toBe(false);
+    expect(action.reject.enabled).toBe(false);
+    expect(action.approve.reason).toContain("正在处理");
+  });
+
+  it("历史轮只读：决策禁用并说明", () => {
+    const action = webRequestAction(request(), { ...ready, historical: true });
+    expect(action.approve.enabled).toBe(false);
+    expect(action.reject.enabled).toBe(false);
+    expect(action.approve.reason).toContain("历史轮次只读");
+  });
+
+  it("轮已结束：决策禁用并说明", () => {
+    const action = webRequestAction(request(), { ...ready, terminal: true });
+    expect(action.approve.enabled).toBe(false);
+    expect(action.reject.enabled).toBe(false);
+    expect(action.approve.reason).toContain("已经结束");
+  });
+
+  it.each(["approved", "done", "failed", "rejected"])(
+    "非 proposed（%s）不显示决策按钮",
+    (state) => {
+      expect(webRequestAction(request({ state }), ready).visible).toBe(false);
+    },
+  );
+});
+
+describe("联网申请的展示词", () => {
+  it("来源与状态说人话，认不出就照实显示原值", () => {
+    expect(webOriginText("analyzer")).toBe("分析席位");
+    expect(webOriginText("seat")).toBe("席位");
+    expect(webOriginText("integrator")).toBe("整合者");
+    expect(webOriginText("robot")).toBe("robot");
+
+    expect(webRequestStateText("proposed")).toBe("待批准");
+    expect(webRequestStateText("approved")).toBe("已批准，等待执行");
+    expect(webRequestStateText("done")).toBe("已查完");
+    expect(webRequestStateText("failed")).toBe("查失败");
+    expect(webRequestStateText("rejected")).toBe("已拒绝");
+    expect(webRequestStateText("weird")).toBe("weird");
   });
 });
 

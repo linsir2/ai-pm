@@ -4,7 +4,13 @@
 import type { ReactNode } from "react";
 
 import type { ClaimEdit } from "../api/payload";
-import { seatNominationSummary, selectableLabels, targetOptions } from "../api/payload";
+import {
+  openingWebRequests,
+  seatNominationSummary,
+  selectableLabels,
+  targetOptions,
+  webRequestStateText,
+} from "../api/payload";
 import type { DocumentView, RoundView } from "../api/types";
 import { claimLabelText } from "../labels";
 import { EvidenceChip } from "./EvidenceChip";
@@ -16,27 +22,40 @@ export function OpeningCard({
   edits,
   seats,
   webQueries,
+  approvedRequestIds,
+  allowWeb,
   pending,
   historyNav,
   onChangeClaim,
   onToggleSeat,
   onToggleWebQuery,
+  onToggleWebRequest,
+  onToggleAllowWeb,
   onSubmit,
 }: {
   round: RoundView;
   doc: DocumentView | null;
   edits: Record<string, ClaimEdit>;
   seats: string[];
+  /** 旧载体：勾中的检索词。 */
   webQueries: string[];
+  /** 新载体：勾中的 analyzer 申请 id。 */
+  approvedRequestIds: string[];
+  /** 后续席位 / 整合者申请是否自动批准（默认关）。 */
+  allowWeb: boolean;
   pending: boolean;
   /** 头部右端的跨轮入口（"这个项目走过 N 轮"）；不传就不出。 */
   historyNav?: ReactNode;
   onChangeClaim: (claimId: string, edit: ClaimEdit) => void;
   onToggleSeat: (seatId: string) => void;
   onToggleWebQuery: (query: string) => void;
+  onToggleWebRequest: (requestId: string) => void;
+  onToggleAllowWeb: (allow: boolean) => void;
   onSubmit: () => void;
 }) {
   const touched = touchedTargets(round, edits);
+  const opening = openingWebRequests(round);
+  const hasWebSection = opening.requests.length > 0 || opening.legacy.length > 0;
   const alwaysOn = round.nominated_seats.filter((seat) => seat.always_on).length;
   const triggered = round.nominated_seats.filter((seat) => seat.matched_keywords.length > 0);
   const summary = seatNominationSummary(round);
@@ -200,20 +219,56 @@ export function OpeningCard({
           )}
         </fieldset>
 
-        {round.web_queries.length > 0 && (
+        {hasWebSection && (
           <fieldset className="seats web-queries">
             <legend className="loop__label">联网检索</legend>
-            {round.web_search_available ? (
+
+            {opening.requests.length > 0 ? (
+              round.web_search_available ? (
+                <>
+                  <p className="seat__note">
+                    分析席位提了 {opening.requests.length} 条联网申请，默认不查；勾了才查。
+                  </p>
+                  {opening.requests.map((item) => {
+                    const fixed = item.state !== "proposed";
+                    const on = item.state === "approved" || approvedRequestIds.includes(item.request_id);
+                    return (
+                      <label className={on ? "seat seat--on" : "seat"} key={item.request_id}>
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          disabled={fixed || pending}
+                          onChange={() => onToggleWebRequest(item.request_id)}
+                          aria-label={item.query}
+                        />
+                        <span>
+                          <span className="seat__title">
+                            {item.query}
+                            {fixed && ` · ${webRequestStateText(item.state)}`}
+                          </span>
+                          {item.why.trim() !== "" && (
+                            <span className="seat__why">为什么查它：{item.why}</span>
+                          )}
+                          <span className="seat__focus">
+                            查回来的东西算<strong>外部材料</strong>：它只进"它提议的"那一组，默认不写入文档。
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </>
+              ) : (
+                <p className="seat__note">
+                  分析席位提了 {opening.requests.length} 条联网申请，但服务端没配联网工具（缺密钥），
+                  这一栏先帮不了你——想查就先把工具配好。
+                </p>
+              )
+            ) : round.web_search_available ? (
               <>
                 <p className="seat__note">
-                  分析席位建议查 {round.web_queries.length} 条，默认不查；勾了才查。
+                  分析席位建议查 {opening.legacy.length} 条，默认不查；勾了才查。
                 </p>
-                {round.web_search_network_access && (
-                  <p className="seat__note">
-                    检索词会发给第三方搜索服务；勾选前请确认里面没有不想外发的内容。
-                  </p>
-                )}
-                {round.web_queries.map((item) => {
+                {opening.legacy.map((item) => {
                   const on = webQueries.includes(item.query);
                   return (
                     <label className={on ? "seat seat--on" : "seat"} key={item.query}>
@@ -238,10 +293,33 @@ export function OpeningCard({
               </>
             ) : (
               <p className="seat__note">
-                分析席位建议查 {round.web_queries.length} 条，但服务端没配联网工具（缺密钥），
+                分析席位建议查 {opening.legacy.length} 条，但服务端没配联网工具（缺密钥），
                 这一栏先帮不了你——想查就先把工具配好。
               </p>
             )}
+
+            <label className={allowWeb ? "seat seat--on" : "seat"}>
+              <input
+                type="checkbox"
+                checked={allowWeb}
+                disabled={!round.web_search_available || pending}
+                onChange={(event) => onToggleAllowWeb(event.target.checked)}
+              />
+              <span>
+                <span className="seat__title">本轮后续申请自动批准</span>
+                <span className="seat__why">
+                  打开后，席位与整合者之后提的联网申请会自动批准并执行；默认关，逐条批准更稳。
+                </span>
+                {round.web_search_network_access && (
+                  <span className="seat__focus">
+                    检索词会发给第三方搜索服务；打开前请确认里面没有不想外发的内容。
+                  </span>
+                )}
+                {!round.web_search_available && (
+                  <span className="seat__focus">这个开关现在办不了事。</span>
+                )}
+              </span>
+            </label>
           </fieldset>
         )}
       </div>

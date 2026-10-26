@@ -249,6 +249,10 @@ export interface RoundView {
    * 勾选状态由用户给（默认不勾），后端把"你勾过哪条"投影在 `chosen` 里。
    */
   web_queries: WebQueryView[];
+  /** 三方结构化联网申请（P3a）：提名 / 批准 / 执行结果。 */
+  web_requests: WebRequestView[];
+  /** 用户是否允许后续（席位 / 整合者）申请自动批准。默认关。 */
+  allow_web: boolean;
   /** 服务端现在有没有可用的联网工具（没配密钥就是 false）——据此决定出不出现那一栏。 */
   web_search_available: boolean;
   /** 这一轮用的联网工具声明了 `network_access`（检索词会外发给第三方）——授权处据此说清。 */
@@ -363,6 +367,19 @@ export interface WebQueryView {
   query: string;
   why: string;
   chosen: boolean;
+}
+
+/** 一条联网申请（P3a）：谁提的、为什么、批没批、执行结果。 */
+export interface WebRequestView {
+  request_id: string;
+  query: string;
+  why: string;
+  origin: "analyzer" | "seat" | "integrator" | string;
+  seat_id: string | null;
+  pass_index: number | null;
+  state: "proposed" | "approved" | "rejected" | "done" | "failed" | string;
+  result_note: string | null;
+  created_at: string | null;
 }
 
 export interface AnswerBatchView {
@@ -555,6 +572,9 @@ export interface LimitsView {
   max_sim_review_features?: number;
   /** 讨论线程的 turn 上限（M13）；老后端为 undefined（下游回落 12）。 */
   max_discussion_turns?: number;
+  /** 本轮最多执行几条联网申请（P3a；**生效值**，没配工具就是 0）。
+   *  老后端为 undefined：界面不硬编码 3，拿不到就禁用批准并说明。 */
+  max_web_executions?: number;
 }
 
 /** `GET /schema`：现行结构，不是文档内容。 */

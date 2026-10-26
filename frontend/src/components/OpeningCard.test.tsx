@@ -5,7 +5,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { RoundView } from "../api/types";
+import type { RoundView, WebRequestView } from "../api/types";
 import { OpeningCard } from "./OpeningCard";
 
 afterEach(cleanup);
@@ -38,10 +38,27 @@ function round(over: Partial<RoundView> = {}): RoundView {
     web_queries: [
       { query: "RBAC 权限模型", why: "要查行业通行做法", chosen: false },
     ],
+    web_requests: [],
+    allow_web: false,
     web_search_available: true,
     web_search_network_access: false,
     ...over,
   } as unknown as RoundView;
+}
+
+function webRequest(over: Partial<WebRequestView> = {}): WebRequestView {
+  return {
+    request_id: "w1",
+    query: "RBAC 权限模型",
+    why: "要查行业通行做法",
+    origin: "analyzer",
+    seat_id: null,
+    pass_index: null,
+    state: "proposed",
+    result_note: null,
+    created_at: null,
+    ...over,
+  };
 }
 
 function draw(over: Partial<Parameters<typeof OpeningCard>[0]> = {}) {
@@ -51,10 +68,14 @@ function draw(over: Partial<Parameters<typeof OpeningCard>[0]> = {}) {
     edits: {},
     seats: [],
     webQueries: [] as string[],
+    approvedRequestIds: [] as string[],
+    allowWeb: false,
     pending: false,
     onChangeClaim: vi.fn(),
     onToggleSeat: vi.fn(),
     onToggleWebQuery: vi.fn(),
+    onToggleWebRequest: vi.fn(),
+    onToggleAllowWeb: vi.fn(),
     onSubmit: vi.fn(),
     ...over,
   };
@@ -120,6 +141,93 @@ describe("OpeningCard · 联网检索词", () => {
     });
 
     expect(screen.queryByText(/检索词会发给第三方/)).toBeNull();
+  });
+});
+
+describe("OpeningCard · 结构化联网申请（P3a）", () => {
+  it("有 analyzer 申请时只渲染新卡，不再重复渲染旧 web_queries", () => {
+    draw({
+      round: round({
+        web_queries: [{ query: "旧检索词", why: "旧理由", chosen: false }],
+        web_requests: [webRequest()],
+      }),
+    });
+
+    expect(screen.getByRole("checkbox", { name: /RBAC 权限模型/ })).toBeTruthy();
+    expect(screen.queryByText("旧检索词")).toBeNull();
+  });
+
+  it("analyzer proposed 默认不勾；勾一下把 request_id 递出去", () => {
+    const props = draw({ round: round({ web_requests: [webRequest()] }) });
+
+    const box = screen.getByRole("checkbox", { name: /RBAC 权限模型/ }) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+
+    fireEvent.click(box);
+    expect(props.onToggleWebRequest).toHaveBeenCalledWith("w1");
+  });
+
+  it("已勾的从草稿读回来；服务端已批准的显示为勾着且不可改", () => {
+    draw({
+      round: round({ web_requests: [webRequest()] }),
+      approvedRequestIds: ["w1"],
+    });
+    expect(
+      (screen.getByRole("checkbox", { name: /RBAC 权限模型/ }) as HTMLInputElement).checked,
+    ).toBe(true);
+
+    cleanup();
+    draw({
+      round: round({ web_requests: [webRequest({ state: "approved" })] }),
+    });
+    const approved = screen.getByRole("checkbox", {
+      name: /RBAC 权限模型/,
+    }) as HTMLInputElement;
+    expect(approved.checked).toBe(true);
+    expect(approved.disabled).toBe(true);
+  });
+
+  it("allow_web 默认关；打开时把 true 递出去", () => {
+    const props = draw({ round: round({ web_requests: [webRequest()] }) });
+
+    const box = screen.getByRole("checkbox", { name: /自动批准/ }) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    expect(props.onToggleAllowWeb).toHaveBeenCalledWith(true);
+  });
+
+  it("allow_web 旁披露第三方外发；工具不声明外发就不说", () => {
+    draw({
+      round: round({
+        web_requests: [webRequest()],
+        web_search_network_access: true,
+      }),
+    });
+    expect(screen.getByText(/检索词会发给第三方/)).toBeTruthy();
+
+    cleanup();
+    draw({
+      round: round({
+        web_requests: [webRequest()],
+        web_search_network_access: false,
+      }),
+    });
+    expect(screen.queryByText(/检索词会发给第三方/)).toBeNull();
+  });
+
+  it("没配联网工具：申请只说明办不了，不给复选框，allow_web 也禁用", () => {
+    draw({
+      round: round({
+        web_requests: [webRequest()],
+        web_search_available: false,
+      }),
+    });
+
+    expect(screen.queryByRole("checkbox", { name: /RBAC 权限模型/ })).toBeNull();
+    expect(screen.getByText(/没配联网工具/)).toBeTruthy();
+    expect(
+      (screen.getByRole("checkbox", { name: /自动批准/ }) as HTMLInputElement).disabled,
+    ).toBe(true);
   });
 });
 

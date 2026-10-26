@@ -9,12 +9,15 @@ import { useWorkspaceData } from "./useWorkspaceData";
 // 全仓首个 vi.mock：factory 会被 hoist 到文件顶，顶层变量一律用 vi.hoisted 包
 //（inline 的 vi.fn() / import 进来的 ApiError 在 factory 里直接引用会炸）。
 // 其余导出走 importOriginal 原样透出，只换掉 api 单例。
-const { keepCandidate, startExploration, startRound, rounds } = vi.hoisted(() => ({
-  keepCandidate: vi.fn(),
-  startExploration: vi.fn(),
-  startRound: vi.fn(),
-  rounds: vi.fn(),
-}));
+const { decideWebRequest, getRound, keepCandidate, startExploration, startRound, rounds } =
+  vi.hoisted(() => ({
+    decideWebRequest: vi.fn(),
+    getRound: vi.fn(),
+    keepCandidate: vi.fn(),
+    startExploration: vi.fn(),
+    startRound: vi.fn(),
+    rounds: vi.fn(),
+  }));
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
@@ -22,6 +25,8 @@ vi.mock("../api/client", async (importOriginal) => {
     api: {
       listProjects: async () => [],
       schema: async () => null,
+      decideWebRequest,
+      getRound,
       keepCandidate,
       startExploration,
       startRound,
@@ -207,4 +212,85 @@ it("起轮成功后立刻刷新轮次列表（新轮不再显示成本轮、开�
 
   expect(rounds).toHaveBeenCalledWith("p1");
   expect(result.current.rounds.map((item) => item.round_id)).toEqual(["r-new"]);
+});
+
+function decidedRound(state: string, note: string | null = null): RoundView {
+  return {
+    round_id: "r1",
+    project_id: "p1",
+    user_input: "想法",
+    step: "seats_running",
+    waiting_on: "none",
+    seat_round_count: 1,
+    seats: [],
+    active_seats: [],
+    nominated_seats: [],
+    available_seats: [],
+    claims: [],
+    seat_packets: [],
+    dropped: [],
+    questions: [],
+    asked_questions: [],
+    list_items: [],
+    draft: null,
+    advisories: [],
+    failure_reason: null,
+    failure_at_step: null,
+    retry_from: null,
+    abandon_reason: null,
+    confirmed_version_no: null,
+    form_id: null,
+    answer_sets: [],
+    materials: [],
+    web_queries: [],
+    web_requests: [
+      {
+        request_id: "w1",
+        query: "RBAC 权限模型",
+        why: "要查行业通行做法",
+        origin: "seat",
+        seat_id: "seat.permissions",
+        pass_index: 1,
+        state,
+        result_note: note,
+        created_at: null,
+      },
+    ],
+    allow_web: false,
+    web_search_available: true,
+    web_search_network_access: true,
+  } as unknown as RoundView;
+}
+
+it("决策成功：用返回的 RoundView 换掉当前这一轮，并清掉在途申请", async () => {
+  decideWebRequest.mockResolvedValueOnce(decidedRound("done", "搜到 3 条结果"));
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+
+  await act(async () => {
+    await result.current.decideWebRequest("r1", "w1", "approve");
+  });
+
+  expect(decideWebRequest).toHaveBeenCalledWith("r1", "w1", "approve");
+  expect(result.current.state.round?.web_requests[0]?.state).toBe("done");
+  expect(result.current.state.round?.web_requests[0]?.result_note).toBe("搜到 3 条结果");
+  expect(result.current.pendingWebRequestId).toBeNull();
+  expect(result.current.state.error).toBeNull();
+});
+
+it("非工具失败：错误可见，并主动 refetch 把 failed 的真实状态读回来（R17）", async () => {
+  decideWebRequest.mockRejectedValueOnce(new ApiError("tool_failed", "执行中断"));
+  getRound.mockResolvedValueOnce(decidedRound("failed", "执行中断"));
+  const { result } = renderHook(() => useWorkspaceData());
+  await act(async () => {});
+
+  await act(async () => {
+    await result.current.decideWebRequest("r1", "w1", "approve");
+  });
+
+  expect(getRound).toHaveBeenCalledWith("r1");
+  expect(result.current.state.round?.web_requests[0]?.state).toBe("failed");
+  expect(result.current.state.round?.web_requests[0]?.result_note).toBe("执行中断");
+  expect(result.current.state.error).toContain("执行中断");
+  expect(result.current.pendingWebRequestId).toBeNull();
 });

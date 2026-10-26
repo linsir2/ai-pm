@@ -83,3 +83,35 @@ describe("useRoundDrafts", () => {
     expect(result.current.answers).toEqual({});
   });
 });
+
+describe("useRoundDrafts · 联网授权（P3a）", () => {
+  it("allow_web 默认关，逐条批准默认一条都不勾", () => {
+    const { result } = render(round(), "opening");
+
+    expect(result.current.allowWeb).toBe(false);
+    expect(result.current.approvedRequestIds).toEqual([]);
+  });
+
+  it("打开 allow_web、勾一条申请：同一轮刷新不清空", () => {
+    const { result, rerender } = render(round(), "opening");
+
+    act(() => result.current.setAllowWeb(true));
+    act(() => result.current.toggleWebRequest("w1"));
+    expect(result.current.allowWeb).toBe(true);
+    expect(result.current.approvedRequestIds).toEqual(["w1"]);
+
+    rerender({ value: round({ step: "claims_ready" }), mode: "opening" });
+    expect(result.current.allowWeb).toBe(true);
+    expect(result.current.approvedRequestIds).toEqual(["w1"]);
+  });
+
+  it("换一轮重置 allow_web 与逐条批准（上一轮的授权绝不带进下一轮）", () => {
+    const { result, rerender } = render(round(), "opening");
+    act(() => result.current.setAllowWeb(true));
+    act(() => result.current.toggleWebRequest("w1"));
+
+    rerender({ value: round({ round_id: "r2" }), mode: "opening" });
+    expect(result.current.allowWeb).toBe(false);
+    expect(result.current.approvedRequestIds).toEqual([]);
+  });
+});

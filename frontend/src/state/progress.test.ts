@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { RoundView } from "../api/types";
+import type { RoundView, WebRequestView } from "../api/types";
 import {
+  executedWebRequestCount,
   labelCounts,
   loopBadgeCount,
   needsLoopAttention,
@@ -9,6 +10,7 @@ import {
   roundElapsed,
   roundOrdinal,
   statusText,
+  webRequestBadge,
 } from "./progress";
 
 describe("statusText（状态行那一句：waiting 优先于 step）", () => {
@@ -165,6 +167,57 @@ describe("loopBadgeCount（rail 徽标：未答题数 + 草案组 0/1）", () =>
     expect(loopBadgeCount(r)).toBe(0);
   });
 });
+describe("联网申请徽标（P3a）", () => {
+  function request(id: string, state: string): WebRequestView {
+    return {
+      request_id: id,
+      query: `查 ${id}`,
+      why: "为什么查",
+      origin: "seat",
+      seat_id: null,
+      pass_index: null,
+      state,
+      result_note: null,
+      created_at: null,
+    };
+  }
+
+  function round(requests: WebRequestView[]): RoundView {
+    return { web_requests: requests } as unknown as RoundView;
+  }
+
+  it("只数还没走完的申请（proposed + approved）", () => {
+    const view = round([
+      request("w1", "proposed"),
+      request("w2", "approved"),
+      request("w3", "done"),
+      request("w4", "failed"),
+      request("w5", "rejected"),
+    ]);
+
+    expect(webRequestBadge(view)).toBe("有 2 条联网申请");
+  });
+
+  it("没有待处理申请就不出徽标（0 不渲染）", () => {
+    expect(webRequestBadge(round([]))).toBeNull();
+    expect(webRequestBadge(round([request("w1", "done")]))).toBeNull();
+    expect(webRequestBadge(null)).toBeNull();
+  });
+
+  it("执行名额计数 = approved + done + failed（proposed/rejected 不占）", () => {
+    const view = round([
+      request("w1", "proposed"),
+      request("w2", "approved"),
+      request("w3", "done"),
+      request("w4", "failed"),
+      request("w5", "rejected"),
+    ]);
+
+    expect(executedWebRequestCount(view)).toBe(3);
+    expect(executedWebRequestCount(null)).toBe(0);
+  });
+});
+
 describe("roundElapsed（开局时长，rounds 列表拼）", () => {
   const rounds = [{ round_id: "r1", created_at: "2026-10-13T10:00:00.000Z" }];
   const now = Date.parse("2026-10-13T10:03:20.000Z");

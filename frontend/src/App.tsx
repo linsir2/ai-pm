@@ -622,11 +622,28 @@ function Workspace() {
                 ? { roundId: data.historyRound.round_id, onBack: data.backToLatest }
                 : null
             }
+            approvedRequestIds={drafts.approvedRequestIds}
+            allowWeb={drafts.allowWeb}
+            onToggleWebRequest={drafts.toggleWebRequest}
+            onToggleAllowWeb={drafts.setAllowWeb}
+            onDecideWebRequest={(requestId, decision) => {
+              if (round !== null) {
+                data.decideWebRequest(round.round_id, requestId, decision);
+              }
+            }}
+            pendingWebRequestId={data.pendingWebRequestId}
             onSubmitOpening={() =>
               round !== null &&
               void data.submitOpening(
                 round.round_id,
-                buildOpeningBody(round, drafts.seats, drafts.edits, drafts.webQueries),
+                buildOpeningBody(
+                  round,
+                  drafts.seats,
+                  drafts.edits,
+                  drafts.webQueries,
+                  drafts.approvedRequestIds,
+                  drafts.allowWeb,
+                ),
               )
             }
             onSubmitAnswers={() =>
