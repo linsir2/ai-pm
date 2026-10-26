@@ -350,8 +350,8 @@ export function LoopPane({
             <details className="q__whybox">
               <summary className="muted small">工具 {toolNotes.length} 条</summary>
               <ul className="drops">
-                {toolNotes.map((item) => (
-                  <li className="drop" key={`${item.handle}-${item.reason}`}>
+                {toolNotes.map((item, index) => (
+                  <li className="drop" key={`${item.handle}-${item.reason}-${index}`}>
                     <span className="mono small">{item.handle}</span>
                     <span className="drop__reason">{item.reason}</span>
                   </li>

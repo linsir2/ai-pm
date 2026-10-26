@@ -69,6 +69,23 @@ describe("dropsFor", () => {
     ]);
   });
 
+  it("带 seat_id 的 TOOL 留痕（每方超名额）只挂在席位包下，不进工具段", () => {
+    const seatTool: DroppedView = {
+      handle: "联网申请 第四条",
+      seat_id: "seat.data_scale",
+      pass_index: 2,
+      reason: "每方最多 3 条联网申请，多出来的这一条已丢弃",
+      source: "tool",
+      packet_id: packet.packet_id ?? undefined,
+    };
+    expect(toolDrops([...dropped, seatTool]).map((item) => item.handle)).toEqual([
+      "联网检索 RBAC 权限模型",
+    ]);
+    expect(dropsFor(packet, [seatTool]).map((item) => item.handle)).toEqual([
+      "联网申请 第四条",
+    ]);
+  });
+
   it("它说的 3 条里 1 条没进卡片", () => {
     expect(dropHeadline(packet, dropsFor(packet, dropped))).toBe(
       "它说的 3 条里，1 条没进卡片",

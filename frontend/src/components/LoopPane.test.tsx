@@ -139,6 +139,23 @@ describe("闭环区的列表（P29 F1/F2）", () => {
     spy.mockRestore();
   });
 
+  it("工具段同一个 handle+reason 出现两次：两条都在，且不报重复 key", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const toolDrop: DroppedView = {
+      handle: "web_search",
+      reason: "没搜到结果",
+      source: "tool",
+      seat_id: null,
+      pass_index: 1,
+    };
+    const { container } = draw(round({ dropped: [toolDrop, { ...toolDrop }] }));
+
+    expect(container.querySelectorAll("ul.drops li.drop")).toHaveLength(2);
+    expect(spy.mock.calls.some(([message]) =>
+      String(message).includes("same key"))).toBe(false);
+    spy.mockRestore();
+  });
+
   it("自动检索进来的材料不算「留痕」：不进那句「去处写错的」，也不挤占工具的条数", () => {
     const { container } = draw(
       round({

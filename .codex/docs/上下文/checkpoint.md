@@ -6,6 +6,24 @@
 > **读法**：先读下面「当前状态」；历史流水（P1–P38、M1–M15、各次执行结果）保留作档案，
 > 里面的"下一步/剩下来的活"**全部过期**，以当前状态为准。
 
+## 当前状态（2026-10-26：P3a 已交付）
+
+**分支** `new-branch`（base `45e6a86` → `4827017`）· 后端 `not slow`（B6 全量）→
+**3056 passed / 53 skipped / 4 deselected** · `ruff` 全绿 ·
+前端 `tsc --noEmit` 干净 / `vitest` **62 files / 673 tests passed**
+（B6 时 671；终审 Minor 新增 2 条）。
+
+**P3a · 联网申请 / 逐条授权 / 批准即执行**（2026-10-26）：
+- 新轮只写 `web_requests/allow_web/web_selection`；旧 `web_queries/web_queries_chosen`
+  只读派生。每方 3 条提案、每轮 3 条执行；决策、opening、执行点与 `/schema.limits`
+  共用同一判据（`approved/done/failed` 占位，`proposed/rejected` 不占）。
+- **单 worker 前提**：`RoundRunner._running_rounds` 是进程内串行，当前 Docker 与
+  `dev_stack` 都是单进程；多 worker 的 in-flight / 条件 claim 未做，部署前必须补
+  （**P3b**）。
+- 真跑证据：`.codex/runs/2026-10-26/p3a/`（真模型 + 真 Tavily + 真 SQLite，两轮，
+  exit 0）；逐项见 `docs/plans/2026-10-25-P3a-实现计划.md` 与 B6 报告。
+- 下一步：**P3b**（多 worker 前提 + 已记录 park 的边界项）。
+
 ## 当前状态（2026-10-22：批 10–16 交付，R5 / C1 收口，门禁全绿）
 
 **分支** `new-branch` · 后端全量 `uv run pytest -m "not slow"` →

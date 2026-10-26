@@ -1,8 +1,8 @@
-"""可观测性 v2 · P/R 类：真 SQLite + 真 `_search` 路径 + **真端点**（TestClient）。
+"""可观测性 v2 · P/R 类：真 SQLite + 真 `WebResearch` 路径 + **真端点**（TestClient）。
 
 **如实标注**：本环境没有 `PMSTUDIO_TAVILY_API_KEY`，所以工具侧降级为**注入的替身**
 （`RecordingWebSearch`）——真 `TavilySearchGateway` 会出网。模型侧是脚本化网关
-（e2e 一贯如此）。写侧走的是**真** `SubmitOpening._search`（含 `_search_one` 与真留样器）。
+（e2e 一贯如此）。写侧走的是**真** `WebResearch`（含 `search_one` 与真留样器）。
 """
 
 import json

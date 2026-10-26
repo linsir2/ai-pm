@@ -549,6 +549,26 @@ def test_legacy_drop_texts_distinguish_unselected_proposals_from_unnominated_cho
     )
 
 
+def test_legacy_nominated_choice_over_the_cap_keeps_order_and_uses_the_third_reason():
+    payload = legacy_payload(
+        queries=[("一", "为什么一"), ("二", "为什么二"), ("三", "为什么三")],
+        chosen=["四", "五", "六", "一"],
+    )
+
+    round_ = load(payload, step=Step.CLAIMS_READY)
+
+    # 截断只留前三条勾选；第四条勾选是旧版已提名提案，走第三段文案。
+    assert [item.query for item in round_.web_requests] == ["四", "五", "六"]
+    assert [item.handle for item in round_.dropped] == [
+        "联网申请 一",
+        "联网申请 二",
+        "联网申请 三",
+    ]
+    assert "旧版勾选（已提名）没进本轮" in round_.dropped[0].reason
+    assert all("未勾选提案" in item.reason for item in round_.dropped[1:])
+    assert {item.source.value for item in round_.dropped} == {"tool"}
+
+
 def test_old_keys_are_ignored_when_the_new_key_is_present():
     round_ = opening_round()
     payload = round_to_payload(round_)
