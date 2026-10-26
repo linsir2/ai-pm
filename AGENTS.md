@@ -40,7 +40,8 @@
   G10① 销账、03 满轮 ⬜ 真跑补记
 - **P3a 联网申请（2026-10-26）**：分析者/席位/整合者的联网申请统一进 `Round.web_requests`，
   逐条授权、批准即执行；旧 `web_queries*` 只读迁移。当前部署是**单 worker**（进程内串行），
-  多 worker 安全留 **P3b**。
+  多 worker 安全留 **P3b**；P3b 同时收历史趟 TOOL 留痕可见性、stale id 无工具 422、
+  `used>limit` 恢复口径。
 
 - 后端：测试全绿、`ruff` 无告警；结构性守卫在 `tests/architecture/` 与 `tests/contracts/`，
   含"守卫自己的判据有没有效"那一层。守卫条数与测试条数**都会过期**，这里不写数字——

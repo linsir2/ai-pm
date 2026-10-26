@@ -8,8 +8,8 @@
 
 ## 当前状态（2026-10-26：P3a 已交付）
 
-**分支** `new-branch`（base `45e6a86` → `4827017`）· 后端 `not slow`（B6 全量）→
-**3056 passed / 53 skipped / 4 deselected** · `ruff` 全绿 ·
+**分支** `new-branch`（base `45e6a86` → `2225c38`）· 后端 `not slow`（终审后全量）→
+**3057 passed / 53 skipped / 4 deselected** · `ruff` 全绿 ·
 前端 `tsc --noEmit` 干净 / `vitest` **62 files / 673 tests passed**
 （B6 时 671；终审 Minor 新增 2 条）。
 
@@ -22,7 +22,8 @@
   （**P3b**）。
 - 真跑证据：`.codex/runs/2026-10-26/p3a/`（真模型 + 真 Tavily + 真 SQLite，两轮，
   exit 0）；逐项见 `docs/plans/2026-10-25-P3a-实现计划.md` 与 B6 报告。
-- 下一步：**P3b**（多 worker 前提 + 已记录 park 的边界项）。
+- 下一步：**P3b**（多 worker 前提 + park 边界：历史趟席位级 TOOL 留痕可见性、
+  stale DONE/FAILED id 无工具 422、`used>limit` 反复 422）。
 
 ## 当前状态（2026-10-22：批 10–16 交付，R5 / C1 收口，门禁全绿）
 
