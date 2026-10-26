@@ -8,9 +8,9 @@
 
 ## 并发正确性（第 6/7/8 条的前提）
 
-跳过与交回都是 `with uow` 包着 fresh-read + save，SQLite `BEGIN IMMEDIATE`
-写串行——后提交者读到先提交者的状态，不存在 TOCTOU：
-- skip 先提交 → 交回读到 skipped → 丢弃 + 留痕；
+跳过只写 `round_skips` 控制行，不拿 action lease、不写 Round；交回仍在 `with uow`
+里 fresh-read + save。两边都在 `SqliteUnitOfWork` 的 `BEGIN IMMEDIATE` 下串行：
+- skip 先提交 → 交回 fresh-read 到控制行合入的 skipped → 丢弃 + 留痕；
 - 交回先提交 → skip 读到当趟 review → 拒绝（"已交回则拒"不是 UX 选项，是正确性必需）。
 """
 
@@ -122,8 +122,7 @@ async def test_已交回的跳过必须拒():
 
 
 async def test_重复跳过幂等且不重复留痕():
-    """R：第二次是空操作——`skip_seat` 本人幂等，但 `note_dropped` 是追加语义，
-    不 guard 就会多一条留痕。所以"已在 skipped"直接返回 view。"""
+    """R：第二次是空操作——控制行 latest-wins，DTO 只合成一条 USER_SKIPPED。"""
 
     harness = _harness()
     harness.seed_project()
@@ -134,8 +133,9 @@ async def test_重复跳过幂等且不重复留痕():
 
     round_ = harness.rounds.get(round_id)
     assert round_.skipped_seats == (SEAT,)
-    notes = [item for item in round_.dropped if item.seat_id == SEAT]
+    notes = [item for item in view.dropped if item.seat_id == SEAT]
     assert len(notes) == 1
+    assert notes[0].source == "user_skipped"
     assert view.step == "seats_running"
 
 
@@ -153,10 +153,11 @@ async def test_正常跳过记名留痕且不再请():
     assert round_.skipped_seats == (SEAT,)
     assert SEAT not in round_.pending_seats
     assert SECOND_SEAT in round_.pending_seats
-    notes = [item for item in round_.dropped if item.seat_id == SEAT]
+    notes = [item for item in view.dropped if item.seat_id == SEAT]
     assert len(notes) == 1
-    assert notes[0].source is DropSource.USER_SKIPPED
+    assert notes[0].source == "user_skipped"
     assert notes[0].handle == SEAT
+    assert round_.dropped == ()
     packet = next(p for p in view.seat_packets if p.seat_id == SEAT)
     assert packet.status == "skipped"
     other = next(p for p in view.seat_packets if p.seat_id == SECOND_SEAT)
@@ -186,9 +187,14 @@ async def test_跳过后迟交被丢弃且留痕():
 
     round_ = harness.rounds.get(round_id)
     assert [r.seat_id for r in round_.current_reviews] == [SECOND_SEAT]
-    notes = [item for item in round_.dropped if item.seat_id == SEAT]
-    assert len(notes) == 2  # 跳过 1 条 + 迟交丢弃 1 条
-    assert notes[1].source is DropSource.USER_SKIPPED
+    view = await harness.get_round()(round_id=round_id)
+    notes = [item for item in view.dropped if item.seat_id == SEAT]
+    assert len(notes) == 2  # 控制行合成 1 条 + 迟交丢弃 1 条
+    assert {item.source for item in notes} == {"user_skipped"}
+    late = [item for item in round_.dropped if item.seat_id == SEAT]
+    assert len(late) == 1
+    assert late[0].source is DropSource.USER_SKIPPED
+    assert "跳过之后才交回" in late[0].reason
     assert round_.step is Step.SEATS_RUNNING
 
 
@@ -215,9 +221,11 @@ async def test_跳过后任务失败不记谎言留痕():
     await running  # 不抛：SECOND_SEAT 交回了，整轮继续
 
     round_ = harness.rounds.get(round_id)
-    notes = [item for item in round_.dropped if item.seat_id == SEAT]
+    view = await harness.get_round()(round_id=round_id)
+    notes = [item for item in view.dropped if item.seat_id == SEAT]
     assert len(notes) == 1, f"多记了谎言留痕：{[n.reason for n in notes]}"
-    assert notes[0].source is DropSource.USER_SKIPPED
+    assert notes[0].source == "user_skipped"
+    assert [item for item in round_.dropped if item.seat_id == SEAT] == []
     assert [r.seat_id for r in round_.current_reviews] == [SECOND_SEAT]
 
 

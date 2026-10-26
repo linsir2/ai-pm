@@ -241,7 +241,7 @@ harness/providers/    litellm.py
 harness/tools/        registry.py spec.py invoker.py recorder.py definitions/*.toml
 domain/authoring/     document.py blocks.py schema.py version.py instruction.py views.py diff.py readiness.py
 domain/provenance/    ledger.py evidence.py
-domain/round/         round.py step.py claim.py opinion.py questionnaire.py draft.py web.py web_query.py retrieval.py
+domain/round/         round.py step.py claim.py opinion.py questionnaire.py draft.py web.py web_query.py retrieval.py skip.py
 domain/exploration/   exploration.py item.py
 domain/discussion/    thread.py card.py
 domain/services/      traceability.py committer.py scope_guard.py assigner.py

@@ -19,10 +19,10 @@ from pmstudio.application.lease import (
     LeaseHeartbeat,
     LeaseScope,
     clear_lease_scope,
-    current_lease_scope,
     set_lease_scope,
     wall_clock_ms,
 )
+from pmstudio.application.use_cases import RunSeatRound
 from pmstudio.bootstrap.container import build_container
 from pmstudio.bootstrap.settings import Settings
 from pmstudio.domain.shared.ids import RoundId
@@ -459,7 +459,9 @@ async def test_heartbeat_retries_when_the_database_is_locked(tmp_path) -> None:
     assert scope.lost is False
 
 
-async def test_current_token_is_a_read_only_borrow(tmp_path) -> None:
+async def test_run_seat_round_rechecks_the_lease_in_the_db(tmp_path) -> None:
+    """本地 token 还没过期，但行已被接管：E / 观察写入前必须按 DB 判失租。"""
+
     db_path = tmp_path / "pmstudio.db"
     connection = database.connect(db_path)
     connection.execute(
@@ -469,26 +471,41 @@ async def test_current_token_is_a_read_only_borrow(tmp_path) -> None:
         (str(TEST_OWNER),),
     )
     store = SqliteLeaseStore(connection)
-    acquired = store.acquire(
-        LeaseKind.ROUND, "r1", TEST_OWNER, "worker-a", wall_clock_ms(), 2_000
+    old = store.acquire(
+        LeaseKind.ROUND, "r1", TEST_OWNER, "worker-a", wall_clock_ms(), 60_000
     )
-    assert acquired is not None
+    assert old is not None
+    scope = LeaseScope()
+    scope.bind(old)
+    context_token = set_lease_scope(scope)
+    try:
+        store.force_acquire(
+            LeaseKind.ROUND, "r1", TEST_OWNER, "thief", wall_clock_ms() + 1, 60_000
+        )
+        runner = RunSeatRound(
+            rounds=SqliteRoundRepository(connection),
+            round_writer=SqliteRoundRepository(connection),
+            documents=None,
+            evidence=None,
+            evidence_writer=None,
+            uow=None,
+            reviewer=None,
+            catalog=None,
+            assigner=None,
+            checker=None,
+            clock=None,
+            events=None,
+            materials=None,
+            memory=None,
+            leases=store,
+        )
 
-    borrowed = store.current_token(
-        LeaseKind.ROUND, "r1", TEST_OWNER, now_ms=wall_clock_ms()
-    )
-    assert borrowed == acquired
-    assert store.holds(acquired, now_ms=wall_clock_ms())
-
-    assert store.release(
-        LeaseKind.ROUND, "r1", TEST_OWNER, "worker-a", acquired.token
-    )
-    assert (
-        store.current_token(LeaseKind.ROUND, "r1", TEST_OWNER, now_ms=wall_clock_ms())
-        is None
-    )
-    assert current_lease_scope() is None
-    connection.close()
+        with pytest.raises(LeaseLost):
+            runner._ensure_lease_held(RoundId("r1"))
+        assert scope.lost is True
+    finally:
+        clear_lease_scope(context_token)
+        connection.close()
 
 
 def test_round_lease_lost_and_fencing_are_both_409() -> None:

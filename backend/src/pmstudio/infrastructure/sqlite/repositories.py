@@ -38,6 +38,7 @@ from pmstudio.domain.exploration.exploration import (
 from pmstudio.domain.memory.memory import ProjectMemory
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.skip import RoundSkip
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import (
     DiscussionId,
@@ -222,13 +223,69 @@ class SqliteRoundRepository:
         ).fetchone()
         if row is None:
             raise UnknownRound(round_id)
-        return ser.round_from_payload(
+        round_ = ser.round_from_payload(
             json.loads(row["payload"]),
             round_id=RoundId(row["round_id"]),
             project_id=ProjectId(row["project_id"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             step=Step(row["step"]),
             waiting_on=WaitingOn(row["waiting_on"]),
+        )
+        round_.apply_skip_controls(self.skips_for(round_id, owner=resolved))
+        return round_
+
+    def skips_for(
+        self, round_id: RoundId, *, owner: UserId | None = None
+    ) -> tuple[RoundSkip, ...]:
+        resolved = require_owner(owner)
+        rows = self._connection.execute(
+            "SELECT seat_id, pass_index, reason, source, requested_at FROM round_skips"
+            " WHERE round_id = ? AND owner_id = ? ORDER BY requested_at, rowid",
+            (str(round_id), str(resolved)),
+        ).fetchall()
+        return tuple(
+            RoundSkip(
+                seat_id=str(row["seat_id"]),
+                pass_index=int(row["pass_index"]),
+                reason=str(row["reason"]),
+                source=str(row["source"]),
+                requested_at_ms=int(row["requested_at"]),
+            )
+            for row in rows
+        )
+
+    def record_skip(
+        self, round_id: RoundId, skip: RoundSkip, *, owner: UserId | None = None
+    ) -> None:
+        """latest-wins：同一 `(round_id, seat_id)` 只留一行，`pass_index` 随新控制写更新。"""
+
+        resolved = require_owner(owner)
+        known = self._connection.execute(
+            "SELECT 1 FROM rounds WHERE round_id = ? AND owner_id = ?",
+            (str(round_id), str(resolved)),
+        ).fetchone()
+        if known is None:
+            raise UnknownRound(round_id)
+        self._connection.execute(
+            """
+            INSERT INTO round_skips
+                (round_id, owner_id, seat_id, pass_index, reason, source, requested_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(round_id, seat_id) DO UPDATE SET
+                pass_index = excluded.pass_index,
+                reason = excluded.reason,
+                source = excluded.source,
+                requested_at = excluded.requested_at
+            """,
+            (
+                str(round_id),
+                str(resolved),
+                skip.seat_id,
+                skip.pass_index,
+                skip.reason,
+                skip.source,
+                skip.requested_at_ms,
+            ),
         )
 
     def save(self, round_: Round, *, owner: UserId | None = None) -> None:

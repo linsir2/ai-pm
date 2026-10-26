@@ -523,9 +523,13 @@ async def keep_sim_inquiry(  # type: ignore[no-untyped-def]
 ):
     """收下模拟的勾选为材料（空选择直接拒；同选择重复收下幂等）。"""
 
+    services = services_of(request)
     return as_json(
-        await services_of(request).keep_sim_inquiry(
-            round_id=RoundId(round_id), chosen=tuple(body.chosen)
+        await services.runner.short_action(
+            RoundId(round_id),
+            lambda: services.keep_sim_inquiry(
+                round_id=RoundId(round_id), chosen=tuple(body.chosen)
+            ),
         )
     )
 

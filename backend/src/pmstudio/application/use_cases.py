@@ -156,6 +156,7 @@ from pmstudio.application.dto import (
 )
 from pmstudio.application.errors import (
     BuiltinTemplateProtected,
+    LeaseLost,
     MaterialFrozen,
     MaterialTooLarge,
     RoundBusy,
@@ -217,6 +218,7 @@ from pmstudio.application.ports import (
     ProjectFactory,
     RoundCallLog,
     RoundCanceller,
+    RoundSkipStore,
     SeatCatalog,
     SeatDefinition,
     SessionStore,
@@ -332,6 +334,7 @@ from pmstudio.domain.round.round import (
     Round,
     SeedRef,
 )
+from pmstudio.domain.round.skip import RoundSkip, user_skip_reason
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.round.web import (
     MAX_WEB_QUERIES,
@@ -1468,6 +1471,7 @@ class RunSeatRound:
         observations_repo: ObservationRepository = NO_OBSERVATIONS,
         preparer: RoundContextPreparer | None = None,
         web_research: WebResearch | None = None,
+        leases: LeaseStore | None = None,
     ) -> None:
         self._rounds = rounds
         self._round_writer = round_writer
@@ -1486,6 +1490,20 @@ class RunSeatRound:
         self._observations_repo = observations_repo
         self._preparer = preparer
         self._web_research = web_research
+        self._leases = leases
+
+    def _ensure_lease_held(self, round_id: RoundId) -> None:
+        """E / 观察写入前的 **DB** 复核：本地标记不能代替行上的 token/expiry。"""
+
+        if self._leases is None:
+            return
+        scope = current_lease_scope()
+        if scope is None:
+            raise LeaseLost(kind=LeaseKind.ROUND, target_id=str(round_id))
+        token = scope.ensure_held()
+        if not self._leases.holds(token, now_ms=wall_clock_ms()):
+            scope.mark_lost()
+            raise LeaseLost(kind=token.kind, target_id=token.target_id)
 
     async def __call__(self, *, round_id: RoundId) -> None:
         # 执行点必须在**主读取之前**：新 E 号与本步 web_selection 要在 prepare
@@ -1662,6 +1680,7 @@ class RunSeatRound:
             _publish(self._events, self._clock, round_)
             return
         with self._uow:
+            self._ensure_lease_held(round_id)
             ledger = self._evidence.get(round_.project_id)
             self._assigner.assign_opinions(
                 round_.current_reviews,
@@ -1672,6 +1691,7 @@ class RunSeatRound:
             self._evidence_writer.save(ledger)
         _publish(self._events, self._clock, round_)
         # L2 观察提取：席位意见跨轮存活
+        self._ensure_lease_held(round_id)
         self._extract_and_store_observations(round_)
 
     def _build_observations_index(self, project_id) -> str:
@@ -1794,6 +1814,9 @@ class RunSeatRound:
         review = outcome.review
         with self._uow:
             round_ = self._rounds.get(round_id)
+            if round_.seat_round_count != pass_index:
+                # 这一包是上一趟发出的；趟已翻页，不能把旧意见盖到新趟上。
+                return
             if review.seat_id in round_.skipped_seats:
                 # 用户跳过后迟交：整包丢弃，记一条（与跳过同一桶 USER_SKIPPED）。
                 # 不 attest——不变式"跳过的席位零意见进整合"靠这一行构造性成立；
@@ -1813,6 +1836,9 @@ class RunSeatRound:
                     )
                 )
                 self._round_writer.save(round_)
+                return
+            if any(item.seat_id == review.seat_id for item in round_.current_reviews):
+                # 同席同趟的重复交回：整包丢弃，不重复 attest / 留痕 / 发事件。
                 return
             round_.attest(review, packet_id=outcome.envelope.packet_id)
             # 席位提名的联网申请：只挂载、不执行（批不批由用户 / allow_web 决定）；
@@ -4745,6 +4771,7 @@ class AbandonRound:
                         UserId(token.user_id),
                         token.holder,
                         token.token,
+                        now_ms=wall_clock_ms(),
                     )
         finally:
             if scope_token is not None:
@@ -4820,10 +4847,11 @@ class SkipSeat:
     abandon 式直调，**不走 `runner.run()`**——走 runner 会被 `RoundBusy` 拦下，
     而"跑中点跳过"撞上"跑中锁"正是这个用例本身，409 等于功能不存在。
 
-    并发正确性（证明写在 `tests/application/test_skip_seat.py` 模块文档串）：
+    只写 `round_skips` 控制行，**不拿 action lease、不写 Round**：`_review_one`
+    在 attest 前 fresh-read，读到控制行合入的 `skipped_seats` 后把迟交整包丢弃；
+    `RoundRepository.get` 负责合入，DTO 投影时再合成 `USER_SKIPPED` 留痕。
     读验写在同一 uow 内做 fresh-read，SQLite `BEGIN IMMEDIATE` 写串行保证
-    后提交者看到先提交者的状态——交回先提交则这里拒（`SeatAlreadyReviewed`），
-    跳过先提交则迟交在 `_review_one` 汇合处被丢弃。两序都闭合，无 TOCTOU。
+    交回先提交则这里拒（`SeatAlreadyReviewed`），跳过先提交则迟交被丢弃。
 
     回包是**全量 view**（经组合的 `GetRound`，与 graph runner 同款）：
     前端直接拿动作回包渲染（`useWorkspaceData.abandon` 体例，无二次重读），
@@ -4834,98 +4862,49 @@ class SkipSeat:
         self,
         *,
         rounds: RoundReader,
-        round_writer: RoundWriter,
+        skips: RoundSkipStore,
         uow: UnitOfWork,
         events: EventPublisher,
         clock: Clock,
         viewer: GetRound,
-        leases: LeaseStore | None = None,
-        lease_ttl_ms: int = LEASE_TTL_SECONDS * 1000,
     ) -> None:
         self._rounds = rounds
-        self._round_writer = round_writer
+        self._skips = skips
         self._uow = uow
         self._events = events
         self._clock = clock
         self._viewer = viewer
-        self._leases = leases
-        self._lease_ttl_ms = lease_ttl_ms
 
     async def __call__(
         self, *, round_id: RoundId, seat_id: str, owner: UserId | None = None
     ) -> RoundView:
-        if self._leases is not None and owner is None:
-            raise ApplicationError(
-                "跳过席位缺少 owner 上下文",
-                code="missing_owner_scope",
-            )
-        scope_token = None
-        forced = None
-        try:
-            if self._leases is not None:
-                # 跑中跳过**不抢 action lease**：借用当前持有者的 token 写这一条控制信息。
-                # 没有活租约（进程崩过 / 停在 seats_running）才接管一把，写完立刻释放。
-                token = self._leases.current_token(
-                    LeaseKind.ROUND, str(round_id), owner, now_ms=wall_clock_ms()
-                )
-                if token is None:
-                    forced = self._leases.force_acquire(
-                        LeaseKind.ROUND,
-                        str(round_id),
-                        owner,
-                        f"skip:{uuid.uuid4().hex}",
-                        wall_clock_ms(),
-                        self._lease_ttl_ms,
+        with self._uow:
+            round_ = self._rounds.get(round_id)
+            if seat_id not in round_.skipped_seats:
+                if any(review.seat_id == seat_id for review in round_.current_reviews):
+                    # 本趟已交回：拒。不是 UX 选项，是正确性必需（见类文档串）。
+                    raise SeatAlreadyReviewed(
+                        f"席位 {seat_id} 本趟已经交回，跳过没有意义",
+                        seat_id=seat_id,
                     )
-                    token = forced
-                scope = LeaseScope()
-                scope.bind(token)
-                scope_token = set_lease_scope(scope)
-            with self._uow:
-                round_ = self._rounds.get(round_id)
-                if seat_id in round_.skipped_seats:
-                    # 幂等：已经跳过，直接返回 view——`note_dropped` 是追加语义，
-                    # 不 guard 会多记一条留痕。
-                    pass
-                else:
-                    if any(
-                        review.seat_id == seat_id
-                        for review in round_.current_reviews
-                    ):
-                        # 本趟已交回：拒。不是 UX 选项，是正确性必需（见类文档串）。
-                        raise SeatAlreadyReviewed(
-                            f"席位 {seat_id} 本趟已经交回，跳过没有意义",
-                            seat_id=seat_id,
-                        )
-                    # 非成员 → UnknownSeat；非跑中 → IllegalStepTransition——都复用，一字不动。
-                    round_.skip_seat(seat_id)
-                    round_.note_dropped(
-                        (
-                            DroppedItem(
-                                handle=seat_id,
-                                reason=f"用户跳过了席位 {seat_id}，本轮不再请它",
-                                source=DropSource.USER_SKIPPED,
-                                seat_id=seat_id,
-                                pass_index=round_.seat_round_count,
-                                packet_id=None,
-                            ),
-                        )
-                    )
-                    self._round_writer.save(round_)
-        finally:
-            if forced is not None:
-                # 接管来的锁只活到这次控制写结束；借用的锁**绝不释放**（那是长动作的）。
-                self._leases.release(
-                    forced.kind,
-                    forced.target_id,
-                    UserId(forced.user_id),
-                    forced.holder,
-                    forced.token,
+                # 非成员 → UnknownSeat；非跑中 → IllegalStepTransition——都复用，一字不动。
+                # 这里只借它做校验；控制行才是落库的真相，Round 本身不 save。
+                round_.skip_seat(seat_id)
+                self._skips.record_skip(
+                    round_id,
+                    RoundSkip(
+                        seat_id=seat_id,
+                        pass_index=round_.seat_round_count,
+                        reason=user_skip_reason(seat_id),
+                        source=DropSource.USER_SKIPPED.value,
+                        requested_at_ms=wall_clock_ms(),
+                    ),
+                    owner=owner,
                 )
-            if scope_token is not None:
-                clear_lease_scope(scope_token)
         _publish(self._events, self._clock, round_)
         return await self._viewer(round_id=round_id)
+
+
 class GetDocument:
     def __init__(self, *, documents: DocumentReader) -> None:
         self._documents = documents
@@ -5232,13 +5211,17 @@ def fail_round(
     with uow:
         round_ = rounds.get(round_id)
         round_.fail(reason, hint=hint)
+        failure = round_.failure
+        if failure is None:
+            # 用户放弃先落库：`Round.fail` 是空操作，不写、不发事件，也不读 at_step。
+            return
         round_writer.save(round_)
     events.publish(
         Event(
             name=GENERATION_FAILED,
             project_id=str(round_.project_id),
             round_id=str(round_id),
-            payload={"reason": reason, "at_step": str(round_.failure.at_step)},
+            payload={"reason": reason, "at_step": str(failure.at_step)},
             occurred_at=clock.now(),
         )
     )
@@ -5406,6 +5389,7 @@ class RunInquiry:
                             UserId(token.user_id),
                             token.holder,
                             token.token,
+                            now_ms=wall_clock_ms(),
                         )
             finally:
                 if scope_token is not None:
@@ -5620,6 +5604,7 @@ class AbandonExploration:
                         UserId(token.user_id),
                         token.holder,
                         token.token,
+                        now_ms=wall_clock_ms(),
                     )
         finally:
             if scope_token is not None:

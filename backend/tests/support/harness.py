@@ -1079,7 +1079,7 @@ class Harness:
 
         return SkipSeat(
             rounds=self.rounds,
-            round_writer=self.rounds,
+            skips=self.rounds,
             uow=self.uow,
             events=self.events,
             clock=self.clock,

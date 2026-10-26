@@ -24,6 +24,7 @@ from pmstudio.domain.memory.memory import ProjectMemory
 from pmstudio.domain.memory.observations import RoundObservation
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.skip import RoundSkip
 from pmstudio.domain.shared.ids import ExplorationId, ProjectId, RoundId
 from pmstudio.domain.shared.template import DocumentTemplate
 
@@ -65,6 +66,7 @@ class InMemoryDocumentRepository(_InMemoryRepository):
 class InMemoryRoundRepository(_InMemoryRepository):
     def __init__(self) -> None:
         super().__init__("round")
+        self._skips: dict[tuple[str, str], RoundSkip] = {}
 
     def seed(self, round_: Round) -> None:
         self._items[round_.round_id] = deepcopy(round_)
@@ -73,11 +75,26 @@ class InMemoryRoundRepository(_InMemoryRepository):
         round_ = self._items.get(round_id)
         if round_ is None:
             raise UnknownRound(round_id)
-        return deepcopy(round_)
+        loaded = deepcopy(round_)
+        loaded.apply_skip_controls(self.skips_for(round_id))
+        return loaded
 
     def save(self, round_: Round) -> None:
         self.saves += 1
         self._items[round_.round_id] = deepcopy(round_)
+
+    def record_skip(
+        self, round_id: RoundId, skip: RoundSkip, *, owner=None
+    ) -> None:
+        key = (str(round_id), skip.seat_id)
+        self._skips[key] = skip
+
+    def skips_for(self, round_id: RoundId, *, owner=None) -> tuple[RoundSkip, ...]:
+        return tuple(
+            item
+            for (item_round, _), item in self._skips.items()
+            if item_round == str(round_id)
+        )
 
     def all_rounds(self) -> tuple[Round, ...]:
         """按保存顺序给出全部轮次（测试替身专用：真实现是 SQL 的 `ORDER BY`）。"""

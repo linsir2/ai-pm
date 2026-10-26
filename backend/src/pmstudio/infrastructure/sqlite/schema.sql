@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS rounds (
 CREATE INDEX IF NOT EXISTS idx_rounds_project ON rounds(project_id, created_at);
 
 -- 运行中跳过席位（P3b / `02` §11.0.67）：控制行，不抢 action lease。
--- `pass_index` 是"哪一趟席位轮"——同一席位在不同趟里是两件事（与 DroppedItem 同一条理由）。
+-- 主键 `(round_id, seat_id)` 是 **latest-wins**：同一席位重新跳过覆盖同一行；
+-- `pass_index` 记最近一次跳过发生在第几趟（与 DroppedItem 同一条理由）。
+-- `RoundRepository.get` 把行合入 `skipped_seats`（整轮永久），不写 `Round.dropped`。
 CREATE TABLE IF NOT EXISTS round_skips (
   round_id     TEXT NOT NULL,
   owner_id     TEXT NOT NULL,

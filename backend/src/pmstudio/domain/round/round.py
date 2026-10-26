@@ -10,6 +10,7 @@ from pmstudio.domain.round.draft import Draft
 from pmstudio.domain.round.opinion import Opinion, SeatReview
 from pmstudio.domain.round.questionnaire import AnswerSet, ListItem, Question, Questionnaire
 from pmstudio.domain.round.retrieval import ManualChunk, RetrievalStage, RetrievalTrace
+from pmstudio.domain.round.skip import RoundSkip
 from pmstudio.domain.round.step import LEGAL_ADVANCES, MAX_SEAT_ROUNDS, Step, WaitingOn
 from pmstudio.domain.round.web import (
     LEGACY_REQUEST_WHY,
@@ -245,6 +246,9 @@ class Round:
         #: 本轮跳过的席位（`02` §11.0.67）：`pending_seats` 不再含它们，
         #: 答后第二趟也不再请；下一轮编制照旧。
         skipped_seats: tuple[str, ...] = (),
+        #: `round_skips` 控制行的只读副本（读路径合入；**不落进 payload**）。
+        #: `Round.dropped` 不复制它们——DTO 合成 `USER_SKIPPED` 留痕。
+        skip_records: tuple[RoundSkip, ...] = (),
         deferred: tuple[Question, ...] = (),
         carried_sources: dict[str, str] | None = None,
         questionnaire_history: tuple[Questionnaire, ...] = (),
@@ -304,6 +308,7 @@ class Round:
         self._abandon_reason = abandon_reason
         self._active_seats = tuple(active_seats)
         self._skipped_seats = tuple(skipped_seats)
+        self._skip_records = tuple(skip_records)
         #: 轮内未决队列：本批被 5 题上限挤掉的题（下一批优先问；出草案时落 s11）
         self._deferred = tuple(deferred)
         #: 这一轮把哪些 s11 未决条目问回来了（question_id → entry_id）：答完要机械撤下它们
@@ -547,6 +552,29 @@ class Round:
         """本轮跳过的席位（`02` §11.0.67）：两次都交不出可用报文，本轮不再请。"""
 
         return self._skipped_seats
+
+    @property
+    def skip_records(self) -> tuple[RoundSkip, ...]:
+        """读路径合入的 `round_skips` 控制行（只读；不进 payload、不进 `dropped`）。"""
+
+        return self._skip_records
+
+    def apply_skip_controls(self, records: Iterable[RoundSkip]) -> None:
+        """把 `round_skips` 控制行合入本轮（**读路径**，幂等，不要求 `SEATS_RUNNING`）。
+
+        控制行是另一个控制写留下的；`get` 每次按最新行重放，所以同一席位重复出现在
+        两趟里也只算一次。`Round.dropped` 不在这里追加——留痕由 DTO 合成，避免
+        get → save → get 把同一条跳过复制成两行。
+        """
+
+        seats = list(self._skipped_seats)
+        records_by_seat = {item.seat_id: item for item in self._skip_records}
+        for record in records:
+            if record.seat_id not in seats:
+                seats.append(record.seat_id)
+            records_by_seat[record.seat_id] = record
+        self._skipped_seats = tuple(seats)
+        self._skip_records = tuple(records_by_seat.values())
 
     def skip_seat(self, seat_id: str) -> None:
         """跳过一个席位：只在席位轮里调（`RunSeatRound` 失败分支）。
@@ -951,6 +979,9 @@ class Round:
         self._require_step(Step.SEATS_RUNNING)
         if review.seat_id not in self.active_seats:
             raise UnknownSeat(seat_id=review.seat_id)
+        if any(item.seat_id == review.seat_id for item in self.current_reviews):
+            # 同席同趟只留一条：迟到的重复包不能把同一份意见再计一次。
+            return
         stamped = review if packet_id is None else replace(review, packet_id=packet_id)
         self._seat_reviews = self._seat_reviews + (
             replace(stamped, pass_index=self._seat_round_count),
@@ -1424,18 +1455,18 @@ class Round:
     def fail(self, reason: str, *, hint: str | None = None) -> None:
         """记失败：**只记第一次**。
 
-        第二次调用（并发重试、重复提交）会把 `at_step` 记成当时那一步——那时它已经是
-        `failed` 了，于是"从哪一步重跑"这个信息就没了，任谁都救不回来（`04-未决.md` C9）。
-        失败点只有一个，重复的失败不改写它。
+        用户放弃先落库时，失败是**空操作**：终态由放弃说了算，不能把 `ABANDONED`
+        改写成 `FAILED`。已经 `FAILED` / `DONE` 的一轮再调失败是非法推进——
+        lease 已经把同一轮的动作串行，重复失败不该被静默吞掉。
 
-        `hint` 是**报文类**失败的摘要（给重试时的第一次尝试用）：网关那类（超时 / 5xx）
-        不传——那种错对模型没有信息量，递进去只是把提示词喂脏。
+        `hint` 只给**报文类**失败（重试时作为第一次尝试的 `validation_error`）；
+        网关超时 / 5xx 不传，那种错对模型没有信息量。
         """
 
-        if self._step is Step.DONE:
-            raise IllegalStepTransition(current=self._step, target=Step.FAILED)
-        if self._step is Step.FAILED:
+        if self._step is Step.ABANDONED:
             return
+        if self._step in (Step.DONE, Step.FAILED):
+            raise IllegalStepTransition(current=self._step, target=Step.FAILED)
         self._failure = Failure(at_step=self._step, waiting_on=self._waiting_on, reason=reason)
         if hint:
             self._retry_hint = hint

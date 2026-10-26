@@ -296,6 +296,7 @@ class RoundRunner:
                         UserId(lease.user_id),
                         lease.holder,
                         lease.token,
+                        now_ms=wall_clock_ms(),
                     )
                 except Exception:  # noqa: BLE001 —— 收尾不许掩盖原异常
                     pass

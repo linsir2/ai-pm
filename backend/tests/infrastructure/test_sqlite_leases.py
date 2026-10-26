@@ -156,18 +156,63 @@ def test_release_is_best_effort_and_never_raises_on_zero_rows(two_connections) -
     token = store.acquire(LeaseKind.ROUND, "r1", owner, HOLDER, NOW_MS, TTL_MS)
     assert token is not None
 
-    assert store.release(LeaseKind.ROUND, "r1", owner, HOLDER, token.token)
+    assert store.release(
+        LeaseKind.ROUND, "r1", owner, HOLDER, token.token, now_ms=NOW_MS + 1
+    )
     # 再释放一次 = 0 行：不报 409、不抛，只是 False
-    assert store.release(LeaseKind.ROUND, "r1", owner, HOLDER, token.token) is False
-    # 错 holder / 错 owner 也是 0 行
-    assert store.release(LeaseKind.ROUND, "r1", owner, "worker-b", token.token) is False
     assert (
-        store.release(LeaseKind.ROUND, "r1", UserId("u-other"), HOLDER, token.token)
+        store.release(
+            LeaseKind.ROUND, "r1", owner, HOLDER, token.token, now_ms=NOW_MS + 1
+        )
+        is False
+    )
+    # 错 holder / 错 owner 也是 0 行
+    assert (
+        store.release(
+            LeaseKind.ROUND, "r1", owner, "worker-b", token.token, now_ms=NOW_MS + 1
+        )
+        is False
+    )
+    assert (
+        store.release(
+            LeaseKind.ROUND,
+            "r1",
+            UserId("u-other"),
+            HOLDER,
+            token.token,
+            now_ms=NOW_MS + 1,
+        )
         is False
     )
 
     # 释放后下一个 acquire 拿到新 token（只增不减）
     again = _store(second).acquire(LeaseKind.ROUND, "r1", owner, "worker-b", NOW_MS, TTL_MS)
+    assert again is not None
+    assert again.token == token.token + 1
+
+
+def test_release_requires_an_unexpired_lease(two_connections) -> None:
+    """release 也带未过期条件：过期后 0 行，不把旧行清成"无租约"的假象。"""
+
+    first, second, owner = two_connections
+    token = _store(first).acquire(LeaseKind.ROUND, "r1", owner, HOLDER, NOW_MS, TTL_MS)
+    assert token is not None
+
+    assert (
+        _store(first).release(
+            LeaseKind.ROUND,
+            "r1",
+            owner,
+            HOLDER,
+            token.token,
+            now_ms=NOW_MS + TTL_MS,
+        )
+        is False
+    )
+    # 过期行仍可被下一个 acquire 按 expiry 接管。
+    again = _store(second).acquire(
+        LeaseKind.ROUND, "r1", owner, "worker-b", NOW_MS + TTL_MS, TTL_MS
+    )
     assert again is not None
     assert again.token == token.token + 1
 
@@ -240,7 +285,9 @@ def test_exploration_lease_uses_the_same_owner_and_holder_contract(
     assert store.renew(
         LeaseKind.EXPLORATION, "x1", owner, HOLDER, token.token, NOW_MS + 1, TTL_MS
     )
-    assert store.release(LeaseKind.EXPLORATION, "x1", owner, HOLDER, token.token)
+    assert store.release(
+        LeaseKind.EXPLORATION, "x1", owner, HOLDER, token.token, now_ms=NOW_MS + 1
+    )
 
 
 def test_scope_ensure_held_tracks_bind_expiry_loss_and_clear() -> None:
@@ -298,7 +345,9 @@ def test_new_row_insert_is_allowed_but_updates_need_a_live_lease(two_connections
 
     assert rounds.get(RoundId("r-new")).step.value == "abandoned"
 
-    _store(first).release(LeaseKind.ROUND, "r-new", owner, HOLDER, token.token)
+    _store(first).release(
+        LeaseKind.ROUND, "r-new", owner, HOLDER, token.token, now_ms=_now_ms()
+    )
     with pytest.raises(LeaseLost):
         rounds.save(round_)  # 释放后的迟到 save
 

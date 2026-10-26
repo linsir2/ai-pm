@@ -439,16 +439,18 @@ def test_opening_bad_revise_claims_after_seat_round_started():
         round_.revise_claims((claim(),))
 
 
-def test_fail_is_idempotent_so_a_second_writer_cannot_move_the_resume_point():
+def test_a_second_fail_is_rejected_and_cannot_move_the_resume_point():
     """并发/重复失败时，`at_step` 必须还是"从哪一步重跑"，不能被后一次改写。
 
     作者库里真出现过 `at_step=failed`：两个重试同时跑，第二次记失败时 step 已经是 failed，
     于是续跑点被写成 failed，这一轮再也恢复不了（`04-未决.md` C9）。
+    P3b 起 lease 串行同一轮的动作，重复失败改为非法推进——不静默吞掉。
     """
 
     round_ = round_with_seats()
     round_.fail("第一次失败")
-    round_.fail("第二次失败（另一次并发尝试）")
+    with pytest.raises(IllegalStepTransition):
+        round_.fail("第二次失败（另一次并发尝试）")
 
     assert round_.step is Step.FAILED
     assert round_.failure is not None

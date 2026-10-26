@@ -471,6 +471,7 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         observations_repo=observations_repo,
         preparer=round_context,
         web_research=web_research,
+        leases=leases,
     )
     integrate_round = IntegrateRound(
         rounds=rounds,
@@ -721,12 +722,10 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
         ),
         skip_seat=SkipSeat(
             rounds=rounds,
-            round_writer=rounds,
+            skips=rounds,
             uow=uow,
             events=bus,
             clock=clock,
-            # 跑中跳过借用当前 action lease（不抢锁）；Task 4 改成 round_skips 控制行。
-            leases=leases,
             viewer=get_round,
         ),
         exploration_runner=exploration_runner,

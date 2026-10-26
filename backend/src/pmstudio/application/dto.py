@@ -37,7 +37,7 @@ from pmstudio.domain.round.questionnaire import (
     Answer,
     Question,
 )
-from pmstudio.domain.round.round import Round
+from pmstudio.domain.round.round import DropSource, Round
 from pmstudio.domain.round.step import MAX_SEAT_ROUNDS
 from pmstudio.domain.services.scope_guard import ScopeGuard
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
@@ -1425,6 +1425,44 @@ def proposal_ignore_streak(outcomes: Sequence[RoundOutcomeView]) -> int:
     return streak
 
 
+def _dropped_views(round_: Round) -> tuple[DroppedView, ...]:
+    """轮次留痕 + `round_skips` 控制行合成的用户跳过留痕。
+
+    控制行不写进 `Round.dropped`（get → save → get 会复制）；投影时合成，
+    同一席位若已有旧 payload 里的 USER_SKIPPED 行则不重复。
+    """
+
+    views = [
+        DroppedView(
+            handle=item.handle,
+            seat_id=item.seat_id,
+            pass_index=item.pass_index,
+            reason=item.reason,
+            source=item.source.value,
+            packet_id=item.packet_id,
+        )
+        for item in round_.dropped
+    ]
+    traced = {
+        (item.seat_id, item.reason)
+        for item in round_.dropped
+        if item.source is DropSource.USER_SKIPPED
+    }
+    views.extend(
+        DroppedView(
+            handle=record.seat_id,
+            seat_id=record.seat_id,
+            pass_index=record.pass_index,
+            reason=record.reason,
+            source=record.source,
+            packet_id=None,
+        )
+        for record in round_.skip_records
+        if (record.seat_id, record.reason) not in traced
+    )
+    return tuple(views)
+
+
 def round_view(
     round_: Round,
     *,
@@ -1488,17 +1526,7 @@ def round_view(
         seat_packets=_seat_packets(
             round_, seat_titles=seat_titles, ledger=ledger, catalog=catalog
         ),
-        dropped=tuple(
-            DroppedView(
-                handle=item.handle,
-                seat_id=item.seat_id,
-                pass_index=item.pass_index,
-                reason=item.reason,
-                source=item.source.value,
-                packet_id=item.packet_id,
-            )
-            for item in round_.dropped
-        ),
+        dropped=_dropped_views(round_),
         questions=_question_views(round_),
         asked_questions=_asked_question_views(round_),
         # 清单项的真相源是**轮次**（历次累积）：挂在当轮问卷上的那份换一批就没了（F8）

@@ -48,6 +48,7 @@ if TYPE_CHECKING:
         ThreadView,
     )
     from pmstudio.domain.exploration.exploration import ExplorationScope
+    from pmstudio.domain.round.skip import RoundSkip
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,8 +111,14 @@ class LeaseStore(Protocol):
         user_id: UserId,
         holder: str,
         token: int,
+        *,
+        now_ms: int,
     ) -> bool:
-        """尽力而为：0 行返回 False，**不**抛（不是 409，也不代表资源被占）。"""
+        """带未过期条件的尽力而为释放。
+
+        0 行返回 False，**不**抛（不是 409，也不代表资源被占）——过期 / 被接管的锁
+        清不掉是正常的，下一次 `acquire` 会按 `lease_expires_at <= now` 接管。
+        """
 
         ...
 
@@ -133,17 +140,22 @@ class LeaseStore(Protocol):
 
         ...
 
-    def current_token(
-        self, kind: LeaseKind, target_id: str, user_id: UserId, *, now_ms: int
-    ) -> LeaseToken | None:
-        """读一行**当前有效**的租约（不改 token、不续期）。
 
-        给"轮内控制写"借用：`SkipSeat` 要在跑中的 action lease 下写控制信息，
-        但它不是那个长动作、也不该把锁抢走。Task 4 改成 `round_skips` 控制行后，
-        这个入口只保留给"借用已有租约"这一类显式场景。
-        """
+@runtime_checkable
+class RoundSkipStore(Protocol):
+    """运行中跳过席位的控制行（`round_skips`）。
 
-        ...
+    与 `RoundWriter.save` 分开：跳过不写轮次 payload、不拿 action lease；仓储 `get`
+    负责把控制行合入 `skipped_seats`。主键 `(round_id, seat_id)` 是 latest-wins。
+    """
+
+    def record_skip(
+        self, round_id: RoundId, skip: RoundSkip, *, owner: UserId | None = None
+    ) -> None: ...
+
+    def skips_for(
+        self, round_id: RoundId, *, owner: UserId | None = None
+    ) -> tuple[RoundSkip, ...]: ...
 
 
 @runtime_checkable

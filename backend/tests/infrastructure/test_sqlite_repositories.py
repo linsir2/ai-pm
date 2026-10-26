@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from pmstudio.application.errors import LeaseLost, UnknownProject, UnknownRound
+from pmstudio.application.lease import wall_clock_ms
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
@@ -20,6 +21,7 @@ from pmstudio.domain.round.round import (
     Round,
     SeatNomination,
 )
+from pmstudio.domain.round.skip import RoundSkip, user_skip_reason
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.round.web import WebRequest, WebRequestState
 from pmstudio.domain.shared.ids import (
@@ -801,6 +803,60 @@ def test_round_payload_without_skipped_seats_key_still_loads():
     assert loaded.pending_seats == ("seat.a", "seat.b")
 
 
+def test_round_skips_are_latest_wins_and_do_not_touch_dropped(tmp_path):
+    """控制行：同席位换趟覆盖同一行；get 合入 skipped_seats，不写 dropped。"""
+
+    connection = database.connect(tmp_path / "pmstudio.db")
+    try:
+        rounds = SqliteRoundRepository(connection)
+        round_ = make_round(seats=("seat.a", "seat.b"))
+        rounds.save(round_)
+
+        rounds.record_skip(
+            round_.round_id,
+            RoundSkip(
+                seat_id="seat.b",
+                pass_index=1,
+                reason=user_skip_reason("seat.b"),
+                source="user_skipped",
+                requested_at_ms=1,
+            ),
+        )
+        first = rounds.get(round_.round_id)
+        assert first.skipped_seats == ("seat.b",)
+        assert first.dropped == ()
+        assert [item.pass_index for item in first.skip_records] == [1]
+
+        rounds.record_skip(
+            round_.round_id,
+            RoundSkip(
+                seat_id="seat.b",
+                pass_index=2,
+                reason=user_skip_reason("seat.b"),
+                source="user_skipped",
+                requested_at_ms=2,
+            ),
+        )
+        rows = connection.execute(
+            "SELECT seat_id, pass_index FROM round_skips WHERE round_id = ?",
+            (str(round_.round_id),),
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [("seat.b", 2)]
+
+        loaded = rounds.get(round_.round_id)
+        assert loaded.skipped_seats == ("seat.b",)
+        assert [item.pass_index for item in loaded.skip_records] == [2]
+
+        bind_round_lease(connection, round_.round_id)
+        rounds.save(loaded)
+        again = rounds.get(round_.round_id)
+        assert again.skipped_seats == ("seat.b",)
+        assert again.dropped == ()
+        assert len(again.skip_records) == 1
+    finally:
+        connection.close()
+
+
 def test_material_references_counts_pinned_and_manual_chunks(tmp_path):
     """P2.0：还没投影、没有 E 号的"手勾/手动带料"也算引用——不许删、不许就地重解析。"""
 
@@ -846,7 +902,12 @@ def test_round_save_is_fenced_by_the_current_lease(tmp_path):
         rounds.save(round_)  # 有匹配的活租约
 
         SqliteLeaseStore(connection).release(
-            token.kind, token.target_id, token.user_id, token.holder, token.token
+            token.kind,
+            token.target_id,
+            token.user_id,
+            token.holder,
+            token.token,
+            now_ms=wall_clock_ms(),
         )
         with pytest.raises(LeaseLost):
             rounds.save(round_)  # 释放后的迟到写
