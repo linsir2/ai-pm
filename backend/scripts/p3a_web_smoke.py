@@ -34,7 +34,10 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
 ENV_FILE = BACKEND_ROOT / ".env"
+#: 一次性证据目录（日期固定）。复跑用 `--out` 指到新目录，别覆盖旧证据。
 DEFAULT_OUT = REPO_ROOT / ".codex" / "runs" / "2026-10-26" / "p3a"
+#: 写盘前要替换掉的敏感值（从 `.env` 的 *KEY* / *SECRET* / *PASSWORD* / *TOKEN* 收集）。
+SECRET_VALUES: list[str] = []
 
 INPUT = (
     "我们要做一款面向大学生的时间管理 App。先查一下 2025 年中国大学生平均每天"
@@ -62,7 +65,22 @@ def load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def _redact(value):
+    """写盘前把 `.env` 里的敏感值替换掉（错误文本也可能带上游回包）。"""
+
+    if isinstance(value, str):
+        for secret in SECRET_VALUES:
+            value = value.replace(secret, "<redacted>")
+        return value
+    if isinstance(value, dict):
+        return {key: _redact(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(item) for item in value]
+    return value
+
+
 def save(report: dict, out: Path) -> None:
+    report = _redact(report)
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -88,10 +106,20 @@ def save(report: dict, out: Path) -> None:
             f"waiting_on={slot.get('opening_waiting_on')}",
             f"- 申请状态（opening）：{slot.get('opening_state_counts')}",
             f"- 申请状态（final）：{slot.get('final_state_counts')}",
+            f"- 自动批准触发：{slot.get('auto_approval_triggered')}；"
+            f"席位/整合执行：{len(slot.get('seat_integrator_executed') or ())} 条",
             f"- 一条结果一个 E 号：{slot.get('one_result_one_eid')}",
             f"- E 号可查：{slot.get('evidence_resolvable')}",
             f"- 决策：{slot.get('decision_status_code')} "
             f"{slot.get('decision_state') or slot.get('decision_error') or '（无待决策申请）'}",
+        ]
+        if slot.get("decision_new_selected_materials") is not None:
+            lines.append(
+                f"- 决策新增选中材料：{slot['decision_new_selected_materials']} 份；"
+                f"真库 web 材料 {slot.get('decision_db_web_materials_before')}→"
+                f"{slot.get('decision_db_web_materials_after')} 份"
+            )
+        lines += [
             f"- SQLite：web 材料 {slot.get('sqlite', {}).get('web_materials')} 份 / "
             f"{slot.get('sqlite', {}).get('web_chunks')} 块；"
             f"web_selection={slot.get('sqlite', {}).get('web_selection_count')} 项",
@@ -356,7 +384,9 @@ async def run_round(  # noqa: C901 —— 冒烟脚本按步骤线性写
             f"{label}:decision",
             f"批准 {target['request_id']}（{target['origin']}）：可能再出网一次",
         )
-        before = len(slot["opening_web_materials"])
+        selected_before = len(slot["opening_web_materials"])
+        db_before = db_evidence(db_path, project_id, round_id)
+        slot["decision_db_web_materials_before"] = db_before["web_materials"]
         decided = await client.post(
             f"/api/rounds/{round_id}/web-requests/{target['request_id']}/decision",
             json={"decision": "approve"},
@@ -374,15 +404,19 @@ async def run_round(  # noqa: C901 —— 冒烟脚本按步骤线性写
                 ),
                 None,
             )
-            slot["decision_new_materials"] = (
-                len(slot["decision_web_materials"]) - before
+            slot["decision_new_selected_materials"] = (
+                len(slot["decision_web_materials"]) - selected_before
             )
+            db_after = db_evidence(db_path, project_id, round_id)
+            slot["decision_db_web_materials_after"] = db_after["web_materials"]
             log(
                 report,
                 out,
                 f"{label}:decision-done",
                 f"{target['request_id']} → {slot['decision_state']}；"
-                f"新增 web 材料 {slot['decision_new_materials']} 份",
+                f"新增选中材料 {slot['decision_new_selected_materials']} 份；"
+                f"真库 web 材料 {slot['decision_db_web_materials_before']}"
+                f"→{slot['decision_db_web_materials_after']} 份",
             )
         else:
             body = decided.text[:400]
@@ -426,12 +460,20 @@ async def run_round(  # noqa: C901 —— 冒烟脚本按步骤线性写
     db = db_evidence(db_path, project_id, round_id)
     slot["sqlite"] = db
     slot["web_selection"] = db.get("web_selection")
-    slot["auto_approved_or_executed"] = [
+    # 只数“席位/整合者被批准或执行过”的条目；其中可能是 decision 手动批的，
+    # 所以不叫 auto。自动批准触发没触发另记（opening 阶段就 done/failed 的
+    # seat/integrator 只可能来自 allow_web 自动批准）。
+    slot["seat_integrator_executed"] = [
         item
         for item in slot["final_web_requests"]
         if item["origin"] in ("seat", "integrator")
         and item["state"] in ("done", "failed", "approved")
     ]
+    slot["auto_approval_triggered"] = any(
+        item["origin"] in ("seat", "integrator")
+        and item["state"] in ("done", "failed")
+        for item in slot["opening_web_requests"]
+    )
     log(
         report,
         out,
@@ -488,6 +530,13 @@ async def run(report: dict, out: Path) -> int:
     run_env.pop("PMSTUDIO_TRACE_MODEL", None)
     for key, value in run_env.items():
         os.environ[key] = value
+    SECRET_VALUES.clear()
+    SECRET_VALUES.extend(
+        value
+        for key, value in env.items()
+        if any(marker in key for marker in ("KEY", "SECRET", "PASSWORD", "TOKEN"))
+        and len(value) >= 4
+    )
 
     sys.path.insert(0, str(BACKEND_ROOT / "src"))
     import httpx
@@ -529,17 +578,25 @@ async def run(report: dict, out: Path) -> int:
 
         schema = (await client.get("/api/schema")).json()
         limits = schema.get("limits") or {}
-        report["schema_max_web_executions"] = limits.get("max_web_executions")
+        limit = limits.get("max_web_executions")
+        report["schema_max_web_executions"] = limit
+        # 生效值 = `min(tool.max_queries, MAX_WEB_EXECUTIONS)`。shipped Tavily
+        # 默认 max_queries=3，所以这份默认配置下是 3；脚本只要求 >0，不把 3
+        # 当产品契约（合法配置 max_queries=1/2 时不应该判脚本失败）。
+        report["schema_limit_note"] = (
+            "生效值 = min(tool.max_queries, MAX_WEB_EXECUTIONS)；"
+            "默认 Tavily max_queries=3 时为 3，脚本只要求 >0"
+        )
         log(
             report,
             out,
             "schema",
-            f"max_web_executions={limits.get('max_web_executions')}",
+            f"max_web_executions={limit}（默认 Tavily 假设；脚本只要求 >0）",
         )
-        if limits.get("max_web_executions") != 3:
+        if not isinstance(limit, int) or limit <= 0:
             report["error"] = (
-                "schema.limits.max_web_executions 不是 3："
-                f"{limits.get('max_web_executions')!r}"
+                "schema.limits.max_web_executions 不是正数："
+                f"{limit!r}（默认 Tavily 配置下应为 3）"
             )
             return 1
 
@@ -549,7 +606,8 @@ async def run(report: dict, out: Path) -> int:
         report.setdefault("rounds", []).append(first)
         report["web_search_available"] = first.get("web_search_available")
         report["web_search_network_access"] = first.get("web_search_network_access")
-        report["auto_approved_or_executed"] = first.get("auto_approved_or_executed")
+        report["seat_integrator_executed"] = first.get("seat_integrator_executed")
+        report["auto_approval_triggered"] = first.get("auto_approval_triggered")
         problems = round_problems(first)
         if problems:
             report["error"] = "第一轮：" + "；".join(problems)
@@ -567,6 +625,9 @@ async def run(report: dict, out: Path) -> int:
                 report["error"] = "第二轮：" + "；".join(problems)
                 return 1
 
+    report["auto_approval_triggered"] = any(
+        slot.get("auto_approval_triggered") for slot in report["rounds"]
+    )
     attempted = [slot for slot in report["rounds"] if slot.get("decision_request")]
     succeeded = [
         slot for slot in attempted if slot.get("decision_status_code") == 200
@@ -583,7 +644,12 @@ async def run(report: dict, out: Path) -> int:
 
 async def main() -> int:
     parser = argparse.ArgumentParser(description="P3a 真模型 + 真 Tavily 冒烟")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=DEFAULT_OUT,
+        help="证据目录；默认是一次性日期目录，复跑建议用 --out 指到新目录",
+    )
     args = parser.parse_args()
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
