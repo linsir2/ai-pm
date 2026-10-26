@@ -360,6 +360,22 @@ class RoundBusy(ApplicationError):
         )
 
 
+class LeaseLost(ApplicationError):
+    """写库时发现租约已经不属于自己（过期被接管、被 force 抢走，或根本没拿到）。
+
+    它是**写路径的 fencing 失败**：这次 `save` 没有落库（或在同一事务里被回滚）。
+    与 `RoundBusy` 分开——那是"还没开始就被别人占着"，这是"跑到一半发现锁没了"。
+    """
+
+    def __init__(self, *, kind: object, target_id: object) -> None:
+        super().__init__(
+            f"租约已失效（{kind}:{target_id}），这次写入没有落库",
+            code="lease_lost",
+            kind=str(kind),
+            target_id=str(target_id),
+        )
+
+
 class DiscussionBusy(ApplicationError):
     """同一条讨论线程已经有一轮在跑。
 

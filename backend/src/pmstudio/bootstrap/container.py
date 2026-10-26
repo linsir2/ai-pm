@@ -119,6 +119,7 @@ from pmstudio.infrastructure.sqlite.call_log import SqliteRoundCallLog
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
+from pmstudio.infrastructure.sqlite.leases import SqliteLeaseStore
 from pmstudio.infrastructure.sqlite.materials import (
     SqliteFtsRetriever,
     SqliteHybridRetriever,
@@ -318,8 +319,11 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     # 管理后台那一屏的读模型（`06` §2.4）：每用户一行，只读，同样无写能力
     admin_stats = SqliteAdminStatsRepository(connection)
     documents = SqliteDocumentRepository(connection)
-    rounds = SqliteRoundRepository(connection)
-    explorations = SqliteExplorationRepository(connection)
+    # 轮 / 探索的 DB 租约（P3b 多 worker）：同一个 store 交给两个仓储，
+    # 保证 fencing 与 runner 心跳用的是同一套 SQL/口径。
+    leases = SqliteLeaseStore(connection)
+    rounds = SqliteRoundRepository(connection, leases=leases)
+    explorations = SqliteExplorationRepository(connection, leases=leases)
     discussions = SqliteDiscussionRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
     materials = SqliteMaterialStore(connection, ids=ids)

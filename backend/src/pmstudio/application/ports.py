@@ -28,6 +28,7 @@ from pmstudio.domain.shared.ids import (
     RoundId,
     UserId,
 )
+from pmstudio.domain.shared.lease import LeaseKind, LeaseToken
 from pmstudio.domain.shared.template import DocumentTemplate
 
 if TYPE_CHECKING:
@@ -69,6 +70,68 @@ class Clock(Protocol):
 @runtime_checkable
 class IdGenerator(Protocol):
     def new(self, prefix: str) -> str: ...
+
+
+@runtime_checkable
+class LeaseStore(Protocol):
+    """轮 / 探索行上的 DB 租约（多 worker 互斥的唯一真相源）。
+
+    所有方法都带**用户** `user_id`（行的归属）与**持有者** `holder`（进程/动作身份）——
+    两者分开：同一个人可能开着两个标签页，也可能两个 worker 跑同一用户的库。
+    时间一律用绝对毫秒；`acquire` 发现被占用返回 `None`（由调用方翻成 409），
+    未知 / 不属于该用户的 target 抛 `UnknownRound` / `UnknownExploration`（404）。
+    """
+
+    def acquire(
+        self,
+        kind: LeaseKind,
+        target_id: str,
+        user_id: UserId,
+        holder: str,
+        now_ms: int,
+        ttl_ms: int,
+    ) -> LeaseToken | None: ...
+
+    def renew(
+        self,
+        kind: LeaseKind,
+        target_id: str,
+        user_id: UserId,
+        holder: str,
+        token: int,
+        now_ms: int,
+        ttl_ms: int,
+    ) -> bool: ...
+
+    def release(
+        self,
+        kind: LeaseKind,
+        target_id: str,
+        user_id: UserId,
+        holder: str,
+        token: int,
+    ) -> bool:
+        """尽力而为：0 行返回 False，**不**抛（不是 409，也不代表资源被占）。"""
+
+        ...
+
+    def force_acquire(
+        self,
+        kind: LeaseKind,
+        target_id: str,
+        user_id: UserId,
+        holder: str,
+        now_ms: int,
+        ttl_ms: int,
+    ) -> LeaseToken:
+        """无条件接管（放弃 / 恢复用）；未知 target 仍然 404。"""
+
+        ...
+
+    def holds(self, token: LeaseToken, *, now_ms: int) -> bool:
+        """这一行此刻是否仍归这把 token（owner + holder + token + 未过期）。"""
+
+        ...
 
 
 @runtime_checkable

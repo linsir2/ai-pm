@@ -7,6 +7,7 @@
 
 import json
 import sqlite3
+import time
 from datetime import UTC, datetime
 
 from pmstudio.application.dto import (
@@ -17,13 +18,15 @@ from pmstudio.application.dto import (
     round_head_view,
 )
 from pmstudio.application.errors import (
+    LeaseLost,
     UnknownDiscussion,
     UnknownExploration,
     UnknownProject,
     UnknownRound,
     UnknownTemplate,
 )
-from pmstudio.application.ports import TemplateEntry
+from pmstudio.application.lease import current_lease_scope
+from pmstudio.application.ports import LeaseStore, TemplateEntry
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.discussion.thread import Discussion, ThreadStatus
 from pmstudio.domain.exploration.exploration import (
@@ -42,13 +45,42 @@ from pmstudio.domain.shared.ids import (
     RoundId,
     UserId,
 )
+from pmstudio.domain.shared.lease import LeaseKind, LeaseToken
 from pmstudio.domain.shared.template import DocumentTemplate, standard_template
 from pmstudio.infrastructure.sqlite import serialization as ser
+from pmstudio.infrastructure.sqlite.leases import SqliteLeaseStore
 from pmstudio.infrastructure.sqlite.owner_scope import optional_owner, require_owner
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _now_ms() -> int:
+    return time.time_ns() // 1_000_000
+
+
+def _matching_lease(
+    kind: LeaseKind, target_id: str, owner: UserId
+) -> LeaseToken | None:
+    """当前 contextvar 里那把**属于这一行**的租约；没有/不对就是 `None`。
+
+    只做形状匹配；"是否仍然有效"由仓储的 SQL 条件判（本地标记最多是个快速失败）。
+    """
+
+    scope = current_lease_scope()
+    if scope is None or scope.lost:
+        return None
+    token = scope.token
+    if token is None:
+        return None
+    if (
+        token.kind is not kind
+        or token.target_id != target_id
+        or token.user_id != str(owner)
+    ):
+        return None
+    return token
 
 
 class SqliteDocumentRepository:
@@ -166,8 +198,11 @@ class SqliteDocumentRepository:
 
 
 class SqliteRoundRepository:
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(
+        self, connection: sqlite3.Connection, *, leases: LeaseStore | None = None
+    ) -> None:
         self._connection = connection
+        self._leases: LeaseStore = leases or SqliteLeaseStore(connection)
 
     def get(self, round_id: RoundId, *, owner: UserId | None = None) -> Round:
         resolved = require_owner(owner)
@@ -187,32 +222,82 @@ class SqliteRoundRepository:
         )
 
     def save(self, round_: Round, *, owner: UserId | None = None) -> None:
+        """写一轮。**existing 行必须有当前上下文里的活租约**（fencing）。
+
+        新 INSERT 允许无租约（建轮那一刻还没出租；Task 2 会在同一 UoW 里补 acquire）。
+        existing 行则必须同时满足 `owner_id / lease_owner / lease_token /
+        lease_expires_at > now`——旧 worker 在过期被别人接管后的迟到写会抛 `LeaseLost`，
+        由外层事务整笔回滚。
+        """
+
         resolved = require_owner(owner)
+        target_id = str(round_.round_id)
         payload = json.dumps(ser.round_to_payload(round_), ensure_ascii=False)
-        self._connection.execute(
+        exists = (
+            self._connection.execute(
+                "SELECT 1 FROM rounds WHERE round_id = ?", (target_id,)
+            ).fetchone()
+            is not None
+        )
+        if not exists:
+            try:
+                self._connection.execute(
+                    """
+                    INSERT INTO rounds (round_id, project_id, owner_id, step, waiting_on,
+                                        payload, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        target_id,
+                        str(round_.project_id),
+                        str(resolved),
+                        str(round_.step),
+                        str(round_.waiting_on),
+                        payload,
+                        round_.created_at.isoformat(),
+                        _now(),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                # 查与插之间被别人建了同一行 → 这一行不是我们的租约，不许覆盖。
+                if (
+                    self._connection.execute(
+                        "SELECT 1 FROM rounds WHERE round_id = ?", (target_id,)
+                    ).fetchone()
+                    is not None
+                ):
+                    raise LeaseLost(
+                        kind=LeaseKind.ROUND, target_id=target_id
+                    ) from None
+                raise
+            return
+
+        now_ms = _now_ms()
+        token = _matching_lease(LeaseKind.ROUND, target_id, resolved)
+        if token is None or not self._leases.holds(token, now_ms=now_ms):
+            raise LeaseLost(kind=LeaseKind.ROUND, target_id=target_id)
+        cursor = self._connection.execute(
             """
-            INSERT INTO rounds (round_id, project_id, owner_id, step, waiting_on, payload,
-                                created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(round_id) DO UPDATE SET
-                step = excluded.step,
-                waiting_on = excluded.waiting_on,
-                payload = excluded.payload,
-                updated_at = excluded.updated_at
-            WHERE owner_id = ?
+            UPDATE rounds
+            SET step = ?, waiting_on = ?, payload = ?, updated_at = ?
+            WHERE round_id = ? AND owner_id = ?
+              AND lease_owner = ? AND lease_token = ?
+              AND lease_expires_at > ?
             """,
             (
-                str(round_.round_id),
-                str(round_.project_id),
-                str(resolved),
                 str(round_.step),
                 str(round_.waiting_on),
                 payload,
-                round_.created_at.isoformat(),
                 _now(),
+                target_id,
                 str(resolved),
+                token.holder,
+                token.token,
+                now_ms,
             ),
         )
+        if cursor.rowcount != 1:
+            raise LeaseLost(kind=LeaseKind.ROUND, target_id=target_id)
 
     def latest_round_id(
         self, project_id: ProjectId, *, owner: UserId | None = None
@@ -233,8 +318,11 @@ class SqliteExplorationRepository:
     状态与类别是列——"同项目有没有在跑"这类查询不该把整份 payload 读出来。
     """
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(
+        self, connection: sqlite3.Connection, *, leases: LeaseStore | None = None
+    ) -> None:
         self._connection = connection
+        self._leases: LeaseStore = leases or SqliteLeaseStore(connection)
 
     def get(
         self, exploration_id: ExplorationId, *, owner: UserId | None = None
@@ -249,34 +337,82 @@ class SqliteExplorationRepository:
         return self._from_row(row)
 
     def save(self, exploration: Exploration, *, owner: UserId | None = None) -> None:
+        """写一趟探索；existing 行的 fencing 契约与轮次仓储逐字相同。
+
+        INSERT 允许无租约（Task 3 会在同一 UoW 里写 token=1）；running 行的部分唯一索引
+        冲突**不**在这里翻译——Task 3 的用例层统一转 `ExplorationBusy`。
+        """
+
         resolved = require_owner(owner)
+        target_id = str(exploration.exploration_id)
         payload = json.dumps(
             ser.exploration_to_payload(exploration), ensure_ascii=False
         )
-        self._connection.execute(
+        exists = (
+            self._connection.execute(
+                "SELECT 1 FROM explorations WHERE exploration_id = ?", (target_id,)
+            ).fetchone()
+            is not None
+        )
+        if not exists:
+            try:
+                self._connection.execute(
+                    """
+                    INSERT INTO explorations (exploration_id, project_id, owner_id, kind,
+                                              status, payload, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        target_id,
+                        str(exploration.project_id),
+                        str(resolved),
+                        str(exploration.kind),
+                        str(exploration.status),
+                        payload,
+                        exploration.created_at.isoformat(),
+                        _now(),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                if (
+                    self._connection.execute(
+                        "SELECT 1 FROM explorations WHERE exploration_id = ?",
+                        (target_id,),
+                    ).fetchone()
+                    is not None
+                ):
+                    raise LeaseLost(
+                        kind=LeaseKind.EXPLORATION, target_id=target_id
+                    ) from None
+                raise
+            return
+
+        now_ms = _now_ms()
+        token = _matching_lease(LeaseKind.EXPLORATION, target_id, resolved)
+        if token is None or not self._leases.holds(token, now_ms=now_ms):
+            raise LeaseLost(kind=LeaseKind.EXPLORATION, target_id=target_id)
+        cursor = self._connection.execute(
             """
-            INSERT INTO explorations (exploration_id, project_id, owner_id, kind, status,
-                                      payload, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(exploration_id) DO UPDATE SET
-                kind = excluded.kind,
-                status = excluded.status,
-                payload = excluded.payload,
-                updated_at = excluded.updated_at
-            WHERE owner_id = ?
+            UPDATE explorations
+            SET kind = ?, status = ?, payload = ?, updated_at = ?
+            WHERE exploration_id = ? AND owner_id = ?
+              AND lease_owner = ? AND lease_token = ?
+              AND lease_expires_at > ?
             """,
             (
-                str(exploration.exploration_id),
-                str(exploration.project_id),
-                str(resolved),
                 str(exploration.kind),
                 str(exploration.status),
                 payload,
-                exploration.created_at.isoformat(),
                 _now(),
+                target_id,
                 str(resolved),
+                token.holder,
+                token.token,
+                now_ms,
             ),
         )
+        if cursor.rowcount != 1:
+            raise LeaseLost(kind=LeaseKind.EXPLORATION, target_id=target_id)
 
     def list_for_project(
         self, project_id: ProjectId, *, owner: UserId | None = None, limit: int = 20

@@ -36,6 +36,7 @@ from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.application.test_materials import make_material
 from tests.support.builders import NOW, PROJECT, ROUND_ID, make_round
 from tests.support.harness import Harness
+from tests.support.leases import bind_round_lease
 
 OWNER = UserId("u-attach")
 
@@ -209,6 +210,7 @@ async def test_attach_round_trips_through_real_sqlite(tmp_path):
         round_id=ROUND_ID, project_id=PROJECT, user_input="导出", now=NOW
     )
     rounds.save(round_)
+    bind_round_lease(connection, ROUND_ID)
 
     await AttachMaterials(
         rounds=rounds,

@@ -14,6 +14,7 @@ import pytest
 
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
 from pmstudio.application.errors import (
+    LeaseLost,
     UnknownDiscussion,
     UnknownExploration,
     UnknownProject,
@@ -260,7 +261,8 @@ def test_write_stamp_does_not_change_on_later_owner(connection):
 def test_rounds_save_cannot_overwrite_another_owners_row(connection):
     rounds = SqliteRoundRepository(connection)
     rounds.save(make_round(), owner=ALICE)
-    rounds.save(make_round(), owner=BOB)  # 越权 save：不改他人行
+    with pytest.raises(LeaseLost):  # 越权 save：P3b 起是 fencing 失败，不再静默 no-op
+        rounds.save(make_round(), owner=BOB)
 
     row = connection.execute(
         "SELECT owner_id FROM rounds WHERE round_id = ?", (str(RoundId("r1")),)

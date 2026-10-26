@@ -31,9 +31,26 @@ CREATE TABLE IF NOT EXISTS rounds (
   waiting_on TEXT NOT NULL,
   payload    TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  lease_owner      TEXT,
+  lease_expires_at INTEGER,
+  lease_token      INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_rounds_project ON rounds(project_id, created_at);
+
+-- 运行中跳过席位（P3b / `02` §11.0.67）：控制行，不抢 action lease。
+-- `pass_index` 是"哪一趟席位轮"——同一席位在不同趟里是两件事（与 DroppedItem 同一条理由）。
+CREATE TABLE IF NOT EXISTS round_skips (
+  round_id     TEXT NOT NULL,
+  owner_id     TEXT NOT NULL,
+  seat_id      TEXT NOT NULL,
+  pass_index   INTEGER NOT NULL,
+  reason       TEXT NOT NULL,
+  source       TEXT NOT NULL,
+  requested_at INTEGER NOT NULL,
+  PRIMARY KEY (round_id, seat_id)
+);
+CREATE INDEX IF NOT EXISTS idx_round_skips_owner ON round_skips(owner_id, round_id);
 
 -- 模板库（`02` §11.0.68）：定义时来源。行内快照（`documents.template`）才是运行真相，
 -- 所以这里允许 seed 反复覆盖 builtin 行，老项目不受影响。
@@ -118,9 +135,17 @@ CREATE TABLE IF NOT EXISTS explorations (
   status         TEXT NOT NULL,
   payload        TEXT NOT NULL,
   created_at     TEXT NOT NULL,
-  updated_at     TEXT NOT NULL
+  updated_at     TEXT NOT NULL,
+  lease_owner      TEXT,
+  lease_expires_at INTEGER,
+  lease_token      INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_explorations_project ON explorations(project_id, created_at);
+-- 同一项目同时最多一趟 running（P3b）：M8 调研与研究共用项目锁。
+-- 老库的重复 running 由 `database.migrate()` 在 schema 执行**之前**判 abandoned
+-- （否则这里 CREATE UNIQUE INDEX 会直接 IntegrityError，后端起不来）。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_explorations_running
+  ON explorations(project_id) WHERE status = 'running';
 
 -- 讨论线程（M9）：一条自由主题的多轮讨论一行，轮次与卡片全在 payload。
 -- 与 explorations 同一个范式：列只放"要按它查"的（项目/状态），其余进 JSON。

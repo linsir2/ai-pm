@@ -45,6 +45,7 @@ from tests.application.test_seat_round import (
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_round, make_seat
 from tests.support.doubles import FixedClock, RecordingMaterialRetriever
 from tests.support.harness import Harness
+from tests.support.leases import bind_round_lease
 
 
 def material_hit(packet, index: int = 0, score: float = 1.0) -> MaterialHit:
@@ -287,6 +288,7 @@ def test_prepare_round_trips_through_real_sqlite(tmp_path):
     )
     round_.pin_materials((packet.material_id,))
     rounds.save(round_)
+    bind_round_lease(connection, ROUND_ID)
 
     prepared = RoundContextPreparer(
         rounds=rounds,

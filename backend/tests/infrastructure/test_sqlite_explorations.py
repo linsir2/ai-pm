@@ -99,6 +99,10 @@ def test_list_is_newest_first_and_limited(store) -> None:  # type: ignore[no-unt
         scope=ExplorationScope(kind=ScopeKind.DOCUMENT),
         now=NOW.replace(minute=30),
     )
+    # v17 起同一项目只许一趟 running（部分唯一索引）；这条用例只验列表排序，
+    # 两趟都先跑完再落库。
+    first.complete(hypotheses=(), blind_spots=())
+    second.complete(hypotheses=(), blind_spots=())
     repo.save(first)
     repo.save(second)
 

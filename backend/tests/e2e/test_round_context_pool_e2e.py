@@ -46,6 +46,7 @@ from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_seat
 from tests.support.doubles import FixedClock, RecordingPublisher
 from tests.support.harness import Harness
+from tests.support.leases import bind_round_lease
 
 INPUT = "导出权限怎么定"
 
@@ -217,6 +218,7 @@ async def test_the_whole_context_chain_is_real_and_idempotent(tmp_path):
     round_id = await start.create(
         project_id=PROJECT, user_input=INPUT, material_ids=[pinned.material_id]
     )
+    bind_round_lease(connection, round_id)
     await start.analyze(round_id=round_id)
 
     opening = SubmitOpening(
@@ -469,6 +471,7 @@ async def test_a_seat_retrieval_issues_a_new_eid_that_reaches_the_prompt(tmp_pat
     round_id = await start.create(
         project_id=PROJECT, user_input=INPUT, material_ids=[pinned.material_id]
     )
+    bind_round_lease(connection, round_id)
     await start.analyze(round_id=round_id)
 
     before = rounds.get(round_id)
@@ -576,6 +579,7 @@ def test_a_handpicked_block_over_the_share_is_not_put_in_the_prompt(tmp_path):
     )
     round_.pin_materials((handpicked.material_id,))
     rounds.save(round_)
+    bind_round_lease(connection, ROUND_ID)
 
     prepared = RoundContextPreparer(
         rounds=rounds,

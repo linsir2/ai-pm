@@ -37,6 +37,7 @@ from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.support.builders import NOW, PROJECT, SEAT, make_web_packet
 from tests.support.doubles import FixedClock, RecordingPublisher, RecordingWebSearch
 from tests.support.harness import Harness
+from tests.support.leases import bind_round_lease
 
 QUERY_A = "RBAC 权限模型的主流做法"
 QUERY_B = "多租户隔离怎么做"
@@ -155,6 +156,7 @@ async def test_real_sqlite_executes_across_steps_and_reuses_the_shared_result_nu
     round_id = await start.create(
         project_id=PROJECT, user_input="想做个订单导出的功能"
     )
+    bind_round_lease(connection, round_id)
     await start.analyze(round_id=round_id)
     opening_request = rounds.get(round_id).web_requests[0]
 

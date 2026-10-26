@@ -21,7 +21,9 @@ PROFILE_KEY = "embed_profile"
 #: 13 = 多用户改造：13 张表补 `owner_id` + 存量回填给首 admin + NULL 熔断。
 #: 14 = L2 观察回填 `created_at`（v11 当死字段删过，这里再加回来并让它当排序依据）。
 #: 16 = 工具调用留样：`tool_calls` 表（`CREATE TABLE IF NOT EXISTS` 自建）。
-USER_VERSION = 16
+#: 17 = P3b 租约：`rounds` / `explorations` 各补 lease 三列；`round_skips`
+#:      （owner_id + pass_index）；同一项目唯一 running 探索的部分索引。
+USER_VERSION = 17
 
 #: v13 起带 `owner_id` 的表：12 张项目域表 + `templates`（裁决 A）。
 #: `templates` 的 builtin 行 owner 留 NULL（出厂模板人人可见）——回填与熔断都跳过它们。
@@ -40,6 +42,7 @@ OWNER_TABLES: tuple[str, ...] = (
     "round_digests",
     "inspirations",
     "templates",
+    "round_skips",
 )
 
 #: `CREATE TABLE IF NOT EXISTS` 补不了**已有**表的列，所以老库要靠这里的 `ALTER TABLE`（幂等）。
@@ -50,11 +53,21 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("owner_id", "TEXT"),
     ),
     "document_versions": (("owner_id", "TEXT"),),
-    "rounds": (("owner_id", "TEXT"),),
+    "rounds": (
+        ("owner_id", "TEXT"),
+        ("lease_owner", "TEXT"),
+        ("lease_expires_at", "INTEGER"),
+        ("lease_token", "INTEGER NOT NULL DEFAULT 0"),
+    ),
     "evidence_ledgers": (("owner_id", "TEXT"),),
     "materials": (("owner_id", "TEXT"),),
     "material_chunks": (("owner_id", "TEXT"),),
-    "explorations": (("owner_id", "TEXT"),),
+    "explorations": (
+        ("owner_id", "TEXT"),
+        ("lease_owner", "TEXT"),
+        ("lease_expires_at", "INTEGER"),
+        ("lease_token", "INTEGER NOT NULL DEFAULT 0"),
+    ),
     "discussions": (("owner_id", "TEXT"),),
     "project_memory": (("owner_id", "TEXT"),),
     "observations": (
@@ -288,6 +301,41 @@ DROPPED_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _dedupe_running_explorations(connection: sqlite3.Connection) -> None:
+    """老库把同一项目留成多条 `running` 时，只留最新一条，其余判 `abandoned`。
+
+    **必须在 `schema.sql` 建部分唯一索引之前跑**（`migrate()` 在 `executescript` 之前）：
+    否则老库升级第一次启动就 `IntegrityError`，后端起不来。
+
+    "最新"用 `created_at DESC, rowid DESC`——与列表排序同一条口径；不猜时间、
+    不改 `updated_at`（迁移不是业务动作），只把状态挪到终态。这不是"清理用户数据"：
+    多 worker 时代之前，崩掉的进程本来就会留下这些没跑完的壳（Task 3 的
+    `clear_stale` 是同一件事的运行时版本）。
+    """
+
+    has_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'explorations'"
+    ).fetchone()
+    if has_table is None:
+        return
+    projects = connection.execute(
+        "SELECT project_id FROM explorations WHERE status = 'running'"
+        " GROUP BY project_id HAVING COUNT(*) > 1"
+    ).fetchall()
+    for row in projects:
+        keep = connection.execute(
+            "SELECT exploration_id FROM explorations"
+            " WHERE project_id = ? AND status = 'running'"
+            " ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (row["project_id"],),
+        ).fetchone()
+        connection.execute(
+            "UPDATE explorations SET status = 'abandoned'"
+            " WHERE project_id = ? AND status = 'running' AND exploration_id != ?",
+            (row["project_id"], keep["exploration_id"]),
+        )
+
+
 def migrate(connection: sqlite3.Connection, *, embedder=None) -> None:
     """把老库补到当前形状：加列、删列、不丢业务数据、可重复跑。
 
@@ -314,6 +362,8 @@ def migrate(connection: sqlite3.Connection, *, embedder=None) -> None:
         for name in columns:
             if name in existing:
                 connection.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
+
+    _dedupe_running_explorations(connection)
 
     # 补完列再填值：`sessions.created_at` 是绝对上限的锚点，NULL 会让 `GetMe` 的
     # datetime 减法炸成 500。老行拿 `last_seen_at` 顶——那时能拿到的最接近建会话的时刻。

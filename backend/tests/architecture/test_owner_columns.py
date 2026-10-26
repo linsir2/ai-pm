@@ -37,6 +37,7 @@ OWNER_TABLES = frozenset(
         "round_digests",
         "inspirations",
         "templates",
+        "round_skips",
     }
 )
 

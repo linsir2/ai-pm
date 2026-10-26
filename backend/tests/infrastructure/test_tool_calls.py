@@ -90,12 +90,12 @@ def test_schema_creates_the_table_on_an_old_db(tmp_path):
     assert "tool_calls" in names
 
 
-def test_user_version_is_16(tmp_path):
+def test_user_version_is_current(tmp_path):
     """`tool_calls` 是 v16 引入的（`CREATE TABLE IF NOT EXISTS` 自建，不动 ADDED_COLUMNS）。"""
 
     connection = database.connect(tmp_path / "pm.db")
 
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
 
 
 def test_recorder_survives_a_broken_write(tmp_path):

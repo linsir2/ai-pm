@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from pmstudio.application.errors import UnknownProject, UnknownRound
+from pmstudio.application.errors import LeaseLost, UnknownProject, UnknownRound
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
@@ -34,6 +34,7 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.infrastructure.sqlite import database, owner_scope, serialization
+from pmstudio.infrastructure.sqlite.leases import SqliteLeaseStore
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
@@ -42,6 +43,7 @@ from pmstudio.infrastructure.sqlite.repositories import (
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.support.builders import NOW, PROJECT, make_document, make_round
+from tests.support.leases import bind_round_lease
 
 #: 比 NOW 晚一个小时：用来验"最近更新倒序"（`Document.new(now=...)` 决定 `documents.updated_at`）
 LATER = NOW.replace(hour=NOW.hour + 1)
@@ -826,3 +828,27 @@ def test_material_references_counts_pinned_and_manual_chunks(tmp_path):
 
     assert references.get("m7") == ("手勾",), "手勾材料必须算被引用"
     assert references.get("m8") == ("手动带料",), "手动带进的块必须算被引用"
+
+
+def test_round_save_is_fenced_by_the_current_lease(tmp_path):
+    """仓储 fencing：新 INSERT 允许；existing 行没有活租约就写不进去（P3b Task 1）。"""
+
+    connection = database.connect(tmp_path / "pmstudio.db")
+    try:
+        rounds = SqliteRoundRepository(connection)
+        round_ = make_round()
+        rounds.save(round_)  # INSERT：还没有出租，允许
+
+        with pytest.raises(LeaseLost):
+            rounds.save(round_)  # existing + 无 token
+
+        token = bind_round_lease(connection, round_.round_id)
+        rounds.save(round_)  # 有匹配的活租约
+
+        SqliteLeaseStore(connection).release(
+            token.kind, token.target_id, token.user_id, token.holder, token.token
+        )
+        with pytest.raises(LeaseLost):
+            rounds.save(round_)  # 释放后的迟到写
+    finally:
+        connection.close()

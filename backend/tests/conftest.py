@@ -10,6 +10,7 @@ D2 的取舍：owner 可以由仓储方法**显式传**，也可以从**环境�
 
 import pytest
 
+from pmstudio.application.lease import clear_lease_scope
 from pmstudio.domain.shared.ids import UserId
 from pmstudio.infrastructure.sqlite import owner_scope
 
@@ -22,3 +23,11 @@ def default_owner_scope():  # type: ignore[no-untyped-def]
     token = owner_scope.set_owner_scope(TEST_OWNER)
     yield TEST_OWNER
     owner_scope.clear_owner_scope(token)
+
+
+@pytest.fixture(autouse=True)
+def default_lease_scope_is_clear():  # type: ignore[no-untyped-def]
+    """每个用例结束后清空租约 contextvar——测试补的租约不跨用例泄漏。"""
+
+    yield
+    clear_lease_scope()

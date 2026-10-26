@@ -51,6 +51,7 @@ from tests.support.doubles import (
     ScriptedModelGateway,
     StaticSeatCatalog,
 )
+from tests.support.leases import bind_round_lease
 
 MATERIAL_TEXT = "导出权限按角色控制，管理员才能导出全量。"
 
@@ -163,6 +164,7 @@ def _setup(tmp_path, gateway: ScriptedModelGateway):  # type: ignore[no-untyped-
         ),
     )
     rounds.save(round_)
+    bind_round_lease(connection, ROUND_ID)
 
     retriever = _CountingRetriever(SqliteFtsRetriever(connection))
     clock = FixedClock()

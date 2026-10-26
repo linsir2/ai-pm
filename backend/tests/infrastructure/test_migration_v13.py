@@ -9,8 +9,8 @@ v12 的库没有任何归属。13 给 **13 张表**补上 `owner_id TEXT`：12 �
 `connect → 建 users → 种首 admin → backfill_owners → assert_owners_backfilled` 走。
 本文件按同一顺序显式调用。豁免不加列的：users / sessions / model_calls。
 
-注意：`user_version` 的字面量随 `database.USER_VERSION` 前进（本文件已到 16——v16 加了
-`tool_calls` 表）。这里断言的是"连完就是当前形状"，不是"停在 13"。
+注意：`user_version` 的字面量随 `database.USER_VERSION` 前进（本文件已到 17——v17 加了
+lease 三列 / `round_skips` / running 唯一索引）。这里断言的是"连完就是当前形状"，不是"停在 13"。
 """
 
 import sqlite3
@@ -237,7 +237,7 @@ def test_v12_db_migrates_to_v13_with_owners(tmp_path):
 
     connection = _connect_and_backfill(path)
 
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
     assert (
         connection.execute(
             "SELECT COUNT(*) FROM documents WHERE owner_id IS NULL"
@@ -286,7 +286,7 @@ def test_connect_alone_never_fuses_but_assert_catches_orphans(tmp_path):
     _old_v12_db(path, content=True)
 
     connection = database.connect(path)  # 不熔断：还没到校验那一步
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
 
     with pytest.raises(RuntimeError, match="documents"):
         database.assert_owners_backfilled(connection)
@@ -302,7 +302,7 @@ def test_fresh_db_is_built_in_v13_shape(tmp_path):
 
     connection = database.connect(tmp_path / "new.db")
 
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
     for table in OWNER_TABLES:
         columns = {
             row["name"]
@@ -327,7 +327,7 @@ def test_migration_is_idempotent(tmp_path):
 
     connection = _connect_and_backfill(path)
 
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
     assert (
         connection.execute(
             "SELECT owner_id FROM documents WHERE project_id = 'p1'"

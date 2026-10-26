@@ -35,6 +35,7 @@ from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
 from tests.support.builders import NOW, PROJECT, ROUND_ID
 from tests.support.doubles import FixedClock
+from tests.support.leases import bind_round_lease
 
 #: 语义查询：换成"人话"的防误删需求。
 QUERY = "如何防止用户误删数据"
@@ -137,6 +138,7 @@ def test_a_semantic_only_material_reaches_the_seat_projection(tmp_path):
             round_id=ROUND_ID, project_id=PROJECT, user_input=QUERY, now=NOW
         )
         rounds.save(round_)
+        bind_round_lease(connection, ROUND_ID)
         prepared = RoundContextPreparer(
             rounds=rounds,
             round_writer=rounds,
