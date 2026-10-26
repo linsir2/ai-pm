@@ -16,7 +16,7 @@ from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.persona_simulator import PersonaSimulatorAgent
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
-from pmstudio.application.ports import Clock, LoginGuard, WebFetcher
+from pmstudio.application.ports import Clock, LoginGuard, WebFetcher, WebSearchGateway
 from pmstudio.application.use_cases import (
     AbandonExploration,
     AbandonRound,
@@ -286,11 +286,17 @@ def _build_login_guard(settings: Settings, clock: Clock) -> LoginGuard:
     )
 
 
-def build_container(settings: Settings, *, gateway: ModelGateway | None = None) -> Container:
+def build_container(
+    settings: Settings,
+    *,
+    gateway: ModelGateway | None = None,
+    web_search: WebSearchGateway | None = None,
+    fetcher: WebFetcher | None = None,
+) -> Container:
     """唯一组装点。
-    `gateway` 是**唯一**给测试用的注入口（端到端测试注入脚本化网关）。
-    生产路径（`build_app`）永远自己 new 真网关，不提供"用假模型"的开关——
-    这一点由 `tests/architecture/test_no_fakes_in_production.py` 与
+    `gateway` / `web_search` / `fetcher` 是**给测试用的注入口**（端到端测试注入脚本化
+    网关与工具替身）。生产路径（`build_app`）永远自己 new 真实现，不提供"用假实现"的
+    开关——这一点由 `tests/architecture/test_no_fakes_in_production.py` 与
     `tests/bootstrap/test_container.py::test_container_has_no_fake_model_switch` 守着。
     """
     # 登录哈希隔离舱（高并发 P1）：容量来自 settings，**必须在事件循环跑起来之前**设。
@@ -345,7 +351,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     parser = LocalMaterialParser()
     # 按网址抓网页（P27）：真 httpx，护栏在实现里（只抓公开网页、限 3 跳 / 15s / 5MB）。
     # 与解析器一样，换实现（无头浏览器 / 更强的正文抽取）只改这一行。
-    fetcher: WebFetcher = HttpxWebFetcher()
+    if fetcher is None:
+        fetcher = HttpxWebFetcher()
     index = SqliteWorkspaceIndex(connection)
     memory = SqliteMemoryRepository(connection)
     observations_repo = SqliteObservationRepository(connection)
@@ -372,7 +379,8 @@ def build_container(settings: Settings, *, gateway: ModelGateway | None = None) 
     # 工具目录：`requires` 没配上的工具**直接不可用**（不是"无密钥降级"）
     tools = TomlToolCatalog(DEFINITIONS_DIR)
     available_tool_keys = settings.available_tool_keys()
-    web_search = _web_search_gateway(settings, tools=tools, keys=available_tool_keys)
+    if web_search is None:
+        web_search = _web_search_gateway(settings, tools=tools, keys=available_tool_keys)
     assigner = EvidenceAssigner()
     readiness = ReadinessChecker()
     analyzer = ClaimAnalyzer(model=gateway, prompts=prompts, catalog=catalog)
