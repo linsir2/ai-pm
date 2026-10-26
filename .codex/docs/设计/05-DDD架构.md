@@ -268,6 +268,14 @@ infrastructure/discussion/ roles.py
 **`domain` 不 import 任何外部包**（不 import fastapi / langgraph / litellm / sqlite3）。
 这条用测试守：扫 `domain/` 的 import，出现外部包即失败。
 
+**P3a 联网申请（2026-10-26）**：`domain/round/web.py` 是 5 状态申请与其状态机
+（`proposed → approved → done/failed`，或 `proposed → rejected`），只管"谁想查什么、
+为什么、批没批"；不联网、不算执行名额。`application/web_research.py` 是执行层：
+查（UoW 外）→ 选（EID 复用、`web_selection`、`WEB_BUDGET`）→ 一个 UoW 落材料 /
+请求状态 / 留痕；`MAX_WEB_EXECUTIONS` 与生效名额也只在这里定义一份。API 的
+`POST /rounds/{id}/web-requests/{rid}/decision` 走 `RoundRunner`（`infrastructure/graph/graph.py`
+的 `decide_web_request` 节点），不新开写入路径。
+
 **domain 内部的三条依赖规矩**（同样由 `tests/architecture/` 扫 AST 守）：
 
 1. 领域上下文（authoring / provenance / round / exploration）**互不 import**，只能通过 `shared/` 与 `services/` 协作；
