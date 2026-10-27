@@ -31,6 +31,29 @@ DIRECT_URL_ENV = "PMSTUDIO_TEST_DIRECT_DATABASE_URL"
 SCHEMA_ENV = "PMSTUDIO_TEST_SCHEMA"
 DEFAULT_SCHEMA = "pmstudio_test"
 
+#: 18 张显式数据表（19 张普通表减掉 `vector_index_meta`）。测试间整批清空。
+#: 未知/临时表（例如 T1 的 `uow_probe`）不在这里，不会被顺手 TRUNCATE。
+DATA_TABLES = (
+    "documents",
+    "document_versions",
+    "rounds",
+    "round_skips",
+    "templates",
+    "evidence_ledgers",
+    "materials",
+    "material_chunks",
+    "explorations",
+    "discussions",
+    "project_memory",
+    "model_calls",
+    "tool_calls",
+    "observations",
+    "round_digests",
+    "users",
+    "sessions",
+    "inspirations",
+)
+
 #: 这两张表是夹具的"基础设施"：迁移账本与向量口径。测试间不清。
 PRESERVED_TABLES = frozenset({"schema_migrations", "vector_index_meta"})
 
@@ -171,14 +194,11 @@ def _table_names(connection, schema: str) -> list[str]:  # type: ignore[no-untyp
 
 
 def truncate_data_tables(database: PgTestDatabase) -> None:
-    """清空测试 schema 里的显式数据表；保留迁移账本与向量口径。"""
+    """清空测试 schema 里的 18 张显式数据表；保留迁移账本与向量口径。"""
 
     with connect(database.direct_url) as connection:
-        names = [
-            name
-            for name in _table_names(connection, database.schema)
-            if name not in PRESERVED_TABLES
-        ]
+        existing = set(_table_names(connection, database.schema))
+        names = [name for name in DATA_TABLES if name in existing]
         if not names:
             return
         qualified = ", ".join(
