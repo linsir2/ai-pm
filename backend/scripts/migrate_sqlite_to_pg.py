@@ -273,6 +273,11 @@ def _source_table_names(source: sqlite3.Connection) -> list[str]:
     return sorted(names)
 
 
+def _source_columns(source: sqlite3.Connection, table: str) -> set[str]:
+    rows = source.execute(f"PRAGMA table_info({_quote_sqlite(table)})").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
 def _read_source_rows(
     source: sqlite3.Connection, table: str
 ) -> list[dict[str, object]]:
@@ -913,7 +918,7 @@ def _roundtrip(connection) -> None:  # type: ignore[no-untyped-def]
         ser.round_to_payload(round_)
 
     for row in connection.execute("SELECT * FROM explorations").fetchall():
-        ser.exploration_from_payload(
+        first = ser.exploration_from_payload(
             row["payload"],
             exploration_id=ExplorationId(row["exploration_id"]),
             project_id=ProjectId(row["project_id"]),
@@ -921,18 +926,52 @@ def _roundtrip(connection) -> None:  # type: ignore[no-untyped-def]
             status=ExplorationStatus(row["status"]),
             created_at=row["created_at"],
         )
+        payload = ser.exploration_to_payload(first)
+        again = ser.exploration_from_payload(
+            payload,
+            exploration_id=ExplorationId(row["exploration_id"]),
+            project_id=ProjectId(row["project_id"]),
+            kind=ExplorationKind(row["kind"]),
+            status=ExplorationStatus(row["status"]),
+            created_at=row["created_at"],
+        )
+        if ser.exploration_to_payload(again) != payload:
+            raise EtlError(f"exploration roundtrip 不稳定：{row['exploration_id']}")
+
     for row in connection.execute("SELECT * FROM discussions").fetchall():
-        ser.discussion_from_payload(
+        first = ser.discussion_from_payload(
             row["payload"],
             discussion_id=DiscussionId(row["discussion_id"]),
             project_id=ProjectId(row["project_id"]),
             status=ThreadStatus(row["status"]),
             created_at=row["created_at"],
         )
+        payload = ser.discussion_to_payload(first)
+        again = ser.discussion_from_payload(
+            payload,
+            discussion_id=DiscussionId(row["discussion_id"]),
+            project_id=ProjectId(row["project_id"]),
+            status=ThreadStatus(row["status"]),
+            created_at=row["created_at"],
+        )
+        if ser.discussion_to_payload(again) != payload:
+            raise EtlError(f"discussion roundtrip 不稳定：{row['discussion_id']}")
+
     for row in connection.execute("SELECT * FROM project_memory").fetchall():
-        ser.memory_from_payload(row["payload"], project_id=ProjectId(row["project_id"]))
+        project_id = ProjectId(row["project_id"])
+        first = ser.memory_from_payload(row["payload"], project_id=project_id)
+        payload = ser.memory_to_payload(first)
+        again = ser.memory_from_payload(payload, project_id=project_id)
+        if ser.memory_to_payload(again) != payload:
+            raise EtlError(f"memory roundtrip 不稳定：{row['project_id']}")
+
     for row in connection.execute("SELECT * FROM evidence_ledgers").fetchall():
-        ser.ledger_from_json(ProjectId(row["project_id"]), row["payload"])
+        project_id = ProjectId(row["project_id"])
+        first = ser.ledger_from_json(project_id, row["payload"])
+        payload = ser.ledger_to_json(first)
+        again = ser.ledger_from_json(project_id, payload)
+        if ser.ledger_to_json(again) != payload:
+            raise EtlError(f"ledger roundtrip 不稳定：{row['project_id']}")
 
 
 def _embed_chunks(
@@ -1007,11 +1046,15 @@ def migrate(
     source = _open_source(path)
     try:
         version = _user_version(source)
-        if version < 15:
+        if version not in {15, 17}:
             raise EtlError(
-                f"不支持 user_version={version} 的旧库；v15 起才带 owner/模板/留样列"
+                f"只支持 user_version 15/17 的旧库，实得 {version}；"
+                "不认识的版本不猜列"
             )
         tables = _source_table_names(source)
+        source_columns = {
+            table: _source_columns(source, table) for table in tables
+        }
         source_rows: dict[str, list[dict[str, object]]] = {
             table: _read_source_rows(source, table) for table in tables
         }
@@ -1069,6 +1112,21 @@ def migrate(
 
     with connect(database_url) as connection:
         _ensure_target(connection)
+        specs = {table: _target_columns(connection, table) for table in tables}
+        for table in tables:
+            if table == "vector_index_meta":
+                continue  # 旧 key/value 由专门转换处理
+            extra = sorted(
+                source_columns[table].difference(
+                    {spec.name for spec in specs[table]}
+                )
+            )
+            if extra:
+                raise EtlError(
+                    f"{table} 有目标 schema 不认识的源列：{'、'.join(extra)}；"
+                    "拒绝静默丢数据"
+                )
+
         current_counts = _target_counts(connection)
         if any(current_counts.values()):
             if not truncate:
@@ -1081,8 +1139,6 @@ def migrate(
                     f"目标表非空（{detail}）；确认这是重跑后加 --truncate 清空目标表"
                 )
             _truncate_target(connection)
-
-        specs = {table: _target_columns(connection, table) for table in tables}
         prepared: dict[str, list[PreparedRow]] = {}
         for table in tables:
             if table == "vector_index_meta":

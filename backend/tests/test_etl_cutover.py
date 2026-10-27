@@ -646,7 +646,8 @@ def test_v15_fixture_migrates_native_types_dedupes_and_backfills_tokens(tmp_path
     assert arrays["sections"] == [] and arrays["features"] == ["s1"]
     assert arrays["outcomes"] == [] and arrays["created_at"] == ""
 
-    # 检索不拿 0 材料跳过：真 FTS 查中文，且带 % / _ 的标题原样保留。
+    # FTS smoke（不是 recall@5）：中文 query 能命中，带 % / _ 的标题原样保留；
+    # T9 的检索验收口径是 tokens 相等，recall 挂 T5/T10 hard gate。
     with open_direct() as connection:
         hits = SqliteFtsRetriever(connection).search(
             project_id=ProjectId("p-1"), query="退货时限", limit=5,
@@ -690,6 +691,16 @@ def test_v17_fixture_migrates_tool_calls_round_skips_and_vector_meta(tmp_path: P
     meta = _fetch_one("SELECT profile, dimensions, model FROM vector_index_meta")
     assert meta["dimensions"] == 512
     assert _count("sessions") == 0
+    for table in ("model_calls", "tool_calls"):
+        sequence = _fetch_one(
+            "SELECT pg_get_serial_sequence(%s, 'id') AS seq", (table,)
+        )["seq"]
+        maximum = _fetch_one(f'SELECT MAX(id) AS n FROM "{table}"')["n"]
+        with open_direct() as connection:
+            next_value = connection.execute(
+                "SELECT nextval(%s) AS value", (str(sequence),)
+            ).fetchone()["value"]
+        assert int(next_value) > int(maximum)
 
 
 def test_rerun_needs_truncate_and_is_idempotent(tmp_path: Path) -> None:
@@ -717,6 +728,26 @@ def test_duplicate_material_sha_aborts_before_writing(tmp_path: Path) -> None:
 def test_unknown_source_table_aborts_before_writing(tmp_path: Path) -> None:
     source = _make_fixture(tmp_path, version=15, unknown_table=True)
     with pytest.raises(EtlError, match="未知表"):
+        migrate(source, load_environment().direct_url, truncate=True)
+    assert _count("documents") == 0
+
+
+def test_unknown_source_column_aborts_before_writing(tmp_path: Path) -> None:
+    source = _make_fixture(tmp_path, version=15)
+    with sqlite3.connect(source) as connection:
+        connection.execute("ALTER TABLE documents ADD COLUMN surprise TEXT")
+        connection.commit()
+    with pytest.raises(EtlError, match="不认识的源列"):
+        migrate(source, load_environment().direct_url, truncate=True)
+    assert _count("documents") == 0
+
+
+def test_unsupported_user_version_aborts(tmp_path: Path) -> None:
+    source = _make_fixture(tmp_path, version=17)
+    with sqlite3.connect(source) as connection:
+        connection.execute("PRAGMA user_version = 18")
+        connection.commit()
+    with pytest.raises(EtlError, match="user_version 15/17"):
         migrate(source, load_environment().direct_url, truncate=True)
     assert _count("documents") == 0
 
