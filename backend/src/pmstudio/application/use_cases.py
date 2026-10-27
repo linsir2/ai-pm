@@ -4276,7 +4276,7 @@ class UploadMaterial:
                 now=self._clock.now(),
             )
         # 向量在**主事务提交之后**另起小事务写（ONNX 推理 ~20ms/块，不许占着写锁）。
-        # 崩溃窗口由 `migrate()` 的幂等回填兜底。
+        # 崩溃窗口由维护任务补算。
         if existing is None:
             self._vectors.write(packet.material_id)
         return material_summary_view(packet, current=self._parser.identities())
@@ -4509,8 +4509,8 @@ class DeleteMaterial:
         if eids:
             raise MaterialFrozen(material_id, eids=eids, action="删")
         with self._uow:
-            # vec 表是影子表，没有 CASCADE 兜底：**先删向量再删块**——反过来的话
-            # 块已被 CASCADE 带走，`drop()` 的子查询就找不到任何 chunk_id，删了个空。
+            # `drop()` 把 `embedding` 置 NULL；块删除会连行一起带走——先删向量
+            # 保证任何失败路径下都不会留下指向已删块的向量。
             self._vectors.drop(material_id)
             self._materials.delete(material_id)
         return list_material_views(

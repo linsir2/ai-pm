@@ -1,19 +1,13 @@
 """SQLite 连接：建库、建表、WAL。单用户单进程，一个连接就够。"""
 
-import json
 import logging
 import sqlite3
 from pathlib import Path
-
-from pmstudio.infrastructure.sqlite.embedding import EMBED_PROFILE
-from pmstudio.infrastructure.sqlite.tokenize import index_source, index_text
 
 logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
-#: 向量口径在 `vector_index_meta` 里的键名。
-PROFILE_KEY = "embed_profile"
 #: 11 = 删 observations.sections/features/create
 #:     at（死字段销账）。
 #: 12 = 模板库：`templates` 表（CREATE TABLE IF NOT EXISTS 自建）+
@@ -208,7 +202,7 @@ def _enable_wal(connection: sqlite3.Connection) -> None:
     _warn_wal_reset_risk(mode)
 
 
-def connect(db_path: Path, *, embedder=None) -> sqlite3.Connection:
+def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # 显式 `timeout=10.0`（多用户改造 §0.9）：Python 默认 5.0 是隐式的，写出来是为了
     # "并发写等锁最多等多久"这件事有个可见的数；单 worker + 短事务是前提，见 `scripts/dev.py`。
@@ -223,74 +217,10 @@ def connect(db_path: Path, *, embedder=None) -> sqlite3.Connection:
     # EXISTS` 补不了已有表的列，只有 `migrate()` 的 `ALTER TABLE` 能。放在 schema 之后
     # 建索引就会在老库上炸「no such column: owner_id」。新库两边都幂等，不受影响。
     #
-    # 向量扩展在这里（`migrate` 之前）加载，随后**由代码建 vec0 表**：建表必须在
-    # `migrate()` 的向量回填之前，否则老库首次升级补不上（要等第二次启动）。
-    # 载不了就记一行 warning，检索侧退回纯 FTS5（见 `_create_vector_table`）。
-    load_sqlite_vec(connection)
-    _create_vector_table(connection)
-    migrate(connection, embedder=embedder)
+    migrate(connection)
     connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     connection.execute(f"PRAGMA user_version = {USER_VERSION}")
     return connection
-
-
-def _create_vector_table(connection: sqlite3.Connection) -> bool:
-    """载入扩展后建 `material_chunks_vec`（vec0 虚拟表）。**建不成就返回 False。**
-
-    为什么不由 `schema.sql` 建：那张表需要 `sqlite-vec` 扩展先在连接里注册模块，
-    而 `executescript` 不带条件——模块不在时整份 schema 执行直接炸，后端起不来。
-    这里独立出来，扩展缺失就跳过这一张表，其余形状照常迁移（降级到纯 FTS5）。
-
-    **口径对不上就清表重算**（2026-10-19）：向量口径 = 模型 + 喂进去的文本形态，
-    记在 `vector_index_meta` 表里。口径变了（换模型、或把分词串改成自然语言），
-    **旧向量就是脏的**——留着一半旧口径一半新口径的表，检索结果不可复现。
-    这里 DROP 掉表，随后 `migrate()` 的幂等回填会把全部块重算一遍
-    （ONNX ~20ms/块，单用户几百块 = 几秒，一次性）。
-    """
-
-    if not load_sqlite_vec(connection):
-        return False
-    try:
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS vector_index_meta ("
-            " key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-        )
-        row = connection.execute(
-            "SELECT value FROM vector_index_meta WHERE key = ?", (PROFILE_KEY,)
-        ).fetchone()
-        stored = str(row["value"]) if row is not None else None
-        if stored is not None and stored != EMBED_PROFILE:
-            logger.warning("向量口径变了（%s → %s），清空向量表重算", stored, EMBED_PROFILE)
-            connection.execute("DROP TABLE IF EXISTS material_chunks_vec")
-        connection.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS material_chunks_vec USING vec0("
-            " chunk_id TEXT PRIMARY KEY,"
-            " embedding FLOAT[512])"
-        )
-        connection.execute(
-            "INSERT INTO vector_index_meta (key, value) VALUES (?, ?)"
-            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (PROFILE_KEY, EMBED_PROFILE),
-        )
-    except Exception as error:  # noqa: BLE001 —— 建表失败同样降级，不炸启动
-        logger.warning("向量索引表建不出来，检索退回纯 FTS5：%s", error)
-        return False
-    return True
-
-
-def load_sqlite_vec(connection: sqlite3.Connection) -> bool:
-    """把 `sqlite-vec` 载进这条连接。**载不了就返回 False**——调用方据此降级，
-    绝不因此炸 `connect()`（"缺配置说缺，不是假装有"）。"""
-
-    try:
-        import sqlite_vec
-        connection.enable_load_extension(True)
-        sqlite_vec.load(connection)
-        connection.enable_load_extension(False)
-        return True
-    except Exception as error:  # noqa: BLE001 —— 扩展/平台问题一律降级
-        logger.warning("sqlite-vec 载入失败，检索退回纯 FTS5：%s", error)
-        return False
 
 
 #: 老库要删的列（销账死字段）。`ALTER TABLE ... DROP COLUMN` 要求 SQLite ≥ 3.35。
@@ -336,11 +266,11 @@ def _dedupe_running_explorations(connection: sqlite3.Connection) -> None:
         )
 
 
-def migrate(connection: sqlite3.Connection, *, embedder=None) -> None:
+def migrate(connection: sqlite3.Connection) -> None:
     """把老库补到当前形状：加列、删列、不丢业务数据、可重复跑。
 
-    `embedder` 只给向量回填用：`None` = 只做形状迁移（离线安全；调用方全不传时就是它）；
-    传了才补 `material_chunks_vec`。真跑里容器传 `FastEmbedEmbedder`，测试里传假实现。
+    FTS/向量回填已随 T5 删除（PostgreSQL 的 `tokens`/`search_tsv`/`embedding`
+    由 `migrations/0001_init.sql` 与 ETL 负责）。
     """
 
     for table, columns in ADDED_COLUMNS.items():
@@ -412,124 +342,6 @@ def migrate(connection: sqlite3.Connection, *, embedder=None) -> None:
             " WHERE created_at = ''"
             " AND EXISTS (SELECT 1 FROM rounds r WHERE r.round_id = observations.round_id)"
         )
-
-    _backfill_chunk_index(connection)
-    _backfill_chunk_vectors(connection, embedder=embedder)
-
-
-def _backfill_chunk_vectors(connection: sqlite3.Connection, *, embedder=None) -> None:
-    """给"升级前入库的块"补向量（检索阶段 2）。**幂等**：只补缺的那些。
-
-    与 FTS 回填同一条"补缺"口径（`_backfill_chunk_index`）：`embedder=None` 就整段跳过
-    ——形状迁移本身不许依赖模型下载；真跑由调用方显式传，测试传假实现。
-    """
-
-    if embedder is None:
-        return
-    if not load_sqlite_vec(connection):
-        return
-    has_table = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'material_chunks'"
-    ).fetchone()
-    has_vec = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'material_chunks_vec'"
-    ).fetchone()
-    if has_table is None or has_vec is None:
-        return
-    missing = connection.execute(
-        "SELECT c.chunk_id, c.material_id, c.text, c.heading_path, c.ordinal,"
-        " m.title AS title, m.origin AS origin"
-        " FROM material_chunks c JOIN materials m ON m.material_id = c.material_id"
-        " WHERE c.chunk_id NOT IN (SELECT chunk_id FROM material_chunks_vec)"
-    ).fetchall()
-    if not missing:
-        return
-    # **与 `SqliteVectorIndex.write` 同一套预算规则**（否则启动回填会把预算外的块
-    # 全补上，预算形同虚设）。判据用**绝对 ordinal**，不是"缺的那些里的第几个"——
-    # 一份 12 块的联网材料若前 8 块已有向量，缺的是 9–12，它们**不该**被补。
-    #
-    # 预算的量纲是**字数**（2026-10-21 批 11），所以边界要按材料把**全部块**查出来
-    # 算累计字数（`blocks_within_budget`）——只看"缺的那些"算不出边界。
-    from pmstudio.infrastructure.sqlite.vector_index import (
-        blocks_within_budget,
-        vector_char_budget,
-    )
-
-    origin_of = {str(row["material_id"]): str(row["origin"]) for row in missing}
-    limits: dict[str, int | None] = {}
-    for material_id, origin in origin_of.items():
-        char_budget = vector_char_budget(origin)
-        if char_budget is None:
-            limits[material_id] = None
-            continue
-        all_rows = connection.execute(
-            "SELECT ordinal, text FROM material_chunks WHERE material_id = ? ORDER BY ordinal",
-            (material_id,),
-        ).fetchall()
-        limits[material_id] = blocks_within_budget(all_rows, char_budget)
-    missing = [
-        row
-        for row in missing
-        if limits[str(row["material_id"])] is None
-        or int(row["ordinal"]) < int(limits[str(row["material_id"])])
-    ]
-    if not missing:
-        return
-    from sqlite_vec import serialize_float32
-
-    texts = [
-        index_text(
-            title=row["title"],
-            heading_path=json.loads(row["heading_path"]),
-            text=row["text"],
-        )
-        for row in missing
-    ]
-    try:
-        vectors = embedder.embed_many(texts)
-    except Exception as error:  # noqa: BLE001 —— 模型下载/推理失败降级，不阻断启动
-        logger.warning("向量回填失败，检索退回纯 FTS5：%s", error)
-        return
-    for row, vector in zip(missing, vectors, strict=True):
-        connection.execute(
-            "INSERT OR REPLACE INTO material_chunks_vec (chunk_id, embedding)"
-            " VALUES (?, ?)",
-            (row["chunk_id"], serialize_float32(list(vector))),
-        )
-
-
-def _backfill_chunk_index(connection: sqlite3.Connection) -> None:
-    """给"升级前入库的块"补全文索引（检索 P1）。**幂等**：只补缺的那些，重复跑不动。
-
-    为什么要它：`material_chunks_fts` 是随本次升级新增的；老库里的块没有索引条目，
-    不补的话那些材料**永远搜不到**。分词在应用层（jieba），所以不能纯 SQL 干——
-    逐条选出"没有 FTS 条目"的块，分词后补写。表/索引不存在时（极老的库）什么都不做。
-    """
-
-    has_table = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'material_chunks_fts'"
-    ).fetchone()
-    if has_table is None:
-        return
-    missing = connection.execute(
-        "SELECT c.chunk_id, c.material_id, c.text, c.heading_path, m.title AS title"
-        " FROM material_chunks c JOIN materials m ON m.material_id = c.material_id"
-        " WHERE c.chunk_id NOT IN (SELECT chunk_id FROM material_chunks_fts)"
-    ).fetchall()
-    for row in missing:
-        connection.execute(
-            "INSERT INTO material_chunks_fts (chunk_id, material_id, tokens) VALUES (?, ?, ?)",
-            (
-                row["chunk_id"],
-                row["material_id"],
-                index_source(
-                    title=row["title"],
-                    heading_path=json.loads(row["heading_path"]),
-                    text=row["text"],
-                ),
-            ),
-        )
-
 
 def backfill_owners(connection: sqlite3.Connection) -> None:
     """存量行补归属：只填 NULL（幂等），owner = 首个 admin。

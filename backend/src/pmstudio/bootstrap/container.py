@@ -93,7 +93,6 @@ from pmstudio.application.web_research import WebResearch
 from pmstudio.bootstrap.maintenance import MaterialMaintenance
 from pmstudio.bootstrap.settings import AppSettings
 from pmstudio.domain.authoring.readiness import ReadinessChecker
-from pmstudio.domain.null_repos import NoOpVectorIndex
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.services.committer import ProposalCommitter
 from pmstudio.domain.services.scope_guard import ScopeGuard
@@ -109,7 +108,15 @@ from pmstudio.infrastructure.graph.exploration_runner import ExplorationRunner
 from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.personas.catalog import load_personas
 from pmstudio.infrastructure.postgres.database import PgConnection
+from pmstudio.infrastructure.postgres.embedding import FastEmbedEmbedder
+from pmstudio.infrastructure.postgres.materials import (
+    SqliteFtsRetriever,
+    SqliteHybridRetriever,
+    SqliteMaterialStore,
+)
+from pmstudio.infrastructure.postgres.tokenize import warm as warm_tokenizer
 from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
+from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.security import (
     configure_gate,
@@ -119,14 +126,8 @@ from pmstudio.infrastructure.security import (
 from pmstudio.infrastructure.sqlite import owner_scope
 from pmstudio.infrastructure.sqlite.call_log import SqliteRoundCallLog
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
-from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
 from pmstudio.infrastructure.sqlite.leases import SqliteLeaseStore
-from pmstudio.infrastructure.sqlite.materials import (
-    SqliteFtsRetriever,
-    SqliteHybridRetriever,
-    SqliteMaterialStore,
-)
 from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
 from pmstudio.infrastructure.sqlite.observations_repo import SqliteObservationRepository
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
@@ -140,7 +141,6 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteTemplateRepository,
     SqliteWorkspaceIndex,
 )
-from pmstudio.infrastructure.sqlite.tokenize import warm as warm_tokenizer
 from pmstudio.infrastructure.sqlite.tool_calls import SqliteToolCallRecorder
 from pmstudio.infrastructure.sqlite.usage import (
     SqliteAdminStatsRepository,
@@ -301,11 +301,11 @@ def build_container(
     discussions = SqliteDiscussionRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
     materials = SqliteMaterialStore(connection, ids=ids)
-    # 向量索引在 T5 迁到 pgvector；T1 只立运行时骨架，先保持 NoOp。
-    vector_index = NoOpVectorIndex()
-    # 材料检索（检索 P1 + 阶段 2）：FTS5 词法 + jieba 预分词，向量路再叠一路 RRF 融合。
+    # 向量索引：与材料同表（`material_chunks.embedding`），写路径在 UoW 外。
+    vector_index = SqliteVectorIndex(connection, embedder=embedder)
+    # 材料检索（检索 P1 + 阶段 2）：PostgreSQL FTS（generated tsvector）+ pgvector 融合。
     # 换实现只改这一行（`P18` C-2c-1）——`MaterialRetriever` 协议的升级位就在这儿。
-    # `SqliteHybridRetriever` 内部对向量路做了降级：扩展缺失/推理失败就退回纯 FTS5，
+    # `SqliteHybridRetriever` 内部对向量路做了降级：扩展缺失/推理失败就退回纯词法，
     # 检索永远有结果，所以这里不需要再分叉。
     material_search = SqliteHybridRetriever(connection, embedder=embedder)
     #: 顶栏搜索**只做关键词**（P1.1）：不碰 embedding、不碰融合、不占向量预算。

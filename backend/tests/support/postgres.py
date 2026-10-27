@@ -247,6 +247,7 @@ def pg_test_database() -> PgTestDatabase:
 @pytest.fixture()
 def pg_direct_connection(pg_test_database: PgTestDatabase) -> Iterator[object]:
     truncate_data_tables(pg_test_database)
+    upsert_vector_profile(pg_test_database)
     with connect(pg_test_database.direct_url) as connection:
         yield connection
     truncate_data_tables(pg_test_database)

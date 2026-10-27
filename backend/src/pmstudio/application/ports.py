@@ -280,9 +280,10 @@ class MaterialRetriever(Protocol):
     与 `MaterialParser` / `MaterialStore` 同一套路子：实现换过两版，**这个协议没变**，
     调用方一行没改（换实现只改 `bootstrap/container.py` 一行）：
 
-    实现 `SqliteFtsRetriever`：**SQLite FTS5 + jieba 预分词 + OR**（词级、词序无关、
-    容忍停用词）。它替换掉了更早的整句 `LIKE` 版（`SqliteLikeRetriever`，2026-10-17 删除）；
-    升级前后对照见 `docs/plans/2026-10-17-检索升级验收.md`。
+    实现 `SqliteFtsRetriever`：**PostgreSQL FTS（generated tsvector）+ jieba 预分词 +
+    OR**（词级、词序无关、容忍停用词）。它替换掉了更早的整句 `LIKE` 版
+    （`SqliteLikeRetriever`，2026-10-17 删除）；升级前后对照见
+    `docs/plans/2026-10-17-检索升级验收.md`。
 
     再往上的升级位（向量 / 混合）仍在同一个协议后面。
 
@@ -296,11 +297,11 @@ class MaterialRetriever(Protocol):
 
 @runtime_checkable
 class MaterialVectorIndex(Protocol):
-    """材料块的**向量**索引（检索阶段 2）：与 `MaterialStore` 同库同文件、不同表。
+    """材料块的**向量**索引（检索阶段 2）：向量存在 `material_chunks.embedding`。
 
     为什么是独立协议而不是塞进 `MaterialStore`：写向量要跑 ONNX 推理，
     **不许**落在仓储的写事务里（持锁时长是基线写操作的百倍，见批 5 检索升级计划）。
-    所以向量由调用方在**主事务提交后**另起小事务写；崩溃窗口由 `migrate` 的幂等回填兜底。
+    所以向量由调用方在**主事务提交后**另起小事务写；崩溃窗口由维护任务补算。
     """
 
     def write(self, material_id: str) -> None: ...

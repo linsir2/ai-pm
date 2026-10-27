@@ -17,7 +17,8 @@ from contextlib import suppress
 from typing import Any
 
 import psycopg
-from psycopg import OperationalError
+from pgvector.psycopg import register_vector
+from psycopg import OperationalError, ProgrammingError
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 
@@ -66,7 +67,7 @@ def connect(
     所以 search_path 保留、timezone 固定为 UTC。
     """
 
-    return psycopg.connect(
+    connection = psycopg.connect(
         url,
         autocommit=True,
         row_factory=dict_row,
@@ -75,6 +76,15 @@ def connect(
         application_name=application_name or DEFAULT_APPLICATION_NAME,
         connect_timeout=connect_timeout,
     )
+    try:
+        register_vector(connection)
+    except ProgrammingError:
+        # 测试/早期 schema 可能还没有 vector 扩展；连接本身不该因此失败。
+        # 真正走向量检索时，调用方会明确报错并退回纯词法。
+        pass
+    else:
+        connection._pmstudio_vector_registered = True
+    return connection
 
 
 def _is_connection_error(error: OperationalError) -> bool:
