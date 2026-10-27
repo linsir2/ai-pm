@@ -4,39 +4,40 @@
 **模型侧 `error_kind` 恒为 NULL**——只有 `error` 文本，重算分类要造假异常（不硬凑）。
 """
 
-
-from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.call_log import SqliteRoundCallLog
+from tests.support.postgres import open_direct
 
 
-def _model_call(connection, *, at: str, purpose: str, ok: int, duration_ms: int) -> None:
+def _model_call(connection, *, at: str, purpose: str, ok: bool, duration_ms: int) -> None:
     connection.execute(
         "INSERT INTO model_calls (round_id, purpose, model, prompt_sha, prompt_text,"
         " reply_text, usage_json, duration_ms, created_at, ok) VALUES"
-        " ('r1', ?, 'm', 'sha', 'p', 'r', '{}', ?, ?, ?)",
+        " ('r1', %s, 'm', 'sha', 'p', 'r', '{}', %s, %s, %s)",
         (purpose, duration_ms, at, ok),
     )
 
 
 def _tool_call(
-    connection, *, at: str, tool_id: str, ok: int, duration_ms: int, error_kind: str | None
+    connection, *, at: str, tool_id: str, ok: bool, duration_ms: int, error_kind: str | None
 ) -> None:
     connection.execute(
         "INSERT INTO tool_calls (round_id, tool_id, arguments, result_note, duration_ms,"
-        " created_at, ok, error_kind) VALUES ('r1', ?, '{}', 'x', ?, ?, ?, ?)",
+        " created_at, ok, error_kind) VALUES ('r1', %s, '{}', 'x', %s, %s, %s, %s)",
         (tool_id, duration_ms, at, ok, error_kind),
     )
 
 
-def test_round_calls_merges_model_and_tool_in_time_order(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
-    _model_call(connection, at="2026-10-23T10:00:00+00:00", purpose="claims", ok=1, duration_ms=10)
+def test_round_calls_merges_model_and_tool_in_time_order():
+    connection = open_direct()
+    _model_call(
+        connection, at="2026-10-23T10:00:00+00:00", purpose="claims", ok=True, duration_ms=10
+    )
     _tool_call(
-        connection, at="2026-10-23T10:00:01+00:00", tool_id="web_search", ok=0,
+        connection, at="2026-10-23T10:00:01+00:00", tool_id="web_search", ok=False,
         duration_ms=900, error_kind="timeout",
     )
     _model_call(
-        connection, at="2026-10-23T10:00:02+00:00", purpose="integration", ok=0, duration_ms=20
+        connection, at="2026-10-23T10:00:02+00:00", purpose="integration", ok=False, duration_ms=20
     )
 
     entries = SqliteRoundCallLog(connection).round_calls("r1")
@@ -51,16 +52,16 @@ def test_round_calls_merges_model_and_tool_in_time_order(tmp_path):
     assert [entry.duration_ms for entry in entries] == [10, 900, 20]
 
 
-def test_round_calls_ignores_other_rounds(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_round_calls_ignores_other_rounds():
+    connection = open_direct()
     _tool_call(
-        connection, at="2026-10-23T10:00:01+00:00", tool_id="web_search", ok=1,
+        connection, at="2026-10-23T10:00:01+00:00", tool_id="web_search", ok=True,
         duration_ms=1, error_kind=None,
     )
     connection.execute(
         "INSERT INTO tool_calls (round_id, tool_id, arguments, result_note, duration_ms,"
         " created_at, ok) VALUES ('r2', 'web_search', '{}', 'x', 1,"
-        " '2026-10-23T10:00:02+00:00', 1)"
+        " '2026-10-23T10:00:02+00:00', TRUE)"
     )
 
     entries = SqliteRoundCallLog(connection).round_calls("r1")
@@ -68,7 +69,7 @@ def test_round_calls_ignores_other_rounds(tmp_path):
     assert [entry.kind for entry in entries] == ["tool"]
 
 
-def test_a_round_with_no_calls_is_empty(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_a_round_with_no_calls_is_empty():
+    connection = open_direct()
 
     assert SqliteRoundCallLog(connection).round_calls("r-none") == ()

@@ -17,7 +17,11 @@ BACKEND = Path(__file__).resolve().parents[2]
 
 
 def _env(**extra: str) -> dict[str, str]:
-    base = {"PMSTUDIO_MODEL": "openai/x", "PMSTUDIO_API_KEY": "k"}
+    base = {
+        "PMSTUDIO_MODEL": "openai/x",
+        "PMSTUDIO_API_KEY": "k",
+        "PMSTUDIO_DATABASE_URL": "postgresql://app@pgbouncer/pmstudio",
+    }
     base.update(extra)
     return base
 

@@ -33,7 +33,11 @@ def test_attachment_tool_never_needs_a_key():
 
 
 def test_settings_reads_the_tavily_key_and_tolerates_its_absence():
-    base = {"PMSTUDIO_MODEL": "openai/x", "PMSTUDIO_API_KEY": "k"}
+    base = {
+        "PMSTUDIO_MODEL": "openai/x",
+        "PMSTUDIO_API_KEY": "k",
+        "PMSTUDIO_DATABASE_URL": "postgresql://app@pgbouncer/pmstudio",
+    }
 
     assert Settings.from_env(base).tavily_api_key is None
     settings = Settings.from_env({**base, "PMSTUDIO_TAVILY_API_KEY": " tvly-x "})
@@ -41,7 +45,11 @@ def test_settings_reads_the_tavily_key_and_tolerates_its_absence():
 
 
 def test_settings_expose_which_tools_are_available():
-    base = {"PMSTUDIO_MODEL": "openai/x", "PMSTUDIO_API_KEY": "k"}
+    base = {
+        "PMSTUDIO_MODEL": "openai/x",
+        "PMSTUDIO_API_KEY": "k",
+        "PMSTUDIO_DATABASE_URL": "postgresql://app@pgbouncer/pmstudio",
+    }
 
     assert Settings.from_env(base).available_tool_keys() == frozenset()
     settings = Settings.from_env({**base, "PMSTUDIO_TAVILY_API_KEY": "tvly-x"})

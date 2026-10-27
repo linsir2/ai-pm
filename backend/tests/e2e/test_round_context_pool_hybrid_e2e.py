@@ -1,12 +1,11 @@
-"""P（生产·真跑·slow）：真 SQLite + 真 `SqliteHybridRetriever` + 真 fastembed。
+"""P（生产·真跑·slow）：真 PostgreSQL + 真 `SqliteHybridRetriever` + 真 fastembed。
 
 这条是 P2.9 的硬证据：语义那条材料**与查询没有任何词面重合**——纯 FTS5 查不到它，
 只有向量分支能把它带进 SEAT 投影。不这样做的话，"FTS 也能查到"会让测试绿着但
 什么都没证明（见 `test_round_context_pool_e2e.py` 的 FTS e2e）。
 
 **只在显式 `-m slow` 时跑**：首次运行会下载/加载 `BAAI/bge-small-zh-v1.5`（~90MB）。
-依赖或 sqlite-vec 扩展缺失时 `skip` 并写明原因；但**向量写入后
-`material_chunks_vec` 的条数必须 > 0**——写入失败是错，不是跳过。
+只依赖 pgvector；**向量写入后 `material_chunks.embedding` 的条数必须 > 0**——写入失败是错，不是跳过。
 """
 
 import hashlib
@@ -19,7 +18,7 @@ from pmstudio.bootstrap.container import UuidIdGenerator
 from pmstudio.domain.round.retrieval import RetrievalStage
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.template import standard_template
-from pmstudio.infrastructure.sqlite.database import connect
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
 from pmstudio.infrastructure.sqlite.materials import (
     SqliteFtsRetriever,
@@ -31,11 +30,11 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteEvidenceRepository,
     SqliteRoundRepository,
 )
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
 from tests.support.builders import NOW, PROJECT, ROUND_ID
 from tests.support.doubles import FixedClock
 from tests.support.leases import bind_round_lease
+from tests.support.postgres import open_direct
 
 #: 语义查询：换成"人话"的防误删需求。
 QUERY = "如何防止用户误删数据"
@@ -75,18 +74,11 @@ def put(store: SqliteMaterialStore, text: str, title: str):
 
 
 @pytest.mark.slow
-def test_a_semantic_only_material_reaches_the_seat_projection(tmp_path):
+def test_a_semantic_only_material_reaches_the_seat_projection():
     pytest.importorskip("fastembed", reason="真 hybrid 慢测需要 fastembed")
-    pytest.importorskip("sqlite_vec", reason="真 hybrid 慢测需要 sqlite-vec")
 
-    connection = connect(tmp_path / "hybrid.db")
+    connection = open_direct()
     try:
-        has_vec_table = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='material_chunks_vec'"
-        ).fetchone()
-        if has_vec_table is None:
-            pytest.skip("sqlite-vec 扩展加载失败：material_chunks_vec 未建成")
-
         ids = UuidIdGenerator()
         store = SqliteMaterialStore(connection, ids=ids)
         SqliteProjectFactory(connection, ids=ids).create(
@@ -104,11 +96,11 @@ def test_a_semantic_only_material_reaches_the_seat_projection(tmp_path):
         vector_index.write(semantic.material_id)
 
         stored = connection.execute(
-            "SELECT COUNT(*) FROM material_chunks_vec"
-        ).fetchone()[0]
+            "SELECT COUNT(*) AS n FROM material_chunks WHERE embedding IS NOT NULL"
+        ).fetchone()["n"]
         assert stored > 0, "向量写入失败（0 条）——这不许用 skip 冒充绿"
         assert connection.execute(
-            "SELECT 1 FROM material_chunks_vec WHERE chunk_id = ?",
+            "SELECT 1 FROM material_chunks WHERE chunk_id = %s AND embedding IS NOT NULL",
             (semantic_chunk,),
         ).fetchone(), "语义那条的向量没写进去"
 
@@ -146,7 +138,7 @@ def test_a_semantic_only_material_reaches_the_seat_projection(tmp_path):
             evidence_writer=evidences,
             materials=store,
             retriever=retriever,
-            uow=SqliteUnitOfWork(connection),
+            uow=PgUnitOfWork(connection),
             clock=FixedClock(),
         ).prepare(round_id=ROUND_ID, stage=RetrievalStage.SEAT, query=QUERY)
 

@@ -407,7 +407,7 @@ async def test_business_endpoint_requires_login(make_app):
         assert (await client.get("/api/events")).status_code == 401
 
 
-def test_sse_only_delivers_my_events(tmp_path):
+def test_sse_only_delivers_my_events():
     """两个 owner 各订一条流：只收到自己项目的事件（别人的一条都不投）。"""
 
     from pmstudio.api.sse import event_stream, owner_visible
@@ -415,17 +415,18 @@ def test_sse_only_delivers_my_events(tmp_path):
     from pmstudio.domain.authoring.document import Document
     from pmstudio.domain.shared.ids import DocumentId, ProjectId, UserId
     from pmstudio.harness.events import Event
-    from pmstudio.infrastructure.sqlite import database, owner_scope
+    from pmstudio.infrastructure.postgres import owner_scope
     from pmstudio.infrastructure.sqlite.repositories import (
         SqliteDocumentRepository,
         SqliteWorkspaceIndex,
     )
     from tests.support.builders import NOW
+    from tests.support.postgres import open_direct
 
     alice = UserId("u-alice")
     bob = UserId("u-bob")
 
-    conn = database.connect(tmp_path / "sse.db")
+    conn = open_direct()
     docs = SqliteDocumentRepository(conn)
     for project_id, owner in (("p-a", alice), ("p-b", bob)):
         docs.save(

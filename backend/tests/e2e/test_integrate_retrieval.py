@@ -29,7 +29,7 @@ from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EvidenceId
 from pmstudio.domain.shared.template import standard_template
 from pmstudio.harness.errors import ModelCallFailed
-from pmstudio.infrastructure.sqlite.database import connect
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.materials import (
     SqliteFtsRetriever,
     SqliteMaterialStore,
@@ -42,7 +42,6 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_seat
 from tests.support.doubles import (
     FixedClock,
@@ -52,6 +51,7 @@ from tests.support.doubles import (
     StaticSeatCatalog,
 )
 from tests.support.leases import bind_round_lease
+from tests.support.postgres import open_direct
 
 MATERIAL_TEXT = "导出权限按角色控制，管理员才能导出全量。"
 
@@ -95,7 +95,7 @@ class _CountingRetriever:
 
 
 def _setup(tmp_path, gateway: ScriptedModelGateway):  # type: ignore[no-untyped-def]
-    connection = connect(tmp_path / "integrate_retry.db")
+    connection = open_direct()
     ids = UuidIdGenerator()
     store = SqliteMaterialStore(connection, ids=ids)
     documents = SqliteDocumentRepository(connection)
@@ -103,7 +103,7 @@ def _setup(tmp_path, gateway: ScriptedModelGateway):  # type: ignore[no-untyped-
     evidences = SqliteEvidenceRepository(connection)
     memory = SqliteMemoryRepository(connection)
     index = SqliteWorkspaceIndex(connection)
-    uow = SqliteUnitOfWork(connection)
+    uow = PgUnitOfWork(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT,
         title="整合重试 e2e",

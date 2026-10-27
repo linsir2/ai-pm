@@ -7,10 +7,10 @@ import pytest
 
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
 from pmstudio.domain.shared.ids import ProjectId
-from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
 from tests.support.builders import NOW, PROJECT
 from tests.support.doubles import SeqIds
+from tests.support.postgres import open_direct
 
 
 def parsed_material(*chunks: str, truncated: bool = False) -> ParsedMaterial:
@@ -38,8 +38,8 @@ def parsed_material(*chunks: str, truncated: bool = False) -> ParsedMaterial:
 
 
 @pytest.fixture()
-def store(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def store():
+    connection = open_direct()
     yield SqliteMaterialStore(connection, ids=SeqIds())
     connection.close()
 

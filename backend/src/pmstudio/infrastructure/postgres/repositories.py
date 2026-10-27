@@ -523,7 +523,7 @@ class SqliteExplorationRepository:
         for row in rows:
             try:
                 found.append(self._from_row(row))
-            except (TypeError, KeyError, ValueError):
+            except (AttributeError, TypeError, KeyError, ValueError):
                 continue  # 坏行跳过不抛（与 list_rounds 同一条口径）
         return tuple(found)
 
@@ -542,7 +542,7 @@ class SqliteExplorationRepository:
         for row in rows:
             try:
                 found.append(self._from_row(row))
-            except (TypeError, KeyError, ValueError):
+            except (AttributeError, TypeError, KeyError, ValueError):
                 continue
         return tuple(found)
 
@@ -618,7 +618,7 @@ class SqliteDiscussionRepository:
         for row in rows:
             try:
                 found.append(self._from_row(row))
-            except (TypeError, KeyError, ValueError):
+            except (AttributeError, TypeError, KeyError, ValueError):
                 continue  # 坏行跳过不抛（与 explorations 同一条口径）
         return tuple(found)
 
@@ -814,17 +814,16 @@ class SqliteWorkspaceIndex:
         heads: list[RoundHeadView] = []
         for row in rows:
             try:
-                payload = row["payload"]
-            except (TypeError, ValueError):
-                continue
-            heads.append(
-                round_head_view(
-                    round_id=row["round_id"],
-                    step=row["step"],
-                    created_at=row["created_at"],
-                    payload=payload,
+                heads.append(
+                    round_head_view(
+                        round_id=row["round_id"],
+                        step=row["step"],
+                        created_at=row["created_at"],
+                        payload=row["payload"],
+                    )
                 )
-            )
+            except (AttributeError, TypeError, KeyError, ValueError):
+                continue
         return tuple(heads)
 
     def recent_opinions(
@@ -848,9 +847,8 @@ class SqliteWorkspaceIndex:
         ).fetchall()
         found: list[OpinionSourceView] = []
         for row in rows:
-            try:
-                payload = row["payload"]
-            except (TypeError, ValueError):
+            payload = row["payload"]
+            if not isinstance(payload, dict):
                 continue
             reviews = payload.get("seat_reviews")
             if not isinstance(reviews, list):
@@ -896,9 +894,8 @@ class SqliteWorkspaceIndex:
         ).fetchall()
         found: dict[str, list[str]] = {}
         for row in rows:
-            try:
-                payload = row["payload"]
-            except (TypeError, ValueError):
+            payload = row["payload"]
+            if not isinstance(payload, dict):
                 continue
             materials = payload.get("materials")
             if isinstance(materials, list):

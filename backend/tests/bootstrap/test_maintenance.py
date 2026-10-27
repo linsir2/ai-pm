@@ -19,6 +19,7 @@ from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
 from pmstudio.infrastructure.tools.extract import HTML_PARSER_ID, LocalMaterialParser
 from tests.conftest import TEST_OWNER  # noqa: E402 —— 真 owner（conftest 装了作用域默认值）
 from tests.support.embedding import FakeEmbedder
+from tests.support.postgres import open_direct
 
 OWNER = str(TEST_OWNER)
 PROJECT = "p1"
@@ -49,21 +50,20 @@ def _html_material(text: str = "<html><body><p>机柜布线规范</p></body></ht
     )
 
 
-def _store_with_material(tmp_path, *, material_id="m-old", parser_version="bs4-1+x"):
+def _store_with_material(*, material_id="m-old", parser_version="bs4-1+x"):
     """造一份**旧档位**的上传材料（原始字节在库）。"""
-    from pmstudio.infrastructure.sqlite import database
-
-    connection = database.connect(tmp_path / "m.db")
+    connection = open_direct()
     connection.execute(
         "INSERT INTO users (user_id, username, password_hash, created_at)"
-        " VALUES (?, 'alice', 'x', ?)",
-        (OWNER, "2026-10-18T00:00:00+00:00"),
+        " VALUES (%s, 'alice', 'x', '2026-10-18T00:00:00+00:00')"
+        " ON CONFLICT (user_id) DO NOTHING",
+        (OWNER,),
     )
     connection.execute(
         "INSERT INTO materials (material_id, project_id, owner_id, origin, title, source_ref,"
         " media_type, bytes_len, sha256, parser_id, parser_version, schema_version, truncated,"
-        " warnings, content, created_at) VALUES (?, ?, ?, 'upload', '旧文档.html',"
-        " 'attachment:旧文档.html', 'text/html', 40, 'sha-old', ?, ?, 1, 0, '[]', ?, ?)",
+        " warnings, content, created_at) VALUES (%s, %s, %s, 'upload', '旧文档.html',"
+        " 'attachment:旧文档.html', 'text/html', 40, 'sha-old', %s, %s, 1, false, '{}', %s, %s)",
         (
             material_id,
             PROJECT,
@@ -76,18 +76,18 @@ def _store_with_material(tmp_path, *, material_id="m-old", parser_version="bs4-1
     )
     connection.execute(
         "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
-        " heading_path, anchor) VALUES (?, ?, ?, 0, '旧块', '[]', '第 1 段')",
+        " heading_path, anchor, tokens) VALUES (%s, %s, %s, 0, '旧块', '{}', '第 1 段', '旧块')",
         (f"{material_id}#c00", material_id, OWNER),
     )
     return connection
 
 
-async def test_the_maintenance_re_parses_an_old_material_and_recomputes_its_vectors(tmp_path):
+async def test_the_maintenance_re_parses_an_old_material_and_recomputes_its_vectors():
     """R：旧档位的材料被**重切**，且**向量重算**（旧向量对应旧块，重切后作废）。"""
     from pmstudio.bootstrap.maintenance import MaterialMaintenance
-    from pmstudio.infrastructure.sqlite import owner_scope
+    from pmstudio.infrastructure.postgres import owner_scope
 
-    connection = _store_with_material(tmp_path)
+    connection = _store_with_material()
     store = SqliteMaterialStore(connection, ids=_SeqIds())
     vectors = SqliteVectorIndex(connection, embedder=FakeEmbedder(dimensions=512))
     vectors.write("m-old")     # 先给旧块写上向量
@@ -106,17 +106,18 @@ async def test_the_maintenance_re_parses_an_old_material_and_recomputes_its_vect
     assert packet.parsed.parser_version != "bs4-1+x", "档位没更新"
     assert "机柜布线规范" in packet.parsed.chunks[0].text, "块没按新块宽重切"
     rows = connection.execute(
-        "SELECT chunk_id FROM material_chunks_vec WHERE chunk_id LIKE 'm-old#%'"
+        "SELECT chunk_id FROM material_chunks"
+        " WHERE chunk_id LIKE 'm-old#%%' AND embedding IS NOT NULL"
     ).fetchall()
     assert rows, "重切后向量没重算"
 
 
-async def test_the_maintenance_is_idempotent(tmp_path):
+async def test_the_maintenance_is_idempotent():
     """R：再跑一次**不重做**（档位对上 → 不再需要重切）。"""
     from pmstudio.bootstrap.maintenance import MaterialMaintenance
-    from pmstudio.infrastructure.sqlite import owner_scope
+    from pmstudio.infrastructure.postgres import owner_scope
 
-    connection = _store_with_material(tmp_path)
+    connection = _store_with_material()
     store = SqliteMaterialStore(connection, ids=_SeqIds())
     task = MaterialMaintenance(
         connection=connection,
@@ -133,12 +134,12 @@ async def test_the_maintenance_is_idempotent(tmp_path):
     assert second == 0, "第二遍不该再重切（幂等）"
 
 
-async def test_a_referenced_material_is_not_touched(tmp_path):
+async def test_a_referenced_material_is_not_touched():
     """R：**已被编号引用**的材料一个字都不动（编号指着旧块，改块 = 改指编号）。"""
     from pmstudio.bootstrap.maintenance import MaterialMaintenance
-    from pmstudio.infrastructure.sqlite import owner_scope
+    from pmstudio.infrastructure.postgres import owner_scope
 
-    connection = _store_with_material(tmp_path)
+    connection = _store_with_material()
     store = SqliteMaterialStore(connection, ids=_SeqIds())
     task = MaterialMaintenance(
         connection=connection,
@@ -156,12 +157,12 @@ async def test_a_referenced_material_is_not_touched(tmp_path):
     assert packet.parsed.chunks[0].text == "旧块", "被引用的材料内容被换了"
 
 
-async def test_a_broken_material_does_not_stop_the_others(tmp_path):
+async def test_a_broken_material_does_not_stop_the_others():
     """R：一份坏了**不连累**别的（维护任务不该因为一份材料失败就整体停下）。"""
     from pmstudio.bootstrap.maintenance import MaterialMaintenance
-    from pmstudio.infrastructure.sqlite import owner_scope
+    from pmstudio.infrastructure.postgres import owner_scope
 
-    connection = _store_with_material(tmp_path)
+    connection = _store_with_material()
     store = SqliteMaterialStore(connection, ids=_SeqIds())
     task = MaterialMaintenance(
         connection=connection,

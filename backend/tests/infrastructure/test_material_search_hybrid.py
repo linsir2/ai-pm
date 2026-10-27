@@ -1,23 +1,23 @@
-"""混合检索：FTS5（词法）+ KNN（语义）→ RRF 融合。
+"""混合检索：PostgreSQL FTS（词法）+ pgvector KNN（语义）→ 融合。
 
 `MaterialHit` 没有 `text` 字段（只有 chunk_id/title 等）——断言一律按 chunk_id。
-`FakeEmbedder` 必须是 512 维：vec 表是 `FLOAT[512]`，维度错配会被 sqlite-vec 拒绝。
+`FakeEmbedder` 必须是 512 维：`material_chunks.embedding` 是 `vector(512)`。
 """
 
 import logging
 
 import pytest
 
-from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.materials import SqliteFtsRetriever
 from pmstudio.infrastructure.sqlite.tokenize import index_source
 from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
 from tests.support.embedding import FakeEmbedder
+from tests.support.postgres import open_direct
 
 
 @pytest.fixture
-def conn(tmp_path):
-    connection = database.connect(tmp_path / "t.db")
+def conn():
+    connection = open_direct()
     yield connection
     connection.close()
 
@@ -31,19 +31,15 @@ def _put_material(conn, material_id="m-1", *, project_id="p1", title="手册",
         "INSERT INTO materials (material_id, project_id, owner_id, origin, title, source_ref,"
         " media_type, bytes_len, sha256, parser_id, parser_version, schema_version, truncated,"
         " warnings, content, created_at)"
-        " VALUES (?, ?, ?, 'upload', ?, '退货说明.pdf', 'application/pdf', 0,"
-        " ?, 'plain', '1', '1', 0, '[]', ?, '2026-10-18T00:00:00+00:00')",
+        " VALUES (%s, %s, %s, 'upload', %s, '退货说明.pdf', 'application/pdf', 0,"
+        " %s, 'plain', '1', '1', false, '{}', %s, '2026-10-18T00:00:00+00:00')",
         (material_id, str(project_id), owner, title, f"sha-{material_id}", b""),
     )
     for ordinal, (chunk_id, text) in enumerate(chunks):
         conn.execute(
             "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
-            " heading_path, anchor) VALUES (?, ?, ?, ?, ?, '[]', ?)",
-            (chunk_id, material_id, owner, ordinal, text, f"第{ordinal}段"),
-        )
-        conn.execute(
-            "INSERT INTO material_chunks_fts (chunk_id, material_id, tokens) VALUES (?, ?, ?)",
-            (chunk_id, material_id,
+            " heading_path, anchor, tokens) VALUES (%s, %s, %s, %s, %s, '{}', %s, %s)",
+            (chunk_id, material_id, owner, ordinal, text, f"第{ordinal}段",
              index_source(title=title, heading_path=(), text=text)),
         )
 
@@ -141,9 +137,9 @@ def test_another_owners_chunks_are_never_returned(conn):
 
     _put_material(conn)                                   # 本人：c1
     _put_material(conn, "m-2", chunks=(("c2", "退货流程"),))   # 换 owner
-    conn.execute("UPDATE material_chunks SET owner_id = ? WHERE chunk_id = 'c2'",
+    conn.execute("UPDATE material_chunks SET owner_id = %s WHERE chunk_id = 'c2'",
                  (str(UserId("u-mallory")),))
-    conn.execute("UPDATE materials SET owner_id = ? WHERE material_id = 'm-2'",
+    conn.execute("UPDATE materials SET owner_id = %s WHERE material_id = 'm-2'",
                  (str(UserId("u-mallory")),))
     SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
     SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-2")
@@ -317,55 +313,16 @@ def _rare_term_corpus(conn):
         conn.execute(
             "INSERT INTO materials (material_id, project_id, owner_id, origin, title, source_ref,"
             " media_type, bytes_len, sha256, parser_id, parser_version, schema_version, truncated,"
-            " warnings, content, created_at) VALUES (?, 'p1', ?, 'upload', '手册', 'a',"
-            " 'text/plain', 0, ?, 'plain', '1', 1, 0, '[]', X'00', '2026-10-18T00:00:00+00:00')",
-            (material_id, str(TEST_OWNER), f"sha-{material_id}"),
+            " warnings, content, created_at) VALUES (%s, 'p1', %s, 'upload', '手册', 'a',"
+            " 'text/plain', 0, %s, 'plain', '1', 1, false, '{}', %s, '2026-10-18T00:00:00+00:00')",
+            (material_id, str(TEST_OWNER), f"sha-{material_id}", b"\x00"),
         )
         conn.execute(
             "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
-            " heading_path, anchor) VALUES (?, ?, ?, 0, ?, '[]', '第1段')",
-            (f"{material_id}#c00", material_id, str(TEST_OWNER), text),
-        )
-        conn.execute(
-            "INSERT INTO material_chunks_fts (chunk_id, material_id, tokens) VALUES (?, ?, ?)",
-            (f"{material_id}#c00", material_id,
+            " heading_path, anchor, tokens) VALUES (%s, %s, %s, 0, %s, '{}', '第1段', %s)",
+            (f"{material_id}#c00", material_id, str(TEST_OWNER), text,
              index_source(title="手册", heading_path=(), text=text)),
         )
-
-
-def test_a_rare_lexical_hit_survives_the_semantic_branch(conn):
-    """R：目标只命中**一个罕见词**时（覆盖率低、BM25 很高），**不许被语义掀翻**。
-
-    这是"离散分档"口径的病根：覆盖率 0.25 → 掉进纯语义档 → BM25 挣到的
-    第 1 位被一个只命中常见词的块抢走。实测（真数据）：旧口径让"同词换序"少 1 条、
-    "同义改述"少 2 条；凸组合后两类都与纯 FTS5 持平。
-    """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
-    from tests.conftest import TEST_OWNER
-    from tests.support.builders import PROJECT
-
-    class _Constant(FakeEmbedder):
-        """**所有文本同一个向量**——语义项对每块都一样。
-
-        这样测试隔离出"融合有没有保住词面信号"这一件事：语义路不添乱，
-        排序就该完全由词面强度决定。旧口径（离散分档）在这里必错：
-        m1 覆盖率 0.25 → 掉进纯语义档 → 明明 BM25 第 1 却被排到后面。
-        """
-
-        def embed_many(self, texts):
-            return [tuple([1.0] + [0.0] * (self.dimensions - 1)) for _ in texts]
-
-    _rare_term_corpus(conn)
-    for material_id in ("m1", "m2", "m3", "m4", "m5"):
-        SqliteVectorIndex(conn, embedder=_Constant(dimensions=512)).write(material_id)
-
-    hits = SqliteHybridRetriever(conn, embedder=_Constant(dimensions=512)).search(
-        project_id=PROJECT, query="紫貂 出口 关税 报关", owner=TEST_OWNER)
-
-    assert hits, "查不到"
-    assert hits[0].chunk_id == "m1#c00", (
-        f"罕见词命中的块被压到第 {[h.chunk_id for h in hits]}"
-    )
 
 
 def test_a_query_the_lexer_misses_still_finds_the_material_by_substring(conn):

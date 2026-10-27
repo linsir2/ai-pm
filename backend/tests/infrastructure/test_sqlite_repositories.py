@@ -1,9 +1,9 @@
 from datetime import UTC, datetime
 
 import pytest
+from psycopg.types.json import Jsonb
 
 from pmstudio.application.errors import LeaseLost, UnknownProject, UnknownRound
-from pmstudio.application.lease import wall_clock_ms
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
@@ -35,31 +35,32 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from pmstudio.infrastructure.sqlite import database, owner_scope, serialization
-from pmstudio.infrastructure.sqlite.leases import SqliteLeaseStore
+from pmstudio.infrastructure.postgres import owner_scope, serialization
+from pmstudio.infrastructure.postgres.leases import PgLeaseStore
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.support.builders import NOW, PROJECT, make_document, make_round
 from tests.support.leases import bind_round_lease
+from tests.support.postgres import open_direct
 
 #: 比 NOW 晚一个小时：用来验"最近更新倒序"（`Document.new(now=...)` 决定 `documents.updated_at`）
 LATER = NOW.replace(hour=NOW.hour + 1)
 
 
 @pytest.fixture()
-def repos(tmp_path):
-    connection = database.connect(tmp_path / "pmstudio.db")
+def repos():
+    connection = open_direct()
     yield (
         SqliteDocumentRepository(connection),
         SqliteRoundRepository(connection),
         SqliteEvidenceRepository(connection),
         SqliteWorkspaceIndex(connection),
-        SqliteUnitOfWork(connection),
+        PgUnitOfWork(connection),
     )
     connection.close()
 
@@ -362,11 +363,11 @@ def test_recent_rounds_returns_newest_first_and_reads_the_tally(repos):
 def test_list_rounds_returns_newest_first_and_skips_broken_rows(tmp_path):
     """F4 的入口：轮次列表最新在前；payload 坏了的行跳过，不把整次查询打崩。"""
 
-    connection = database.connect(tmp_path / "pmstudio.db")
+    connection = open_direct()
     try:
         rounds = SqliteRoundRepository(connection)
         index = SqliteWorkspaceIndex(connection)
-        uow = SqliteUnitOfWork(connection)
+        uow = PgUnitOfWork(connection)
         with uow:
             rounds.save(
                 Round(
@@ -391,13 +392,14 @@ def test_list_rounds_returns_newest_first_and_skips_broken_rows(tmp_path):
             )
         connection.execute(
             "INSERT INTO rounds (round_id, project_id, owner_id, step, waiting_on, payload,"
-            " created_at, updated_at) VALUES ('r-bad', ?, ?, 'started', 'none',"
-            " '{不是 JSON', ?, ?)",
+            " created_at, updated_at) VALUES ('r-bad', %s, %s, 'started', 'none',"
+            " %s, %s, %s)",
             (
                 str(PROJECT),
                 owner_scope.current_owner_scope(),
-                NOW.isoformat(),
-                NOW.isoformat(),
+                Jsonb("oops"),
+                NOW,
+                NOW,
             ),
         )
 
@@ -439,11 +441,11 @@ def test_material_references_tells_which_numbers_came_from_which_material(tmp_pa
     是按标题拼的，两份同名文件会撞，不能当判据。
     """
 
-    connection = database.connect(tmp_path / "pmstudio.db")
+    connection = open_direct()
     try:
         rounds = SqliteRoundRepository(connection)
         index = SqliteWorkspaceIndex(connection)
-        uow = SqliteUnitOfWork(connection)
+        uow = PgUnitOfWork(connection)
         first = Round(
             round_id=RoundId("r1"),
             project_id=PROJECT,
@@ -474,13 +476,14 @@ def test_material_references_tells_which_numbers_came_from_which_material(tmp_pa
             rounds.save(second)
         connection.execute(
             "INSERT INTO rounds (round_id, project_id, owner_id, step, waiting_on, payload,"
-            " created_at, updated_at) VALUES ('r-bad', ?, ?, 'started', 'none',"
-            " '{不是 JSON', ?, ?)",
+            " created_at, updated_at) VALUES ('r-bad', %s, %s, 'started', 'none',"
+            " %s, %s, %s)",
             (
                 str(PROJECT),
                 owner_scope.current_owner_scope(),
-                NOW.isoformat(),
-                NOW.isoformat(),
+                Jsonb("oops"),
+                NOW,
+                NOW,
             ),
         )
 
@@ -806,7 +809,7 @@ def test_round_payload_without_skipped_seats_key_still_loads():
 def test_round_skips_are_latest_wins_and_do_not_touch_dropped(tmp_path):
     """控制行：同席位换趟覆盖同一行；get 合入 skipped_seats，不写 dropped。"""
 
-    connection = database.connect(tmp_path / "pmstudio.db")
+    connection = open_direct()
     try:
         rounds = SqliteRoundRepository(connection)
         round_ = make_round(seats=("seat.a", "seat.b"))
@@ -838,10 +841,10 @@ def test_round_skips_are_latest_wins_and_do_not_touch_dropped(tmp_path):
             ),
         )
         rows = connection.execute(
-            "SELECT seat_id, pass_index FROM round_skips WHERE round_id = ?",
+            "SELECT seat_id, pass_index FROM round_skips WHERE round_id = %s",
             (str(round_.round_id),),
         ).fetchall()
-        assert [tuple(row) for row in rows] == [("seat.b", 2)]
+        assert [(row["seat_id"], row["pass_index"]) for row in rows] == [("seat.b", 2)]
 
         loaded = rounds.get(round_.round_id)
         assert loaded.skipped_seats == ("seat.b",)
@@ -860,11 +863,11 @@ def test_round_skips_are_latest_wins_and_do_not_touch_dropped(tmp_path):
 def test_material_references_counts_pinned_and_manual_chunks(tmp_path):
     """P2.0：还没投影、没有 E 号的"手勾/手动带料"也算引用——不许删、不许就地重解析。"""
 
-    connection = database.connect(tmp_path / "pmstudio.db")
+    connection = open_direct()
     try:
         rounds = SqliteRoundRepository(connection)
         index = SqliteWorkspaceIndex(connection)
-        uow = SqliteUnitOfWork(connection)
+        uow = PgUnitOfWork(connection)
         round_ = Round(
             round_id=RoundId("r-pinned"),
             project_id=PROJECT,
@@ -889,7 +892,7 @@ def test_material_references_counts_pinned_and_manual_chunks(tmp_path):
 def test_round_save_is_fenced_by_the_current_lease(tmp_path):
     """仓储 fencing：新 INSERT 允许；existing 行没有活租约就写不进去（P3b Task 1）。"""
 
-    connection = database.connect(tmp_path / "pmstudio.db")
+    connection = open_direct()
     try:
         rounds = SqliteRoundRepository(connection)
         round_ = make_round()
@@ -901,13 +904,12 @@ def test_round_save_is_fenced_by_the_current_lease(tmp_path):
         token = bind_round_lease(connection, round_.round_id)
         rounds.save(round_)  # 有匹配的活租约
 
-        SqliteLeaseStore(connection).release(
+        PgLeaseStore(connection).release(
             token.kind,
             token.target_id,
             token.user_id,
             token.holder,
             token.token,
-            now_ms=wall_clock_ms(),
         )
         with pytest.raises(LeaseLost):
             rounds.save(round_)  # 释放后的迟到写

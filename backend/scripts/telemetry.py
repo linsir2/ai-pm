@@ -365,10 +365,11 @@ def scan_memory_hits(url: str) -> dict[str, dict[str, int]]:
         rounds_missing = not _table_exists(connection, "rounds")
         memories = SqliteMemoryRepository(connection)
         round_repo = SqliteRoundRepository(connection)
-        for project_id, owner_id in connection.execute(
+        for row in connection.execute(
             "SELECT project_id, owner_id FROM project_memory"
         ).fetchall():
-            owner = UserId(owner_id)
+            project_id = row["project_id"]
+            owner = UserId(row["owner_id"])
             entries = memories.get(ProjectId(project_id), owner=owner).entries
             if rounds_missing:
                 recent: list[str] = []
@@ -379,7 +380,7 @@ def scan_memory_hits(url: str) -> dict[str, dict[str, int]]:
                         "SELECT round_id FROM rounds"
                         " WHERE project_id = %s AND owner_id = %s"
                         " ORDER BY seq DESC LIMIT %s",
-                        (project_id, owner_id, MEMORY_USAGE_WINDOW),
+                        (project_id, row["owner_id"], MEMORY_USAGE_WINDOW),
                     ).fetchall()
                 ][::-1]
             cited_by_round: dict[str, frozenset[str]] = {}

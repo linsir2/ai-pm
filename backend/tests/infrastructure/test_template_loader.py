@@ -95,16 +95,16 @@ def test_loading_a_directory_rejects_duplicate_template_ids(tmp_path):
         loader.load_template_dir(tmp_path)
 
 
-def test_seed_builtin_templates_is_idempotent_and_keeps_customs(tmp_path):
+def test_seed_builtin_templates_is_idempotent_and_keeps_customs():
     """启动 seed：内置 upsert 反复种不炸，自定义模板碰不到。"""
 
     from pmstudio.domain.shared.ids import SectionId
     from pmstudio.domain.shared.template import DocumentTemplate, TemplatedSection, TemplateRole
-    from pmstudio.infrastructure.sqlite import database
     from pmstudio.infrastructure.sqlite.repositories import SqliteTemplateRepository
     from pmstudio.infrastructure.templates import loader
+    from tests.support.postgres import open_direct
 
-    connection = database.connect(tmp_path / "pm.db")
+    connection = open_direct()
     repo = SqliteTemplateRepository(connection)
     custom = DocumentTemplate(
         template_id="tpl-x",

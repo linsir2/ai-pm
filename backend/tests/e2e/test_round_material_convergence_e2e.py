@@ -20,7 +20,7 @@ from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.ids import UserId
 from pmstudio.domain.shared.template import standard_template
-from pmstudio.infrastructure.sqlite.database import connect
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever, SqliteMaterialStore
 from pmstudio.infrastructure.sqlite.owner_scope import set_owner_scope
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
@@ -31,9 +31,9 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteExplorationRepository,
     SqliteRoundRepository,
 )
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.support.builders import NOW, PROJECT
 from tests.support.doubles import FixedClock, RecordingPublisher
+from tests.support.postgres import open_direct
 
 OWNER = UserId("u-convergence")
 INPUT = "导出权限怎么定"
@@ -95,7 +95,7 @@ async def test_a_real_round_converges_from_the_whole_library(tmp_path):
     """
 
     set_owner_scope(OWNER)
-    connection = connect(tmp_path / "convergence.db")
+    connection = open_direct()
     ids = UuidIdGenerator()
     store = SqliteMaterialStore(connection, ids=ids)
     documents = SqliteDocumentRepository(connection)
@@ -116,7 +116,7 @@ async def test_a_real_round_converges_from_the_whole_library(tmp_path):
         round_writer=rounds,
         evidence=evidences,
         evidence_writer=evidences,
-        uow=SqliteUnitOfWork(connection),
+        uow=PgUnitOfWork(connection),
         analyzer=_UnusedAnalyzer(),  # type: ignore[arg-type]
         assigner=EvidenceAssigner(),
         checker=ReadinessChecker(),
@@ -165,7 +165,7 @@ async def test_a_real_round_caps_a_huge_pinned_block_and_keeps_the_auto_segment(
     """
 
     set_owner_scope(OWNER)
-    connection = connect(tmp_path / "convergence-split.db")
+    connection = open_direct()
     ids = UuidIdGenerator()
     store = SqliteMaterialStore(connection, ids=ids)
     documents = SqliteDocumentRepository(connection)
@@ -184,7 +184,7 @@ async def test_a_real_round_caps_a_huge_pinned_block_and_keeps_the_auto_segment(
         round_writer=rounds,
         evidence=evidences,
         evidence_writer=evidences,
-        uow=SqliteUnitOfWork(connection),
+        uow=PgUnitOfWork(connection),
         analyzer=_UnusedAnalyzer(),  # type: ignore[arg-type]
         assigner=EvidenceAssigner(),
         checker=ReadinessChecker(),

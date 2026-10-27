@@ -1,6 +1,6 @@
 """向量写回接用例（批 5/5）：主事务提交后落向量，删除/重解析时清向量。
 
-打的是**真 SQLite 仓 + 真实用例**，不是内存 harness——本批最关键的契约
+打的是**真 PostgreSQL 仓 + 真实用例**，不是内存 harness——本批最关键的契约
 "推理不许在写事务里"只有真连接才能证（`connection.in_transaction` 是真值）。
 
 三条判据：
@@ -12,32 +12,38 @@
 from datetime import UTC
 
 import pytest
+from psycopg.pq import TransactionStatus
 
 from pmstudio.application.use_cases import DeleteMaterial, ReparseMaterial, UploadMaterial
-from pmstudio.infrastructure.sqlite import database
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
 from tests.conftest import TEST_OWNER
 from tests.support.builders import PROJECT
 from tests.support.doubles import SeqIds
 from tests.support.embedding import FakeEmbedder
+from tests.support.postgres import open_direct
 
 DOC = "# 退货\n用户的退货流程与时限".encode()
 
 
+def _in_transaction(connection) -> bool:  # type: ignore[no-untyped-def]
+    return connection.info.transaction_status != TransactionStatus.IDLE
+
+
 @pytest.fixture
-def wired(tmp_path):
+def wired():
     """真连接 + 真材料仓 + 真向量索引 + 真 UoW，四个用例都从这套装配。"""
-    connection = database.connect(tmp_path / "t.db")
+    connection = open_direct()
     connection.execute(
-        "INSERT OR IGNORE INTO users (user_id, password_hash, created_at)"
-        " VALUES (?, 'x', '2026-10-18T00:00:00+00:00')",
+        "INSERT INTO users (user_id, username, password_hash, created_at)"
+        " VALUES (%s, 'owner', 'x', '2026-10-18T00:00:00+00:00')"
+        " ON CONFLICT (user_id) DO NOTHING",
         (str(TEST_OWNER),),
     )
     store = SqliteMaterialStore(connection, ids=SeqIds())
     vectors = SqliteVectorIndex(connection, embedder=FakeEmbedder(dimensions=512))
-    uow = SqliteUnitOfWork(connection)
+    uow = PgUnitOfWork(connection)
     yield connection, store, vectors, uow
     connection.close()
 
@@ -59,7 +65,9 @@ def _upload(connection, store, vectors, uow, data=DOC, name="ret.md", media="tex
 
 
 def _vec_count(connection) -> int:
-    return connection.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0]
+    return connection.execute(
+        "SELECT count(*) AS n FROM material_chunks WHERE embedding IS NOT NULL"
+    ).fetchone()["n"]
 
 
 def test_upload_writes_vectors_after_the_main_transaction_commits(wired):
@@ -69,7 +77,7 @@ def test_upload_writes_vectors_after_the_main_transaction_commits(wired):
     saved = _upload(connection, store, vectors, uow)
 
     assert _vec_count(connection) == saved.chunk_count == 1
-    assert not connection.in_transaction          # 提交干净，推理不在事务里
+    assert not _in_transaction(connection)          # 提交干净，推理不在事务里
 
 
 def test_inference_never_runs_inside_the_uploads_write_transaction(wired):
@@ -84,7 +92,7 @@ def test_inference_never_runs_inside_the_uploads_write_transaction(wired):
 
     class Recorder(FakeEmbedder):
         def embed_many(self, texts):
-            seen.append(connection.in_transaction)
+            seen.append(_in_transaction(connection))
             return super().embed_many(texts)
 
     recorder_index = SqliteVectorIndex(connection, embedder=Recorder(dimensions=512))
@@ -114,7 +122,9 @@ def test_deleting_a_material_takes_its_vectors_with_it(wired):
     asyncio.run(run())
 
     assert _vec_count(connection) == 0
-    assert connection.execute("SELECT count(*) FROM material_chunks").fetchone()[0] == 0
+    assert (
+        connection.execute("SELECT count(*) AS n FROM material_chunks").fetchone()["n"] == 0
+    )
 
 
 def test_reparsing_recomputes_vectors_instead_of_leaving_stale_ones(wired):
@@ -123,7 +133,9 @@ def test_reparsing_recomputes_vectors_instead_of_leaving_stale_ones(wired):
     saved = _upload(connection, store, vectors, uow)
     original = {
         row["chunk_id"]: row["embedding"]
-        for row in connection.execute("SELECT chunk_id, embedding FROM material_chunks_vec")
+        for row in connection.execute(
+            "SELECT chunk_id, embedding FROM material_chunks WHERE embedding IS NOT NULL"
+        )
     }
 
     # 换一个解析器（不同 parser_id），产出内容不同的块
@@ -145,7 +157,9 @@ def test_reparsing_recomputes_vectors_instead_of_leaving_stale_ones(wired):
 
     after = {
         row["chunk_id"]: row["embedding"]
-        for row in connection.execute("SELECT chunk_id, embedding FROM material_chunks_vec")
+        for row in connection.execute(
+            "SELECT chunk_id, embedding FROM material_chunks WHERE embedding IS NOT NULL"
+        )
     }
     assert after, "重解析后向量表空了"
     assert all(
@@ -210,15 +224,16 @@ class _Clock:
 
 def _seed_project(connection) -> None:
     connection.execute(
-        "INSERT OR IGNORE INTO users (user_id, password_hash, created_at)"
-        " VALUES (?, 'x', '2026-10-18T00:00:00+00:00')",
+        "INSERT INTO users (user_id, username, password_hash, created_at)"
+        " VALUES (%s, 'owner', 'x', '2026-10-18T00:00:00+00:00')"
+        " ON CONFLICT (user_id) DO NOTHING",
         (str(TEST_OWNER),),
     )
 
 # ── 联网材料也要写向量（批 6a Task 6）──────────────────────────────────────────
 
 
-def test_a_web_result_also_gets_a_vector(tmp_path):
+def test_a_web_result_also_gets_a_vector():
     """R：**联网搜来的材料也有向量**——今天它没有，所以"F6 搜得到"只对上传的材料成立。
 
     联网材料是"用户不知道它长什么样"的那一类（外部来源），恰恰最需要语义召回
@@ -227,18 +242,19 @@ def test_a_web_result_also_gets_a_vector(tmp_path):
     装配是**真的**：真 SQLite 仓 + 真向量索引 + 真用例（`SubmitOpening`）。
     """
     from pmstudio.application.use_cases import SubmitOpening
+    from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
     from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-    from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
     from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
     from tests.support.builders import PROJECT, make_web_packet
     from tests.support.doubles import RecordingWebSearch
     from tests.support.harness import Harness
 
     harness = Harness(replies={}, web_search=RecordingWebSearch())
-    connection = database.connect(tmp_path / "web.db")
+    connection = open_direct()
     connection.execute(
-        "INSERT OR IGNORE INTO users (user_id, password_hash, created_at)"
-        " VALUES (?, 'x', '2026-10-18T00:00:00+00:00')",
+        "INSERT INTO users (user_id, username, password_hash, created_at)"
+        " VALUES (%s, 'owner', 'x', '2026-10-18T00:00:00+00:00')"
+        " ON CONFLICT (user_id) DO NOTHING",
         (str(TEST_OWNER),),
     )
     store = SqliteMaterialStore(connection, ids=SeqIds())
@@ -256,7 +272,7 @@ def test_a_web_result_also_gets_a_vector(tmp_path):
         materials=store,
         # 判"这份材料被哪些编号引用过"（`SubmitOpening` 新增的依赖）
         index=_Index(),
-        uow=SqliteUnitOfWork(connection),
+        uow=PgUnitOfWork(connection),
         clock=harness.clock,
         events=harness.events,
         vectors=vectors,
@@ -265,7 +281,9 @@ def test_a_web_result_also_gets_a_vector(tmp_path):
     draft = make_web_packet(url="https://example.com/a", text="机器内部的线要接到背后")
     packet = opening._keep(PROJECT, draft)
 
-    rows = connection.execute("SELECT count(*) FROM material_chunks_vec").fetchone()[0]
+    rows = connection.execute(
+        "SELECT count(*) AS n FROM material_chunks WHERE embedding IS NOT NULL"
+    ).fetchone()["n"]
     assert rows == len(packet.parsed.chunks), (
         f"联网材料应有向量（{len(packet.parsed.chunks)} 块），实得 {rows} 条"
     )

@@ -1,10 +1,12 @@
-"""端到端夹具：真 SQLite、真用例、真图、真席位目录；只有模型是脚本化的。
+"""端到端夹具：真 PostgreSQL、真用例、真图、真席位目录；只有模型是脚本化的。
 
 脚本化模型是**测试专用**：生产容器（`build_app`）里没有"用假模型"的开关。
-两次 `build_app(tmp_path, ...)` 用同一个 db 文件 = **换一个进程接着跑**（内存里什么都没留下）。
+`build_app` 每次都连同一个测试 schema（session 级 URL 已写进环境），等价于
+"同一个库换一个进程接着跑"——内存里什么都没留下。
 """
 
 import hashlib
+import os
 import secrets
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -15,13 +17,16 @@ from fastapi import FastAPI
 
 from pmstudio.api.deps import SESSION_COOKIE
 from pmstudio.bootstrap.container import build_container
-from pmstudio.bootstrap.settings import Settings
+from pmstudio.bootstrap.settings import AppSettings
 from pmstudio.domain.shared.ids import UserId
+from pmstudio.infrastructure.postgres import owner_scope
+from pmstudio.infrastructure.postgres.repositories import SqliteTemplateRepository
 from pmstudio.infrastructure.security import hash_password
-from pmstudio.infrastructure.sqlite import owner_scope
+from pmstudio.infrastructure.templates.loader import seed_builtin_templates
 from tests.support.doubles import ScriptedModelGateway
+from tests.support.postgres import open_direct
 
-#: e2e 默认 owner（多用户改造 Task 5 / D2）：真 SQLite 的读写都要有归属。
+#: e2e 默认 owner（多用户改造 Task 5 / D2）：真 PG 的读写都要有归属。
 #: 生产里由 `require_user`（Task 6）在每个请求里设置；这里在装配时给整条链路装一个，
 #: 让既有 e2e 无需逐处传 owner。contextvar 在测试体（同 async 任务）里设，会传给 await 的 app。
 E2E_OWNER = UserId("u-e2e-owner")
@@ -59,6 +64,20 @@ def _ensure_authed_user(app: FastAPI) -> None:
     app.state.test_cookie = {SESSION_COOKIE: token}
 
 
+def _ensure_first_admin(app: FastAPI) -> None:
+    """测试专用：等价于 `init_db --finalize` 的首管理员 seed。"""
+
+    users = app.state.auth.users
+    if users.get_by_name("admin") is not None:
+        return
+    user_id = users.register(
+        username="admin",
+        password_hash=hash_password("test-admin-password"),
+        role="admin",
+    )
+    users.set_status(user_id, "active")
+
+
 def build_app(
     tmp_path: Path,
     *,
@@ -73,15 +92,11 @@ def build_app(
 ) -> tuple[FastAPI, ScriptedModelGateway]:
     owner_scope.set_owner_scope(E2E_OWNER)
     gateway = ScriptedModelGateway(replies=replies, seat_replies=seat_replies or {})
-    settings = Settings(
-        db_path=tmp_path / "pmstudio.db",
+    settings = AppSettings(
+        database_url=os.environ["PMSTUDIO_DATABASE_URL"],
         model="scripted",
         api_key="test-key",
         api_base=None,
-        # v13 起存量内容必须有归属：换进程重启的用例得有个 admin 让回填接得上。
-        # 默认不种——auth 用例要的是"干净的用户表"。
-        first_admin_username="admin" if first_admin else None,
-        first_admin_password="test-admin-password" if first_admin else None,
         # **e2e 默认把尝试闸放大到不可能触发**：否则多个用例从同一个
         # "testclient" IP 连打登录时会互相限流——测试被自己的防护卡死，
         # 而且这种失败看起来像产品坏了，不像像测试没配好。
@@ -94,7 +109,11 @@ def build_app(
         # 所以只给 key、再把网关实例换成替身，见 `test_call_observability.py`）。
         tavily_api_key=tavily_api_key,
     )
+    with open_direct() as connection:
+        seed_builtin_templates(SqliteTemplateRepository(connection))
     container = build_container(settings, gateway=gateway)
+    if first_admin:
+        _ensure_first_admin(container.app)
     if autologin:
         _ensure_authed_user(container.app)
     return container.app, gateway

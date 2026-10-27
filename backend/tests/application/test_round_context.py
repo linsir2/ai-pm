@@ -23,7 +23,7 @@ from pmstudio.domain.round.retrieval import ManualChunk, RetrievalStage, Retriev
 from pmstudio.domain.round.round import DropSource, MaterialRef, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.template import standard_template
-from pmstudio.infrastructure.sqlite.database import connect
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.materials import (
     SqliteFtsRetriever,
     SqliteMaterialStore,
@@ -33,7 +33,6 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteEvidenceRepository,
     SqliteRoundRepository,
 )
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.api.test_routes import QUESTION_REPLY
 from tests.application.test_materials import make_material
 from tests.application.test_seat_round import (
@@ -46,6 +45,7 @@ from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_round, mak
 from tests.support.doubles import FixedClock, RecordingMaterialRetriever
 from tests.support.harness import Harness
 from tests.support.leases import bind_round_lease
+from tests.support.postgres import open_direct
 
 
 def material_hit(packet, index: int = 0, score: float = 1.0) -> MaterialHit:
@@ -266,8 +266,8 @@ def test_manual_chunks_are_projected_and_get_an_eid():
     assert any(ref.chunk_id == "m1#c00" for ref in after.materials)
 
 
-def test_prepare_round_trips_through_real_sqlite(tmp_path):
-    connection = connect(tmp_path / "context.db")
+def test_prepare_round_trips_through_real_pg():
+    connection = open_direct()
     ids = UuidIdGenerator()
     store = SqliteMaterialStore(connection, ids=ids)
     rounds = SqliteRoundRepository(connection)
@@ -297,7 +297,7 @@ def test_prepare_round_trips_through_real_sqlite(tmp_path):
         evidence_writer=evidences,
         materials=store,
         retriever=SqliteFtsRetriever(connection),
-        uow=SqliteUnitOfWork(connection),
+        uow=PgUnitOfWork(connection),
         clock=FixedClock(),
     ).prepare(round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="权限")
 

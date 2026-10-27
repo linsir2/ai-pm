@@ -8,6 +8,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from psycopg.types.json import Jsonb
 
 from pmstudio.application.errors import UnknownDiscussion
 from pmstudio.domain.discussion.card import Card, CardState, Grounding
@@ -20,19 +21,20 @@ from pmstudio.domain.discussion.thread import (
     ThreadStatus,
 )
 from pmstudio.domain.shared.ids import DiscussionId, EvidenceId, ProjectId
-from pmstudio.infrastructure.sqlite import database, owner_scope
+from pmstudio.infrastructure.postgres import owner_scope
 from pmstudio.infrastructure.sqlite.repositories import SqliteDiscussionRepository
 from pmstudio.infrastructure.sqlite.serialization import (
     discussion_from_payload,
     discussion_to_payload,
 )
+from tests.support.postgres import open_direct
 
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture()
-def store(tmp_path):  # type: ignore[no-untyped-def]
-    connection = database.connect(tmp_path / "pmstudio.db")
+def store():  # type: ignore[no-untyped-def]
+    connection = open_direct()
     return SqliteDiscussionRepository(connection), connection
 
 
@@ -243,9 +245,9 @@ def test_list_returns_newest_first_and_skips_bad_rows(store) -> None:  # type: i
     repo.save(second)
     connection.execute(
         "INSERT INTO discussions (discussion_id, project_id, owner_id, status, payload,"
-        " created_at, updated_at) VALUES ('d-bad','p1',?,'open','{oops',"
+        " created_at, updated_at) VALUES ('d-bad','p1',%s,'open',%s,"
         "'2026-10-06T12:00:00+00:00','2026-10-06T12:00:00+00:00')",
-        (owner_scope.current_owner_scope(),),
+        (owner_scope.current_owner_scope(), Jsonb("oops")),
     )
 
     assert [str(item.discussion_id) for item in repo.list_for_project(ProjectId("p1"))] == [
@@ -258,36 +260,6 @@ def test_unknown_thread_raises_unknown_discussion(store) -> None:  # type: ignor
     repo, _ = store
     with pytest.raises(UnknownDiscussion):
         repo.get(DiscussionId("d-9"))
-
-
-def test_user_version_is_current_and_discussions_table_exists(store) -> None:  # type: ignore[no-untyped-def]
-    _, connection = store
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
-    tables = {
-        row["name"]
-        for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
-    assert "discussions" in tables
-    assert "observations" in tables
-    assert "round_digests" in tables
-    assert "inspirations" in tables
-    # 死字段已销账
-    obs_cols = {
-        row["name"]
-        for row in connection.execute("PRAGMA table_info(observations)")
-    }
-    assert "relevance_count" not in obs_cols
-    assert "last_accessed" not in obs_cols
-    assert "sections" not in obs_cols
-    assert "features" not in obs_cols
-    # 原先这里还断言 `created_at` 不在——v11 当死字段删掉，v14 把它加回来当
-    # `recent()` 的排序判据（修 obs-9 排在 obs-10 前的字典序 bug），故不再断言缺席。
-    insp_cols = {
-        row["name"]
-        for row in connection.execute("PRAGMA table_info(inspirations)")
-    }
-    assert "grounding" not in insp_cols
-    assert "context" not in insp_cols
 
 
 def test_panel_thread_round_trips_with_participants_authors_and_summaries(store) -> None:  # type: ignore[no-untyped-def]

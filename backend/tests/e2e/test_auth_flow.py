@@ -13,8 +13,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from pmstudio.bootstrap.container import build_container
-from pmstudio.bootstrap.settings import Settings
 from pmstudio.domain.shared.ids import UserId
 from pmstudio.infrastructure.security import hash_password
 from tests.support.api_client import async_client
@@ -279,28 +277,6 @@ async def test_login_cookie_secure_only_behind_https(make_app):
         assert "Secure" in forwarded.headers["set-cookie"]
 
 
-def test_seed_first_admin_builds_once(tmp_path):
-    """首管理员种子：空库首启建一个 active admin；非空库再启动不重复建、不覆盖。"""
-
-    settings = Settings(
-        db_path=tmp_path / "pmstudio.db",
-        model="scripted",
-        api_key="test-key",
-        api_base=None,
-        first_admin_username="root",
-        first_admin_password="root-s3cret",
-    )
-
-    first = build_container(settings)
-    seeded = first.app.state.auth.users.list_all()
-    assert [record.username for record in seeded] == ["root"]
-    assert seeded[0].role == "admin"
-    assert seeded[0].status == "active"
-
-    second = build_container(settings)
-    assert [record.username for record in second.app.state.auth.users.list_all()] == ["root"]
-
-
 #: 全部管理端点（`require_admin` 必须逐条挂上——漏一条这里就红）。
 ADMIN_ENDPOINTS = [
     ("post", "/api/auth/approve"),
@@ -553,21 +529,21 @@ async def test_stats_reports_per_user_activity(make_app):
                     "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,"
                     " created_at, updated_at, owner_id) VALUES"
                     f" ('r-{tag}-{index}','p-x','done','none','{{}}','2026-10-16T00:00:00+00:00',"
-                    " '2026-10-16T00:00:00+00:00', ?)",
+                    " '2026-10-16T00:00:00+00:00', %s)",
                     (str(owner),),
                 )
         conn.execute(
             "INSERT INTO documents (project_id, document_id, title, template, blocks,"
             " preference_entries, tombstones, created_at, updated_at, owner_id) VALUES"
             " ('p-adm','d1','存量','{}','[]','[]','[]','2026-10-16T00:00:00+00:00',"
-            " '2026-10-16T00:00:00+00:00', ?)",
+            " '2026-10-16T00:00:00+00:00', %s)",
             (str(admin_id),),
         )
         for round_id in ("r-bob-0", "r-bob-1"):
             conn.execute(
                 "INSERT INTO model_calls (round_id, purpose, model, prompt_sha, prompt_text,"
                 " reply_text, usage_json, duration_ms, ok, created_at) VALUES"
-                f" ('{round_id}','integration','m','sha','p','r','{{}}',500,1,"
+                f" ('{round_id}','integration','m','sha','p','r','{{}}',500,TRUE,"
                 "'2026-10-16T00:00:00+00:00')"
             )
 
@@ -603,26 +579,26 @@ async def test_stats_counts_failures_and_tokens(make_app):
             "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,"
             " created_at, updated_at, owner_id) VALUES"
             " ('r1','p-x','done','none','{}','2026-10-16T00:00:00+00:00',"
-            " '2026-10-16T00:00:00+00:00', ?)",
+            " '2026-10-16T00:00:00+00:00', %s)",
             (str(bob),),
         )
-        for duration, ok, tokens in ((1000, 1, 100), (3000, 0, 50)):
+        for duration, ok, tokens in ((1000, True, 100), (3000, False, 50)):
             conn.execute(
                 "INSERT INTO model_calls (round_id, purpose, model, prompt_sha, prompt_text,"
                 " reply_text, duration_ms, usage_json, ok, error, created_at) VALUES"
-                " ('r1','integration','m','sha','p','r',?,?,?,?,'2026-10-16T00:00:00+00:00')",
+                " ('r1','integration','m','sha','p','r',%s,%s,%s,%s,'2026-10-16T00:00:00+00:00')",
                 (
                     duration,
                     f'{{"total_tokens": {tokens}}}',
                     ok,
-                    None if ok == 1 else "Timeout: boom",
+                    None if ok else "Timeout: boom",
                 ),
             )
         # 一条没挂到 rounds 上的调用：不该算进任何用户
         conn.execute(
             "INSERT INTO model_calls (round_id, purpose, model, prompt_sha, prompt_text,"
             " reply_text, usage_json, duration_ms, ok, created_at) VALUES"
-            " ('x-orphan','exploration','m','sha','p','r','{}',10,1,"
+            " ('x-orphan','exploration','m','sha','p','r','{}',10,TRUE,"
             "'2026-10-16T00:00:00+00:00')"
         )
 

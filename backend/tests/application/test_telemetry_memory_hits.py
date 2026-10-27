@@ -30,12 +30,12 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.memory import MemoryChange, MemoryKind, MemoryOp
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
-from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteMemoryRepository,
     SqliteRoundRepository,
 )
 from tests.support.doubles import FixedClock, SeqIds
+from tests.support.postgres import direct_url, open_direct
 
 NOW = datetime(2026, 10, 1)
 
@@ -86,13 +86,12 @@ def test_no_entries_means_nothing_to_report():
     assert memory_hit_counts((), {}) == {}
 
 
-def test_scan_reads_real_rows_and_counts_hits_per_entry(tmp_path):
+def test_scan_reads_real_rows_and_counts_hits_per_entry():
     """R：真库行 → 命中表：交代过 E1 的那条 1 轮命中，没人交代 E9 的那条 0（= 久未使用）。
 
     走真仓储落库、真序列化读回——与 `--memory-hits` 线上跑的是同一条路。
     """
-    db = tmp_path / "scan.db"
-    connection = database.connect(db)
+    connection = open_direct()
     clock, ids = FixedClock(), SeqIds()
     pid = ProjectId("p-scan")
     memory = ProjectMemory.empty(pid).apply(
@@ -156,7 +155,7 @@ def test_scan_reads_real_rows_and_counts_hits_per_entry(tmp_path):
     )
     connection.close()
 
-    hits = scan_memory_hits(db)[str(pid)]
+    hits = scan_memory_hits(direct_url())[str(pid)]
     by_text = {entry.text: entry.memory_id for entry in memory.entries}
 
     assert hits[by_text["导出保留期是 30 天"]] == 1

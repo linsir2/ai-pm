@@ -23,7 +23,6 @@ import httpx
 import psycopg
 import pytest
 from psycopg.rows import dict_row
-from scripts.migrate import apply_migrations
 
 from pmstudio.api.deps import SESSION_COOKIE
 from pmstudio.application.errors import LeaseLost
@@ -37,13 +36,7 @@ from pmstudio.infrastructure.postgres.owner_scope import (
 from pmstudio.infrastructure.postgres.repositories import SqliteRoundRepository
 from pmstudio.infrastructure.security import hash_password
 from pmstudio.infrastructure.sqlite.users import SqliteUserRepository
-from tests.support.postgres import (
-    PgTestDatabase,
-    isolated_schema,
-    load_environment,
-    prepare,
-    truncate_data_tables,
-)
+from tests.support.postgres import PgTestDatabase, truncate_data_tables
 
 BACKEND = Path(__file__).resolve().parents[2]
 USERNAME = "multiworker-pg-admin"
@@ -112,11 +105,8 @@ INTEGRATION_REPLY = json.dumps(
 
 
 @pytest.fixture(scope="module")
-def database() -> PgTestDatabase:
-    pg = isolated_schema(load_environment(), "t6_multiworker")
-    prepare(pg)
-    apply_migrations(pg.direct_url)
-    return pg
+def database(pg_test_database: PgTestDatabase) -> PgTestDatabase:
+    return pg_test_database
 
 
 def _seed_admin(database: PgTestDatabase) -> None:

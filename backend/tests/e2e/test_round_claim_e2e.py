@@ -1,6 +1,6 @@
-"""两个 app（同库、各一条 SQLite 连接）抢同一轮：一个进图，另一个 409。
+"""两个 app（同库、各一条 PostgreSQL 连接）抢同一轮：一个进图，另一个 409。
 
-这是 Task 2 的跨进程互斥在**真 HTTP + 真 SQLite** 上的证据：两个 `RoundRunner`
+这是 Task 2 的跨进程互斥在**真 HTTP + 真 PostgreSQL** 上的证据：两个 `RoundRunner`
 各自有独立的 `_running_rounds`（内存快路径互相看不见），只有行上的 DB lease
 能挡住第二个。跑中跳过（借用 action lease 的控制写）也在这条路径上验一次。
 """
@@ -8,19 +8,17 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
-from pathlib import Path
+import os
 
-from pmstudio.application.lease import wall_clock_ms
 from pmstudio.bootstrap.container import build_container
-from pmstudio.bootstrap.settings import Settings
+from pmstudio.bootstrap.settings import AppSettings
 from pmstudio.domain.shared.ids import UserId
 from pmstudio.domain.shared.lease import LeaseKind
-from pmstudio.infrastructure.sqlite import database
-from pmstudio.infrastructure.sqlite.leases import SqliteLeaseStore
+from pmstudio.infrastructure.postgres.leases import PgLeaseStore
 from tests.e2e.conftest import _ensure_authed_user
 from tests.support.api_client import async_client
 from tests.support.doubles import ScriptedModelGateway
+from tests.support.postgres import open_direct
 
 CLAIMS_REPLY = """{
   "basis": "读了空文档",
@@ -95,25 +93,29 @@ class BlockingSeatGateway(ScriptedModelGateway):
         return await super().complete(request)
 
 
-def _app(db_path: Path, gateway: ScriptedModelGateway):  # type: ignore[no-untyped-def]
-    settings = Settings(
-        db_path=db_path,
+def _app(gateway: ScriptedModelGateway):  # type: ignore[no-untyped-def]
+    settings = AppSettings(
+        database_url=os.environ["PMSTUDIO_DATABASE_URL"],
         model="scripted",
         api_key="test-key",
         api_base=None,
         login_ip_max_attempts=10_000,
         login_username_max_attempts=10_000,
     )
+    from pmstudio.infrastructure.postgres.repositories import SqliteTemplateRepository
+    from pmstudio.infrastructure.templates.loader import seed_builtin_templates
+
+    with open_direct() as connection:
+        seed_builtin_templates(SqliteTemplateRepository(connection))
     app = build_container(settings, gateway=gateway).app
     _ensure_authed_user(app)
     return app
 
 
-async def test_second_worker_gets_409_and_skip_does_not_steal_the_lease(tmp_path) -> None:
-    db_path = tmp_path / "pmstudio.db"
+async def test_second_worker_gets_409_and_skip_does_not_steal_the_lease() -> None:
     gateway = BlockingSeatGateway()
-    first = _app(db_path, gateway)
-    second = _app(db_path, ScriptedModelGateway(replies={"claims": CLAIMS_REPLY}))
+    first = _app(gateway)
+    second = _app(ScriptedModelGateway(replies={"claims": CLAIMS_REPLY}))
 
     async with async_client(first) as a, async_client(second) as b:
         project_id = (
@@ -155,21 +157,20 @@ async def test_second_worker_gets_409_and_skip_does_not_steal_the_lease(tmp_path
 
 
 
-def _round_lease_owner(db_path: Path, round_id: str) -> tuple[UserId, str]:
-    connection = sqlite3.connect(db_path, timeout=10.0)
+def _round_lease_owner(round_id: str) -> tuple[UserId, str]:
+    connection = open_direct()
     try:
         row = connection.execute(
-            "SELECT owner_id, lease_owner FROM rounds WHERE round_id = ?", (round_id,)
+            "SELECT owner_id, lease_owner FROM rounds WHERE round_id = %s", (round_id,)
         ).fetchone()
     finally:
         connection.close()
-    return UserId(row[0]), str(row[1])
+    return UserId(row["owner_id"]), str(row["lease_owner"])
 
 
-async def test_lost_lease_returns_409_round_lease_lost(tmp_path) -> None:
-    db_path = tmp_path / "pmstudio.db"
+async def test_lost_lease_returns_409_round_lease_lost() -> None:
     gateway = BlockingSeatGateway(block_on="claims")
-    app = _app(db_path, gateway)
+    app = _app(gateway)
     app.state.services.runner._lease_heartbeat_seconds = 0.02
 
     async with async_client(app) as client:
@@ -183,20 +184,20 @@ async def test_lost_lease_returns_409_round_lease_lost(tmp_path) -> None:
             )
         )
         await asyncio.wait_for(gateway.entered.wait(), timeout=5)
-        connection = sqlite3.connect(db_path, timeout=10.0)
+        connection = open_direct()
         try:
             round_id = str(
-                connection.execute("SELECT round_id FROM rounds").fetchone()[0]
+                connection.execute("SELECT round_id FROM rounds").fetchone()["round_id"]
             )
         finally:
             connection.close()
-        owner, holder = _round_lease_owner(db_path, round_id)
+        owner, holder = _round_lease_owner(round_id)
         assert holder != "thief"
 
-        thief = database.connect(db_path)
+        thief = open_direct()
         try:
-            SqliteLeaseStore(thief).force_acquire(
-                LeaseKind.ROUND, round_id, owner, "thief", wall_clock_ms(), 90_000
+            PgLeaseStore(thief).force_acquire(
+                LeaseKind.ROUND, round_id, owner, "thief", 90_000
             )
         finally:
             thief.close()
@@ -205,4 +206,4 @@ async def test_lost_lease_returns_409_round_lease_lost(tmp_path) -> None:
 
     assert lost.status_code == 409, lost.text[:300]
     assert lost.json()["code"] == "round_lease_lost"
-    assert _round_lease_owner(db_path, round_id)[1] == "thief"
+    assert _round_lease_owner(round_id)[1] == "thief"

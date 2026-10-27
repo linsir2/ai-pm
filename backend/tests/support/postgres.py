@@ -1,7 +1,7 @@
 """真 PostgreSQL 测试库夹具（一个 test database + 一个 test schema）。
 
-T1 只提供骨架；T8 会把这里的 helper 接进 `tests/conftest.py` 并让全量测试直连 PG。
-约定：
+T8 起由 `tests/conftest.py` 的 session fixture 调用：迁移只跑一次，测试之间只
+truncate 显式数据表。约定：
 
 - `PMSTUDIO_TEST_DATABASE_URL`（app / PgBouncer）与
   `PMSTUDIO_TEST_DIRECT_DATABASE_URL`（直连）都必须给；缺了直接 `pytest.exit`，
@@ -14,13 +14,10 @@ T1 只提供骨架；T8 会把这里的 helper 接进 `tests/conftest.py` 并让
 
 from __future__ import annotations
 
-import atexit
 import os
 import re
-import uuid
-from collections.abc import Iterator, Mapping
-from contextlib import suppress
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 import pytest
@@ -33,9 +30,6 @@ APP_URL_ENV = "PMSTUDIO_TEST_DATABASE_URL"
 DIRECT_URL_ENV = "PMSTUDIO_TEST_DIRECT_DATABASE_URL"
 SCHEMA_ENV = "PMSTUDIO_TEST_SCHEMA"
 DEFAULT_SCHEMA = "pmstudio_test"
-
-#: 一次 pytest 进程一个后缀：并发跑同一批文件时，模块专用 schema 也必须互不重叠。
-_RUN_SUFFIX = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
 
 #: 18 张显式数据表（19 张普通表减掉 `vector_index_meta`）。测试间整批清空。
 #: 未知/临时表（例如 T1 的 `uow_probe`）不在这里，不会被顺手 TRUNCATE。
@@ -157,44 +151,6 @@ def load_environment(env: Mapping[str, str] | None = None) -> PgTestDatabase:
     )
 
 
-def isolated_schema(database: PgTestDatabase, suffix: str) -> PgTestDatabase:
-    """在同一个测试库里派生一个**模块 + 进程专用 schema**。
-
-    设计里的默认口径仍是一个 test DB + 一个 schema（pytest 串行）；这个 helper 只给
-    T6 的租约/多进程用例用：多个 pytest 进程并行跑**同一批文件**时，不能互相
-    `TRUNCATE` 对方的行。进程号 + 随机后缀保证每次运行独立，退出时尽力清掉。
-    T8 统一测试夹具时可以删掉。
-    """
-
-    schema = f"{database.schema}_{suffix}_{_RUN_SUFFIX}"
-    isolated = replace(
-        database,
-        schema=schema,
-        app_url=schema_url(database.app_url, schema),
-        direct_url=schema_url(database.direct_url, schema),
-    )
-    _ISOLATED.append(isolated)
-    return isolated
-
-
-_ISOLATED: list[PgTestDatabase] = []
-
-
-def _drop_isolated_schemas() -> None:
-    while _ISOLATED:
-        database = _ISOLATED.pop()
-        with suppress(Exception):
-            with connect(database.direct_url) as connection:
-                # 不跟残留线程/连接死等：清不掉就留给下次容器重建。
-                connection.execute("SET lock_timeout = '2s'")
-                connection.execute(
-                    f"DROP SCHEMA IF EXISTS {_quote_identifier(database.schema)} CASCADE"
-                )
-
-
-atexit.register(_drop_isolated_schemas)
-
-
 def prepare(database: PgTestDatabase) -> None:
     """建 schema、确保 pgvector 扩展可用，并断言 current_schema / timezone。"""
 
@@ -221,6 +177,10 @@ def prepare(database: PgTestDatabase) -> None:
         row = connection.execute("SELECT current_schema() AS schema").fetchone()
         assert row is not None and row["schema"] == database.schema, (
             "app URL 的 options 没把 search_path 指到测试 schema"
+        )
+        row = connection.execute("SHOW timezone").fetchone()
+        assert row is not None and row["TimeZone"] == "UTC", (
+            "app URL 的 timezone 没被 connect 固定为 UTC"
         )
 
 
@@ -282,18 +242,28 @@ def upsert_vector_profile(
         )
 
 
-@pytest.fixture(scope="session")
-def pg_test_database() -> PgTestDatabase:
-    database = load_environment()
-    prepare(database)
-    return database
+def seed_defaults(database: PgTestDatabase) -> None:
+    """truncate 后恢复向量口径（内置模板由需要它的测试自己 seed）。"""
+
+    upsert_vector_profile(database)
 
 
-@pytest.fixture()
-def pg_direct_connection(pg_test_database: PgTestDatabase) -> Iterator[object]:
-    truncate_data_tables(pg_test_database)
-    upsert_vector_profile(pg_test_database)
-    with connect(pg_test_database.direct_url) as connection:
-        yield connection
-    truncate_data_tables(pg_test_database)
-    upsert_vector_profile(pg_test_database)
+def install_environment(database: PgTestDatabase) -> None:
+    """把测试 URL 双写成生产变量，供所有子进程继承（uvicorn / pytest 子进程）。"""
+
+    os.environ.update(database.environment_for_children())
+
+
+def direct_url() -> str:
+    """当前 pytest 进程的直连 URL（session fixture 已把测试 schema 写进环境）。"""
+
+    url = os.environ.get("PMSTUDIO_DIRECT_DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError("测试直连 URL 没装进环境——先跑 tests/conftest.py 的 session fixture")
+    return url
+
+
+def open_direct():  # type: ignore[no-untyped-def]
+    """开一条直连测试 schema 的连接（dict_row / autocommit，与生产 connect 同款）。"""
+
+    return connect(direct_url())

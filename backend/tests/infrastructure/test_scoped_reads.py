@@ -42,7 +42,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.template import template_from_dict
 from pmstudio.harness.errors import ApplicationError
-from pmstudio.infrastructure.sqlite import database, owner_scope
+from pmstudio.infrastructure.postgres import owner_scope
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
 from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
@@ -56,14 +56,15 @@ from pmstudio.infrastructure.sqlite.repositories import (
 )
 from tests.support.builders import NOW, PROJECT, make_document, make_round
 from tests.support.doubles import SeqIds
+from tests.support.postgres import open_direct
 
 ALICE = UserId("u-alice")
 BOB = UserId("u-bob")
 
 
 @pytest.fixture()
-def connection(tmp_path):  # type: ignore[no-untyped-def]
-    conn = database.connect(tmp_path / "pm.db")
+def connection():  # type: ignore[no-untyped-def]
+    conn = open_direct()
     yield conn
     conn.close()
 
@@ -235,7 +236,7 @@ def test_writes_stamp_the_owner(connection):
     docs.save(make_document(), owner=ALICE)
 
     stamped = connection.execute(
-        "SELECT owner_id FROM documents WHERE project_id = ?", (str(PROJECT),)
+        "SELECT owner_id FROM documents WHERE project_id = %s", (str(PROJECT),)
     ).fetchone()
     assert stamped["owner_id"] == str(ALICE)
 
@@ -252,7 +253,7 @@ def test_write_stamp_does_not_change_on_later_owner(connection):
     docs.save(make_document(title="第二版"), owner=BOB)
 
     row = connection.execute(
-        "SELECT owner_id, title FROM documents WHERE project_id = ?", (str(PROJECT),)
+        "SELECT owner_id, title FROM documents WHERE project_id = %s", (str(PROJECT),)
     ).fetchone()
     assert row["owner_id"] == str(ALICE)
     assert row["title"] == "第一版"
@@ -265,7 +266,7 @@ def test_rounds_save_cannot_overwrite_another_owners_row(connection):
         rounds.save(make_round(), owner=BOB)
 
     row = connection.execute(
-        "SELECT owner_id FROM rounds WHERE round_id = ?", (str(RoundId("r1")),)
+        "SELECT owner_id FROM rounds WHERE round_id = %s", (str(RoundId("r1")),)
     ).fetchone()
     assert row["owner_id"] == str(ALICE)
     with pytest.raises(UnknownRound):

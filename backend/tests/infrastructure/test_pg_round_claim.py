@@ -12,7 +12,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-from scripts.migrate import apply_migrations
 
 from pmstudio.api.errors import status_for
 from pmstudio.application.agents.seat import SeatReviewer
@@ -74,13 +73,7 @@ from tests.support.doubles import (
     StaticSeatCatalog,
 )
 from tests.support.fakes import InMemoryMaterialStore
-from tests.support.postgres import (
-    PgTestDatabase,
-    isolated_schema,
-    load_environment,
-    prepare,
-    truncate_data_tables,
-)
+from tests.support.postgres import PgTestDatabase, truncate_data_tables
 
 OWNER = TEST_OWNER
 ROUND = RoundId("r-claim")
@@ -99,11 +92,8 @@ class _Database:
 
 
 @pytest.fixture(scope="module")
-def database() -> _Database:
-    pg = isolated_schema(load_environment(), "t6_round_claim")
-    prepare(pg)
-    apply_migrations(pg.direct_url)
-    return _Database(pg)
+def database(pg_test_database: PgTestDatabase) -> _Database:
+    return _Database(pg_test_database)
 
 
 @pytest.fixture()

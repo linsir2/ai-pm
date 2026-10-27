@@ -171,22 +171,22 @@ async def test_the_admin_stats_report_both_failure_rates(make_app):
         conn.execute(
             "INSERT INTO rounds (round_id, project_id, step, waiting_on, payload,"
             " created_at, updated_at, owner_id) VALUES ('r-x','p-x','done','none','{}',"
-            " '2026-10-23T00:00:00+00:00','2026-10-23T00:00:00+00:00', ?)",
+            " '2026-10-23T00:00:00+00:00','2026-10-23T00:00:00+00:00', %s)",
             (owner,),
         )
-        for duration, ok in ((1000, 1), (3000, 0)):
+        for duration, ok in ((1000, True), (3000, False)):
             conn.execute(
                 "INSERT INTO model_calls (round_id, purpose, model, prompt_sha,"
                 " prompt_text, reply_text, usage_json, duration_ms, ok, created_at)"
-                " VALUES ('r-x','integration','m','sha','p','r','{}',?,?,"
+                " VALUES ('r-x','integration','m','sha','p','r','{}',%s,%s,"
                 " '2026-10-23T00:00:00+00:00')",
                 (duration, ok),
             )
-        for duration, ok in ((200, 1), (400, 1), (900, 0)):
+        for duration, ok in ((200, True), (400, True), (900, False)):
             conn.execute(
                 "INSERT INTO tool_calls (round_id, tool_id, arguments, result_note,"
-                " duration_ms, created_at, ok) VALUES ('r-x','web_search','{}','x',?,"
-                " '2026-10-23T00:00:00+00:00',?)",
+                " duration_ms, created_at, ok) VALUES ('r-x','web_search','{}','x',%s,"
+                " '2026-10-23T00:00:00+00:00',%s)",
                 (duration, ok),
             )
 
@@ -261,7 +261,7 @@ async def test_trace_off_writes_nothing(make_app, monkeypatch):
         )
         calls = await client.get(f"/api/rounds/{round_id}/calls")
         conn = app.state.auth.users._connection
-        rows = conn.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0]
+        rows = conn.execute("SELECT COUNT(*) AS n FROM tool_calls").fetchone()["n"]
 
     assert opened.status_code == 200, opened.text
     assert rows == 0

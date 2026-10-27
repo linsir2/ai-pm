@@ -1,15 +1,16 @@
-"""KeepSim 走 `RoundRunner.short_action`：真 SQLite 上不再因 fencing 500。"""
+"""KeepSim 走 `RoundRunner.short_action`：真 PostgreSQL 上不再因 fencing 500。"""
 
+import os
 from datetime import UTC, datetime
 
 from pmstudio.bootstrap.container import build_container
-from pmstudio.bootstrap.settings import Settings
+from pmstudio.bootstrap.settings import AppSettings
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import ProjectId, RoundId
-from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.repositories import SqliteRoundRepository
 from tests.support.doubles import ScriptedModelGateway
+from tests.support.postgres import open_direct
 
 CLAIMS_REPLY = '{"basis": "读了空文档", "claims": [], "seats": []}'
 HYPOTHESIS = {
@@ -23,21 +24,24 @@ HYPOTHESIS = {
 }
 
 
-def _app(tmp_path):  # type: ignore[no-untyped-def]
-    settings = Settings(
-        db_path=tmp_path / "pmstudio.db",
+def _app():  # type: ignore[no-untyped-def]
+    settings = AppSettings(
+        database_url=os.environ["PMSTUDIO_DATABASE_URL"],
         model="scripted",
         api_key="test-key",
         api_base=None,
     )
     gateway = ScriptedModelGateway(replies={"claims": CLAIMS_REPLY})
+    from pmstudio.infrastructure.postgres.repositories import SqliteTemplateRepository
+    from pmstudio.infrastructure.templates.loader import seed_builtin_templates
+
+    with open_direct() as connection:
+        seed_builtin_templates(SqliteTemplateRepository(connection))
     return build_container(settings, gateway=gateway).app
 
 
-async def test_keep_sim_runs_under_the_round_lease_and_does_not_double_write(
-    tmp_path,
-) -> None:
-    app = _app(tmp_path)
+async def test_keep_sim_runs_under_the_round_lease_and_does_not_double_write() -> None:
+    app = _app()
     services = app.state.services
     summary = await services.create_project(title="模拟收下")
     project_id = summary.project_id
@@ -53,7 +57,7 @@ async def test_keep_sim_runs_under_the_round_lease_and_does_not_double_write(
         sim_hypotheses=(HYPOTHESIS,),
     )
 
-    connection = database.connect(tmp_path / "pmstudio.db")
+    connection = open_direct()
     try:
         SqliteRoundRepository(connection).save(round_)
     finally:
@@ -69,7 +73,7 @@ async def test_keep_sim_runs_under_the_round_lease_and_does_not_double_write(
     assert first.kept == ("H1",)
     materials = await services.list_materials(project_id=ProjectId(project_id))
     assert len(materials) == 1
-    connection = database.connect(tmp_path / "pmstudio.db")
+    connection = open_direct()
     try:
         stored = SqliteRoundRepository(connection).get(round_id)
     finally:

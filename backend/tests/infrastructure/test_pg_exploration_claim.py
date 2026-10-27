@@ -8,7 +8,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-from scripts.migrate import apply_migrations
 
 from pmstudio.application.errors import ExplorationBusy, LeaseLost
 from pmstudio.application.lease import LeaseScope, clear_lease_scope, set_lease_scope
@@ -36,13 +35,7 @@ from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from tests.conftest import TEST_OWNER
 from tests.support.builders import NOW, PROJECT, document_with_feature
 from tests.support.doubles import FixedClock, RecordingPublisher
-from tests.support.postgres import (
-    PgTestDatabase,
-    isolated_schema,
-    load_environment,
-    prepare,
-    truncate_data_tables,
-)
+from tests.support.postgres import PgTestDatabase, truncate_data_tables
 
 OWNER = TEST_OWNER
 TTL_MS = 60_000
@@ -54,11 +47,8 @@ class _Database:
 
 
 @pytest.fixture(scope="module")
-def database() -> _Database:
-    pg = isolated_schema(load_environment(), "t6_exploration_claim")
-    prepare(pg)
-    apply_migrations(pg.direct_url)
-    return _Database(pg)
+def database(pg_test_database: PgTestDatabase) -> _Database:
+    return _Database(pg_test_database)
 
 
 @pytest.fixture()

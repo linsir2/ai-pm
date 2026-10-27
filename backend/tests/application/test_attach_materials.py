@@ -28,15 +28,15 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template import standard_template
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from pmstudio.infrastructure.sqlite.database import connect
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
 from pmstudio.infrastructure.sqlite.repositories import SqliteRoundRepository
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.application.test_materials import make_material
 from tests.support.builders import NOW, PROJECT, ROUND_ID, make_round
 from tests.support.harness import Harness
 from tests.support.leases import bind_round_lease
+from tests.support.postgres import open_direct
 
 OWNER = UserId("u-attach")
 
@@ -188,10 +188,10 @@ async def test_attach_rejects_more_than_ten_manual_chunks_per_round():
         )
 
 
-async def test_attach_round_trips_through_real_sqlite(tmp_path):
+async def test_attach_round_trips_through_real_pg():
     """P：真 SQLite + 真材料仓 + 真轮次仓。"""
 
-    connection = connect(tmp_path / "attach.db")
+    connection = open_direct()
     ids = UuidIdGenerator()
     store = SqliteMaterialStore(connection, ids=ids)
     rounds = SqliteRoundRepository(connection)
@@ -216,7 +216,7 @@ async def test_attach_round_trips_through_real_sqlite(tmp_path):
         rounds=rounds,
         round_writer=rounds,
         materials=store,
-        uow=SqliteUnitOfWork(connection),
+        uow=PgUnitOfWork(connection),
     )(
         round_id=ROUND_ID,
         material_id=packet.material_id,

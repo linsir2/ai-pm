@@ -1,16 +1,15 @@
-"""L4 轮次摘要的 SQLite 存储。"""
+"""L4 轮次摘要的 PostgreSQL 存储。"""
 
-import sqlite3
 from datetime import datetime
-from pathlib import Path
 
 import pytest
+from psycopg.errors import NotNullViolation
 
 from pmstudio.application.errors import DigestAlreadyWritten
 from pmstudio.domain.memory.digest import RoundDigest
-from pmstudio.infrastructure.sqlite import database
+from pmstudio.infrastructure.postgres.owner_scope import require_owner
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
-from pmstudio.infrastructure.sqlite.owner_scope import require_owner
+from tests.support.postgres import open_direct
 
 NOW = datetime(2026, 10, 8, 10, 0, 0)
 
@@ -34,29 +33,29 @@ def _insert_digest_at(conn, digest_id: str, created_at: str) -> None:
     conn.execute(
         "INSERT INTO round_digests"
         " (id, project_id, owner_id, round_id, summary, sections, features, outcomes,"
-        " created_at) VALUES (?, 'p1', ?, ?, '摘要', '[]', '[]', '[]', ?)",
+        " created_at) VALUES (%s, 'p1', %s, %s, '摘要', '{}', '{}', '{}', %s)",
         (digest_id, str(require_owner(None)), digest_id.removeprefix("digest-"), created_at),
     )
 
 
 @pytest.fixture
-def repo(tmp_path):
-    conn = database.connect(Path(tmp_path) / "test.db")
+def repo():
+    conn = open_direct()
     r = SqliteDigestRepository(conn)
     yield r
     conn.close()
 
 
 @pytest.fixture
-def repo_and_conn(tmp_path):
+def repo_and_conn():
     """要写死时间的用例用这个（与 observations 测试里 `legacy_repo` 同形）。"""
-    conn = database.connect(Path(tmp_path) / "test.db")
+    conn = open_direct()
     r = SqliteDigestRepository(conn)
     yield r, conn
     conn.close()
 
 
-class TestSqliteDigestRepository:
+class TestPgDigestRepository:
     def test_saved_digest_is_readable_via_recent(self, repo):
         """`get` 已删（详情内联定案，0 生产者）——存了就能从 `recent` 里读回。"""
         d = _digest("digest-1")
@@ -160,13 +159,14 @@ class TestSqliteDigestRepository:
         钉住的是形状：哪天真把它放宽成可空，排序里"无时间沉底"的判据得跟着换。
         """
         repo, conn = repo_and_conn
-        notnull = {
-            row["name"]: row["notnull"]
-            for row in conn.execute("PRAGMA table_info(round_digests)")
-        }
-        assert notnull["created_at"] == 1
+        row = conn.execute(
+            "SELECT is_nullable FROM information_schema.columns"
+            " WHERE table_schema = current_schema() AND table_name = 'round_digests'"
+            " AND column_name = 'created_at'"
+        ).fetchone()
+        assert row["is_nullable"] == "NO"
 
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(NotNullViolation):
             _insert_digest_at(conn, "digest-r-0000000b", None)
 
     def test_recent_filters_by_project(self, repo):

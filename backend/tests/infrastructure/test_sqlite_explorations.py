@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from psycopg.types.json import Jsonb
 
 from pmstudio.application.errors import UnknownExploration
 from pmstudio.domain.exploration.exploration import (
@@ -13,15 +14,16 @@ from pmstudio.domain.exploration.exploration import (
 )
 from pmstudio.domain.exploration.item import BlindSpot, Grounding, Hypothesis
 from pmstudio.domain.shared.ids import EvidenceId, ExplorationId, ProjectId
-from pmstudio.infrastructure.sqlite import database, owner_scope
+from pmstudio.infrastructure.postgres import owner_scope
 from pmstudio.infrastructure.sqlite.repositories import SqliteExplorationRepository
+from tests.support.postgres import open_direct
 
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture()
-def store(tmp_path):  # type: ignore[no-untyped-def]
-    connection = database.connect(tmp_path / "pmstudio.db")
+def store():  # type: ignore[no-untyped-def]
+    connection = open_direct()
     return SqliteExplorationRepository(connection), connection
 
 
@@ -117,8 +119,8 @@ def test_a_corrupted_row_is_skipped_not_raised(store) -> None:  # type: ignore[n
     repo, connection = store
     connection.execute(
         "INSERT INTO explorations (exploration_id, project_id, owner_id, kind, status, payload,"
-        " created_at, updated_at) VALUES ('x-bad','p1',?,'inquiry','done','{oops',"
+        " created_at, updated_at) VALUES ('x-bad','p1',%s,'inquiry','done',%s,"
         "'2026-10-06T12:00:00+00:00','2026-10-06T12:00:00+00:00')",
-        (owner_scope.current_owner_scope(),),
+        (owner_scope.current_owner_scope(), Jsonb("oops")),
     )
     assert repo.list_for_project(ProjectId("p1")) == ()

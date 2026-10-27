@@ -1,27 +1,17 @@
-"""扫 `schema.sql`：**13 张内容表必须含 `owner_id`**，豁免三张写死（多用户改造 Task 5）。
+"""扫真 PostgreSQL schema：**内容表必须含 `owner_id`**，豁免表写死。
 
 为什么要扫表形状而不是只靠运行时：`owner_id` 列是隔离的**物理前提**——仓储的读过滤
-`AND owner_id = ?` 只有在列存在时才有意义。漏给一张新表加列，仓储一时不读它，
+`AND owner_id = %s` 只有在列存在时才有意义。漏给一张新表加列，仓储一时不读它，
 隔离就悄悄缺一个面，而没有任何用例会红。所以这里把"哪些表必须有列"变成可执行的契约。
 
-`templates` 也算内容表（自建模板归 owner；builtin 行 owner 留 NULL 人人可见）。
-豁免名单 `{users, sessions, model_calls}` **写死在测试里**：新增一张表而不同时回答
-"它归不归 owner"，这里先红——不许静默溜过去。
+以 `information_schema` + `current_schema()` 为准：测试 schema 由 0001 迁移建出，
+不再解析 `schema.sql`（SQLite 源在 T10 删除）。
 """
 
-import sqlite3
-from pathlib import Path
+from pmstudio.infrastructure.postgres.database import connect
+from tests.support.postgres import direct_url
 
-SCHEMA = (
-    Path(__file__).resolve().parents[2]
-    / "src"
-    / "pmstudio"
-    / "infrastructure"
-    / "sqlite"
-    / "schema.sql"
-)
-
-#: 必须含 `owner_id` 的表（裁决 A）：12 张项目域表 + `templates`。
+#: 必须含 `owner_id` 的表：项目域表 + `templates`。
 OWNER_TABLES = frozenset(
     {
         "documents",
@@ -41,35 +31,44 @@ OWNER_TABLES = frozenset(
     }
 )
 
-#: 明确**不带**归属的表：身份本身（users/sessions）与留样（model_calls / tool_calls，join 查）；
-#: 外加 FTS5 影子表 `material_chunks_fts`——它是**派生的索引**，归属由 JOIN `materials`
-#: 判定（`material_chunks_fts.chunk_id → material_chunks → materials.owner_id`），
-#: 自己不带也没有 owner 列。它的 5 张内部影表（`_data/_idx/...`）由下面的取表口径跳过。
+#: 明确**不带**归属的表：身份本身（users/sessions）、留样（model_calls / tool_calls，
+#: join 查）、迁移账本与向量口径。
 EXEMPT_TABLES = frozenset(
-    {"users", "sessions", "model_calls", "tool_calls", "material_chunks_fts"}
+    {
+        "users",
+        "sessions",
+        "model_calls",
+        "tool_calls",
+        "schema_migrations",
+        "vector_index_meta",
+    }
 )
 
 
 def _tables_and_columns() -> dict[str, set[str]]:
-    """把 `schema.sql` 灌进内存库，读真实列集——比正则解析 DDL 可靠。"""
+    """从当前测试 schema 的 `information_schema` 读真实表与列集。"""
 
-    connection = sqlite3.connect(":memory:")
-    try:
-        connection.executescript(SCHEMA.read_text(encoding="utf-8"))
-        # 只取**真表**与**虚拟表**：FTS5 的 5 张内部影表（`type='shadow'`）是引擎的
-        # 实现细节，不是应用表——把它们当"新表"来审是误报。虚拟表（fts5 本体）留下，
-        # 它需要显式回答"归不归 owner"。
-        names = [
-            row[1]
-            for row in connection.execute("PRAGMA table_list")
-            if not row[1].startswith("sqlite_") and row[2] in ("table", "virtual")
-        ]
-        return {
-            name: {row[1] for row in connection.execute(f"PRAGMA table_info({name})")}
-            for name in names
-        }
-    finally:
-        connection.close()
+    with connect(direct_url()) as connection:
+        rows = connection.execute(
+            """
+            SELECT table_name
+              FROM information_schema.tables
+             WHERE table_schema = current_schema()
+               AND table_type = 'BASE TABLE'
+            """
+        ).fetchall()
+        names = [str(row["table_name"]) for row in rows]
+        columns = connection.execute(
+            """
+            SELECT table_name, column_name
+              FROM information_schema.columns
+             WHERE table_schema = current_schema()
+            """
+        ).fetchall()
+    found: dict[str, set[str]] = {name: set() for name in names}
+    for row in columns:
+        found.setdefault(str(row["table_name"]), set()).add(str(row["column_name"]))
+    return found
 
 
 def test_every_content_table_has_an_owner_column():

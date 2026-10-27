@@ -37,13 +37,13 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
 from pmstudio.harness.model.prompt_log import PROMPT_LIMIT, TRUNCATION_MARK
-from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
     SqliteRoundRepository,
 )
 from tests.support.builders import PROJECT, SEAT, make_claim, make_document
+from tests.support.postgres import direct_url, open_direct
 
 NOW = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
 ROUND = RoundId("r-test")
@@ -270,20 +270,18 @@ def test_materials_slot_agrees_with_unreferenced_materials_for():
     assert materials.injected - materials.cited == len(unreferenced)
 
 
-def test_analyze_db_reads_a_real_round(tmp_path):
+def test_analyze_db_reads_a_real_round():
     """Reach：真实仓储写进临时库；Infect：连库/反序列化错则读不回来。"""
 
-    db = tmp_path / "t.db"
-    connection = database.connect(db)
+    connection = open_direct()
     SqliteDocumentRepository(connection).save(make_document())  # 外键：轮/账本挂在文档上
     SqliteRoundRepository(connection).save(
         _round_with_draft(question_refs=None, with_opinion=True)
     )
     SqliteEvidenceRepository(connection).save(_ledger(answer=True, opinion=True))
-    connection.commit()
     connection.close()
 
-    measured, skipped = analyze_db(db)
+    measured, skipped = analyze_db(direct_url())
 
     assert skipped == 0
     assert len(measured) == 1

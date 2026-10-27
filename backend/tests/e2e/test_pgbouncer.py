@@ -5,7 +5,8 @@
     PMSTUDIO_TEST_PGBOUNCER_URL=postgresql://pmstudio_app:…@127.0.0.1:6432/pmstudio
     PMSTUDIO_TEST_PGBOUNCER_ADMIN_URL=postgresql://pmstudio_owner:…@127.0.0.1:6432/pgbouncer
 
-缺任一个就 skip（**不拿直连假装通过**）；CI 里 skip 视为失败，由 T8 的 job 保证。
+缺任一个就 skip（**不拿直连假装通过**）；CI 用 `PMSTUDIO_TEST_REQUIRE_PGBOUNCER=1`
+把缺 URL 变成 fail（skip 视为失败）。
 """
 
 from __future__ import annotations
@@ -25,9 +26,10 @@ ADMIN_URL = os.environ.get("PMSTUDIO_TEST_PGBOUNCER_ADMIN_URL", "").strip()
 @pytest.fixture(scope="module")
 def pgbouncer_urls() -> tuple[str, str]:
     if not APP_URL or not ADMIN_URL:
-        pytest.skip(
-            "缺 PMSTUDIO_TEST_PGBOUNCER_URL / PMSTUDIO_TEST_PGBOUNCER_ADMIN_URL"
-        )
+        message = "缺 PMSTUDIO_TEST_PGBOUNCER_URL / PMSTUDIO_TEST_PGBOUNCER_ADMIN_URL"
+        if os.environ.get("PMSTUDIO_TEST_REQUIRE_PGBOUNCER") == "1":
+            pytest.fail(message)
+        pytest.skip(message)
     return APP_URL, ADMIN_URL
 
 

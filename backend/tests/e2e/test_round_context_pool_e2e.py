@@ -27,7 +27,7 @@ from pmstudio.domain.round.retrieval import RetrievalStage
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.template import standard_template
-from pmstudio.infrastructure.sqlite.database import connect
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.materials import (
     SqliteFtsRetriever,
     SqliteMaterialStore,
@@ -42,11 +42,11 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_seat
 from tests.support.doubles import FixedClock, RecordingPublisher
 from tests.support.harness import Harness
 from tests.support.leases import bind_round_lease
+from tests.support.postgres import open_direct
 
 INPUT = "导出权限怎么定"
 
@@ -165,7 +165,7 @@ def put(store: SqliteMaterialStore, text: str, title: str):
 
 
 async def test_the_whole_context_chain_is_real_and_idempotent(tmp_path):
-    connection = connect(tmp_path / "context_e2e.db")
+    connection = open_direct()
     ids = UuidIdGenerator()
     store = SqliteMaterialStore(connection, ids=ids)
     documents = SqliteDocumentRepository(connection)
@@ -173,7 +173,7 @@ async def test_the_whole_context_chain_is_real_and_idempotent(tmp_path):
     evidences = SqliteEvidenceRepository(connection)
     memory = SqliteMemoryRepository(connection)
     index = SqliteWorkspaceIndex(connection)
-    uow = SqliteUnitOfWork(connection)
+    uow = PgUnitOfWork(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT, title="检索投影 e2e", now=NOW, template=standard_template()
     )
@@ -420,7 +420,7 @@ async def test_a_seat_retrieval_issues_a_new_eid_that_reaches_the_prompt(tmp_pat
     真 `RoundContextPreparer` + 真 `SqliteFtsRetriever` + 真账本 + 真 `RunSeatRound`。
     """
 
-    connection = connect(tmp_path / "context_new_eid.db")
+    connection = open_direct()
     ids = UuidIdGenerator()
     store = SqliteMaterialStore(connection, ids=ids)
     documents = SqliteDocumentRepository(connection)
@@ -428,7 +428,7 @@ async def test_a_seat_retrieval_issues_a_new_eid_that_reaches_the_prompt(tmp_pat
     evidences = SqliteEvidenceRepository(connection)
     memory = SqliteMemoryRepository(connection)
     index = SqliteWorkspaceIndex(connection)
-    uow = SqliteUnitOfWork(connection)
+    uow = PgUnitOfWork(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT, title="新号可见 e2e", now=NOW, template=standard_template()
     )
@@ -564,7 +564,7 @@ async def test_a_seat_retrieval_issues_a_new_eid_that_reaches_the_prompt(tmp_pat
 
 
 def test_a_handpicked_block_over_the_share_is_not_put_in_the_prompt(tmp_path):
-    connection = connect(tmp_path / "context_budget_e2e.db")
+    connection = open_direct()
     ids = UuidIdGenerator()
     store = SqliteMaterialStore(connection, ids=ids)
     rounds = SqliteRoundRepository(connection)
@@ -588,7 +588,7 @@ def test_a_handpicked_block_over_the_share_is_not_put_in_the_prompt(tmp_path):
         evidence_writer=evidences,
         materials=store,
         retriever=SqliteFtsRetriever(connection),
-        uow=SqliteUnitOfWork(connection),
+        uow=PgUnitOfWork(connection),
         clock=FixedClock(),
     ).prepare(round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="自动材料")
 

@@ -14,7 +14,6 @@ from collections.abc import Iterator
 
 import pytest
 from psycopg.errors import LockNotAvailable, SerializationFailure
-from scripts.migrate import apply_migrations
 
 from pmstudio.application.errors import LeaseLost, UnknownExploration, UnknownRound
 from pmstudio.application.lease import (
@@ -42,13 +41,7 @@ from pmstudio.infrastructure.postgres.repositories import (
 from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from tests.conftest import TEST_OWNER
 from tests.support.builders import NOW, PROJECT
-from tests.support.postgres import (
-    PgTestDatabase,
-    isolated_schema,
-    load_environment,
-    prepare,
-    truncate_data_tables,
-)
+from tests.support.postgres import PgTestDatabase, truncate_data_tables
 
 OWNER = TEST_OWNER
 HOLDER = "worker-a"
@@ -56,11 +49,8 @@ TTL_MS = 30_000
 
 
 @pytest.fixture(scope="module")
-def database() -> PgTestDatabase:
-    pg = isolated_schema(load_environment(), "t6_leases")
-    prepare(pg)
-    apply_migrations(pg.direct_url)
-    return pg
+def database(pg_test_database: PgTestDatabase) -> PgTestDatabase:
+    return pg_test_database
 
 
 @pytest.fixture()

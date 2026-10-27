@@ -1,9 +1,7 @@
 name: CI
 
-# 每次 push / PR 跑一遍：后端测试 + lint、前端类型 + 测试、接口零差。
-#
-# **为什么值得有**：这个仓有 250+ 个测试文件、684 次提交，但**没有 CI**——
-# 于是"这些测试谁在跑"没有答案。补上它，是"工程化"最便宜的一步。
+# 每次 push / PR：后端全量测试（真 PostgreSQL 18 + pgvector）、PgBouncer smoke、
+# lint、前端类型 + 测试、接口零差、镜像构建。
 
 on:
   push:
@@ -15,20 +13,30 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        # **必须**：pytest 的 `pythonpath = ["src", "."]` 依赖工作目录是 `backend/`
-        # （`tests/test_dev_script.py` 用 `from scripts.dev import ...`，
-        #  `tests/architecture/guards.py` 用 `from tests.architecture.guards import ...`）。
-        # 工作目录不对 → 一批用例直接 ImportError。
+        # pytest 的 `pythonpath = ["src", "."]` 依赖工作目录是 `backend/`。
         working-directory: backend
+    services:
+      postgres:
+        # pgvector 0.8.7 + PostgreSQL 18；digest 与 compose 同一枚，避免浮动标签漂移。
+        image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:9d9c930220cb9bf2f956d10a8f909cf9973d9672ca0278aef2c1e6facccad2e0
+        env:
+          POSTGRES_DB: pmstudio
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pmstudio"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      # 两套 URL 都指向同一个 service；fixture 会各自加上测试 schema 的 search_path。
+      PMSTUDIO_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/pmstudio
+      PMSTUDIO_TEST_DIRECT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/pmstudio
     steps:
       - uses: actions/checkout@v4
 
-      # ⚠️ **必须用 setup-python 的解释器**，不能用 uv 自己下载的那个：
-      # 有些 Python 构建**没有** `sqlite3.Connection.enable_load_extension`
-      # （`sqlite-vec` 靠它加载扩展）→ 扩展装不上 → 检索静默降级成纯 FTS5
-      # → 一批向量相关的用例红。setup-python 装的是发行版/官方构建，**带扩展加载**。
-      # `UV_PYTHON` 是为了显式钉住它（`backend/.python-version` 已经写了 3.13，
-      # 但那只是"要哪个版本"，不保证"哪个构建"）。
       - name: 装 Python
         uses: actions/setup-python@v5
         with:
@@ -47,31 +55,93 @@ jobs:
       - name: lint
         run: uv run ruff check --no-cache .
 
-      # compose 的 backend 服务 `env_file: ./backend/.env` —— 文件不存在会让
-      # `docker compose config`（`tests/architecture/test_container_assets.py`）直接失败。
-      # 那条用例**故意**把"env_file 缺失"当红灯（那正是它要抓的真问题，
-      # 见其文档串），所以这里给它一个占位：构建阶段不读值，只是要文件在
-      # （与下面的 build job 同一口径）。
-      #
-      # ⚠ 路径是 `.env.example` 而不是 `backend/.env.example`：**这个 job 的
-      # `working-directory` 就是 `backend/`**（见文件顶部 defaults）。
-      # 2026-10-23 修：写成 `backend/.env.example` → `cp: cannot stat ...`，
-      # 这一步自己红了（build job 没有那个 working-directory，所以它那边是对的）。
+      # backup/restore 用真 PG18 `pg_dump -Fc`；Ubuntu 自带的 16 不兼容。
+      - name: 装 PostgreSQL 18 客户端
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+
+      - name: 建 pgvector 扩展
+        run: |
+          uv run python - <<'PY'
+          import psycopg
+          with psycopg.connect(
+              "postgresql://postgres:postgres@127.0.0.1:5432/pmstudio", autocommit=True
+          ) as connection:
+              connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
+          PY
+
+      # compose 的 backend 服务 `env_file: ./backend/.env`；文件不存在会让
+      # `docker compose config`（test_container_assets）直接失败。
       - name: 造占位 .env
         run: cp .env.example .env
 
       - name: 测试
-        # ⚠️ **`-m "not slow"` 必须显式给**：`markers` 只是**注册**标记，
-        # pytest 默认**会跑** slow 用例 → CI 会去下 90MB 的 ONNX 模型并调真模型 API
-        # （慢、贵、还会因为网络抖而红）。
+        # **必须显式 -m "not slow"**：markers 只是注册，pytest 默认会跑 slow
+        # （下 90MB 模型 + 调真模型 API）。全量直连真 PG，缺 URL 会 pytest.exit。
         run: uv run pytest -m "not slow" -q -p no:cacheprovider
 
       - name: 接口零差
-        # 前后端接口清单必须逐字一致（`scripts/check_api_parity.py`）。
-        # 它只读 OpenAPI、不连库；这里仍给一个合法 PG URL。
+        # 接口清单只读 OpenAPI，不连库；仍给同一套临时 PG 的合法 URL。
         env:
-          PMSTUDIO_DATABASE_URL: postgresql://parity:parity@127.0.0.1:1/parity
+          PMSTUDIO_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/pmstudio
         run: uv run python scripts/check_api_parity.py
+
+  # 真 PgBouncer：compose 起 db → init（写 auth_file/角色）→ pgbouncer，
+  # 再跑 `tests/e2e/test_pgbouncer.py`。用例缺 URL 会 fail（skip 视为失败）。
+  pgbouncer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 造 env（示例值即可，CI 只用一次性容器）
+        run: |
+          cp backend/.env.example backend/.env
+          cp backend/.env.ops.example backend/.env.ops
+
+      - name: 起 db / init / pgbouncer
+        run: |
+          docker compose -f docker-compose.yml -f .github/pgbouncer-ci.yml up -d db init pgbouncer
+          for _ in $(seq 1 60); do
+            status=$(docker compose ps --format json init | sed -n 's/.*"State":"\([^"]*\)".*/\1/p' | head -1)
+            [ "$status" = "exited" ] && break
+            sleep 2
+          done
+          docker compose ps
+          docker compose wait init || true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 装依赖
+        working-directory: backend
+        run: uv sync --frozen --dev
+        env:
+          UV_PYTHON: "3.13"
+
+      - name: PgBouncer smoke
+        working-directory: backend
+        env:
+          PMSTUDIO_TEST_PGBOUNCER_URL: postgresql://pmstudio_app:change-me-app@127.0.0.1:6432/pmstudio
+          PMSTUDIO_TEST_PGBOUNCER_ADMIN_URL: postgresql://pmstudio_owner:change-me-owner@127.0.0.1:6432/pgbouncer
+          PMSTUDIO_TEST_REQUIRE_PGBOUNCER: "1"
+        run: uv run pytest tests/e2e/test_pgbouncer.py -q -p no:cacheprovider
+
+      - name: 收尾
+        if: always()
+        run: docker compose -f docker-compose.yml -f .github/pgbouncer-ci.yml down -v
 
   frontend:
     runs-on: ubuntu-latest
@@ -96,17 +166,11 @@ jobs:
       - name: 测试
         run: npx vitest run
 
-  # **真的构建镜像**：Dockerfile 里的错（COPY 路径不在 context 内、缺依赖、
-  # alpine 装不上 onnxruntime、`.dockerignore` 漏掉密钥）**没有一条会自己报错**——
-  # 不构建一次，它们要等到部署时才炸。
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # compose 的 backend 服务 `env_file: ./backend/.env` —— 文件不存在会让
-      # `docker compose build` 直接失败（与"镜像能不能构建"无关）。造一个占位：
-      # 构建阶段不读值，只是要文件在。
       - name: 造占位 .env
         run: cp backend/.env.example backend/.env
 

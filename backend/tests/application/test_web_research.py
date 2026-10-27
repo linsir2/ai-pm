@@ -1084,7 +1084,6 @@ async def test_recovery_only_accepts_approved_requests_above_the_limit():
 
 
 async def test_two_direct_decisions_on_different_requests_never_push_used_over_limit(
-    tmp_path,
 ):
     """不靠 RoundBusy：两边都拿着"used=2"的旧读去 claim，后写者必须在 fresh read 上停住。"""
 
@@ -1094,7 +1093,7 @@ async def test_two_direct_decisions_on_different_requests_never_push_used_over_l
     from pmstudio.application.lease import LeaseScope, clear_lease_scope, set_lease_scope
     from pmstudio.application.use_cases import DecideWebRequest
     from pmstudio.application.web_research import WebResearch
-    from pmstudio.infrastructure.sqlite.database import connect
+    from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
     from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
     from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
     from pmstudio.infrastructure.sqlite.repositories import (
@@ -1102,12 +1101,11 @@ async def test_two_direct_decisions_on_different_requests_never_push_used_over_l
         SqliteRoundRepository,
         SqliteWorkspaceIndex,
     )
-    from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
     from tests.support.builders import NOW, PROJECT, ROUND_ID
     from tests.support.leases import bind_round_lease
+    from tests.support.postgres import open_direct
 
-    db_path = tmp_path / "claim.db"
-    setup = connect(db_path)
+    setup = open_direct()
     ids = UuidIdGenerator()
     SqliteProjectFactory(setup, ids=ids).create(
         project_id=PROJECT, title="并发 claim", now=NOW, template=standard_template()
@@ -1166,7 +1164,7 @@ async def test_two_direct_decisions_on_different_requests_never_push_used_over_l
             return self._inner.get_for_update(round_id, **kwargs)
 
     def make_decider():
-        connection = connect(db_path)
+        connection = open_direct()
         rounds = SqliteRoundRepository(connection)
         evidences = SqliteEvidenceRepository(connection)
         web = WebResearch(
@@ -1179,7 +1177,7 @@ async def test_two_direct_decisions_on_different_requests_never_push_used_over_l
             available_tool_keys=base.available_tool_keys,
             web_search=base.web_search,
             index=SqliteWorkspaceIndex(connection),
-            uow=SqliteUnitOfWork(connection),
+            uow=PgUnitOfWork(connection),
             clock=base.clock,
         )
         return connection, DecideWebRequest(
@@ -1190,7 +1188,7 @@ async def test_two_direct_decisions_on_different_requests_never_push_used_over_l
             tools=base.tools,
             available_tool_keys=base.available_tool_keys,
             web_research=web,
-            uow=SqliteUnitOfWork(connection),
+            uow=PgUnitOfWork(connection),
             clock=base.clock,
             events=base.events,
         )
@@ -1219,7 +1217,7 @@ async def test_two_direct_decisions_on_different_requests_never_push_used_over_l
     )
 
     assert sorted((first, second)) == ["WebExecutionLimitReached", "ok"]
-    final = SqliteRoundRepository(connect(db_path)).get(ROUND_ID)
+    final = SqliteRoundRepository(open_direct()).get(ROUND_ID)
     assert (
         sum(
             1

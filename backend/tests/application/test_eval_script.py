@@ -1,50 +1,39 @@
-"""eval 脚本自己的两条守卫：
+"""eval 脚本自己的守卫：一条用例崩了别的照跑 + 临时库从 URL 派生。"""
 
-1. "别碰工作库"（真踩过：`.env` 的 PMSTUDIO_DB 赢了 default_db，一次 eval 把项目建进了
-   作者的工作库）；
-2. "一条用例崩了别的照跑"（真踩过：case-a 第一次真模型运行时复述对不上原文 →
-   `PacketParseError` 冒到 `main`，8 条用例在第 1 条就整体退出，等于没有 eval 报告）。
-"""
-
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from scripts.eval import DEFAULT_EVAL_DB, resolve_eval_db, run_one
+from scripts.eval import load_cases, run_one
+from scripts.pg_scratch import _base_urls
+
+from pmstudio.bootstrap.settings import ConfigError
+from pmstudio.harness.errors import ApplicationError
 
 
-def test_default_eval_db_is_a_temp_path():
-    assert (
-        resolve_eval_db(None, working_db=Path("data/pmstudio.db")) == DEFAULT_EVAL_DB
-    )
-
-
-def test_eval_refuses_the_working_db(tmp_path):
-    working = tmp_path / "pmstudio.db"
-
-    with pytest.raises(SystemExit) as error:
-        resolve_eval_db(str(working), working_db=working)
-
-    assert "工作库" in str(error.value)
-
-
-def test_eval_accepts_another_path(tmp_path):
-    chosen = tmp_path / "eval.db"
-
-    assert resolve_eval_db(str(chosen), working_db=tmp_path / "pmstudio.db") == chosen
+def test_load_cases_reads_every_case_and_filters_by_name():
+    every = load_cases(None)
+    assert every
+    chosen = load_cases(every[0]["name"])
+    assert [case["name"] for case in chosen] == [every[0]["name"]]
+    assert load_cases("no-such-case") == []
 
 
 async def _boom(*args, **kwargs):
-    raise RuntimeError("炸了")
+    raise ApplicationError("炸了")
 
 
 async def _make_project(*, title):
     return SimpleNamespace(project_id="p-eval")
 
 
+async def _no_rounds(*args, **kwargs):
+    return []
+
+
 async def test_a_crashing_case_is_reported_instead_of_killing_the_run():
     services = SimpleNamespace(
         create_project=_make_project,
+        list_rounds=_no_rounds,
         runner=SimpleNamespace(run=_boom),
     )
 
@@ -53,5 +42,20 @@ async def test_a_crashing_case_is_reported_instead_of_killing_the_run():
     )
 
     assert ok is False
-    assert "RuntimeError" in why
+    assert "ApplicationError" in why
     assert "炸了" in why
+
+
+def test_scratch_database_requires_both_urls() -> None:
+    with pytest.raises(ConfigError, match="PMSTUDIO_DATABASE_URL"):
+        _base_urls(
+            {
+                "PMSTUDIO_DIRECT_DATABASE_URL": "postgresql://owner@db/pmstudio",
+            }
+        )
+    with pytest.raises(ConfigError, match="PMSTUDIO_DIRECT_DATABASE_URL"):
+        _base_urls(
+            {
+                "PMSTUDIO_DATABASE_URL": "postgresql://app@pgbouncer/pmstudio",
+            }
+        )

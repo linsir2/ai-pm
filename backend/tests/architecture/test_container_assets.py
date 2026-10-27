@@ -638,18 +638,26 @@ def test_the_ci_workflow_runs_frontend_typecheck_and_tests() -> None:
     assert "vitest run" in text
 
 
-def test_the_ci_workflow_pins_a_python_with_sqlite_extension_support() -> None:
-    """**用 setup-python 的解释器，不用 uv 自己下载的那个**。
-
-    有些 Python 构建**没有** `sqlite3.Connection.enable_load_extension`
-    （`sqlite-vec` 靠它加载扩展）→ 扩展装不上 → 检索静默降级成纯 FTS5
-    → 一批向量相关的用例红（本机实测就是如此：uv 管的 3.13 构建没有，
-    发行版的 python3.12 有）。
-    """
+def test_the_ci_workflow_runs_against_pgvector_18() -> None:
+    """测试库必须是真 PostgreSQL 18 + pgvector，且两个测试 URL 都指向它。"""
 
     text = _text(CI_WORKFLOW)
+    assert "pgvector/pgvector:0.8.7-pg18-trixie@" in text, "CI 必须用 pgvector 18 服务"
+    assert "PMSTUDIO_TEST_DATABASE_URL" in text
+    assert "PMSTUDIO_TEST_DIRECT_DATABASE_URL" in text
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in text
     assert "actions/setup-python" in text, "CI 必须显式用 setup-python 装解释器"
     assert "UV_PYTHON" in text, "要显式钉住 uv 用哪个解释器"
+
+
+def test_the_ci_has_a_pgbouncer_smoke_job() -> None:
+    """PgBouncer 只做一条真 smoke：缺 URL 必须 fail，不许 skip 冒充绿。"""
+
+    text = _text(CI_WORKFLOW)
+    assert re.search(r"^  pgbouncer:", text, re.MULTILINE), "CI 缺 PgBouncer smoke job"
+    assert "test_pgbouncer.py" in text
+    assert "PMSTUDIO_TEST_REQUIRE_PGBOUNCER" in text
+    assert "skip 视为失败" in text or "缺 URL 会 fail" in text
 
 
 def test_the_ci_workflow_builds_the_images() -> None:

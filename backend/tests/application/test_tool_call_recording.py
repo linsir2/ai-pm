@@ -14,11 +14,11 @@ from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.ids import RoundId
 from pmstudio.harness.errors import ToolCallFailed
 from pmstudio.harness.model import failure
-from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.tool_calls import SqliteToolCallRecorder
 from tests.support.builders import PROJECT, SEAT, make_web_packet
 from tests.support.doubles import RecordingWebSearch
 from tests.support.harness import Harness
+from tests.support.postgres import open_direct
 
 QUERY = "RBAC 权限模型的主流做法"
 
@@ -65,15 +65,15 @@ async def recap_round(harness: Harness) -> RoundId:
 def _rows(connection, round_id: RoundId):  # type: ignore[no-untyped-def]
     return connection.execute(
         "SELECT tool_id, arguments, result_note, duration_ms, ok, error, error_kind"
-        " FROM tool_calls WHERE round_id = ? ORDER BY id",
+        " FROM tool_calls WHERE round_id = %s ORDER BY id",
         (str(round_id),),
     ).fetchall()
 
 
-async def test_a_successful_search_is_recorded_with_its_duration(tmp_path):
+async def test_a_successful_search_is_recorded_with_its_duration():
     """I：成功的那一趟也记（只记失败答不出「这个工具慢不慢」），耗时是逐条量的。"""
 
-    connection = database.connect(tmp_path / "trace.db")
+    connection = open_direct()
     harness = web_harness(make_web_packet(url="https://a"))
     harness.tool_recorder = SqliteToolCallRecorder(connection)
     round_id = await recap_round(harness)
@@ -85,20 +85,20 @@ async def test_a_successful_search_is_recorded_with_its_duration(tmp_path):
     assert rows[0]["tool_id"] == "web_search"
     # 两个参数都要可追溯（schema 注释写明了形状）：只记 query 答不出
     # 「这次只回 1 条是 limit=1 还是上游只给了 1 条」。
-    recorded = json.loads(rows[0]["arguments"])
+    recorded = rows[0]["arguments"]
     assert recorded["query"] == "RBAC 权限模型的主流做法"
     assert recorded["limit"] > 0
     assert rows[0]["result_note"] == "1 条"
-    assert rows[0]["ok"] == 1
+    assert rows[0]["ok"] is True
     assert rows[0]["error"] is None
     assert rows[0]["error_kind"] is None
     assert rows[0]["duration_ms"] >= 0
 
 
-async def test_a_failed_search_is_recorded_with_a_classified_error(tmp_path):
+async def test_a_failed_search_is_recorded_with_a_classified_error():
     """I：工具失败的留样带**分类**（复用 `failure.classify`，不新造分类器）。"""
 
-    connection = database.connect(tmp_path / "trace.db")
+    connection = open_direct()
     harness = web_harness()
     harness.tool_recorder = SqliteToolCallRecorder(connection)
     error = ToolCallFailed(
@@ -111,15 +111,15 @@ async def test_a_failed_search_is_recorded_with_a_classified_error(tmp_path):
 
     rows = _rows(connection, round_id)
     assert len(rows) == 1
-    assert rows[0]["ok"] == 0
+    assert rows[0]["ok"] is False
     assert rows[0]["error"] == error.message
     assert rows[0]["error_kind"] == failure.classify(error).value
 
 
-async def test_a_non_tool_exception_is_recorded_before_it_raises(tmp_path):
+async def test_a_non_tool_exception_is_recorded_before_it_raises():
     """I（评审 #2）：非工具异常**先记一笔再 raise**——这次调用确实炸了，不留痕就是盲区。"""
 
-    connection = database.connect(tmp_path / "trace.db")
+    connection = open_direct()
     harness = web_harness()
     harness.tool_recorder = SqliteToolCallRecorder(connection)
     harness.web_search.failure = ValueError("不是工具错")
@@ -132,14 +132,14 @@ async def test_a_non_tool_exception_is_recorded_before_it_raises(tmp_path):
 
     rows = _rows(connection, round_id)
     assert len(rows) == 1
-    assert rows[0]["ok"] == 0
+    assert rows[0]["ok"] is False
     assert rows[0]["error"] == "不是工具错"
 
 
-async def test_recording_never_breaks_the_round(tmp_path):
+async def test_recording_never_breaks_the_round():
     """I：表被 DROP / 只读时这一轮照常（旁路语义不许变），且 `Round.dropped` 一字不变。"""
 
-    connection = database.connect(tmp_path / "trace.db")
+    connection = open_direct()
     harness = web_harness()
     harness.tool_recorder = SqliteToolCallRecorder(connection)
     harness.web_search.failure = ToolCallFailed(
@@ -147,8 +147,8 @@ async def test_recording_never_breaks_the_round(tmp_path):
     )
     round_id = await recap_round(harness)
 
-    # 表删了：留样写不进去，但这一轮必须照常走完
-    connection.execute("DROP TABLE tool_calls")
+    # 连接断了：留样写不进去，但这一轮必须照常走完
+    connection.close()
     await harness.submit_opening()(round_id=round_id, seats=(SEAT,), web_queries=(QUERY,))
 
     round_ = harness.rounds.get(round_id)
@@ -160,10 +160,10 @@ async def test_recording_never_breaks_the_round(tmp_path):
     assert "504" in tool_drops[0].reason
 
 
-async def test_no_recorder_means_no_writes(tmp_path):
+async def test_no_recorder_means_no_writes():
     """R：留样关（recorder=None）时**零写入**——这是生产的默认状态。"""
 
-    connection = database.connect(tmp_path / "trace.db")
+    connection = open_direct()
     harness = web_harness(make_web_packet(url="https://a"))
     harness.tool_recorder = None  # 默认
     round_id = await recap_round(harness)
@@ -171,4 +171,6 @@ async def test_no_recorder_means_no_writes(tmp_path):
     await harness.submit_opening()(round_id=round_id, seats=(SEAT,), web_queries=(QUERY,))
 
     assert _rows(connection, round_id) == []
-    assert connection.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0] == 0
+    assert (
+        connection.execute("SELECT COUNT(*) AS n FROM tool_calls").fetchone()["n"] == 0
+    )

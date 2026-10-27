@@ -21,6 +21,7 @@ lifespan，`await background.start()` 抛 `AttributeError`）在整套 e2e 全�
 一条测试都挡不住。#6 就是补这个洞：在真 `build_container` 缝上观测。
 """
 
+import os
 import sys
 
 import pytest
@@ -30,7 +31,7 @@ from scripts import dev
 
 from pmstudio.api.app import BackgroundResource, create_app
 from pmstudio.bootstrap.container import build_container
-from pmstudio.bootstrap.settings import Settings
+from pmstudio.bootstrap.settings import AppSettings
 from pmstudio.harness.events import InProcessEventBus
 from pmstudio.infrastructure.redis_bus import RedisFanoutEventBus
 from tests.support.doubles import ScriptedModelGateway
@@ -125,7 +126,7 @@ def test_不带Redis起服务时照实说(monkeypatch, capsys):
     [("redis://127.0.0.1:6379/9", False), ("", True)],
 )
 def test_装配点只把真有生命周期的总线交给create_app(
-    monkeypatch, tmp_path, redis_url, expect_none
+    monkeypatch, redis_url, expect_none
 ):
     """R：这道守卫的唯一职责是"真有生命周期才交给 lifespan"，所以要在**装配点**
     观测它到底传了什么给 `create_app`，而不是在本地造个总线去 `isinstance`。
@@ -148,8 +149,8 @@ def test_装配点只把真有生命周期的总线交给create_app(
     # spy 转调真 `create_app`（本模块从 `pmstudio.api.app` 导入的那个），不桩掉应用。
     monkeypatch.setattr("pmstudio.bootstrap.container.create_app", spy)
 
-    settings = Settings(
-        db_path=tmp_path / "x.db",
+    settings = AppSettings(
+        database_url=os.environ["PMSTUDIO_DATABASE_URL"],
         model="scripted",
         api_key="test-key",
         api_base=None,

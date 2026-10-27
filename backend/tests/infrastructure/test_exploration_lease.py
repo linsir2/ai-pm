@@ -1,4 +1,4 @@
-"""探索运行的跨进程租约（P3b Task 3）：真 SQLite、真 HTTP、两个 app 抢同一项目。
+"""探索运行的跨进程租约（P3b Task 3）：真 PostgreSQL、真 HTTP、两个 app 抢同一项目。
 
 这里钉住四件事：
 
@@ -14,16 +14,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
+import os
+import time
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
+from psycopg.types.json import Jsonb
 
 from pmstudio.application.errors import ExplorationBusy, LeaseLost
-from pmstudio.application.lease import wall_clock_ms
 from pmstudio.bootstrap.container import build_container
-from pmstudio.bootstrap.settings import Settings
+from pmstudio.bootstrap.settings import AppSettings
 from pmstudio.domain.exploration.exploration import (
     Exploration,
     ExplorationScope,
@@ -31,12 +31,17 @@ from pmstudio.domain.exploration.exploration import (
 )
 from pmstudio.domain.shared.ids import ExplorationId, ProjectId, UserId
 from pmstudio.domain.shared.lease import LeaseKind
-from pmstudio.infrastructure.sqlite import database
-from pmstudio.infrastructure.sqlite.leases import SqliteLeaseStore
+from pmstudio.infrastructure.postgres.leases import PgLeaseStore
 from pmstudio.infrastructure.sqlite.repositories import SqliteExplorationRepository
 from tests.e2e.conftest import _ensure_authed_user
 from tests.support.api_client import async_client
 from tests.support.doubles import ScriptedModelGateway
+from tests.support.postgres import open_direct
+
+
+def _now_ms() -> int:
+    return time.time_ns() // 1_000_000
+
 
 INQUIRY_REPLY = json.dumps(
     {
@@ -76,15 +81,20 @@ class BlockingInquiryGateway(ScriptedModelGateway):
         return await super().complete(request)
 
 
-def _app(db_path: Path, gateway: ScriptedModelGateway):  # type: ignore[no-untyped-def]
-    settings = Settings(
-        db_path=db_path,
+def _app(gateway: ScriptedModelGateway):  # type: ignore[no-untyped-def]
+    settings = AppSettings(
+        database_url=os.environ["PMSTUDIO_DATABASE_URL"],
         model="scripted",
         api_key="test-key",
         api_base=None,
         login_ip_max_attempts=10_000,
         login_username_max_attempts=10_000,
     )
+    from pmstudio.infrastructure.postgres.repositories import SqliteTemplateRepository
+    from pmstudio.infrastructure.templates.loader import seed_builtin_templates
+
+    with open_direct() as connection:
+        seed_builtin_templates(SqliteTemplateRepository(connection))
     app = build_container(settings, gateway=gateway).app
     _ensure_authed_user(app)
     return app
@@ -102,20 +112,19 @@ async def _project(client) -> str:  # type: ignore[no-untyped-def]
     return str(project_id)
 
 
-def _owner_of(db_path: Path, project_id: str) -> str:
-    connection = sqlite3.connect(db_path, timeout=10.0)
+def _owner_of(project_id: str) -> str:
+    connection = open_direct()
     try:
         row = connection.execute(
-            "SELECT owner_id FROM documents WHERE project_id = ?", (project_id,)
+            "SELECT owner_id FROM documents WHERE project_id = %s", (project_id,)
         ).fetchone()
     finally:
         connection.close()
     assert row is not None
-    return str(row[0])
+    return str(row["owner_id"])
 
 
 def _insert_exploration(
-    db_path: Path,
     *,
     exploration_id: str,
     project_id: str,
@@ -128,36 +137,34 @@ def _insert_exploration(
     payload = (
         {"failure": {"reason": "上次跑挂了"}} if status == "failed" else {}
     )
-    connection = sqlite3.connect(db_path, timeout=10.0)
+    connection = open_direct()
     try:
         connection.execute(
             "INSERT INTO explorations (exploration_id, project_id, owner_id, kind, status,"
             " payload, created_at, updated_at, lease_owner, lease_expires_at)"
-            " VALUES (?, ?, ?, 'inquiry', ?, ?, ?, ?, ?, ?)",
+            " VALUES (%s, %s, %s, 'inquiry', %s, %s, %s, %s, %s, %s)",
             (
                 exploration_id,
                 project_id,
                 owner,
                 status,
-                json.dumps(payload, ensure_ascii=False),
+                Jsonb(payload),
                 created_at,
                 created_at,
                 lease_owner,
                 lease_expires_at,
             ),
         )
-        connection.commit()
     finally:
         connection.close()
 
 
-def _row(db_path: Path, exploration_id: str) -> sqlite3.Row:
-    connection = sqlite3.connect(db_path, timeout=10.0)
-    connection.row_factory = sqlite3.Row
+def _row(exploration_id: str) -> dict:
+    connection = open_direct()
     try:
         row = connection.execute(
             "SELECT status, lease_owner, lease_token, lease_expires_at, owner_id"
-            " FROM explorations WHERE exploration_id = ?",
+            " FROM explorations WHERE exploration_id = %s",
             (exploration_id,),
         ).fetchone()
     finally:
@@ -166,25 +173,24 @@ def _row(db_path: Path, exploration_id: str) -> sqlite3.Row:
     return row
 
 
-def _running_count(db_path: Path, project_id: str) -> int:
-    connection = sqlite3.connect(db_path, timeout=10.0)
+def _running_count(project_id: str) -> int:
+    connection = open_direct()
     try:
         return int(
             connection.execute(
-                "SELECT COUNT(*) FROM explorations WHERE project_id = ?"
+                "SELECT COUNT(*) AS n FROM explorations WHERE project_id = %s"
                 " AND status = 'running'",
                 (project_id,),
-            ).fetchone()[0]
+            ).fetchone()["n"]
         )
     finally:
         connection.close()
 
 
-async def test_start_writes_lease_and_keep_dismiss_do_not_need_one(tmp_path) -> None:
+async def test_start_writes_lease_and_keep_dismiss_do_not_need_one() -> None:
     """C2：真 SQLite 的 M8 不再 500；收下/删掉是 done 行上的短控制写。"""
 
-    db_path = tmp_path / "pmstudio.db"
-    app = _app(db_path, ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
+    app = _app(ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
 
     async with async_client(app) as client:
         project_id = await _project(client)
@@ -198,7 +204,7 @@ async def test_start_writes_lease_and_keep_dismiss_do_not_need_one(tmp_path) -> 
         xid = body["exploration_id"]
 
         # 租约只在跑的时候存在；跑完必须释放（0 行不是错误，但这里应该正好释放成功）
-        row = _row(db_path, xid)
+        row = _row(xid)
         assert row["status"] == "done"
         assert row["lease_owner"] is None
         assert row["lease_token"] == 1
@@ -213,12 +219,11 @@ async def test_start_writes_lease_and_keep_dismiss_do_not_need_one(tmp_path) -> 
         assert dismissed.status_code == 200, dismissed.text
 
 
-async def test_two_workers_start_only_one_runs_the_other_is_409(tmp_path) -> None:
-    db_path = tmp_path / "pmstudio.db"
+async def test_two_workers_start_only_one_runs_the_other_is_409() -> None:
     gateway = BlockingInquiryGateway()
-    first_app = _app(db_path, gateway)
+    first_app = _app(gateway)
     second_gateway = ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY})
-    second_app = _app(db_path, second_gateway)
+    second_app = _app(second_gateway)
 
     async with async_client(first_app) as first, async_client(second_app) as second:
         project_id = await _project(first)
@@ -230,18 +235,18 @@ async def test_two_workers_start_only_one_runs_the_other_is_409(tmp_path) -> Non
         )
         await asyncio.wait_for(gateway.entered.wait(), timeout=5)
 
-        connection = sqlite3.connect(db_path, timeout=10.0)
+        connection = open_direct()
         try:
             running = connection.execute(
                 "SELECT exploration_id, lease_owner, lease_token FROM explorations"
-                " WHERE project_id = ? AND status = 'running'",
+                " WHERE project_id = %s AND status = 'running'",
                 (project_id,),
             ).fetchall()
         finally:
             connection.close()
         assert len(running) == 1
-        assert running[0][1] is not None
-        assert running[0][2] == 1  # INSERT 同 UoW 的 acquire：token 从 1 开始
+        assert running[0]["lease_owner"] is not None
+        assert running[0]["lease_token"] == 1  # INSERT 同 UoW 的 acquire：token 从 1 开始
 
         busy = await second.post(
             f"/api/projects/{project_id}/explorations",
@@ -256,23 +261,21 @@ async def test_two_workers_start_only_one_runs_the_other_is_409(tmp_path) -> Non
         finished = await asyncio.wait_for(pending, timeout=5)
         assert finished.status_code == 200, finished.text
         assert finished.json()["status"] == "done"
-        assert _running_count(db_path, project_id) == 0
+        assert _running_count(project_id) == 0
 
 
-async def test_legacy_running_beyond_the_20_row_window_is_still_cleared(tmp_path) -> None:
+async def test_legacy_running_beyond_the_20_row_window_is_still_cleared() -> None:
     """`clear_stale` 直接查 running，不借 `list_for_project(limit=20)`。"""
 
-    db_path = tmp_path / "pmstudio.db"
-    app = _app(db_path, ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
+    app = _app(ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
 
     async with async_client(app) as client:
         project_id = await _project(client)
-        owner = _owner_of(db_path, project_id)
+        owner = _owner_of(project_id)
 
         # 唯一一条 running 是最老的，且是 v17 之前的老行（没有过期时间）：
         # 按 20 条窗口会被 20 条更新的 done 挤出视野，start 就会撞唯一索引。
         _insert_exploration(
-            db_path,
             exploration_id="x-legacy",
             project_id=project_id,
             owner=owner,
@@ -281,7 +284,6 @@ async def test_legacy_running_beyond_the_20_row_window_is_still_cleared(tmp_path
         )
         for index in range(20):
             _insert_exploration(
-                db_path,
                 exploration_id=f"x-done-{index:02d}",
                 project_id=project_id,
                 owner=owner,
@@ -295,25 +297,23 @@ async def test_legacy_running_beyond_the_20_row_window_is_still_cleared(tmp_path
         )
         assert started.status_code == 200, started.text
         assert started.json()["status"] == "done"
-        assert _row(db_path, "x-legacy")["status"] == "abandoned"
+        assert _row("x-legacy")["status"] == "abandoned"
 
 
-async def test_clear_stale_keeps_a_live_lease_and_start_is_busy(tmp_path) -> None:
+async def test_clear_stale_keeps_a_live_lease_and_start_is_busy() -> None:
     """M8 与研究共用一个项目锁：活租约的 running 不被 clear，只回 409。"""
 
-    db_path = tmp_path / "pmstudio.db"
-    app = _app(db_path, ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
+    app = _app(ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
 
     async with async_client(app) as client:
         project_id = await _project(client)
-        owner = _owner_of(db_path, project_id)
+        owner = _owner_of(project_id)
         _insert_exploration(
-            db_path,
             exploration_id="x-live",
             project_id=project_id,
             owner=owner,
             lease_owner="another-worker",
-            lease_expires_at=wall_clock_ms() + 90_000,
+            lease_expires_at=_now_ms() + 90_000,
         )
 
         busy = await client.post(
@@ -323,37 +323,34 @@ async def test_clear_stale_keeps_a_live_lease_and_start_is_busy(tmp_path) -> Non
         assert busy.status_code == 409, busy.text
         assert busy.json()["code"] == "exploration_busy"
 
-        row = _row(db_path, "x-live")
+        row = _row("x-live")
         assert row["status"] == "running"
         assert row["lease_owner"] == "another-worker"
 
 
-async def test_retry_clears_stale_first_and_holds_the_lease(tmp_path) -> None:
+async def test_retry_clears_stale_first_and_holds_the_lease() -> None:
     """retry 先 clear_stale（同项目僵壳），再在同一 UoW 把 failed 置 RUNNING + acquire。"""
 
-    db_path = tmp_path / "pmstudio.db"
     gateway = BlockingInquiryGateway()
-    first_app = _app(db_path, gateway)
+    first_app = _app(gateway)
     second_gateway = ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY})
-    second_app = _app(db_path, second_gateway)
+    second_app = _app(second_gateway)
 
     async with async_client(first_app) as first, async_client(second_app) as second:
         project_id = await _project(first)
-        owner = _owner_of(db_path, project_id)
+        owner = _owner_of(project_id)
         _insert_exploration(
-            db_path,
             exploration_id="x-failed",
             project_id=project_id,
             owner=owner,
             status="failed",
         )
         _insert_exploration(
-            db_path,
             exploration_id="x-stale",
             project_id=project_id,
             owner=owner,
             lease_owner="dead-worker",
-            lease_expires_at=wall_clock_ms() - 1_000,
+            lease_expires_at=_now_ms() - 1_000,
         )
 
         pending = asyncio.create_task(
@@ -361,12 +358,12 @@ async def test_retry_clears_stale_first_and_holds_the_lease(tmp_path) -> None:
         )
         await asyncio.wait_for(gateway.entered.wait(), timeout=5)
 
-        row = _row(db_path, "x-failed")
+        row = _row("x-failed")
         assert row["status"] == "running"
         assert row["lease_owner"] is not None
         assert row["lease_token"] == 1
-        assert _row(db_path, "x-stale")["status"] == "abandoned"
-        assert _running_count(db_path, project_id) == 1
+        assert _row("x-stale")["status"] == "abandoned"
+        assert _running_count(project_id) == 1
 
         busy = await second.post("/api/explorations/x-failed/retry")
         assert busy.status_code == 409, busy.text
@@ -380,14 +377,13 @@ async def test_retry_clears_stale_first_and_holds_the_lease(tmp_path) -> None:
         assert finished.json()["status"] == "done"
 
 
-async def test_abandon_force_acquires_and_fences_the_running_worker(tmp_path) -> None:
+async def test_abandon_force_acquires_and_fences_the_running_worker() -> None:
     """放弃走 force_acquire：同一 UoW 写 ABANDONED + 释放；在跑的 worker 被失租停下。"""
 
-    db_path = tmp_path / "pmstudio.db"
     gateway = BlockingInquiryGateway()
-    first_app = _app(db_path, gateway)
+    first_app = _app(gateway)
     first_app.state.services.exploration_runner._lease_heartbeat_seconds = 0.02
-    second_app = _app(db_path, ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
+    second_app = _app(ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
 
     async with async_client(first_app) as first, async_client(second_app) as second:
         project_id = await _project(first)
@@ -398,20 +394,20 @@ async def test_abandon_force_acquires_and_fences_the_running_worker(tmp_path) ->
             )
         )
         await asyncio.wait_for(gateway.entered.wait(), timeout=5)
-        connection = sqlite3.connect(db_path, timeout=10.0)
+        connection = open_direct()
         try:
             xid = connection.execute(
                 "SELECT exploration_id FROM explorations"
-                " WHERE project_id = ? AND status = 'running'",
+                " WHERE project_id = %s AND status = 'running'",
                 (project_id,),
-            ).fetchone()[0]
+            ).fetchone()["exploration_id"]
         finally:
             connection.close()
 
         abandoned = await second.post(f"/api/explorations/{xid}/abandon")
         assert abandoned.status_code == 200, abandoned.text
         assert abandoned.json()["status"] == "abandoned"
-        assert _row(db_path, str(xid))["status"] == "abandoned"
+        assert _row(str(xid))["status"] == "abandoned"
 
         lost = await asyncio.wait_for(pending, timeout=5)
 
@@ -420,25 +416,22 @@ async def test_abandon_force_acquires_and_fences_the_running_worker(tmp_path) ->
     assert lost.json()["code"] == "exploration_lease_lost"
 
 
-async def test_retry_resume_hitting_another_running_row_is_409(tmp_path) -> None:
+async def test_retry_resume_hitting_another_running_row_is_409() -> None:
     """resume 把 failed 置 RUNNING 时撞同项目另一条 running：唯一索引 → ExplorationBusy。"""
 
-    db_path = tmp_path / "pmstudio.db"
-    app = _app(db_path, ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
+    app = _app(ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
 
     async with async_client(app) as client:
         project_id = await _project(client)
-        owner = _owner_of(db_path, project_id)
+        owner = _owner_of(project_id)
         _insert_exploration(
-            db_path,
             exploration_id="x-live",
             project_id=project_id,
             owner=owner,
             lease_owner="another-worker",
-            lease_expires_at=wall_clock_ms() + 90_000,
+            lease_expires_at=_now_ms() + 90_000,
         )
         _insert_exploration(
-            db_path,
             exploration_id="x-failed",
             project_id=project_id,
             owner=owner,
@@ -448,14 +441,13 @@ async def test_retry_resume_hitting_another_running_row_is_409(tmp_path) -> None
         busy = await client.post("/api/explorations/x-failed/retry")
         assert busy.status_code == 409, busy.text
         assert busy.json()["code"] == "exploration_busy"
-        assert _row(db_path, "x-failed")["status"] == "failed"
-        assert _row(db_path, "x-live")["status"] == "running"
+        assert _row("x-failed")["status"] == "failed"
+        assert _row("x-live")["status"] == "running"
 
 
-async def test_lost_lease_returns_409_exploration_lease_lost(tmp_path) -> None:
-    db_path = tmp_path / "pmstudio.db"
+async def test_lost_lease_returns_409_exploration_lease_lost() -> None:
     gateway = BlockingInquiryGateway()
-    app = _app(db_path, gateway)
+    app = _app(gateway)
     app.state.services.exploration_runner._lease_heartbeat_seconds = 0.02
 
     async with async_client(app) as client:
@@ -468,24 +460,24 @@ async def test_lost_lease_returns_409_exploration_lease_lost(tmp_path) -> None:
         )
         await asyncio.wait_for(gateway.entered.wait(), timeout=5)
 
-        connection = sqlite3.connect(db_path, timeout=10.0)
+        connection = open_direct()
         try:
-            xid, owner = connection.execute(
+            row = connection.execute(
                 "SELECT exploration_id, owner_id FROM explorations"
-                " WHERE project_id = ? AND status = 'running'",
+                " WHERE project_id = %s AND status = 'running'",
                 (project_id,),
             ).fetchone()
         finally:
             connection.close()
+        xid, owner = row["exploration_id"], row["owner_id"]
 
-        thief = database.connect(db_path)
+        thief = open_direct()
         try:
-            SqliteLeaseStore(thief).force_acquire(
+            PgLeaseStore(thief).force_acquire(
                 LeaseKind.EXPLORATION,
                 str(xid),
                 UserId(owner),
                 "thief",
-                wall_clock_ms(),
                 90_000,
             )
         finally:
@@ -496,13 +488,13 @@ async def test_lost_lease_returns_409_exploration_lease_lost(tmp_path) -> None:
     gateway.release.set()
     assert lost.status_code == 409, lost.text
     assert lost.json()["code"] == "exploration_lease_lost"
-    assert _row(db_path, str(xid))["lease_owner"] == "thief"
+    assert _row(str(xid))["lease_owner"] == "thief"
 
 
-def test_done_rows_are_exempt_but_running_rows_are_fenced(tmp_path) -> None:
+def test_done_rows_are_exempt_but_running_rows_are_fenced() -> None:
     """仓储 fence：done 行（收下/删掉）不要求租约；running 行必须持有。"""
 
-    connection = database.connect(tmp_path / "pmstudio.db")
+    connection = open_direct()
     try:
         repo = SqliteExplorationRepository(connection)
         run = Exploration.start(
@@ -528,8 +520,8 @@ def test_done_rows_are_exempt_but_running_rows_are_fenced(tmp_path) -> None:
         connection.close()
 
 
-def test_two_running_rows_in_one_project_raise_exploration_busy(tmp_path) -> None:
-    connection = database.connect(tmp_path / "pmstudio.db")
+def test_two_running_rows_in_one_project_raise_exploration_busy() -> None:
+    connection = open_direct()
     try:
         repo = SqliteExplorationRepository(connection)
         first = Exploration.start(

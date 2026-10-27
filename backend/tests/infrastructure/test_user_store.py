@@ -8,11 +8,11 @@ import hashlib
 from datetime import UTC, datetime
 
 from pmstudio.domain.shared.ids import UserId
-from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.users import (
     SqliteSessionRepository,
     SqliteUserRepository,
 )
+from tests.support.postgres import open_direct
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -21,8 +21,8 @@ def _sha256(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def test_register_then_login_lookup(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_register_then_login_lookup():
+    connection = open_direct()
     repo = SqliteUserRepository(connection)
     user_id = repo.register(username="alice", password_hash="$argon2id$fake")
     assert repo.get_by_name("alice").status == "pending"
@@ -31,8 +31,8 @@ def test_register_then_login_lookup(tmp_path):
     connection.close()
 
 
-def test_session_round_trips_by_token_hash(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_session_round_trips_by_token_hash():
+    connection = open_direct()
     users = SqliteUserRepository(connection)
     sessions = SqliteSessionRepository(connection)
     user_id = users.register(username="alice", password_hash="$argon2id$fake")
@@ -43,7 +43,7 @@ def test_session_round_trips_by_token_hash(tmp_path):
     )
 
     row = connection.execute(
-        "SELECT token_hash FROM sessions WHERE session_id = ?", (session.session_id,)
+        "SELECT token_hash FROM sessions WHERE session_id = %s", (session.session_id,)
     ).fetchone()
     assert row["token_hash"] == _sha256(token)
     assert row["token_hash"] != token
@@ -54,8 +54,8 @@ def test_session_round_trips_by_token_hash(tmp_path):
     connection.close()
 
 
-def test_touch_renews_session(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_touch_renews_session():
+    connection = open_direct()
     users = SqliteUserRepository(connection)
     sessions = SqliteSessionRepository(connection)
     user_id = users.register(username="alice", password_hash="$argon2id$fake")
@@ -71,8 +71,8 @@ def test_touch_renews_session(tmp_path):
     connection.close()
 
 
-def test_get_by_id_round_trips(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_get_by_id_round_trips():
+    connection = open_direct()
     repo = SqliteUserRepository(connection)
     user_id = repo.register(username="alice", password_hash="$argon2id$fake")
 
@@ -84,8 +84,8 @@ def test_get_by_id_round_trips(tmp_path):
     connection.close()
 
 
-def test_list_all_returns_every_user(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_list_all_returns_every_user():
+    connection = open_direct()
     repo = SqliteUserRepository(connection)
     repo.register(username="alice", password_hash="$argon2id$fake")
     repo.register(username="bob", password_hash="$argon2id$fake", role="admin")
@@ -94,8 +94,8 @@ def test_list_all_returns_every_user(tmp_path):
     connection.close()
 
 
-def test_revoked_session_is_not_found(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_revoked_session_is_not_found():
+    connection = open_direct()
     users = SqliteUserRepository(connection)
     sessions = SqliteSessionRepository(connection)
     user_id = users.register(username="alice", password_hash="$argon2id$fake")
@@ -108,10 +108,10 @@ def test_revoked_session_is_not_found(tmp_path):
     connection.close()
 
 
-def test_revoke_by_token_hash_leaves_other_sessions_alone(tmp_path):
+def test_revoke_by_token_hash_leaves_other_sessions_alone():
     """按单条会话吊销（Ruling 18）：只踢命中的那条，同一用户的另一条照旧能用。"""
 
-    connection = database.connect(tmp_path / "pm.db")
+    connection = open_direct()
     users = SqliteUserRepository(connection)
     sessions = SqliteSessionRepository(connection)
     user_id = users.register(username="alice", password_hash="$argon2id$fake")

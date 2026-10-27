@@ -1,4 +1,4 @@
-"""材料检索升级（FTS5 + jieba）：词级、词序无关、容忍停用词（检索 P1）。
+"""材料检索升级（PostgreSQL FTS + jieba）：词级、词序无关、容忍停用词（检索 P1）。
 
 被替换掉的 v1（整句 `LIKE`，**2026-10-17 删除**）要求中文"逐字连续子串"。
 验收实测（`docs/plans/2026-10-17-检索升级验收.md`）：v1 对"同词换序 / 插停用词 / 按标题"
@@ -12,7 +12,6 @@ import logging
 import pytest
 
 from pmstudio.domain.shared.ids import ProjectId
-from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.materials import (
     SqliteFtsRetriever,
     SqliteMaterialStore,
@@ -20,6 +19,7 @@ from pmstudio.infrastructure.sqlite.materials import (
 from tests.conftest import TEST_OWNER
 from tests.support.builders import NOW, PROJECT
 from tests.support.doubles import SeqIds
+from tests.support.postgres import open_direct
 
 OTHER = ProjectId("p2")
 
@@ -51,10 +51,10 @@ def parsed(*texts: str, title: str = "诊断报告.pdf", origin: str = "upload")
 
 
 @pytest.fixture()
-def world(tmp_path):
+def world():
     """一个带材料的库：`store` 盖章、`SqliteFtsRetriever` 检索（共用同一个连接）。"""
 
-    connection = database.connect(tmp_path / "pm.db")
+    connection = open_direct()
     store = SqliteMaterialStore(connection, ids=SeqIds())
 
     def seed(*texts: str, title: str = "诊断报告.pdf", project_id: ProjectId = PROJECT) -> str:
@@ -208,35 +208,6 @@ def test_deleting_a_material_drops_its_index(world):
     store.delete(mid)
 
     assert retriever.search(project_id=PROJECT, query="权限模型") == ()
-
-
-def test_backfill_indexes_existing_chunks_idempotently(tmp_path):
-    """老库（有块、无 FTS）跑 migrate → 补全；再跑一次不重复、也不报错。"""
-
-    connection = database.connect(tmp_path / "old.db")
-    # 绕过 store 直接塞一行块，模拟"升级前入库的旧数据"
-    connection.execute(
-        "INSERT INTO materials (material_id, project_id, owner_id, origin, title, source_ref,"
-        " media_type, bytes_len, sha256, parser_id, parser_version, schema_version, truncated,"
-        " warnings, content, created_at) VALUES ('m0', ?, ?, 'upload', 't', 'r', 'text/x',"
-        " 1, 'sha', 'p', 'v', 1, 0, '[]', X'00', ?)",
-        (str(PROJECT), str(TEST_OWNER), NOW.isoformat()),
-    )
-    connection.execute(
-        "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
-        " heading_path, anchor) VALUES ('m0#c00', 'm0', ?, 0, '权限模型 说明', '[]', 'a')",
-        (str(TEST_OWNER),),
-    )
-    assert SqliteFtsRetriever(connection).search(project_id=PROJECT, query="权限模型") == ()
-
-    database.migrate(connection)
-    assert [h.chunk_id for h in SqliteFtsRetriever(connection).search(
-        project_id=PROJECT, query="权限模型")] == ["m0#c00"]
-
-    database.migrate(connection)  # 幂等：再跑不重复
-    rows = connection.execute("SELECT COUNT(*) FROM material_chunks_fts").fetchone()[0]
-    assert rows == 1
-    connection.close()
 
 
 # ── 索引源：标题 + 祖先标题 + 正文（真数据坐实的缺口）──────────────────────────

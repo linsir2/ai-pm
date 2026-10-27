@@ -13,10 +13,10 @@ api 那份跑的是 harness-app（内存仓储 + `FakeTransaction`）——它�
 """
 
 import asyncio
-from pathlib import Path
+import os
 
 from pmstudio.bootstrap.container import build_container
-from pmstudio.bootstrap.settings import Settings
+from pmstudio.bootstrap.settings import AppSettings
 from pmstudio.infrastructure.sqlite import owner_scope  # noqa: E402
 from tests.api.test_routes import QUESTION_REPLY  # noqa: E402
 from tests.application.test_seat_round import (
@@ -46,7 +46,7 @@ class _BlockingGateway(ScriptedModelGateway):
         return await super().complete(request)
 
 
-def _build_real_app(tmp_path: Path):
+def _build_real_app():
     """真容器 + 落盘库。照抄 `tests/e2e/conftest.build_app`，只换网关。"""
 
     owner_scope.set_owner_scope(E2E_OWNER)
@@ -57,17 +57,23 @@ def _build_real_app(tmp_path: Path):
             "seat.permissions": SEAT_REPLY,
         },
     )
-    settings = Settings(
-        db_path=tmp_path / "pmstudio.db",
+    settings = AppSettings(
+        database_url=os.environ["PMSTUDIO_DATABASE_URL"],
         model="scripted",
         api_key="test-key",
         api_base=None,
     )
+    from pmstudio.infrastructure.postgres.repositories import SqliteTemplateRepository
+    from pmstudio.infrastructure.templates.loader import seed_builtin_templates
+    from tests.support.postgres import open_direct
+
+    with open_direct() as connection:
+        seed_builtin_templates(SqliteTemplateRepository(connection))
     container = build_container(settings, gateway=gateway)
     return container.app, gateway
 
 
-async def test_真锁上_跳过与迟交两序都闭合(tmp_path):
+async def test_真锁上_跳过与迟交两序都闭合():
     """R：与单测 R6 同一幕，但在真 SQLite 写串行上重演。
 
     I：opening 在后台挂起（真锁）；P：跳过 → 放行 → opening 跑完；
@@ -75,7 +81,7 @@ async def test_真锁上_跳过与迟交两序都闭合(tmp_path):
     留痕 2 条（跳过 + 迟交）+ 轮继续往下走（问卷出来了）。
     """
 
-    app, gateway = _build_real_app(tmp_path)
+    app, gateway = _build_real_app()
     async with async_client(app) as client:
         _seed_active_user(app, username="alice", password=PW)
         await client.post("/api/auth/login", json={"username": "alice", "password": PW})

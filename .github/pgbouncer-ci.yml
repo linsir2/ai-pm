@@ -1,0 +1,5 @@
+# CI 覆盖：把 PgBouncer 的 6432 暴露给 runner，供 test_pgbouncer.py 连接。
+services:
+  pgbouncer:
+    ports:
+      - "6432:6432"

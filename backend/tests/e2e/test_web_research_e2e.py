@@ -26,7 +26,7 @@ from pmstudio.domain.round.web import WebRequest, WebRequestState, used_web_requ
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.template import standard_template
 from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
-from pmstudio.infrastructure.sqlite.database import connect
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
 from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
@@ -41,7 +41,6 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from tests.support.builders import NOW, PROJECT, SEAT, make_seat, make_web_packet
 from tests.support.doubles import (
     FixedClock,
@@ -53,6 +52,7 @@ from tests.support.doubles import (
 )
 from tests.support.harness import Harness
 from tests.support.leases import bind_round_lease
+from tests.support.postgres import open_direct
 
 QUERY_A = "RBAC 权限模型的主流做法"
 QUERY_B = "多租户隔离怎么做"
@@ -107,10 +107,8 @@ INTEGRATION_REPLY = json.dumps(
 MEMORY_REPLY = json.dumps({"changes": []}, ensure_ascii=False)
 
 
-async def test_real_sqlite_executes_across_steps_and_reuses_the_shared_result_number(
-    tmp_path,
-):
-    connection = connect(tmp_path / "web_research_e2e.db")
+async def test_real_pg_executes_across_steps_and_reuses_the_shared_result_number():
+    connection = open_direct()
     ids = UuidIdGenerator()
     store = SqliteMaterialStore(connection, ids=ids)
     documents = SqliteDocumentRepository(connection)
@@ -118,7 +116,7 @@ async def test_real_sqlite_executes_across_steps_and_reuses_the_shared_result_nu
     evidences = SqliteEvidenceRepository(connection)
     memory = SqliteMemoryRepository(connection)
     index = SqliteWorkspaceIndex(connection)
-    uow = SqliteUnitOfWork(connection)
+    uow = PgUnitOfWork(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT, title="联网执行 e2e", now=NOW, template=standard_template()
     )
@@ -308,17 +306,17 @@ def _seed_over_limit(rounds, round_id):  # type: ignore[no-untyped-def]
     return requests[3].request_id
 
 
-async def _prepare_over_limit_round(tmp_path, *, web_search):
+async def _prepare_over_limit_round(*, web_search):
     """真 SQLite + 真用例；只有模型与 Tavily 是脚本化替身（不用内存 Harness）。"""
 
-    connection = connect(tmp_path / "recovery_e2e.db")
+    connection = open_direct()
     ids = UuidIdGenerator()
     store = SqliteMaterialStore(connection, ids=ids)
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
     index = SqliteWorkspaceIndex(connection)
-    uow = SqliteUnitOfWork(connection)
+    uow = PgUnitOfWork(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT, title="恢复 e2e", now=NOW, template=standard_template()
     )
@@ -398,10 +396,10 @@ async def _prepare_over_limit_round(tmp_path, *, web_search):
     return connection, round_id, over_id, opening, recover, rounds, web_search
 
 
-async def test_true_sqlite_recovery_abandon_then_opening_succeeds(tmp_path):
+async def test_true_pg_recovery_abandon_then_opening_succeeds():
     web_search = RecordingWebSearch(returns=(make_web_packet(),))
     connection, round_id, over_id, opening, recover, rounds, web_search = (
-        await _prepare_over_limit_round(tmp_path, web_search=web_search)
+        await _prepare_over_limit_round(web_search=web_search)
     )
 
     with pytest.raises(WebRequestRecoveryRequired):
@@ -424,10 +422,10 @@ async def test_true_sqlite_recovery_abandon_then_opening_succeeds(tmp_path):
     connection.close()
 
 
-async def test_true_sqlite_recovery_execute_once_then_opening_is_zero_web(tmp_path):
+async def test_true_pg_recovery_execute_once_then_opening_is_zero_web():
     web_search = RecordingWebSearch(returns=(make_web_packet(url="https://recovered"),))
     connection, round_id, over_id, opening, recover, rounds, web_search = (
-        await _prepare_over_limit_round(tmp_path, web_search=web_search)
+        await _prepare_over_limit_round(web_search=web_search)
     )
 
     with pytest.raises(WebRequestRecoveryRequired):

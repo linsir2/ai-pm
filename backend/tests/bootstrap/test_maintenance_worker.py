@@ -4,18 +4,14 @@ from __future__ import annotations
 
 import pytest
 from scripts import maintenance_worker
-from scripts.migrate import apply_migrations
 
 from pmstudio.infrastructure.postgres.database import connect
-from tests.support.postgres import isolated_schema, load_environment, prepare
+from tests.support.postgres import PgTestDatabase
 
 
 @pytest.fixture()
-def direct_url() -> str:
-    database = isolated_schema(load_environment(), "t7_maintenance")
-    prepare(database)
-    apply_migrations(database.direct_url)
-    return database.direct_url
+def direct_url(pg_test_database: PgTestDatabase) -> str:
+    return pg_test_database.direct_url
 
 
 def test_maintenance_worker_skips_when_another_run_holds_the_lock(

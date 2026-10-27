@@ -1,21 +1,54 @@
-"""全局测试夹具：给"真 SQLite"用例装一个默认 owner 上下文（多用户改造 Task 5 / D2）。
+"""全局测试夹具：真 PostgreSQL + 默认 owner 上下文。
 
-D2 的取舍：owner 可以由仓储方法**显式传**，也可以从**环境上下文**取（`owner_scope`）。
-生产里由 `require_user`（Task 6）在每个请求里设置上下文；测试里由这里装一个默认值，
-让既有仓储 / e2e 用例不必逐处传 owner 就能保持绿。
-
-想验证"缺上下文即抛 `missing_owner_scope`"的用例，自己 `clear_owner_scope()` 即可
-（`tests/infrastructure/test_scoped_reads.py`）。
+T8 起**全量测试直连 PG**：一个 test database、一个 test schema，pytest 串行。
+- session 一次：建 schema、装 pgvector、跑迁移、种 vector profile 与内置模板；
+- 每个用例前：只 `TRUNCATE` 显式数据表（保留 `schema_migrations` /
+  `vector_index_meta`），truncate 后重新 upsert profile 与内置模板；
+- 两个测试 URL 双写成生产变量，子进程（uvicorn / CLI）直接继承；
+- 缺 URL 或连不上直接 `pytest.exit`，不回落 SQLite。
 """
 
+import os
+
 import pytest
+from scripts.migrate import apply_migrations
 
 from pmstudio.application.lease import clear_lease_scope
 from pmstudio.domain.shared.ids import UserId
-from pmstudio.infrastructure.sqlite import owner_scope
+from pmstudio.infrastructure.postgres import owner_scope
+from tests.support.postgres import (
+    install_environment,
+    load_environment,
+    prepare,
+    seed_defaults,
+    truncate_data_tables,
+)
 
 #: 测试默认 owner。真值不重要，只要跨调用稳定——写入盖章与读取过滤用同一个值。
 TEST_OWNER = UserId("u-owner-scope-test")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def pg_test_database():  # type: ignore[no-untyped-def]
+    """一次建库/迁移；URL 写进环境供子进程继承。缺 URL 在 load_environment 退出。"""
+
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        pytest.exit("测试夹具是单 schema + 串行 truncate：禁止 xdist", returncode=2)
+    database = load_environment()
+    prepare(database)
+    apply_migrations(database.direct_url)
+    seed_defaults(database)
+    install_environment(database)
+    return database
+
+
+@pytest.fixture(autouse=True)
+def clean_pg_database(pg_test_database):  # type: ignore[no-untyped-def]
+    """每个用例前清空显式数据表；不清迁移账本与向量口径。"""
+
+    truncate_data_tables(pg_test_database)
+    seed_defaults(pg_test_database)
+    yield
 
 
 @pytest.fixture(autouse=True)

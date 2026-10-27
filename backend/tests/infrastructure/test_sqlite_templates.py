@@ -1,14 +1,14 @@
-"""模板库表：builtin seed + 自定义存取 + 老库迁移 + 删（`02` §11.0.70）。"""
+"""模板库表：builtin seed + 自定义存取 + 删（`02` §11.0.70）。"""
 
 import json
-import sqlite3
 
 import pytest
+from psycopg.types.json import Jsonb
 
 from pmstudio.application.errors import UnknownTemplate
 from pmstudio.domain.shared.template import standard_template, template_from_dict
-from pmstudio.infrastructure.sqlite import database
 from pmstudio.infrastructure.sqlite.repositories import SqliteTemplateRepository
+from tests.support.postgres import open_direct
 
 
 def _custom_template() -> object:
@@ -33,10 +33,10 @@ def _custom_template() -> object:
     )
 
 
-def test_templates_table_created_and_round_trips(tmp_path):
+def test_templates_table_created_and_round_trips():
     from pmstudio.infrastructure.templates.loader import TEMPLATES_DIR, load_template_file
 
-    connection = database.connect(tmp_path / "pm.db")
+    connection = open_direct()
     repo = SqliteTemplateRepository(connection)
 
     repo.save(standard_template(), builtin=True)
@@ -52,8 +52,8 @@ def test_templates_table_created_and_round_trips(tmp_path):
     connection.close()
 
 
-def test_unknown_template_id_is_a_404(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_unknown_template_id_is_a_404():
+    connection = open_direct()
     repo = SqliteTemplateRepository(connection)
 
     try:
@@ -65,10 +65,10 @@ def test_unknown_template_id_is_a_404(tmp_path):
         connection.close()
 
 
-def test_list_and_get_report_which_templates_are_builtin(tmp_path):
+def test_list_and_get_report_which_templates_are_builtin():
     """库里要能分辨出厂的和自建的（`06` §2.3：内置那份不���编辑/删除按钮）。"""
 
-    connection = database.connect(tmp_path / "pm.db")
+    connection = open_direct()
     repo = SqliteTemplateRepository(connection)
     repo.save(standard_template(), builtin=True)
     repo.save(_custom_template(), builtin=False)
@@ -82,8 +82,8 @@ def test_list_and_get_report_which_templates_are_builtin(tmp_path):
     connection.close()
 
 
-def test_delete_removes_that_template_and_leaves_the_others(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_delete_removes_that_template_and_leaves_the_others():
+    connection = open_direct()
     repo = SqliteTemplateRepository(connection)
     repo.save(standard_template(), builtin=True)
     repo.save(_custom_template(), builtin=False)
@@ -94,8 +94,8 @@ def test_delete_removes_that_template_and_leaves_the_others(tmp_path):
     connection.close()
 
 
-def test_deleting_a_template_that_is_not_there_is_an_error(tmp_path):
-    connection = database.connect(tmp_path / "pm.db")
+def test_deleting_a_template_that_is_not_there_is_an_error():
+    connection = open_direct()
     repo = SqliteTemplateRepository(connection)
     repo.save(standard_template(), builtin=True)
 
@@ -106,62 +106,19 @@ def test_deleting_a_template_that_is_not_there_is_an_error(tmp_path):
     connection.close()
 
 
-OLD_DOCUMENTS_DDL = """
-CREATE TABLE documents (
-  project_id         TEXT PRIMARY KEY,
-  document_id        TEXT NOT NULL,
-  title              TEXT NOT NULL,
-  blocks             TEXT NOT NULL,
-  preference_entries TEXT NOT NULL,
-  tombstones         TEXT NOT NULL,
-  created_at         TEXT NOT NULL,
-  updated_at         TEXT NOT NULL
-);
-"""
-
-
-def test_an_old_db_gets_templates_table_and_documents_template_column(tmp_path):
-    """老库：补 `templates` 表 + `documents.template` 列，旧行不丢。"""
-
-    path = tmp_path / "old.db"
-    old = sqlite3.connect(path)
-    old.executescript(OLD_DOCUMENTS_DDL)
-    old.execute(
-        "INSERT INTO documents (project_id, document_id, title, blocks,"
-        " preference_entries, tombstones, created_at, updated_at) VALUES"
-        " ('p1', 'doc-1', '旧项目', '[]', '[]', '[]',"
-        "  '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00')"
-    )
-    old.commit()
-    old.close()
-
-    connection = database.connect(path)
-    names = {
-        row["name"]
-        for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
-    assert "templates" in names
-    columns = {
-        row["name"] for row in connection.execute("PRAGMA table_info(documents)")
-    }
-    assert "template" in columns
-    row = connection.execute("SELECT title FROM documents WHERE project_id='p1'").fetchone()
-    assert row["title"] == "旧项目"
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == database.USER_VERSION
-    connection.close()
-
-
-def test_old_document_row_without_template_reads_back_as_standard(tmp_path):
+def test_old_document_row_without_template_reads_back_as_standard():
     """无模板的老行读回即 STANDARD：真存一份，再把列手写回 '{}' 模拟老行。"""
 
     from pmstudio.domain.shared.template import STANDARD_TEMPLATE_ID
     from pmstudio.infrastructure.sqlite.repositories import SqliteDocumentRepository
     from tests.support.builders import PROJECT, make_document
 
-    connection = database.connect(tmp_path / "pm.db")
+    connection = open_direct()
     docs = SqliteDocumentRepository(connection)
     docs.save(make_document())
-    connection.execute("UPDATE documents SET template = '{}' WHERE project_id = 'p1'")
+    connection.execute(
+        "UPDATE documents SET template = %s WHERE project_id = 'p1'", (Jsonb({}),)
+    )
 
     document = docs.get(PROJECT)
 
@@ -178,7 +135,7 @@ def test_template_json_round_trip():
     assert json.loads(json.dumps(serialization.template_to_json(template)))
 
 
-def test_project_summary_carries_template_ref(tmp_path):
+def test_project_summary_carries_template_ref():
     """列表/摘要带模板 id 与名（首页密行渲染用；读行快照，零新查询）。"""
 
     from pmstudio.domain.authoring.document import Document
@@ -190,7 +147,7 @@ def test_project_summary_carries_template_ref(tmp_path):
     from pmstudio.infrastructure.templates.loader import TEMPLATES_DIR, load_template_file
     from tests.support.builders import NOW, PROJECT, make_document
 
-    connection = database.connect(tmp_path / "pm.db")
+    connection = open_direct()
     docs = SqliteDocumentRepository(connection)
     docs.save(make_document())
     docs.save(
@@ -265,11 +222,12 @@ def test_template_json_from_legacy_snapshot_falls_back_to_no_declaration():
 #: 那条读必须仍然可用——builtin 行（owner_id IS NULL）本来就人人可见。
 #: 这条用例必须显式清掉 conftest 的 autouse 默认 scope，否则测不到"启动时"这个条件
 #: （2327 条全绿却启动崩溃就是这么漏的：D2 的全局 fixture 把它遮住了）。
-def test_list_works_without_an_owner_scope_returning_only_builtin(tmp_path):
-    from pmstudio.infrastructure.sqlite import owner_scope
+def test_list_works_without_an_owner_scope_returning_only_builtin():
+    from pmstudio.domain.shared.ids import UserId
+    from pmstudio.infrastructure.postgres import owner_scope
     from pmstudio.infrastructure.templates.loader import TEMPLATES_DIR, load_template_file
 
-    connection = database.connect(tmp_path / "pm.db")
+    connection = open_direct()
     repo = SqliteTemplateRepository(connection)
     repo.save(standard_template(), builtin=True)
     repo.save(load_template_file(TEMPLATES_DIR / "light.toml"), builtin=True)
@@ -284,7 +242,7 @@ def test_list_works_without_an_owner_scope_returning_only_builtin(tmp_path):
                 {"id": "s13", "title": "版本", "purpose": "摆设", "role": "version_history"},
             ],
         }
-    ), builtin=False, owner="u-someone-else")
+    ), builtin=False, owner=UserId("u-someone-else"))
 
     owner_scope.clear_owner_scope()
     assert owner_scope.current_owner_scope() is None

@@ -21,7 +21,7 @@ from pmstudio.domain.round.round import MaterialRef, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EvidenceId, ProjectId, RoundId
 from pmstudio.domain.shared.template import standard_template
-from pmstudio.infrastructure.sqlite.database import connect
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
 from pmstudio.infrastructure.sqlite.repositories import (
@@ -29,12 +29,12 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 from tests.e2e.conftest import E2E_USERNAME, build_app
 from tests.support.api_client import async_client
 from tests.support.builders import NOW, PROJECT
 from tests.support.doubles import FixedClock
+from tests.support.postgres import open_direct
 
 RAW = "# 目标\n导出要有权限\n# 边界\n只给管理员\n"
 OLD_VERSION = "v0-旧解析器"
@@ -61,8 +61,8 @@ def _old_parse() -> ParsedMaterial:
     )
 
 
-def _world(tmp_path):  # type: ignore[no-untyped-def]
-    connection = connect(tmp_path / "materials_e2e.db")
+def _world():  # type: ignore[no-untyped-def]
+    connection = open_direct()
     ids = UuidIdGenerator()
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT,
@@ -77,7 +77,7 @@ def _world(tmp_path):  # type: ignore[no-untyped-def]
         SqliteRoundRepository(connection),
         SqliteEvidenceRepository(connection),
         SqliteWorkspaceIndex(connection),
-        SqliteUnitOfWork(connection),
+        PgUnitOfWork(connection),
         LocalMaterialParser(),
     )
 
@@ -130,8 +130,8 @@ def _reparse(store, parser, index, uow):  # type: ignore[no-untyped-def]
     )
 
 
-async def test_a_pin_only_material_is_frozen_on_real_sqlite(tmp_path):
-    connection, store, rounds, _, index, uow, parser = _world(tmp_path)
+async def test_a_pin_only_material_is_frozen_on_real_pg():
+    connection, store, rounds, _, index, uow, parser = _world()
     try:
         material_id = _put_old_material(store)
         _pinned_round(rounds, material_id)
@@ -156,7 +156,7 @@ async def test_a_pin_only_material_is_frozen_on_real_sqlite(tmp_path):
 
 
 async def test_reparsing_a_pin_only_material_makes_exactly_one_variant(tmp_path):
-    connection, store, rounds, _, index, uow, parser = _world(tmp_path)
+    connection, store, rounds, _, index, uow, parser = _world()
     try:
         material_id = _put_old_material(store)
         _pinned_round(rounds, material_id)
@@ -185,7 +185,7 @@ async def test_reparsing_a_pin_only_material_makes_exactly_one_variant(tmp_path)
 
 
 async def test_reparsing_a_projected_material_keeps_the_old_eid_and_parser_version(tmp_path):
-    connection, store, rounds, _, index, uow, parser = _world(tmp_path)
+    connection, store, rounds, _, index, uow, parser = _world()
     try:
         material_id = _put_old_material(store)
         chunk_id = store.get(material_id).parsed.chunks[0].chunk_id
