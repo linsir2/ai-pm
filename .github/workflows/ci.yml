@@ -108,7 +108,6 @@ jobs:
       - name: 起 db / init / pgbouncer
         run: |
           docker compose -f docker-compose.yml -f .github/pgbouncer-ci.yml up -d db init pgbouncer
-          docker compose -f docker-compose.yml -f .github/pgbouncer-ci.yml wait init
           for _ in $(seq 1 60); do
             docker compose -f docker-compose.yml -f .github/pgbouncer-ci.yml ps --format json pgbouncer \
               | grep -q '"Health":"healthy"' && break
