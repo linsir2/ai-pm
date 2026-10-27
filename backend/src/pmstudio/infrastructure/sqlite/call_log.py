@@ -8,13 +8,13 @@
 异常对象（造出来的是假的）→ **不硬凑**（可观测性 v2 §9 取舍）。
 """
 
-import sqlite3
+from psycopg import Connection
 
 from pmstudio.application.dto import CallEntry
 
 
 class SqliteRoundCallLog:
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
     def round_calls(self, trace_id: str) -> tuple[CallEntry, ...]:
@@ -22,10 +22,10 @@ class SqliteRoundCallLog:
             """
             SELECT 'model' AS kind, purpose AS name, duration_ms, ok,
                    NULL AS error_kind, created_at AS at
-              FROM model_calls WHERE round_id = ?
+              FROM model_calls WHERE round_id = %s
             UNION ALL
             SELECT 'tool', tool_id, duration_ms, ok, error_kind, created_at
-              FROM tool_calls WHERE round_id = ?
+              FROM tool_calls WHERE round_id = %s
             ORDER BY at, kind
             """,
             (trace_id, trace_id),
@@ -35,7 +35,7 @@ class SqliteRoundCallLog:
                 kind=row["kind"],
                 name=row["name"],
                 duration_ms=int(row["duration_ms"]),
-                ok=bool(row["ok"]),
+                ok=row["ok"],
                 error_kind=row["error_kind"],
                 at=row["at"],
             )

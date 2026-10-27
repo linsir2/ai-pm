@@ -1,4 +1,4 @@
-"""工具调用留样：与 `model_calls` 同一条纪律（默认不写、旁路、要清就 DELETE）。
+"""工具调用留样（PostgreSQL）：与 `model_calls` 同一条纪律（默认不写、旁路、要清就 DELETE）。
 
 **为什么要有它**（可观测性 v2）：Agent 系统的可观测单位是「一次外部调用」，
 而本项目此前只有模型侧的账（`model_calls`）——工具调用只在**失败**时留一行自由文本
@@ -12,30 +12,30 @@
 「加了没人用」。
 """
 
-import json
 import logging
-import sqlite3
 from collections.abc import Mapping
 from datetime import datetime
+
+import psycopg
+from psycopg import Connection
+from psycopg.types.json import Jsonb
+
+from pmstudio.harness.errors import DatabaseUnavailable
 
 logger = logging.getLogger(__name__)
 
 
-def _mentions_lock(text: str) -> bool:
-    """这条 sqlite 错误是「等锁超时」吗。
+def _is_contention(error: psycopg.Error) -> bool:
+    """锁超时（55P03）与序列化/死锁（40xxx）是写争用；其余按部署/schema 问题报。"""
 
-    **与 `model_calls._mentions_lock` 逐字同款**（那一处另有与 `api/errors.py` 的关系说明）：
-    这一层不许 import `api`（分层守卫），两边各留一份小判据，好过为了共享它去动分层规则。
-    """
-
-    lowered = text.lower()
-    return "locked" in lowered or "busy" in lowered
+    state = getattr(error, "sqlstate", None) or ""
+    return state == "55P03" or state.startswith("40")
 
 
 class SqliteToolCallRecorder:
     """把每次工具调用写进 `tool_calls`。**旁路**：写不进去只 warning，不抛。"""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: Connection) -> None:
         self._connection = connection
         #: 已留过一次痕。**按状态转换留、不按发生次数留**——争用是**持续**故障，
         #: 每次都留会把日志刷爆（形状照抄 `SqliteModelCallRecorder`）。
@@ -58,35 +58,34 @@ class SqliteToolCallRecorder:
             self._connection.execute(
                 "INSERT INTO tool_calls (round_id, tool_id, arguments, result_note,"
                 " duration_ms, created_at, ok, error, error_kind)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     # `trace_id`（协议侧的中性名）落进 `round_id` 列（存储侧的产品名）
                     trace_id,
                     tool_id,
-                    json.dumps(dict(arguments), ensure_ascii=False),
+                    Jsonb(dict(arguments)),
                     result_note,
                     duration_ms,
-                    created_at.isoformat(),
-                    int(ok),
+                    created_at,
+                    ok,
                     error,
                     error_kind,
                 ),
             )
-        except sqlite3.OperationalError as error:
-            # **旁路语义不变**：记不上就算了，不许把这一轮搞失败。
-            if _mentions_lock(str(error)):
-                detail = (
-                    "写争用（等锁超时）——多 worker 下的常态，与留样本身无关，"
-                    "业务写也会遇到同样的争用"
-                )
+        except psycopg.Error as error:
+            # **旁路语义不变**：记不上就算了，不许把这一轮搞失败。用 SQLSTATE 分类。
+            if _is_contention(error):
+                detail = "写争用（锁超时/序列化失败）——多 worker 下的常态，与留样本身无关"
+            elif (getattr(error, "sqlstate", None) or "").startswith("08"):
+                detail = "连接不可用——检查 PostgreSQL / PgBouncer"
             else:
                 detail = f"不是写争用，是部署/schema 问题：{type(error).__name__}"
             self._warn_once(f"工具留样写库失败：{detail}（{error}）")
             return
-        except (sqlite3.Error, TypeError, ValueError) as error:
-            # TypeError/ValueError 是防 `json.dumps` 撞上不可序列化的对象——
-            # 那是**代码 bug**，不是容量问题，措辞要与上一个分支分开。
-            self._warn_once(f"工具留样写库失败（多半是序列化）：{type(error).__name__}: {error}")
+        except (DatabaseUnavailable, TypeError, ValueError) as error:
+            # DatabaseUnavailable 来自 PgConnection 包装；TypeError/ValueError 来自 Jsonb
+            # 撞上不可序列化的对象——那是**代码 bug**，不是容量问题。
+            self._warn_once(f"工具留样写库失败（连接或序列化）：{type(error).__name__}: {error}")
             return
         else:
             # **成功也要清标志**：否则进程跑几天之后那次偶发丢失就再也看不见了。

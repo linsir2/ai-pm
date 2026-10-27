@@ -383,7 +383,7 @@ class CallEntry:
     duration_ms: int
     ok: bool
     error_kind: str | None
-    at: str  # ISO 时刻
+    at: datetime
 
 
 @dataclass(frozen=True, slots=True)

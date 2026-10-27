@@ -7764,7 +7764,7 @@ class GetStats:
 
     async def __call__(self, *, actor: UserView) -> tuple[StatsView, ...]:
         _require_admin(actor)
-        now = self._clock.now().isoformat()
+        now = self._clock.now()
         rows = self._stats.rows(now=now)  # type: ignore[attr-defined]
         out: list[StatsView] = []
         for row in rows:

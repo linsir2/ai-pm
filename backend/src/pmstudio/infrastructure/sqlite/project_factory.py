@@ -8,11 +8,11 @@ from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.ids import DocumentId, ProjectId
 from pmstudio.domain.shared.template import DocumentTemplate
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.sqlite.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
 )
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 
 
 class SqliteProjectFactory:
@@ -26,7 +26,7 @@ class SqliteProjectFactory:
         document_id = DocumentId(self._ids.new("doc"))
         documents = SqliteDocumentRepository(self._connection)
         evidences = SqliteEvidenceRepository(self._connection)
-        with SqliteUnitOfWork(self._connection):
+        with PgUnitOfWork(self._connection):
             documents.save(
                 Document.new(
                     document_id=document_id,

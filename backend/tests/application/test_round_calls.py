@@ -1,6 +1,6 @@
 """`GetRoundCalls`（可观测性 v2）：这一轮外部调用轨迹的**组装**（读侧用例）。
 
-真合并 SQL 在 `tests/infrastructure/test_call_log.py`（那里是**真 SQLite**）；
+真合并 SQL 在 `tests/infrastructure/test_pg_simple_repositories.py`（那里是**真 PostgreSQL**）；
 这里只验「拿到条目后怎么组装成 `RoundCallsView`」与「trace_id 是不是这一轮」。
 """
 
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import fields
+from datetime import UTC, datetime
 
 from pmstudio.application.dto import CallEntry, RoundCallsView
 from tests.support.builders import PROJECT, SEAT
@@ -39,7 +40,7 @@ def _entry(
     ok: bool = True,
     duration_ms: int = 1,
     error_kind: str | None = None,
-    at: str = "2026-10-23T10:00:00+00:00",
+    at: datetime = datetime(2026, 10, 23, 10, 0, tzinfo=UTC),
 ) -> CallEntry:
     return CallEntry(
         kind=kind,

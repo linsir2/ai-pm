@@ -10,6 +10,9 @@ import sqlite3
 import time
 from datetime import UTC, datetime
 
+from psycopg import Connection
+from psycopg.types.json import Jsonb
+
 from pmstudio.application.dto import (
     OpinionSourceView,
     ProjectSummaryView,
@@ -983,7 +986,7 @@ class SqliteTemplateRepository:
     """模板库表：定义时来源。读只给 `DocumentTemplate`，不做 validate
     （入库前调用方已断过；行内快照的 validate 在 `Document` 构造里）。"""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
     def save(
@@ -993,18 +996,19 @@ class SqliteTemplateRepository:
         owner_id = None if builtin else str(require_owner(owner))
         self._connection.execute(
             "INSERT INTO templates (template_id, owner_id, title, spec, builtin, created_at,"
-            " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            " updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT(template_id) DO UPDATE SET title = excluded.title,"
             " spec = excluded.spec, builtin = excluded.builtin,"
-            " updated_at = excluded.updated_at WHERE owner_id IS ?",
+            " updated_at = excluded.updated_at"
+            " WHERE templates.owner_id IS NOT DISTINCT FROM %s",
             (
                 template.template_id,
                 owner_id,
                 template.title,
-                json.dumps(ser.template_to_json(template), ensure_ascii=False),
-                1 if builtin else 0,
-                _now(),
-                _now(),
+                Jsonb(ser.template_to_json(template)),
+                builtin,
+                datetime.now(UTC),
+                datetime.now(UTC),
                 owner_id,
             ),
         )
@@ -1025,13 +1029,13 @@ class SqliteTemplateRepository:
                 # 内置在前（画廊默认选 standard，它得排第一）；同组按标题排，不按 id
                 # （按 id 的话 light 永在 standard 前面，默认高亮落在第二张卡上）。
                 "SELECT spec, builtin FROM templates"
-                " WHERE owner_id IS NULL OR owner_id = ? ORDER BY builtin DESC, title",
+                " WHERE owner_id IS NULL OR owner_id = %s ORDER BY builtin DESC, title",
                 (str(resolved),),
             ).fetchall()
         return tuple(
             TemplateEntry(
-                template=ser.template_from_json(json.loads(row["spec"])),
-                builtin=bool(row["builtin"]),
+                template=ser.template_from_json(row["spec"]),
+                builtin=row["builtin"],
             )
             for row in rows
         )
@@ -1040,14 +1044,14 @@ class SqliteTemplateRepository:
         resolved = require_owner(owner)
         row = self._connection.execute(
             "SELECT spec, builtin FROM templates"
-            " WHERE template_id = ? AND (owner_id IS NULL OR owner_id = ?)",
+            " WHERE template_id = %s AND (owner_id IS NULL OR owner_id = %s)",
             (template_id, str(resolved)),
         ).fetchone()
         if row is None:
             raise UnknownTemplate(template_id)
         return TemplateEntry(
-            template=ser.template_from_json(json.loads(row["spec"])),
-            builtin=bool(row["builtin"]),
+            template=ser.template_from_json(row["spec"]),
+            builtin=row["builtin"],
         )
 
     def delete(self, template_id: str, *, owner: UserId | None = None) -> None:
@@ -1057,14 +1061,14 @@ class SqliteTemplateRepository:
         不是 id 引用，两张表没有外键，所以这里不需要级联、也不需要引用检查
         （`02` §11.0.70）。
 
-        **按 owner 收窄 + `builtin = 0`**（多用户改造 fix round）：builtin 行
-        （owner NULL、人人可见）不由此路删——`builtin = 0` 与 `owner_id = ?` 各挡一道；
+        **按 owner 收窄 + `builtin = false`**（多用户改造 fix round）：builtin 行
+        （owner NULL、人人可见）不由此路删——`builtin = false` 与 `owner_id = %s` 各挡一道；
         用例层 `BuiltinTemplateProtected` 是主防线，这里是物理边界。
         """
 
         resolved = require_owner(owner)
         cursor = self._connection.execute(
-            "DELETE FROM templates WHERE template_id = ? AND owner_id = ? AND builtin = 0",
+            "DELETE FROM templates WHERE template_id = %s AND owner_id = %s AND builtin = false",
             (template_id, str(resolved)),
         )
         if cursor.rowcount == 0:

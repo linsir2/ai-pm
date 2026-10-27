@@ -503,7 +503,7 @@ class AdminStatsStore(Protocol):
     实现里一律用相关子查询（见 `SqliteAdminStatsRepository` 的注释）。
     """
 
-    def rows(self, *, now: str) -> Sequence[object]: ...
+    def rows(self, *, now: datetime) -> Sequence[object]: ...
 
 
 class UserStore(Protocol):

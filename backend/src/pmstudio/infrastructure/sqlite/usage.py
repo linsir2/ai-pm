@@ -1,4 +1,4 @@
-"""管理端用量读模型（多用户改造 Task 8 / Ruling 7）。
+"""管理端用量读模型（多用户改造 Task 8 / Ruling 7，PostgreSQL）。
 
 口径：**按 owner 聚合其项目下轮次的 `model_calls` 行数**。`model_calls` 表**不加 owner 列**
 （`§0.3`），所以这里 join 查：`model_calls.round_id → rounds.round_id → rounds.owner_id`。
@@ -8,13 +8,15 @@
 - 返回**只有调用数 > 0 的 owner**；没有调用的用户由用例侧补 0（它才是知道"有哪些用户"的人）。
 """
 
-import sqlite3
+from datetime import datetime
+
+from psycopg import Connection
 
 from pmstudio.domain.shared.ids import UserId
 
 
 class SqliteUsageRepository:
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
     def count_model_calls_by_owner(self) -> dict[UserId, int]:
@@ -70,16 +72,17 @@ class SqliteAdminStatsRepository:
     - `projects` / `rounds`：owner 直连计数；
     - `calls` / `failed`：只算 `round_id` 能落到某条 `rounds` 行上的调用
       （探索的 `x-*` 与 `NULL` 自然落不进 join，不计入任何用户）；
-    - `total_tokens`：`usage_json.total_tokens` 求和，`usage_json` 为空/NULL 记 0；
+    - `total_tokens`：`usage_json.total_tokens` 求和；缺失/非数字记 0
+      （`jsonb_typeof` 兜底，不让坏值把整屏统计炸掉）；
     - `active_sessions`：`revoked_at IS NULL AND expires_at > now`；
     - `last_seen_at`：该用户**所有**会话（含已吊销）的 `max(last_seen_at)`——
       吊销的会话说明"他来过又走了"，那也是活跃痕迹。
     """
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def rows(self, *, now: str) -> list[UserActivityRow]:
+    def rows(self, *, now: datetime) -> list[UserActivityRow]:
         raw = self._connection.execute(
             """
             SELECT u.user_id, u.status, u.role, u.created_at,
@@ -91,7 +94,7 @@ class SqliteAdminStatsRepository:
                      WHERE r.owner_id = u.user_id) AS calls,
                    (SELECT COUNT(*) FROM model_calls mc
                       JOIN rounds r ON r.round_id = mc.round_id
-                     WHERE r.owner_id = u.user_id AND mc.ok = 0) AS failed,
+                     WHERE r.owner_id = u.user_id AND mc.ok = false) AS failed,
                    (SELECT AVG(mc.duration_ms) FROM model_calls mc
                       JOIN rounds r ON r.round_id = mc.round_id
                      WHERE r.owner_id = u.user_id) AS avg_duration_ms,
@@ -100,21 +103,26 @@ class SqliteAdminStatsRepository:
                      WHERE r.owner_id = u.user_id) AS tool_calls,
                    (SELECT COUNT(*) FROM tool_calls tc
                       JOIN rounds r ON r.round_id = tc.round_id
-                     WHERE r.owner_id = u.user_id AND tc.ok = 0) AS tool_failed,
+                     WHERE r.owner_id = u.user_id AND tc.ok = false) AS tool_failed,
                    (SELECT AVG(tc.duration_ms) FROM tool_calls tc
                       JOIN rounds r ON r.round_id = tc.round_id
                      WHERE r.owner_id = u.user_id) AS tool_avg_duration_ms,
-                   (SELECT SUM(json_extract(mc.usage_json, '$.total_tokens'))
+                   (SELECT SUM(
+                              CASE
+                                WHEN jsonb_typeof(mc.usage_json->'total_tokens') = 'number'
+                                THEN (mc.usage_json->>'total_tokens')::bigint
+                                ELSE 0
+                              END)
                       FROM model_calls mc
                       JOIN rounds r ON r.round_id = mc.round_id
                      WHERE r.owner_id = u.user_id) AS total_tokens,
                    (SELECT COUNT(*) FROM sessions s
                      WHERE s.user_id = u.user_id
-                       AND s.revoked_at IS NULL AND s.expires_at > ?) AS active_sessions,
+                       AND s.revoked_at IS NULL AND s.expires_at > %s) AS active_sessions,
                    (SELECT MAX(s.last_seen_at) FROM sessions s
                      WHERE s.user_id = u.user_id) AS last_seen_at
             FROM users u
-            ORDER BY u.created_at ASC
+            ORDER BY u.created_at ASC, u.seq ASC
             """,
             (now,),
         ).fetchall()
