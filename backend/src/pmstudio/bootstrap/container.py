@@ -109,6 +109,7 @@ from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.personas.catalog import load_personas
 from pmstudio.infrastructure.postgres.database import PgConnection
 from pmstudio.infrastructure.postgres.embedding import FastEmbedEmbedder
+from pmstudio.infrastructure.postgres.leases import PgLeaseStore
 from pmstudio.infrastructure.postgres.materials import (
     SqliteFtsRetriever,
     SqliteHybridRetriever,
@@ -127,7 +128,6 @@ from pmstudio.infrastructure.sqlite import owner_scope
 from pmstudio.infrastructure.sqlite.call_log import SqliteRoundCallLog
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
-from pmstudio.infrastructure.sqlite.leases import SqliteLeaseStore
 from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
 from pmstudio.infrastructure.sqlite.observations_repo import SqliteObservationRepository
 from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
@@ -295,7 +295,7 @@ def build_container(
     documents = SqliteDocumentRepository(connection)
     # 轮 / 探索的 DB 租约（P3b 多 worker）：同一个 store 交给两个仓储，
     # 保证 fencing 与 runner 心跳用的是同一套 SQL/口径。
-    leases = SqliteLeaseStore(connection)
+    leases = PgLeaseStore(connection)
     rounds = SqliteRoundRepository(connection, leases=leases)
     explorations = SqliteExplorationRepository(connection, leases=leases)
     discussions = SqliteDiscussionRepository(connection)

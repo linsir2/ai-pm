@@ -29,7 +29,11 @@ LEASE_HEARTBEAT_SECONDS = 30
 
 
 def wall_clock_ms() -> int:
-    """UTC epoch 毫秒。租约只用这一个时钟口径（跨进程共享系统时钟）。"""
+    """UTC epoch 毫秒（主机时钟）。
+
+    **租约过期不用它**：acquire/renew/holds 一律用 DB `clock_timestamp()`。这个函数
+    只剩非租约时间戳（例如 `round_skips.requested_at` 的旧调用面）与测试夹具在用。
+    """
 
     return time.time_ns() // 1_000_000
 
@@ -55,13 +59,12 @@ def acquire_exploration_lease(
     owner: UserId | None,
     holder: str,
     ttl_ms: int,
-    now_ms: int | None = None,
 ) -> LeaseToken | None:
     """在调用方的 UoW 内给**已经存在**的探索行写租约（create / resume 共用）。
 
     被占用（`acquire` 返回 None）统一翻成 `ExplorationBusy`：对 create 是同一项目
     已有 running，对 resume 是另一个 worker 已经接手。未知 / 他人 target 仍由
-    `LeaseStore` 抛 `UnknownExploration`（404）。
+    `LeaseStore` 抛 `UnknownExploration`（404）。时间由存储层取 DB 时钟。
     """
 
     if leases is None:
@@ -76,7 +79,6 @@ def acquire_exploration_lease(
         str(exploration_id),
         owner,
         holder,
-        wall_clock_ms() if now_ms is None else now_ms,
         ttl_ms,
     )
     if token is None:
@@ -87,9 +89,10 @@ def acquire_exploration_lease(
 class LeaseScope:
     """当前动作持有的那一把租约（可绑定、可标记丢失、可清空）。
 
-    `ensure_held()` 只做**本地**判据（有没有 token、是否已标记丢失、本地记的过期时间）；
-    真正的 fencing 在仓储的 SQL 条件里（`lease_owner` + `lease_token` +
-    `lease_expires_at > now`），两者缺一不可。
+    `ensure_held()` 只做**本地**判据（有没有 token、是否已标记丢失），用于在写路径
+    之前尽快取消；**它不判断过期**——过期与否只有数据库时间说了算。真正的 fencing
+    在仓储的 SQL 条件里（`lease_owner` + `lease_token` + `lease_expires_at > db_now`），
+    两者缺一不可。
 
     `holder / owner` 在**拿到 token 之前**就要有值：`StartRound.create` 要先 INSERT
     再在同一 UoW 里 `acquire`，那一刻 token 还不存在，只能从 scope 上取"谁在跑"。
@@ -139,8 +142,12 @@ class LeaseScope:
         self._token = None
         self._lost = False
 
-    def ensure_held(self, *, now_ms: int | None = None) -> LeaseToken:
-        """本地复核；不满足就抛 `LeaseLost`（调用方不要把它吞成"继续写"）。"""
+    def ensure_held(self) -> LeaseToken:
+        """本地复核（只判 token/丢失标记）；不满足就抛 `LeaseLost`。
+
+        过期判据不在这里：本地时钟相对 DB 时钟可能偏，**只有 `LeaseStore.holds()`**
+        能回答"这一行此刻是否还归我"。写路径必须再过一次那道 SQL 条件。
+        """
 
         token = self._token
         if token is None or self._lost:
@@ -148,24 +155,22 @@ class LeaseScope:
                 kind=token.kind if token is not None else "none",
                 target_id=token.target_id if token is not None else "",
             )
-        now = wall_clock_ms() if now_ms is None else now_ms
-        if token.expires_at_ms <= now:
-            self._lost = True
-            raise LeaseLost(kind=token.kind, target_id=token.target_id)
         return token
 
 
-RenewLease = Callable[[LeaseToken, int, int], bool]
+RenewLease = Callable[[LeaseToken, int], int | None]
 
 
 class LeaseHeartbeat:
-    """后台续租：按 `interval_seconds` 调 `renew(token, now_ms, ttl_ms)`。
+    """后台续租：按 `interval_seconds` 调 `renew(token, ttl_ms)`。
 
     两条纪律：
 
-    - **`database is locked` 不是失租**：短退避重试，直到续上或真的过期；
-    - **只有 renew 返回 False 才置 lost**（owner/持有者/token 不匹配，或行已过期）。
-      置 lost 后调 `on_lost()`（runner 用它取消主任务），循环退出。
+    - **锁等待 / 序列化失败不是失租**：55P03、40001、40P01 短退避重试，
+      直到续上或真的过期；
+    - **只有 renew 返回 `None` 才置 lost**（owner/持有者/token 不匹配，或行已过期）。
+      置 lost 后调 `on_lost()`（runner 用它取消主任务），循环退出。返回的 int 是
+      DB 生成的过期时间，直接写回 scope，不再用主机 `now + ttl`。
 
     第一次续租要等 `StartRound.create` 把 token `bind` 进来；那之前每个 interval
     只是空转一次，所以**不能**把"token 还不存在"当成失租。
@@ -180,7 +185,6 @@ class LeaseHeartbeat:
         ttl_ms: int,
         on_lost: Callable[[], None],
         sleep: Callable[[float], Awaitable[None]] | None = None,
-        clock: Callable[[], int] = wall_clock_ms,
         retry_initial_seconds: float = 0.05,
         retry_max_seconds: float = 1.0,
     ) -> None:
@@ -190,7 +194,6 @@ class LeaseHeartbeat:
         self._ttl_ms = ttl_ms
         self._on_lost = on_lost
         self._sleep = sleep or asyncio.sleep
-        self._clock = clock
         self._retry_initial = retry_initial_seconds
         self._retry_max = retry_max_seconds
 
@@ -213,25 +216,28 @@ class LeaseHeartbeat:
         backoff = self._retry_initial
         while True:
             try:
-                now_ms = self._clock()
-                renewed = self._renew(token, now_ms, self._ttl_ms)
-            except Exception as error:  # noqa: BLE001 —— 只把"锁忙"当可重试
-                if not _database_locked(error):
+                renewed = self._renew(token, self._ttl_ms)
+            except Exception as error:  # noqa: BLE001 —— 只把锁等待/序列化失败当可重试
+                if not _retryable_lease_error(error):
                     raise
                 await self._sleep(backoff)
                 backoff = min(backoff * 2, self._retry_max)
                 continue
-            if not renewed:
+            if renewed is None:
                 self._scope.mark_lost()
                 self._on_lost()
                 return False
-            self._scope.note_renewed(now_ms + self._ttl_ms)
+            self._scope.note_renewed(renewed)
             return True
 
 
-def _database_locked(error: BaseException) -> bool:
-    text = str(error).lower()
-    return "locked" in text or "busy" in text
+#: 可重试的 SQLSTATE：锁等待（55P03）、序列化失败（40001）、死锁（40P01）。
+#: 只认 SQLSTATE，不解析错误文本——文本会随驱动/语言/版本变。
+_RETRYABLE_SQLSTATES = frozenset({"55P03", "40001", "40P01"})
+
+
+def _retryable_lease_error(error: BaseException) -> bool:
+    return getattr(error, "sqlstate", None) in _RETRYABLE_SQLSTATES
 
 
 _current: ContextVar[LeaseScope | None] = ContextVar("pmstudio_lease_scope", default=None)

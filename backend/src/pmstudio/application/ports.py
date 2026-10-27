@@ -79,8 +79,9 @@ class LeaseStore(Protocol):
 
     所有方法都带**用户** `user_id`（行的归属）与**持有者** `holder`（进程/动作身份）——
     两者分开：同一个人可能开着两个标签页，也可能两个 worker 跑同一用户的库。
-    时间一律用绝对毫秒；`acquire` 发现被占用返回 `None`（由调用方翻成 409），
-    未知 / 不属于该用户的 target 抛 `UnknownRound` / `UnknownExploration`（404）。
+    时间由存储层用**数据库时钟**生成/比较；调用方不传主机毫秒，只传 TTL。
+    `acquire` 发现被占用返回 `None`（由调用方翻成 409），未知 / 不属于该用户的
+    target 抛 `UnknownRound` / `UnknownExploration`（404）。
     """
 
     def acquire(
@@ -89,7 +90,6 @@ class LeaseStore(Protocol):
         target_id: str,
         user_id: UserId,
         holder: str,
-        now_ms: int,
         ttl_ms: int,
     ) -> LeaseToken | None: ...
 
@@ -100,9 +100,14 @@ class LeaseStore(Protocol):
         user_id: UserId,
         holder: str,
         token: int,
-        now_ms: int,
         ttl_ms: int,
-    ) -> bool: ...
+    ) -> int | None:
+        """续租成功返回**数据库生成的绝对过期毫秒**；0 行返回 `None`（失租）。
+
+        `None` 是唯一失租信号：不是 409，也不代表资源被占——调用方应停止在途动作。
+        """
+
+        ...
 
     def release(
         self,
@@ -111,13 +116,11 @@ class LeaseStore(Protocol):
         user_id: UserId,
         holder: str,
         token: int,
-        *,
-        now_ms: int,
     ) -> bool:
         """带未过期条件的尽力而为释放。
 
         0 行返回 False，**不**抛（不是 409，也不代表资源被占）——过期 / 被接管的锁
-        清不掉是正常的，下一次 `acquire` 会按 `lease_expires_at <= now` 接管。
+        清不掉是正常的，下一次 `acquire` 会按 `lease_expires_at <= db_now` 接管。
         """
 
         ...
@@ -128,15 +131,14 @@ class LeaseStore(Protocol):
         target_id: str,
         user_id: UserId,
         holder: str,
-        now_ms: int,
         ttl_ms: int,
     ) -> LeaseToken:
         """无条件接管（放弃 / 恢复用）；未知 target 仍然 404。"""
 
         ...
 
-    def holds(self, token: LeaseToken, *, now_ms: int) -> bool:
-        """这一行此刻是否仍归这把 token（owner + holder + token + 未过期）。"""
+    def holds(self, token: LeaseToken) -> bool:
+        """这一行此刻是否仍归这把 token（owner + holder + token + 未过期，DB 时间）。"""
 
         ...
 

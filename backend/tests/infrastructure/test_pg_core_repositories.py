@@ -114,7 +114,7 @@ def _second(database: _Database):
 class _Holds:
     """T4 不迁 lease 时钟（T6）：只验证仓储的 fencing 条件本身。"""
 
-    def holds(self, token, *, now_ms):  # type: ignore[no-untyped-def]
+    def holds(self, token):  # type: ignore[no-untyped-def]
         return True
 
 

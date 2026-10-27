@@ -26,7 +26,6 @@ from pmstudio.application.lease import (
     LeaseScope,
     clear_lease_scope,
     set_lease_scope,
-    wall_clock_ms,
 )
 from pmstudio.application.ports import LeaseStore
 from pmstudio.application.use_cases import RetryExploration, RunInquiry
@@ -152,13 +151,12 @@ class ExplorationRunner:
         heartbeat = asyncio.create_task(
             LeaseHeartbeat(
                 scope=scope,
-                renew=lambda item, now_ms, _ttl: self._leases.renew(
+                renew=lambda item, _ttl: self._leases.renew(
                     item.kind,
                     item.target_id,
                     UserId(item.user_id),
                     item.holder,
                     item.token,
-                    now_ms,
                     _ttl,
                 ),
                 interval_seconds=self._lease_heartbeat_seconds,
@@ -187,7 +185,6 @@ class ExplorationRunner:
                     UserId(lease.user_id),
                     lease.holder,
                     lease.token,
-                    now_ms=wall_clock_ms(),
                 )
             except Exception:  # noqa: BLE001 —— 收尾不许掩盖原异常
                 pass

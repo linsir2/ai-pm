@@ -12,7 +12,7 @@ from pmstudio.domain.shared.errors import ShapeError
 
 
 class LeaseKind(StrEnum):
-    """租约挂在哪张表上。值同时是 `SqliteLeaseStore` 选表的键。"""
+    """租约挂在哪张表上。值同时是 `LeaseStore` 选表的键。"""
 
     ROUND = "round"
     EXPLORATION = "exploration"
@@ -23,7 +23,8 @@ class LeaseToken:
     """一把已经拿到的租约。
 
     `token` 从 1 开始、只增不减；`0` 是"从未出租"的哨兵（列默认值）。
-    `expires_at_ms` 是**绝对毫秒时间戳**（UTC epoch），跨进程共享系统时钟。
+    `expires_at_ms` 是**绝对毫秒时间戳**（UTC epoch），由存储层用 DB 时钟生成；
+    它只用于展示/本地快速判断，真正的 fencing 始终以 `LeaseStore.holds()` 为准。
     """
 
     kind: LeaseKind

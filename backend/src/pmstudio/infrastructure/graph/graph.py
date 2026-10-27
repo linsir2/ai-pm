@@ -25,7 +25,6 @@ from pmstudio.application.lease import (
     LeaseScope,
     clear_lease_scope,
     set_lease_scope,
-    wall_clock_ms,
 )
 from pmstudio.application.ports import LeaseStore
 from pmstudio.application.use_cases import (
@@ -255,7 +254,6 @@ class RoundRunner:
                 round_id,
                 owner,
                 holder,
-                wall_clock_ms(),
                 ttl_ms,
             )
             if token is None:
@@ -271,13 +269,12 @@ class RoundRunner:
         heartbeat = asyncio.create_task(
             LeaseHeartbeat(
                 scope=scope,
-                renew=lambda token, now_ms, _ttl: self._leases.renew(
+                renew=lambda token, _ttl: self._leases.renew(
                     token.kind,
                     token.target_id,
                     UserId(token.user_id),
                     token.holder,
                     token.token,
-                    now_ms,
                     _ttl,
                 ),
                 interval_seconds=self._lease_heartbeat_seconds,
@@ -301,7 +298,6 @@ class RoundRunner:
                         UserId(lease.user_id),
                         lease.holder,
                         lease.token,
-                        now_ms=wall_clock_ms(),
                     )
                 except Exception:  # noqa: BLE001 —— 收尾不许掩盖原异常
                     pass

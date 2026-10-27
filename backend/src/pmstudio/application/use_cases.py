@@ -668,7 +668,6 @@ class StartRound:
             str(round_id),
             scope.owner,
             scope.holder,
-            wall_clock_ms(),
             self._lease_ttl_ms,
         )
         if token is None:
@@ -1647,7 +1646,7 @@ class RunSeatRound:
         if scope is None:
             raise LeaseLost(kind=LeaseKind.ROUND, target_id=str(round_id))
         token = scope.ensure_held()
-        if not self._leases.holds(token, now_ms=wall_clock_ms()):
+        if not self._leases.holds(token):
             scope.mark_lost()
             raise LeaseLost(kind=token.kind, target_id=token.target_id)
 
@@ -4900,7 +4899,6 @@ class AbandonRound:
                         str(round_id),
                         owner,
                         holder,
-                        wall_clock_ms(),
                         self._lease_ttl_ms,
                     )
                     scope = LeaseScope(holder=holder, owner=owner)
@@ -4917,7 +4915,6 @@ class AbandonRound:
                         UserId(token.user_id),
                         token.holder,
                         token.token,
-                        now_ms=wall_clock_ms(),
                     )
         finally:
             if scope_token is not None:
@@ -4996,7 +4993,7 @@ class SkipSeat:
     只写 `round_skips` 控制行，**不拿 action lease、不写 Round**：`_review_one`
     在 attest 前 fresh-read，读到控制行合入的 `skipped_seats` 后把迟交整包丢弃；
     `RoundRepository.get` 负责合入，DTO 投影时再合成 `USER_SKIPPED` 留痕。
-    读验写在同一 uow 内做 fresh-read，SQLite `BEGIN IMMEDIATE` 写串行保证
+    读验写在同一 uow 内做 fresh-read，并锁同一个 `rounds` 行（`FOR UPDATE`）：
     交回先提交则这里拒（`SeatAlreadyReviewed`），跳过先提交则迟交被丢弃。
 
     回包是**全量 view**（经组合的 `GetRound`，与 graph runner 同款）：
@@ -5025,7 +5022,7 @@ class SkipSeat:
         self, *, round_id: RoundId, seat_id: str, owner: UserId | None = None
     ) -> RoundView:
         with self._uow:
-            round_ = self._rounds.get_for_update(round_id)
+            round_ = self._rounds.get_for_update(round_id, owner=owner)
             if seat_id not in round_.skipped_seats:
                 if any(review.seat_id == seat_id for review in round_.current_reviews):
                     # 本趟已交回：拒。不是 UX 选项，是正确性必需（见类文档串）。
@@ -5517,7 +5514,6 @@ class RunInquiry:
                             str(item.exploration_id),
                             owner,
                             holder,
-                            wall_clock_ms(),
                             self._lease_ttl_ms,
                         )
                         if token is None:
@@ -5535,7 +5531,6 @@ class RunInquiry:
                             UserId(token.user_id),
                             token.holder,
                             token.token,
-                            now_ms=wall_clock_ms(),
                         )
             finally:
                 if scope_token is not None:
@@ -5734,7 +5729,6 @@ class AbandonExploration:
                         str(exploration_id),
                         owner,
                         holder,
-                        wall_clock_ms(),
                         self._lease_ttl_ms,
                     )
                     scope = LeaseScope(holder=holder, owner=owner)
@@ -5750,7 +5744,6 @@ class AbandonExploration:
                         UserId(token.user_id),
                         token.holder,
                         token.token,
-                        now_ms=wall_clock_ms(),
                     )
         finally:
             if scope_token is not None:

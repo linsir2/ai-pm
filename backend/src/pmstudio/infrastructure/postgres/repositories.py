@@ -9,7 +9,6 @@ skip 与 review 锁同一行。JSON 负载内部仍是 ISO 字符串，行上的
 由 psycopg 直接给 datetime。
 """
 
-import time
 from datetime import UTC, datetime
 
 from psycopg import Connection
@@ -56,16 +55,16 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.lease import LeaseKind, LeaseToken
 from pmstudio.domain.shared.template import DocumentTemplate, standard_template
 from pmstudio.infrastructure.postgres import serialization as ser
+from pmstudio.infrastructure.postgres.leases import PgLeaseStore
 from pmstudio.infrastructure.postgres.owner_scope import optional_owner, require_owner
-from pmstudio.infrastructure.sqlite.leases import SqliteLeaseStore
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _now_ms() -> int:
-    return time.time_ns() // 1_000_000
+#: 行上的 lease 是否还活着由 DB 时钟判；主机时钟不参与 fencing。
+_DB_NOW_MS = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT"
 
 
 def _running_conflict(error: UniqueViolation) -> bool:
@@ -206,7 +205,7 @@ class SqliteRoundRepository:
         self, connection: Connection, *, leases: LeaseStore | None = None
     ) -> None:
         self._connection = connection
-        self._leases: LeaseStore = leases or SqliteLeaseStore(connection)
+        self._leases: LeaseStore = leases or PgLeaseStore(connection)
 
     def _load(self, row: dict, *, resolved: UserId) -> Round:
         round_ = ser.round_from_payload(
@@ -349,17 +348,16 @@ class SqliteRoundRepository:
                 raise LeaseLost(kind=LeaseKind.ROUND, target_id=target_id)
             return
 
-        now_ms = _now_ms()
         token = _matching_lease(LeaseKind.ROUND, target_id, resolved)
-        if token is None or not self._leases.holds(token, now_ms=now_ms):
+        if token is None or not self._leases.holds(token):
             raise LeaseLost(kind=LeaseKind.ROUND, target_id=target_id)
         cursor = self._connection.execute(
-            """
+            f"""
             UPDATE rounds
             SET step = %s, waiting_on = %s, payload = %s, updated_at = %s
             WHERE round_id = %s AND owner_id = %s
               AND lease_owner = %s AND lease_token = %s
-              AND lease_expires_at > %s
+              AND lease_expires_at > {_DB_NOW_MS}
             """,
             (
                 str(round_.step),
@@ -370,7 +368,6 @@ class SqliteRoundRepository:
                 str(resolved),
                 token.holder,
                 token.token,
-                now_ms,
             ),
         )
         if cursor.rowcount != 1:
@@ -399,7 +396,7 @@ class SqliteExplorationRepository:
         self, connection: Connection, *, leases: LeaseStore | None = None
     ) -> None:
         self._connection = connection
-        self._leases: LeaseStore = leases or SqliteLeaseStore(connection)
+        self._leases: LeaseStore = leases or PgLeaseStore(connection)
 
     def get(
         self, exploration_id: ExplorationId, *, owner: UserId | None = None
@@ -483,18 +480,17 @@ class SqliteExplorationRepository:
                 raise LeaseLost(kind=LeaseKind.EXPLORATION, target_id=target_id)
             return
 
-        now_ms = _now_ms()
         token = _matching_lease(LeaseKind.EXPLORATION, target_id, resolved)
-        if token is None or not self._leases.holds(token, now_ms=now_ms):
+        if token is None or not self._leases.holds(token):
             raise LeaseLost(kind=LeaseKind.EXPLORATION, target_id=target_id)
         try:
             cursor = self._connection.execute(
-                """
+                f"""
                 UPDATE explorations
                 SET kind = %s, status = %s, payload = %s, updated_at = %s
                 WHERE exploration_id = %s AND owner_id = %s
                   AND lease_owner = %s AND lease_token = %s
-                  AND lease_expires_at > %s
+                  AND lease_expires_at > {_DB_NOW_MS}
                 """,
                 (
                     str(exploration.kind),
@@ -505,7 +501,6 @@ class SqliteExplorationRepository:
                     str(resolved),
                     token.holder,
                     token.token,
-                    now_ms,
                 ),
             )
         except UniqueViolation as error:
