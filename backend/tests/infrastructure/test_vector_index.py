@@ -69,11 +69,22 @@ def test_vectors_are_written_outside_any_open_transaction(conn):
 
 
 def test_write_fills_the_vector_for_every_chunk(conn):
-    _put_material(conn, chunks=(("c1", "用户退货流程"), ("c2", "机柜布线规范")))
+    seen: list[str] = []
 
-    SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
+    class Recorder(FakeEmbedder):
+        def embed_many(self, texts):
+            seen.extend(texts)
+            return super().embed_many(texts)
+
+    _put_material(conn, chunks=(("c1", "退货时限是七天"), ("c2", "机柜布线规范")))
+
+    SqliteVectorIndex(conn, embedder=Recorder(dimensions=512)).write("m-1")
 
     assert _vector_count(conn) == 2
+    assert seen, "向量索引一条都没算（测试没有鉴别力）"
+    assert any("退货时限是七天" in text for text in seen), (
+        f"喂进 embedder 的不是自然语言正文：{seen!r}"
+    )
 
 
 def test_drop_removes_the_vectors(conn):

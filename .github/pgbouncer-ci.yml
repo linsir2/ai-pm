@@ -1,5 +1,10 @@
-# CI 覆盖：把 PgBouncer 的 6432 暴露给 runner，供 test_pgbouncer.py 连接。
+# CI 覆盖：把 db 5432 与 PgBouncer 6432 暴露给 runner。
+# - 5432：session 夹具要两个 test URL（测试 schema 在 init 建好的库上派生）；
+# - 6432：test_pgbouncer.py 真连 transaction pool / admin console。
 services:
+  db:
+    ports:
+      - "5432:5432"
   pgbouncer:
     ports:
       - "6432:6432"

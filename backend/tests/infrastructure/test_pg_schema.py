@@ -652,6 +652,6 @@ def test_0001_has_no_sqlite_only_syntax() -> None:
     assert first_statement.upper().startswith("CREATE EXTENSION IF NOT EXISTS VECTOR")
 
 
-def test_fixture_truncates_only_the_18_data_tables() -> None:
-    assert len(DATA_TABLES) == 18
+def test_fixture_truncates_exactly_the_migrated_tables() -> None:
+    assert set(DATA_TABLES) | PRESERVED_TABLES == set(EXPECTED_COLUMNS)
     assert PRESERVED_TABLES.isdisjoint(DATA_TABLES)

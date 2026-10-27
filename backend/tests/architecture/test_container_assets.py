@@ -655,9 +655,13 @@ def test_the_ci_has_a_pgbouncer_smoke_job() -> None:
 
     text = _text(CI_WORKFLOW)
     assert re.search(r"^  pgbouncer:", text, re.MULTILINE), "CI 缺 PgBouncer smoke job"
-    assert "test_pgbouncer.py" in text
-    assert "PMSTUDIO_TEST_REQUIRE_PGBOUNCER" in text
-    assert "skip 视为失败" in text or "缺 URL 会 fail" in text
+    job = text.split("\n  pgbouncer:", 1)[1].split("\n  frontend:", 1)[0]
+    assert "test_pgbouncer.py" in job
+    assert "PMSTUDIO_TEST_REQUIRE_PGBOUNCER" in job
+    assert "PMSTUDIO_TEST_DATABASE_URL" in job, "PgBouncer job 必须导出 app 测试 URL"
+    assert "PMSTUDIO_TEST_DIRECT_DATABASE_URL" in job, "PgBouncer job 必须导出直连测试 URL"
+    assert "6432" in job
+    assert "skip 视为失败" in job or "缺 URL 会 fail" in job
 
 
 def test_the_ci_workflow_builds_the_images() -> None:

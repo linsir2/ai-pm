@@ -1,9 +1,10 @@
 """全局测试夹具：真 PostgreSQL + 默认 owner 上下文。
 
 T8 起**全量测试直连 PG**：一个 test database、一个 test schema，pytest 串行。
-- session 一次：建 schema、装 pgvector、跑迁移、种 vector profile 与内置模板；
+- session 一次：建 schema、装 pgvector、跑迁移、种 vector profile；
 - 每个用例前：只 `TRUNCATE` 显式数据表（保留 `schema_migrations` /
-  `vector_index_meta`），truncate 后重新 upsert profile 与内置模板；
+  `vector_index_meta`），truncate 后重新 upsert profile；内置模板由需要它的
+  用例自己 seed（backend 不 seed，生产由 init --finalize 负责）；
 - 两个测试 URL 双写成生产变量，子进程（uvicorn / CLI）直接继承；
 - 缺 URL 或连不上直接 `pytest.exit`，不回落 SQLite。
 """

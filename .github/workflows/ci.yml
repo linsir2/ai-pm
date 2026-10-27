@@ -108,13 +108,15 @@ jobs:
       - name: 起 db / init / pgbouncer
         run: |
           docker compose -f docker-compose.yml -f .github/pgbouncer-ci.yml up -d db init pgbouncer
+          docker compose -f docker-compose.yml -f .github/pgbouncer-ci.yml wait init
           for _ in $(seq 1 60); do
-            status=$(docker compose ps --format json init | sed -n 's/.*"State":"\([^"]*\)".*/\1/p' | head -1)
-            [ "$status" = "exited" ] && break
+            docker compose -f docker-compose.yml -f .github/pgbouncer-ci.yml ps --format json pgbouncer \
+              | grep -q '"Health":"healthy"' && break
             sleep 2
           done
-          docker compose ps
-          docker compose wait init || true
+          docker compose -f docker-compose.yml -f .github/pgbouncer-ci.yml ps
+          docker compose -f docker-compose.yml -f .github/pgbouncer-ci.yml ps --format json pgbouncer \
+            | grep -q '"Health":"healthy"' || { echo "PgBouncer 6432 未 healthy" >&2; exit 1; }
 
       - uses: actions/setup-python@v5
         with:
@@ -131,9 +133,13 @@ jobs:
         env:
           UV_PYTHON: "3.13"
 
+      # skip 视为失败：缺 URL 时 test_pgbouncer.py 在 REQUIRE 下直接 fail。
       - name: PgBouncer smoke
         working-directory: backend
         env:
+          # session 夹具（autouse）先要两个测试 URL；init 已建好 owner 角色。
+          PMSTUDIO_TEST_DATABASE_URL: postgresql://pmstudio_owner:change-me-owner@127.0.0.1:5432/pmstudio
+          PMSTUDIO_TEST_DIRECT_DATABASE_URL: postgresql://pmstudio_owner:change-me-owner@127.0.0.1:5432/pmstudio
           PMSTUDIO_TEST_PGBOUNCER_URL: postgresql://pmstudio_app:change-me-app@127.0.0.1:6432/pmstudio
           PMSTUDIO_TEST_PGBOUNCER_ADMIN_URL: postgresql://pmstudio_owner:change-me-owner@127.0.0.1:6432/pgbouncer
           PMSTUDIO_TEST_REQUIRE_PGBOUNCER: "1"

@@ -325,6 +325,44 @@ def _rare_term_corpus(conn):
         )
 
 
+@pytest.mark.xfail(
+    strict=True, reason="T10 IDF/BM25 gate：PG ts_rank_cd 无 IDF，罕见词被常见词压过"
+)
+def test_a_rare_lexical_hit_survives_the_semantic_branch(conn):
+    """R：目标只命中**一个罕见词**时（覆盖率低、BM25 很高），**不许被语义掀翻**。
+
+    这是"离散分档"口径的病根：覆盖率 0.25 → 掉进纯语义档 → BM25 挣到的
+    第 1 位被一个只命中常见词的块抢走。实测（真数据）：旧口径让"同词换序"少 1 条、
+    "同义改述"少 2 条；凸组合后两类都与纯 FTS5 持平。
+    """
+    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    class _Constant(FakeEmbedder):
+        """**所有文本同一个向量**——语义项对每块都一样。
+
+        这样测试隔离出"融合有没有保住词面信号"这一件事：语义路不添乱，
+        排序就该完全由词面强度决定。旧口径（离散分档）在这里必错：
+        m1 覆盖率 0.25 → 掉进纯语义档 → 明明 BM25 第 1 却被排到后面。
+        """
+
+        def embed_many(self, texts):
+            return [tuple([1.0] + [0.0] * (self.dimensions - 1)) for _ in texts]
+
+    _rare_term_corpus(conn)
+    for material_id in ("m1", "m2", "m3", "m4", "m5"):
+        SqliteVectorIndex(conn, embedder=_Constant(dimensions=512)).write(material_id)
+
+    hits = SqliteHybridRetriever(conn, embedder=_Constant(dimensions=512)).search(
+        project_id=PROJECT, query="紫貂 出口 关税 报关", owner=TEST_OWNER)
+
+    assert hits, "查不到"
+    assert hits[0].chunk_id == "m1#c00", (
+        f"罕见词命中的块被压到第 {[h.chunk_id for h in hits]}"
+    )
+
+
 def test_a_query_the_lexer_misses_still_finds_the_material_by_substring(conn):
     """R：词面路零命中时，**子串兜底**把材料捞回来。
 
