@@ -192,8 +192,8 @@ def bootstrap_database(settings: BootstrapSettings) -> None:
                 )
             )
             connection.execute(
-                sql.SQL("GRANT USAGE ON TYPE vector TO {}").format(
-                    sql.Identifier(APP_ROLE)
+                sql.SQL("GRANT USAGE ON TYPE vector TO {}, {}").format(
+                    sql.Identifier(APP_ROLE), sql.Identifier(OWNER_ROLE)
                 )
             )
 
@@ -324,19 +324,26 @@ def _grant_app_role(connection) -> None:  # type: ignore[no-untyped-def]
     ).fetchone()
     if exists is None:
         return
+    row = connection.execute("SELECT current_schema() AS schema").fetchone()
+    schema = "public" if row is None or row["schema"] is None else str(row["schema"])
     connection.execute(
-        sql.SQL(
-            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {}"
-        ).format(sql.Identifier(APP_ROLE))
-    )
-    connection.execute(
-        sql.SQL("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {}").format(
-            sql.Identifier(APP_ROLE)
+        sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+            sql.Identifier(schema), sql.Identifier(APP_ROLE)
         )
     )
     connection.execute(
-        sql.SQL("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO {}").format(
-            sql.Identifier(APP_ROLE)
+        sql.SQL(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {} TO {}"
+        ).format(sql.Identifier(schema), sql.Identifier(APP_ROLE))
+    )
+    connection.execute(
+        sql.SQL(
+            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {} TO {}"
+        ).format(sql.Identifier(schema), sql.Identifier(APP_ROLE))
+    )
+    connection.execute(
+        sql.SQL("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {} TO {}").format(
+            sql.Identifier(schema), sql.Identifier(APP_ROLE)
         )
     )
 

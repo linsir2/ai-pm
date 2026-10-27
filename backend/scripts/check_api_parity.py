@@ -3,11 +3,10 @@
 判据：双向零差。任一方向多出来 = 有人加了端点没加界面（死契约），或界面调了
 不存在的端点（404 炸）——两边都是"真相源漂移"。
 
-跑法（只读 OpenAPI；不连库、不碰真数据。仍需要 `PMSTUDIO_DATABASE_URL` /
-model / key 让 `AppSettings.from_env()` 能起来）：
+跑法（只读 OpenAPI；**不连库、不碰真数据，也不需要模型配置**）：
 
 ```bash
-cd backend && set -a && . ./.env && set +a && python3 scripts/check_api_parity.py
+cd backend && python3 scripts/check_api_parity.py
 ```
 
 退出码非 0 = 有漂移，打印两个方向的差集。
@@ -16,6 +15,7 @@ cd backend && set -a && . ./.env && set +a && python3 scripts/check_api_parity.p
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 BACKEND = Path(__file__).resolve().parents[1]
 FRONTEND_CLIENT = BACKEND.parents[0] / "frontend" / "src" / "api" / "client.ts"
@@ -27,12 +27,11 @@ KNOWN_NON_FETCH = {("GET", "/events")}
 
 
 def backend_paths() -> set[tuple[str, str]]:
-    from pmstudio.bootstrap.container import build_container
-    from pmstudio.bootstrap.settings import Settings
+    from pmstudio.api.app import create_app
 
-    # 只读 OpenAPI：容器组装不连库（连接在首个请求/ready 才建立）。
-    settings = Settings.from_env()
-    app = build_container(settings).app
+    # OpenAPI 只由路由表决定；给一个最小 services 占位，避免为了列路径去连库/
+    # 读模板/校验模型配置。真正跑接口的是生产 `build_app`，不是这里。
+    app = create_app(SimpleNamespace(model_name="parity"))  # type: ignore[arg-type]
     found: set[tuple[str, str]] = set()
     for path, item in app.openapi()["paths"].items():
         for method in ("get", "post", "put", "patch", "delete"):

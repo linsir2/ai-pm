@@ -3,9 +3,13 @@
 # 恢复演练（手册式 · 跑一次贴输出）。
 #
 # **真调用 `scripts/backup.sh`** 产出备份，再把它恢复到一个临时 scratch 库：
-#   建 scratch（先 CREATE EXTENSION vector）→ pg_restore --exit-on-error --no-owner
-#   → TRUNCATE sessions → 行数/指纹逐字比对。
-# 全程只碰 ops URL（`PMSTUDIO_DIRECT_DATABASE_URL`）；scratch 用完即删。
+#   用 bootstrap/superuser 建 scratch + `CREATE EXTENSION vector` + 授权，
+#   再以 **owner 角色** `pg_restore --exit-on-error --no-owner`
+#   → owner `TRUNCATE sessions` → 行数/指纹逐字比对。
+#
+# 为什么必须用 superuser 建扩展：`pgvector` 的 control 没有 `trusted = true`，
+# 新库里 owner（NOSUPERUSER）装不了。恢复本身仍由 owner 完成——这才是生产口径。
+# 两个 URL 必须指向**同一个 PostgreSQL 集群**（compose 里都是 db:5432）。
 #
 # 恢复后 sessions 为空 = 旧 cookie 必然 401（端到端那条由
 # `tests/test_backup_restore.py` 真验，不只靠这里打印）。
@@ -23,8 +27,10 @@ case "$psql_version" in
   *) echo "需要 PostgreSQL 18 的 psql，现在是：$psql_version" >&2; exit 1 ;;
 esac
 
-url="${PMSTUDIO_DIRECT_DATABASE_URL:-}"
-[[ -n "$url" ]] || { echo "缺 PMSTUDIO_DIRECT_DATABASE_URL（restore 只走直连）" >&2; exit 1; }
+owner_url="${PMSTUDIO_DIRECT_DATABASE_URL:-}"
+bootstrap_url="${PMSTUDIO_BOOTSTRAP_DATABASE_URL:-}"
+[[ -n "$owner_url" ]] || { echo "缺 PMSTUDIO_DIRECT_DATABASE_URL（恢复用 owner）" >&2; exit 1; }
+[[ -n "$bootstrap_url" ]] || { echo "缺 PMSTUDIO_BOOTSTRAP_DATABASE_URL（建 scratch/装扩展用 superuser）" >&2; exit 1; }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # backend/
 BACKUP="$ROOT/scripts/backup.sh"
@@ -33,16 +39,18 @@ WORK="$(mktemp -d)"
 dest="$WORK/backups"
 scratch="pmstudio_restore_$$_$(date -u +%H%M%S)"
 
-# 从 ops URL 派生 maintenance / scratch URL（丢掉 query，避免把 search_path 带进新库）。
-base="${url%%\?*}"
-prefix="${base%/*}"
-dbname="${base##*/}"
-maint_url="${prefix}/postgres"
-scratch_url="${prefix}/${scratch}"
+# 从 URL 派生 maintenance / scratch URL（丢掉 query，避免把 search_path 带进新库）。
+owner_base="${owner_url%%\?*}"
+owner_prefix="${owner_base%/*}"
+bootstrap_base="${bootstrap_url%%\?*}"
+bootstrap_prefix="${bootstrap_base%/*}"
+bootstrap_maint="${bootstrap_prefix}/postgres"
+bootstrap_scratch="${bootstrap_prefix}/${scratch}"
+owner_scratch="${owner_prefix}/${scratch}"
 
 cleanup() {
-  psql "$maint_url" -v ON_ERROR_STOP=0 -c "DROP DATABASE IF EXISTS \"$scratch\" WITH (FORCE)" \
-    >/dev/null 2>&1 || true
+  psql "$bootstrap_maint" -v ON_ERROR_STOP=0 \
+    -c "DROP DATABASE IF EXISTS \"$scratch\" WITH (FORCE)" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -72,32 +80,42 @@ fingerprint() {
   "
 }
 
-echo "== 1. 真调用 backup.sh（直连 ops URL，临时备份目录）=="
-original="$(fingerprint "$url")"
+echo "== 1. 真调用 backup.sh（owner 直连，临时备份目录）=="
+original="$(fingerprint "$owner_url")"
 echo "   原始指纹行数: $(wc -l <<< "$original")"
-PMSTUDIO_DIRECT_DATABASE_URL="$url" PMSTUDIO_BACKUP_DIR="$dest" bash "$BACKUP"
+PMSTUDIO_DIRECT_DATABASE_URL="$owner_url" PMSTUDIO_BACKUP_DIR="$dest" bash "$BACKUP"
 
 dump="$(ls -1 "$dest"/daily/pmstudio-*.dump | sort | tail -1)"
 perm="$(stat -c '%a' "$dump")"
 echo "   dump: $dump（权限 $perm）"
 [[ "$perm" == "600" ]] || { echo "FAIL：dump 权限不是 600" >&2; exit 1; }
 
-echo "== 2. 建 scratch 库（先装 vector 扩展）=="
-psql "$maint_url" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$scratch\"" >/dev/null
-psql "$scratch_url" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null
+echo "== 2. bootstrap 建 scratch（superuser 装 vector + 授权给 owner）=="
+psql "$bootstrap_maint" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$scratch\"" >/dev/null
+psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
+  -c "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null
+psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
+  -c "GRANT USAGE ON TYPE vector TO pmstudio_owner" >/dev/null
+psql "$bootstrap_maint" -v ON_ERROR_STOP=1 \
+  -c "ALTER DATABASE \"$scratch\" OWNER TO pmstudio_owner" >/dev/null
+psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
+  -c "GRANT CREATE, USAGE ON SCHEMA public TO pmstudio_owner" >/dev/null
 
-echo "== 3. pg_restore --exit-on-error --no-owner =="
-pg_restore --exit-on-error --no-owner --dbname="$scratch_url" "$dump" >/dev/null
+echo "== 3. owner 执行 pg_restore --exit-on-error --no-owner --no-comments =="
+# `--no-comments`：dump 里 `COMMENT ON EXTENSION vector` 要求扩展属主；owner 不是
+# 扩展创建者（superuser 才是），但业务表的注释/数据不受影响。
+pg_restore --exit-on-error --no-owner --no-comments \
+  --dbname="$owner_scratch" "$dump" >/dev/null
 
-echo "== 4. 恢复后 TRUNCATE sessions（旧 cookie 作废）=="
-psql "$scratch_url" -v ON_ERROR_STOP=1 -c "TRUNCATE sessions" >/dev/null
-sessions="$(psql "$scratch_url" -tA -c "SELECT count(*) FROM sessions")"
+echo "== 4. 恢复后 owner TRUNCATE sessions（旧 cookie 作废）=="
+psql "$owner_scratch" -v ON_ERROR_STOP=1 -c "TRUNCATE sessions" >/dev/null
+sessions="$(psql "$owner_scratch" -tA -c "SELECT count(*) FROM sessions")"
 [[ "$sessions" == "0" ]] || { echo "FAIL：sessions 未清空：$sessions" >&2; exit 1; }
 
-echo "== 5. 指纹逐字比对（sessions 除外）=="
-restored="$(fingerprint "$scratch_url")"
+echo "== 5. owner 读回指纹，逐字比对（sessions 除外）=="
+restored="$(fingerprint "$owner_scratch")"
 if [[ "$restored" == "$original" ]]; then
-  echo "PASS：dump 可恢复，行数/指纹一致，sessions 已清空（旧 cookie 必然 401）"
+  echo "PASS：owner 可恢复，行数/指纹一致，sessions 已清空（旧 cookie 必然 401）"
 else
   echo "FAIL：恢复后指纹不一致" >&2
   diff <(printf '%s\n' "$original") <(printf '%s\n' "$restored") >&2 || true

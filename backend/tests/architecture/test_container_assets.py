@@ -580,6 +580,21 @@ def test_the_dev_stack_script_uses_the_same_env_keys_as_compose() -> None:
     assert not extra, f"dev_stack.sh 有 compose 没有的未登记键：{sorted(extra)}"
 
 
+def test_dev_stack_keeps_ops_env_out_of_the_backend_process() -> None:
+    """Important 3：`.env.ops` 只在 init 子 shell 加载，不 export 给 backend。"""
+
+    text = _text(DEV_STACK)
+    before_init = text.split('log "初始化数据库', 1)[0]
+    assert 'load_env_file "$BACKEND/.env.ops"' not in before_init
+    init_block = text.split('log "初始化数据库', 1)[1]
+    assert 'load_env_file "$BACKEND/.env.ops"' in init_block
+    assert "unset PMSTUDIO_BOOTSTRAP_DATABASE_URL" in init_block
+    assert (
+        "unset PMSTUDIO_BOOTSTRAP_DATABASE_URL PMSTUDIO_DIRECT_DATABASE_URL"
+        in init_block
+    )
+
+
 def test_the_dev_stack_script_reads_the_same_env_files_as_compose() -> None:
     """两边读**同一套** `.env` / `.env.ops` —— 否则"等价"是假的。"""
 
@@ -650,16 +665,12 @@ def test_the_ci_workflow_builds_the_images() -> None:
     )
 
 
-def test_the_ci_parity_step_provides_model_config() -> None:
-    """接口零差那一步必须给模型配置（A4）。
-
-    `AppSettings.from_env()` 缺 key 或模型名会**直接起不来**（`ConfigError`）——
-    不给的话这一步在 CI 上必红（假值即可，它不调模型）。
-    """
+def test_the_ci_parity_step_uses_the_pg_env() -> None:
+    """接口零差那一步用 `PMSTUDIO_DATABASE_URL`，不许再留旧 `PMSTUDIO_DB`。"""
 
     text = _text(CI_WORKFLOW)
     steps = re.split(r"\n\s*-\s+name:", text)
     parity = next((step for step in steps if "check_api_parity" in step), "")
     assert parity, "CI 里没有接口零差这一步"
-    assert "PMSTUDIO_MODEL" in parity, "接口零差步骤缺 PMSTUDIO_MODEL"
-    assert "PMSTUDIO_API_KEY" in parity, "接口零差步骤缺 PMSTUDIO_API_KEY"
+    assert "PMSTUDIO_DATABASE_URL" in parity
+    assert "PMSTUDIO_DB" not in parity

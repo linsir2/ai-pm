@@ -76,15 +76,22 @@ def _pct(values: list[float], fraction: float) -> float:
     return ordered[index] * 1000
 
 
-def _bad(status: int, body: dict, why: str) -> bool:
+def _bad_http(status: int, body: dict, why: str) -> bool:
+    """HTTP 面（健康检查）：0/5xx/明确数据库错误算失败；4xx 可来自鉴权等。"""
+
     if status == 0 or status >= 500:
         return True
-    # 服务端已经明确说"过一会儿再来"也计入失败：负载门要的是 0 个。
     return body.get("code") in {
         "database_busy",
         "database_unavailable",
         "storage_full",
     } or why in {"timeout", "URLError", "ConnectionResetError"}
+
+
+def _bad_write(status: int, body: dict, why: str) -> bool:
+    """写动作（建项目/轮内写）：**只接受 2xx**；409/422/429 都不算成功。"""
+
+    return status == 0 or not 200 <= status < 300
 
 
 def main() -> int:
@@ -125,7 +132,7 @@ def main() -> int:
     http_failures = [
         (status, body, why)
         for status, body, _, why in http_results
-        if _bad(status, body, why)
+        if _bad_http(status, body, why)
     ]
 
     def _round(index: int) -> tuple[int, dict, float, str]:
@@ -140,7 +147,7 @@ def main() -> int:
     round_failures = [
         (status, body, why)
         for status, body, _, why in round_results
-        if _bad(status, body, why)
+        if _bad_write(status, body, why)
     ]
 
     http_p95 = _pct(http_latencies, 0.95)

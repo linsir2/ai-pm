@@ -10,10 +10,10 @@ import os
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 from psycopg import connect as psycopg_connect
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from scripts.init_db import (
     APP_ROLE,
     OWNER_ROLE,
@@ -21,6 +21,7 @@ from scripts.init_db import (
     finalize_database,
     schema_only,
 )
+from scripts.pg_scratch import drop_scratch, make_scratch
 
 from pmstudio.bootstrap.settings import (
     BootstrapSettings,
@@ -37,15 +38,14 @@ ADMIN_PASSWORD = "root-pass"
 
 
 def _replace_database(url: str, dbname: str) -> str:
-    info = conninfo_to_dict(url)
-    info["dbname"] = dbname
-    return make_conninfo(**info)
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, f"/{dbname}", "", ""))
 
 
 def _as_user(url: str, *, user: str, password: str, dbname: str) -> str:
-    info = conninfo_to_dict(url)
-    info.update({"user": user, "password": password, "dbname": dbname})
-    return make_conninfo(**info)
+    parts = urlsplit(url)
+    netloc = f"{user}:{password}@{parts.hostname}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, f"/{dbname}", "", ""))
 
 
 def _base_direct_url() -> str:
@@ -90,7 +90,7 @@ def _bootstrap(url: str, auth_file: Path) -> BootstrapSettings:
 def _ops(url: str, *, admin: bool = True) -> OpsSettings:
     return OpsSettings(
         direct_database_url=_as_user(
-            url, user=OWNER_ROLE, password=OWNER_PASSWORD, dbname=conninfo_to_dict(url)["dbname"]
+            url, user=OWNER_ROLE, password=OWNER_PASSWORD, dbname=urlsplit(url).path.lstrip("/")
         ),
         first_admin_username=ADMIN_USER if admin else None,
         first_admin_password=ADMIN_PASSWORD if admin else None,
@@ -110,7 +110,7 @@ def test_all_bootstraps_roles_extension_and_auth_file(scratch_database, tmp_path
     content = auth_file.read_text(encoding="utf-8")
     assert f'"{APP_ROLE}"' in content and f'"{OWNER_ROLE}"' in content
 
-    dbname = conninfo_to_dict(scratch_database)["dbname"]
+    dbname = urlsplit(scratch_database).path.lstrip("/")
     app_url = _as_user(
         scratch_database, user=APP_ROLE, password=APP_PASSWORD, dbname=dbname
     )
@@ -143,6 +143,42 @@ def test_all_bootstraps_roles_extension_and_auth_file(scratch_database, tmp_path
     again = finalize_database(owner_url, _ops(scratch_database))
     assert again["owners"] == 0
     assert again["templates"] == result["templates"]
+
+
+def test_scratch_schema_grants_the_real_app_role(scratch_database, tmp_path) -> None:
+    """T7 评审 Important 1：临时 schema 也要给 pmstudio_app USAGE + 表/序列权限。"""
+
+    bootstrap_database(_bootstrap(scratch_database, tmp_path / "userlist.txt"))
+    owner_url = _ops(scratch_database).direct_database_url
+    schema_only(owner_url)
+    finalize_database(owner_url, _ops(scratch_database))
+    dbname = urlsplit(scratch_database).path.lstrip("/")
+    app_base = _as_user(
+        scratch_database, user=APP_ROLE, password=APP_PASSWORD, dbname=dbname
+    )
+    scratch = make_scratch(
+        prefix="grant",
+        env={
+            "PMSTUDIO_DATABASE_URL": app_base,
+            "PMSTUDIO_DIRECT_DATABASE_URL": owner_url,
+        },
+        admin_user="scratch-admin",
+        admin_password="scratch-pass",
+    )
+    try:
+        with connect(scratch.app_url) as app:
+            assert app.execute(
+                "SELECT count(*) AS n FROM templates"
+            ).fetchone() == {"n": 2}
+            assert app.execute(
+                "SELECT count(*) AS n FROM users"
+            ).fetchone() == {"n": 1}
+            row = app.execute(
+                "SELECT has_schema_privilege(current_user, current_schema(), 'USAGE') AS ok"
+            ).fetchone()
+            assert row == {"ok": True}
+    finally:
+        drop_scratch(scratch)
 
 
 def test_schema_only_does_not_seed(scratch_database, tmp_path) -> None:

@@ -2,7 +2,9 @@
 #
 # **用法**：
 #   cp backend/.env.example backend/.env           # app：model/key/app URL（pmstudio_app）
-#   cp backend/.env.ops.example backend/.env.ops   # ops：bootstrap/owner URL、角色口令、首管理员
+#   cp backend/.env.ops.example backend/.env.ops   # ops：bootstrap/owner URL、角色口令
+#   # 然后把 .env.ops 里的 change-me-* 与首管理员全部改成真实值（首管理员必填，
+#   # 空值会让 init --finalize 硬失败，compose 不会起 backend）
 #   docker compose up -d
 #   打开 http://localhost
 #

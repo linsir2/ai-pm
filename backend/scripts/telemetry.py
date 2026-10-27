@@ -140,13 +140,21 @@ def coverage(round_: Round, *, ledger: EvidenceLedger) -> tuple[SlotCoverage, ..
     )
 
 
+def _connect_readonly(url: str):  # type: ignore[no-untyped-def]
+    """只读连接：脚本所有查询都在这里开。"""
+
+    connection = connect(url)
+    connection.execute("SET default_transaction_read_only = on")
+    return connection
+
+
 def analyze_db(url: str) -> tuple[MeasuredRounds, int]:
     """只读扫库：每个**有草案**的轮 → coverage；坏轮跳过（不炸整轮扫描）。
 
     返回 `(测到的轮, 跳过的轮数)`。跳过 = 没草案（半截/失败轮）或读不回来的老行。
     """
 
-    connection = connect(url)
+    connection = _connect_readonly(url)
     try:
         rounds = SqliteRoundRepository(connection)
         evidences = SqliteEvidenceRepository(connection)
@@ -258,7 +266,7 @@ def scan_memory_layers(url: str) -> dict[str, LayerWatermark]:
 
     counts: dict[str, int] = {}
     oldest: dict[str, str | None] = {}
-    connection = connect(url)
+    connection = _connect_readonly(url)
     try:
         for layer in LAYERS:
             table = LAYER_TABLES[layer]
@@ -350,7 +358,7 @@ def scan_memory_hits(url: str) -> dict[str, dict[str, int]]:
     """
 
     result: dict[str, dict[str, int]] = {}
-    connection = connect(url)
+    connection = _connect_readonly(url)
     try:
         if not _table_exists(connection, "project_memory"):
             return result

@@ -26,8 +26,9 @@ FRONTEND_PORT="${PMSTUDIO_WEB_PORT:-5173}"
 # ── 与 compose **完全相同**的环境变量（键名与取值口径一致）─────────────
 # 这一段是"compose 与本脚本等价"的**可核对凭据**：
 # `tests/architecture/test_container_assets.py` 盯着两边的键名不许漂。
-# PostgreSQL 的 app/direct URL 从 backend/.env 与 backend/.env.ops 读
-# （已导出的环境变量优先）；backend 只拿 app URL，init/maintenance 用 direct。
+# PostgreSQL 的 app URL 从 backend/.env 读；backend 只拿 app URL。
+# ops（direct/bootstrap/角色口令/首管理员）只在 init 的**独立子 shell**里加载，
+# 不 export 到主 shell，更不会进 backend 进程。
 load_env_file() {
   local file="$1"
   [ -f "$file" ] || return 0
@@ -48,7 +49,6 @@ load_env_file() {
 }
 
 load_env_file "$BACKEND/.env"
-load_env_file "$BACKEND/.env.ops"
 
 export PMSTUDIO_PORT="$BACKEND_PORT"
 export PMSTUDIO_WEB_PORT="$FRONTEND_PORT"
@@ -102,11 +102,26 @@ check_keys() {
 
 check_db_env() {
   [ -n "${PMSTUDIO_DATABASE_URL:-}" ] || die "缺 PMSTUDIO_DATABASE_URL（backend 只认 app URL）"
-  [ -n "${PMSTUDIO_DIRECT_DATABASE_URL:-}" ] || die "缺 PMSTUDIO_DIRECT_DATABASE_URL（init/maintenance/backup 直连）"
   case "$PMSTUDIO_DATABASE_URL" in
     *pgbouncer*|*:6432*) log "backend app URL：PgBouncer（transaction mode）" ;;
     *) log "backend app URL：直连（本机可以，生产必须经 PgBouncer）" ;;
   esac
+}
+
+check_ops_env() {
+  local ops="$BACKEND/.env.ops"
+  [ -f "$ops" ] || die "没有 backend/.env.ops —— 先 cp backend/.env.ops.example backend/.env.ops 并填值"
+  local key
+  for key in \
+    PMSTUDIO_BOOTSTRAP_DATABASE_URL \
+    PMSTUDIO_DIRECT_DATABASE_URL \
+    PMSTUDIO_APP_PASSWORD \
+    PMSTUDIO_OWNER_PASSWORD \
+    PMSTUDIO_FIRST_ADMIN_USER \
+    PMSTUDIO_FIRST_ADMIN_PASSWORD; do
+    grep -qE "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*[^[:space:]]" "$ops" \
+      || die "backend/.env.ops 缺 ${key}（init --all 需要）"
+  done
 }
 
 wait_for() {
@@ -134,6 +149,7 @@ case "${1:-start}" in
   --check)
     check_keys
     check_db_env
+    check_ops_env
     exit 0
     ;;
   --stop)
@@ -144,6 +160,7 @@ esac
 
 check_keys
 check_db_env
+check_ops_env
 
 [ -f "$BACKEND/.env" ] || die "没有 backend/.env —— 先 cp backend/.env.example backend/.env 并填 key"
 command -v uv >/dev/null || die "没有 uv"
@@ -152,14 +169,20 @@ command -v uv >/dev/null || die "没有 uv"
 stop_all
 : > /tmp/pmstudio-devstack.pids
 
-# compose 的启动序列里 init 是**独立的一次性 job**；本机有 bootstrap URL 时
-# 复现同一段（幂等），没有就要求库已初始化。
-if [ -n "${PMSTUDIO_BOOTSTRAP_DATABASE_URL:-}" ]; then
-  log "初始化数据库（init_db.py --all，bootstrap→schema→finalize）"
-  ( cd "$BACKEND" && ./.venv/bin/python scripts/init_db.py --all ) || die "init_db --all 失败"
-else
-  log "跳过 init：没有 PMSTUDIO_BOOTSTRAP_DATABASE_URL（假定库已由 init job 初始化）"
-fi
+# compose 的启动序列里 init 是**独立的一次性 job**；ops 变量只在子 shell 里加载，
+# 绝不 export 到主 shell —— backend 进程只能看到 .env 的 app 配置。
+log "初始化数据库（独立子 shell；init_db.py --all）"
+(
+  # ops 文件对这几个键有最终解释权；先清掉可能从 .env 带进来的同名值。
+  unset PMSTUDIO_BOOTSTRAP_DATABASE_URL PMSTUDIO_DIRECT_DATABASE_URL \
+    PMSTUDIO_APP_PASSWORD PMSTUDIO_OWNER_PASSWORD \
+    PMSTUDIO_FIRST_ADMIN_USER PMSTUDIO_FIRST_ADMIN_PASSWORD || true
+  set -a
+  load_env_file "$BACKEND/.env.ops"
+  set +a
+  cd "$BACKEND"
+  exec ./.venv/bin/python scripts/init_db.py --all
+) || die "init_db --all 失败"
 
 log "起后端（端口 $BACKEND_PORT）"
 (

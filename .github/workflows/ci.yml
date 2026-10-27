@@ -68,13 +68,9 @@ jobs:
 
       - name: 接口零差
         # 前后端接口清单必须逐字一致（`scripts/check_api_parity.py`）。
-        # 它**拒绝**在工作库上跑，所以给它一个临时库。
-        # ⚠️ **模型配置也要给**（假值即可）：`Settings.from_env()` 缺 key 或模型名
-        # 会**直接起不来**（`ConfigError`）——不给的话这一步在 CI 上必红。
+        # 它只读 OpenAPI、不连库；这里仍给一个合法 PG URL。
         env:
-          PMSTUDIO_DB: ${{ runner.temp }}/parity.db
-          PMSTUDIO_MODEL: openai/x
-          PMSTUDIO_API_KEY: k
+          PMSTUDIO_DATABASE_URL: postgresql://parity:parity@127.0.0.1:1/parity
         run: uv run python scripts/check_api_parity.py
 
   frontend:

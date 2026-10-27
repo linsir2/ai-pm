@@ -111,6 +111,15 @@ def make_scratch(
     with connect(direct_base) as connection:
         connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
         connection.execute(f"CREATE SCHEMA {_quote_identifier(schema)}")
+        # 临时 schema 必须给 app 角色 USAGE；表/序列授权由 finalize 按 current_schema()
+        # 补齐（`init_db._grant_app_role`）。没有真 app 角色时跳过。
+        app_exists = connection.execute(
+            "SELECT 1 FROM pg_roles WHERE rolname = 'pmstudio_app'"
+        ).fetchone()
+        if app_exists is not None:
+            connection.execute(
+                f"GRANT USAGE ON SCHEMA {_quote_identifier(schema)} TO pmstudio_app"
+            )
     direct_url = schema_url(direct_base, schema)
     app_url = schema_url(app_base, schema)
     try:

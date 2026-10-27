@@ -11,20 +11,31 @@ import hashlib
 import os
 import shutil
 import subprocess
+import time
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import pytest
 from psycopg import connect as psycopg_connect
-from scripts.init_db import finalize_database
+from scripts.init_db import (
+    APP_ROLE,
+    OWNER_ROLE,
+    bootstrap_database,
+    finalize_database,
+)
 from scripts.migrate import apply_migrations
 
 from pmstudio.api.deps import SESSION_COOKIE
 from pmstudio.bootstrap.container import build_container
-from pmstudio.bootstrap.settings import AppSettings, OpsSettings
+from pmstudio.bootstrap.settings import (
+    AppSettings,
+    BootstrapSettings,
+    OpsSettings,
+)
 from pmstudio.infrastructure.postgres.database import connect
 from tests.support.postgres import load_environment
 
@@ -32,12 +43,29 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 BACKUP = BACKEND_ROOT / "scripts" / "backup.sh"
 RESTORE_CHECK = BACKEND_ROOT / "scripts" / "restore_check.sh"
 PASSWORD = "backup-admin-pw"
+APP_PASSWORD = "backup-app-pw"
+OWNER_PASSWORD = "backup-owner-pw"
+
+
+@dataclass(frozen=True)
+class BackupDatabase:
+    name: str
+    bootstrap_url: str
+    owner_url: str
+    app_url: str
 
 
 def _replace_database(url: str, dbname: str) -> str:
     parts = urlsplit(url)
     # 新库要落在 public：测试 base URL 的 search_path 是测试 schema，不能带过去。
     return urlunsplit((parts.scheme, parts.netloc, f"/{dbname}", "", ""))
+
+
+def _as_user(url: str, *, user: str, password: str, dbname: str | None = None) -> str:
+    parts = urlsplit(url)
+    database = dbname or parts.path.lstrip("/")
+    netloc = f"{user}:{password}@{parts.hostname}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, f"/{database}", "", ""))
 
 
 def _base_url() -> str:
@@ -67,7 +95,7 @@ def _require_pg18_tools() -> dict[str, str]:
 
 
 @pytest.fixture()
-def database() -> Iterator[str]:
+def database() -> Iterator[BackupDatabase]:
     base = _base_url()
     admin_url = _replace_database(base, "postgres")
     name = f"pmstudio_backup_{os.getpid()}_{uuid.uuid4().hex[:8]}"
@@ -77,18 +105,31 @@ def database() -> Iterator[str]:
         ).fetchone()[0]:
             pytest.skip("测试账号没有 CREATEDB，跑不了备份恢复用例")
         connection.execute(f'CREATE DATABASE "{name}"')
-    url = _replace_database(base, name)
+    bootstrap_url = _replace_database(base, name)
+    owner_url = _as_user(
+        base, user=OWNER_ROLE, password=OWNER_PASSWORD, dbname=name
+    )
+    app_url = _as_user(base, user=APP_ROLE, password=APP_PASSWORD, dbname=name)
     try:
-        apply_migrations(url)
+        bootstrap_database(
+            BootstrapSettings(
+                bootstrap_database_url=bootstrap_url,
+                app_password=APP_PASSWORD,
+                owner_password=OWNER_PASSWORD,
+            )
+        )
+        apply_migrations(owner_url)
         finalize_database(
-            url,
+            owner_url,
             OpsSettings(
-                direct_database_url=url,
+                direct_database_url=owner_url,
                 first_admin_username="backup-admin",
                 first_admin_password=PASSWORD,
             ),
         )
-        yield url
+        yield BackupDatabase(
+            name=name, bootstrap_url=bootstrap_url, owner_url=owner_url, app_url=app_url
+        )
     finally:
         with psycopg_connect(admin_url, autocommit=True) as connection:
             connection.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
@@ -134,32 +175,36 @@ def _fingerprint(url: str) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _make_scratch(base_url: str) -> tuple[str, str]:
+def _make_scratch(bootstrap_url: str) -> tuple[str, str]:
     name = f"pmstudio_restore_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    admin_url = _replace_database(base_url, "postgres")
+    admin_url = _replace_database(bootstrap_url, "postgres")
     with psycopg_connect(admin_url, autocommit=True) as connection:
         connection.execute(f'CREATE DATABASE "{name}"')
-    return name, _replace_database(base_url, name)
+    return name, _replace_database(bootstrap_url, name)
 
 
-def _drop_scratch(base_url: str, name: str) -> None:
-    with psycopg_connect(_replace_database(base_url, "postgres"), autocommit=True) as connection:
+def _drop_scratch(bootstrap_url: str, name: str) -> None:
+    admin_url = _replace_database(bootstrap_url, "postgres")
+    with psycopg_connect(admin_url, autocommit=True) as connection:
         connection.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
 
 
-async def test_backup_dump_and_restore_check(database: str, tmp_path: Path) -> None:
+async def test_backup_dump_and_restore_check(
+    database: BackupDatabase, tmp_path: Path
+) -> None:
     env = _require_pg18_tools()
-    cookie, _project = await _login_and_create_project(database)
-    original = _fingerprint(database)
+    cookie, _project = await _login_and_create_project(database.app_url)
+    original = _fingerprint(database.owner_url)
 
     backup_dir = tmp_path / "backups"
+    backup_env = {
+        **env,
+        "PMSTUDIO_DIRECT_DATABASE_URL": database.owner_url,
+        "PMSTUDIO_BACKUP_DIR": str(backup_dir),
+    }
     completed = subprocess.run(
         ["bash", str(BACKUP)],
-        env={
-            **env,
-            "PMSTUDIO_DIRECT_DATABASE_URL": database,
-            "PMSTUDIO_BACKUP_DIR": str(backup_dir),
-        },
+        env=backup_env,
         cwd=BACKEND_ROOT,
         capture_output=True,
         text=True,
@@ -171,6 +216,28 @@ async def test_backup_dump_and_restore_check(database: str, tmp_path: Path) -> N
     dump = dumps[-1]
     assert dump.stat().st_mode & 0o777 == 0o600
     assert not list((backup_dir / "daily").glob("*.db")), "不许再产出 SQLite 备份"
+
+    # RPO 自检：刚备完应通过；把最新文件改成 2 小时前、上限 1 小时应失败。
+    check = subprocess.run(
+        ["bash", str(BACKUP), "--check"],
+        env={**backup_env, "PMSTUDIO_BACKUP_MAX_AGE_HOURS": "24"},
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert check.returncode == 0, check.stderr
+    stale = time.time() - 2 * 3600
+    os.utime(dump, (stale, stale))
+    expired = subprocess.run(
+        ["bash", str(BACKUP), "--check"],
+        env={**backup_env, "PMSTUDIO_BACKUP_MAX_AGE_HOURS": "1"},
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert expired.returncode == 1, expired.stdout + expired.stderr
 
     # 保留策略：7 日 + 4 周（用假旧文件验 prune，不用真等一周）。
     for index in range(8):
@@ -185,11 +252,7 @@ async def test_backup_dump_and_restore_check(database: str, tmp_path: Path) -> N
         fake.chmod(0o600)
     again = subprocess.run(
         ["bash", str(BACKUP)],
-        env={
-            **env,
-            "PMSTUDIO_DIRECT_DATABASE_URL": database,
-            "PMSTUDIO_BACKUP_DIR": str(backup_dir),
-        },
+        env=backup_env,
         cwd=BACKEND_ROOT,
         capture_output=True,
         text=True,
@@ -199,13 +262,13 @@ async def test_backup_dump_and_restore_check(database: str, tmp_path: Path) -> N
     assert len(list((backup_dir / "daily").glob("pmstudio-*.dump"))) == 7
     assert len(list(weekly_dir.glob("pmstudio-*.dump"))) == 4
 
-    # 真跑恢复演练脚本（它自己再 dump 一次，再恢复、TRUNCATE sessions、指纹比对）。
+    # 真跑恢复演练脚本：superuser 建 scratch/装扩展，owner 恢复/校验。
     drill = subprocess.run(
         ["bash", str(RESTORE_CHECK)],
         env={
             **env,
-            "PMSTUDIO_DIRECT_DATABASE_URL": database,
-            "PMSTUDIO_BACKUP_DIR": str(tmp_path / "drill"),
+            "PMSTUDIO_DIRECT_DATABASE_URL": database.owner_url,
+            "PMSTUDIO_BOOTSTRAP_DATABASE_URL": database.bootstrap_url,
         },
         cwd=BACKEND_ROOT,
         capture_output=True,
@@ -216,17 +279,31 @@ async def test_backup_dump_and_restore_check(database: str, tmp_path: Path) -> N
     assert "PASS" in drill.stdout
 
     # 再用刚才的 dump 恢复一次，验证旧 cookie 在恢复后 401（sessions 已清空）。
-    scratch_name, scratch_url = _make_scratch(database)
+    scratch_name, bootstrap_scratch = _make_scratch(database.bootstrap_url)
+    owner_scratch = _as_user(
+        database.owner_url, user=OWNER_ROLE, password=OWNER_PASSWORD,
+        dbname=scratch_name,
+    )
+    app_scratch = _as_user(
+        database.owner_url, user=APP_ROLE, password=APP_PASSWORD,
+        dbname=scratch_name,
+    )
     try:
-        with connect(scratch_url) as connection:
+        with psycopg_connect(bootstrap_scratch, autocommit=True) as connection:
             connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            connection.execute("GRANT USAGE ON TYPE vector TO pmstudio_owner")
+            connection.execute(
+                f'ALTER DATABASE "{scratch_name}" OWNER TO pmstudio_owner'
+            )
+            connection.execute("GRANT CREATE, USAGE ON SCHEMA public TO pmstudio_owner")
         restored = subprocess.run(
             [
                 shutil.which("pg_restore", path=env["PATH"]),
                 "--exit-on-error",
                 "--no-owner",
+                "--no-comments",
                 "--dbname",
-                scratch_url,
+                owner_scratch,
                 str(dump),
             ],
             env=env,
@@ -235,12 +312,12 @@ async def test_backup_dump_and_restore_check(database: str, tmp_path: Path) -> N
             check=False,
         )
         assert restored.returncode == 0, restored.stderr
-        with connect(scratch_url) as connection:
+        with connect(owner_scratch) as connection:
             connection.execute("TRUNCATE sessions")
-        assert _fingerprint(scratch_url) == original
+        assert _fingerprint(owner_scratch) == original
 
         settings = AppSettings(
-            database_url=scratch_url,
+            database_url=app_scratch,
             model="openai/test-model",
             api_key="test-key",
             api_base=None,
@@ -254,4 +331,4 @@ async def test_backup_dump_and_restore_check(database: str, tmp_path: Path) -> N
             me = await client.get("/api/auth/me")
         assert me.status_code == 401, "恢复后旧 cookie 仍然有效——sessions 没清空"
     finally:
-        _drop_scratch(database, scratch_name)
+        _drop_scratch(database.bootstrap_url, scratch_name)
