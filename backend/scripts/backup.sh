@@ -12,6 +12,9 @@
 #
 # 纪律:
 #   · 只认 `PMSTUDIO_DIRECT_DATABASE_URL`（owner 直连），**不读 app URL**；
+#   · 本脚本只备 PostgreSQL。切换前旧库的回滚备份按 runbook 做（停服后
+#     用旧库自己的 `.backup`，保留 30 天）；切换后 RPO ≤ 24h 由本脚本负责。
+#   · 回滚 = 旧镜像 + 旧库备份；切流后的 PG 写入不反向 ETL（见 runbook）。
 #   · 用 PG18 的 `pg_dump -Fc`；版本不对直接失败（老客户端会静默丢掉新特性）；
 #   · dump 落盘即 chmod 600；备份里有用户/会话/密码哈希，不进版本库/同步盘；
 #   · 每日 03:00 跑一次 → RPO ≤ 24h；保留最近 7 份日备份 + 4 份周备份。

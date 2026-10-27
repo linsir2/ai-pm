@@ -135,6 +135,7 @@ init / maintenance / backup ──(PMSTUDIO_DIRECT_DATABASE_URL, 5432)┘
 - 类型迁移：text→timestamptz（UTC，naive 按 UTC；空值按允许语义）、text→jsonb（解析后校验，不哈希原文）、数组→text[]（`''`→`[]`）、0/1→boolean、BLOB→bytea、rowid→seq/id（保留旧序 + setval）、tokens 回填、向量重嵌入（当前 0）。
 - 0001 已建唯一 running 索引；ETL 在插入前把重复 running 除最新一条外改成 `abandoned`（保留全部行）；`sessions` 不迁；`model_calls` 迁；`tool_calls` 有则迁；`vector_index_meta` 有则迁。
 - 校验：行数/主键哈希/JSON 解析相等/文档-轮次 roundtrip/recall@5（冻结语料）/备份恢复；回滚=旧镜像+旧 SQLite，明确切后写丢失 RPO。不双写/不回写。
+- 停机切换/回滚步骤见 `2026-10-27-PostgreSQL-全量切换-runbook.md`（备份、ETL、finalize、smoke、观察期、RPO 与回滚边界）。
 
 ## 6. 测试/运维
 
