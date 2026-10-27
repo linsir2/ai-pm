@@ -1,22 +1,26 @@
 """建项目：空骨架 + 空账本，一个事务。**只能造空文档**（改文档仍只有 committer 一条路）。"""
 
-import sqlite3
 from datetime import datetime
+
+from psycopg import Connection
 
 from pmstudio.application.ports import IdGenerator
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.ids import DocumentId, ProjectId
 from pmstudio.domain.shared.template import DocumentTemplate
-from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.database import PgConnection
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
 )
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 
 
 class SqliteProjectFactory:
-    def __init__(self, connection: sqlite3.Connection, *, ids: IdGenerator) -> None:
+    def __init__(
+        self, connection: Connection | PgConnection, *, ids: IdGenerator
+    ) -> None:
         self._connection = connection
         self._ids = ids
 

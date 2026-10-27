@@ -79,6 +79,13 @@ class InMemoryRoundRepository(_InMemoryRepository):
         loaded.apply_skip_controls(self.skips_for(round_id))
         return loaded
 
+    def get_for_update(
+        self, round_id: RoundId, owner=None  # type: ignore[no-untyped-def]
+    ) -> Round:
+        """内存里没有行锁：与 `get` 同义（只在测试替身上成立）。"""
+
+        return self.get(round_id)
+
     def save(self, round_: Round) -> None:
         self.saves += 1
         self._items[round_.round_id] = deepcopy(round_)

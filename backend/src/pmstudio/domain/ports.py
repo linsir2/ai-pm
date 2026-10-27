@@ -36,6 +36,13 @@ class DocumentWriter(Protocol):
 class RoundReader(Protocol):
     def get(self, round_id: RoundId) -> "Round": ...
 
+    def get_for_update(
+        self, round_id: RoundId, owner: UserId | None = None
+    ) -> "Round":
+        """UoW 内锁定 round 行再读；所有 round 读改写都先走这里。"""
+
+        ...
+
 
 @runtime_checkable
 class RoundWriter(Protocol):

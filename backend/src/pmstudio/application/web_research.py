@@ -187,7 +187,7 @@ def claim_web_request(
     """
 
     with uow:
-        target = rounds.get(round_id)
+        target = rounds.get_for_update(round_id)
         current = next(
             (item for item in target.web_requests if item.request_id == request_id),
             None,
@@ -494,7 +494,7 @@ class WebResearch:
 
         note = f"执行中断：{type(error).__name__}: {error}"
         with self._uow:
-            target = self._rounds.get(round_id)
+            target = self._rounds.get_for_update(round_id)
             wanted = {request.request_id for request in requests}
             known = {
                 item.request_id: item
@@ -564,7 +564,7 @@ class WebResearch:
             self.ensure_ready("执行联网申请")
         if round_.allow_web and auto_candidates and used < limit:
             with self._uow:
-                target = self._rounds.get(round_id)
+                target = self._rounds.get_for_update(round_id)
                 slots = max(0, limit - web_requests_used(target))
                 for item in target.web_requests:
                     if slots <= 0:
@@ -588,7 +588,7 @@ class WebResearch:
         if execution is None:
             return None
         with self._uow:
-            target = self._rounds.get(round_id)
+            target = self._rounds.get_for_update(round_id)
             ledger = self._evidence.get(target.project_id)
             self.apply(target, ledger, execution)
             self._evidence_writer.save(ledger)

@@ -1297,7 +1297,7 @@ class SubmitOpening:
         # 不会留下 approved 让下一步重跑（`P3a` §0.1）。
         execution = await self._web_research.execute(round_id, approved)
         with self._uow:
-            round_ = self._rounds.get(round_id)
+            round_ = self._rounds.get_for_update(round_id)
             if claim_edits:
                 round_.revise_claims(_apply_claim_edits(round_, claim_edits))
             round_.submit_opening(
@@ -1390,7 +1390,7 @@ class DecideWebRequest:
             )
         if decision == "reject":
             with self._uow:
-                target = self._rounds.get(round_id)
+                target = self._rounds.get_for_update(round_id)
                 self._require_pending(target, request_id)
                 target.decide_web_request(request_id, approve=False)
                 self._round_writer.save(target)
@@ -1434,7 +1434,7 @@ class DecideWebRequest:
         if execution is None:  # pragma: no cover —— 有 approved 就不会是 None
             return
         with self._uow:
-            target = self._rounds.get(round_id)
+            target = self._rounds.get_for_update(round_id)
             ledger = self._evidence.get(target.project_id)
             self._web_research.apply(target, ledger, execution)
             self._evidence_writer.save(ledger)
@@ -1523,7 +1523,7 @@ class RecoverWebRequest:
         current = self._require_recoverable(round_, request_id)
         if action == "abandon":
             with self._uow:
-                target = self._rounds.get(round_id)
+                target = self._rounds.get_for_update(round_id)
                 self._require_recoverable(target, request_id)
                 target.cancel_approved_web_request(
                     request_id, note=RECOVERY_ABANDON_NOTE
@@ -1548,7 +1548,7 @@ class RecoverWebRequest:
         if execution is None:  # pragma: no cover —— 传进去的是 approved
             return
         with self._uow:
-            target = self._rounds.get(round_id)
+            target = self._rounds.get_for_update(round_id)
             ledger = self._evidence.get(target.project_id)
             self._web_research.apply(target, ledger, execution)
             self._evidence_writer.save(ledger)
@@ -1772,7 +1772,7 @@ class RunSeatRound:
             # 全是内容错（两次都交不出可用报文）：记名跳过这些席位，整轮继续
             # （`02` §11.0.67）。网关错不在这里——上面已经整轮失败了。
             with self._uow:
-                round_ = self._rounds.get(round_id)
+                round_ = self._rounds.get_for_update(round_id)
                 for seat, error in failures:
                     if seat.seat_id in round_.skipped_seats:
                         # 用户先跳过、在飞任务后失败：`skip_seat` 幂等无操作，
@@ -1959,7 +1959,7 @@ class RunSeatRound:
             break
         review = outcome.review
         with self._uow:
-            round_ = self._rounds.get(round_id)
+            round_ = self._rounds.get_for_update(round_id)
             if round_.seat_round_count != pass_index:
                 # 这一包是上一趟发出的；趟已翻页，不能把旧意见盖到新趟上。
                 return
@@ -4906,7 +4906,7 @@ class AbandonRound:
                     scope = LeaseScope(holder=holder, owner=owner)
                     scope.bind(token)
                     scope_token = set_lease_scope(scope)
-                round_ = self._rounds.get(round_id)
+                round_ = self._rounds.get_for_update(round_id, owner=owner)
                 round_.abandon(reason)
                 self._round_writer.save(round_)
                 if self._leases is not None and token is not None:
@@ -5025,7 +5025,7 @@ class SkipSeat:
         self, *, round_id: RoundId, seat_id: str, owner: UserId | None = None
     ) -> RoundView:
         with self._uow:
-            round_ = self._rounds.get(round_id)
+            round_ = self._rounds.get_for_update(round_id)
             if seat_id not in round_.skipped_seats:
                 if any(review.seat_id == seat_id for review in round_.current_reviews):
                     # 本趟已交回：拒。不是 UX 选项，是正确性必需（见类文档串）。
@@ -5355,7 +5355,7 @@ def fail_round(
     """
 
     with uow:
-        round_ = rounds.get(round_id)
+        round_ = rounds.get_for_update(round_id)
         round_.fail(reason, hint=hint)
         failure = round_.failure
         if failure is None:

@@ -1162,6 +1162,9 @@ async def test_two_direct_decisions_on_different_requests_never_push_used_over_l
                 return deepcopy(stale)
             return self._inner.get(round_id, **kwargs)
 
+        def get_for_update(self, round_id, **kwargs):
+            return self._inner.get_for_update(round_id, **kwargs)
+
     def make_decider():
         connection = connect(db_path)
         rounds = SqliteRoundRepository(connection)
