@@ -4,12 +4,12 @@ import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 
 MODEL_ENV = "PMSTUDIO_MODEL"
 KEY_ENV = "PMSTUDIO_API_KEY"
 BASE_ENV = "PMSTUDIO_API_BASE"
-DB_ENV = "PMSTUDIO_DB"
+DATABASE_URL_ENV = "PMSTUDIO_DATABASE_URL"
+DIRECT_DATABASE_URL_ENV = "PMSTUDIO_DIRECT_DATABASE_URL"
 TIMEOUT_ENV = "PMSTUDIO_MODEL_TIMEOUT"
 TRACE_ENV = "PMSTUDIO_TRACE_MODEL"
 PARAMS_ENV = "PMSTUDIO_MODEL_PARAMS"
@@ -183,8 +183,8 @@ def _parse_mcp_servers(raw: str) -> tuple[Mapping[str, object], ...]:
 
 
 @dataclass(frozen=True, slots=True)
-class Settings:
-    db_path: Path
+class AppSettings:
+    database_url: str
     model: str
     api_key: str | None
     api_base: str | None
@@ -200,9 +200,6 @@ class Settings:
     tavily_api_key: str | None = None
     #: 认证（多用户改造）：只从 env 读，真值不进库。`secret_key` 留给后续签名/CSRF 用。
     secret_key: str = ""
-    #: 首管理员种子：两个都给且 users 表为空时建一个 active admin；否则不建（幂等）。
-    first_admin_username: str | None = None
-    first_admin_password: str | None = None
     session_ttl_days: int = SESSION_TTL_DAYS
     session_absolute_days: int = SESSION_ABSOLUTE_DAYS
     login_max_fails: int = LOGIN_MAX_FAILS
@@ -239,10 +236,14 @@ class Settings:
         return frozenset(keys)
 
     @classmethod
-    def from_env(
-        cls, env: Mapping[str, str] | None = None, *, default_db: Path | None = None
-    ) -> "Settings":
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "AppSettings":
         source = dict(os.environ if env is None else env)
+        database_url = source.get(DATABASE_URL_ENV, "").strip()
+        if not database_url:
+            raise ConfigError(
+                f"没有配置数据库：请设置 {DATABASE_URL_ENV}"
+                "（backend 走 PgBouncer，例如 postgresql://...@pgbouncer:6432/pmstudio）"
+            )
         model = source.get(MODEL_ENV, "").strip()
         if not model:
             raise ConfigError(
@@ -251,10 +252,6 @@ class Settings:
         api_key = source.get(KEY_ENV, "").strip()
         if not api_key:
             raise ConfigError(f"没有配置密钥：请设置 {KEY_ENV}")
-        db_path = Path(
-            source.get(DB_ENV, "").strip()
-            or str(default_db or Path.home() / ".pmstudio" / "pmstudio.db")
-        )
         raw_timeout = source.get(TIMEOUT_ENV, "").strip()
         try:
             model_timeout = float(raw_timeout) if raw_timeout else DEFAULT_MODEL_TIMEOUT
@@ -277,7 +274,7 @@ class Settings:
             model_params = parsed
         mcp_servers = _parse_mcp_servers(source.get(MCP_SERVERS_ENV, "").strip())
         return cls(
-            db_path=db_path,
+            database_url=database_url,
             model=model,
             api_key=api_key,
             api_base=source.get(BASE_ENV, "").strip() or None,
@@ -286,8 +283,6 @@ class Settings:
             model_params=model_params,
             tavily_api_key=source.get(TAVILY_ENV, "").strip() or None,
             secret_key=source.get(SECRET_ENV, "").strip(),
-            first_admin_username=source.get(FIRST_ADMIN_USER_ENV, "").strip() or None,
-            first_admin_password=source.get(FIRST_ADMIN_PASSWORD_ENV, "").strip() or None,
             session_ttl_days=_positive_int(source, SESSION_TTL_ENV, SESSION_TTL_DAYS),
             session_absolute_days=_positive_int(
                 source, SESSION_ABSOLUTE_ENV, SESSION_ABSOLUTE_DAYS
@@ -318,3 +313,37 @@ class Settings:
                 source, REDIS_TIMEOUT_ENV, REDIS_TIMEOUT, minimum=0.001
             ),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class OpsSettings:
+    """运维侧（init / maintenance / backup）配置：只认直连 URL 与首管理员种子。
+
+    与 `AppSettings` **不互相推导、不互相回落**：backend 缺 app URL 就起不来，
+    init/maintenance 缺 direct URL 就起不来。两边各看各的变量，避免"容器里
+    pgbouncer 没起来却偷偷连上 db"这种假成功。
+    """
+
+    direct_database_url: str
+    first_admin_username: str | None = None
+    first_admin_password: str | None = None
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "OpsSettings":
+        source = dict(os.environ if env is None else env)
+        direct_url = source.get(DIRECT_DATABASE_URL_ENV, "").strip()
+        if not direct_url:
+            raise ConfigError(
+                f"没有配置直连数据库：请设置 {DIRECT_DATABASE_URL_ENV}"
+                "（init / maintenance / backup 不走 PgBouncer）"
+            )
+        return cls(
+            direct_database_url=direct_url,
+            first_admin_username=source.get(FIRST_ADMIN_USER_ENV, "").strip() or None,
+            first_admin_password=source.get(FIRST_ADMIN_PASSWORD_ENV, "").strip() or None,
+        )
+
+
+#: 过渡别名：T1 期间调用点仍在逐步从 `Settings` 改名。它和 `AppSettings`
+#: 是**同一个类**，没有第二套配置语义；T7 完成迁移后删除。
+Settings = AppSettings

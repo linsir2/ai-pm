@@ -36,10 +36,9 @@ RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev
 COPY src ./src
 COPY scripts ./scripts
 
-# 库放**绝对路径**并挂卷：相对路径按 `backend/` 解析（`scripts/dev.py`），
-# 容器里 WORKDIR 不同会落到别处。
+# 数据库地址由 compose 注入 `PMSTUDIO_DATABASE_URL`（PgBouncer）。
+# 镜像里不写库路径：backend 不拥有 SQLite/文件库配置。
 ENV PYTHONUNBUFFERED=1 \
-    PMSTUDIO_DB=/data/pmstudio.db \
     PMSTUDIO_PORT=8000
 
 # 容器里必须 `--host 0.0.0.0`：`dev.py` 的默认是 `127.0.0.1`

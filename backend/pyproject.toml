@@ -32,6 +32,8 @@ dependencies = [
     "sqlite-vec>=0.1.9",
     "fastembed>=0.9.0",
     "mcp>=2.3",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.4",
 ]
 
 [dependency-groups]

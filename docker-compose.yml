@@ -1,4 +1,4 @@
-# PM Studio 的 compose 形态：后端 + 前端（Caddy）+ Redis。
+# PM Studio 的 compose 形态：PostgreSQL + PgBouncer + 后端 + 前端（Caddy）+ Redis。
 #
 # **用法**：
 #   cp backend/.env.example backend/.env   # 填 PMSTUDIO_MODEL / PMSTUDIO_API_KEY
@@ -16,9 +16,10 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # 容器里的库放绝对路径并挂卷（相对路径按 `backend/` 解析，容器里会落到别处）。
-      PMSTUDIO_DB: /data/pmstudio.db
       PMSTUDIO_PORT: "8000"
+      # backend **只认 app URL**（PgBouncer transaction mode）；直连 URL 只给
+      # init / maintenance / backup（T7 的 job 自己注入 `PMSTUDIO_DIRECT_DATABASE_URL`）。
+      PMSTUDIO_DATABASE_URL: "postgresql://${POSTGRES_USER:-pmstudio}:${POSTGRES_PASSWORD:-pmstudio}@pgbouncer:6432/${POSTGRES_DB:-pmstudio}"
       # **跨容器反代必须给**：Caddy 在另一个容器里，源 IP 是 Caddy 的。
       # 不给这个 → "每 IP 限流"退化成"全站限流"，**正常用户会互相锁死**
       # （`scripts/dev.py` 的注释点名了这条）。
@@ -35,6 +36,10 @@ services:
       - pmstudio-data:/data
       - fastembed-cache:/root/.cache/fastembed
     depends_on:
+      db:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
       redis:
         condition: service_started
     healthcheck:
@@ -46,6 +51,48 @@ services:
     # SSE 是长期未完成的响应：关停时必须给够宽限期，
     # 否则 `docker stop` 会把长连接 SIGKILL（`timeout_graceful_shutdown=5` 在 dev.py 里）。
     stop_grace_period: 15s
+
+  db:
+    # pgvector 0.8.7 + PostgreSQL 18。**按 digest 钉死**：浮动标签会随上游发版漂移。
+    image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:9d9c930220cb9bf2f956d10a8f909cf9973d9672ca0278aef2c1e6facccad2e0
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pmstudio}
+      POSTGRES_USER: ${POSTGRES_USER:-pmstudio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pmstudio}
+    volumes:
+      # PostgreSQL 18 的 PGDATA 在 /var/lib/postgresql/18/docker；挂父目录兼容官方镜像。
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  pgbouncer:
+    # PgBouncer 是 backend 唯一的池：transaction mode，禁用服务端预编译语句。
+    # **不发布 6432 端口**：admin console 不对公网暴露。
+    image: edoburu/pgbouncer:v1.26.1-p0@sha256:488422e38cff912895d0d65d8963fcd306e6ac589a724398b6eb8e294e94d624
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-pmstudio}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-pmstudio}
+      DB_NAME: ${POSTGRES_DB:-pmstudio}
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "64"
+      DEFAULT_POOL_SIZE: "10"
+      MAX_PREPARED_STATEMENTS: "0"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U $${DB_USER} -d $${DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   frontend:
     build:
@@ -81,3 +128,4 @@ services:
 volumes:
   pmstudio-data:
   fastembed-cache:
+  pgdata:

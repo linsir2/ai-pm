@@ -119,11 +119,11 @@ def test_the_backend_dockerfile_skips_uv_sync_at_runtime() -> None:
     assert any("--no-sync" in line for line in cmds)
 
 
-def test_the_backend_dockerfile_uses_an_absolute_db_path() -> None:
-    """相对路径按 `backend/` 解析（`scripts/dev.py`），容器里会落到别处。"""
+def test_the_backend_dockerfile_does_not_hardcode_a_sqlite_path() -> None:
+    """backend 只认 `PMSTUDIO_DATABASE_URL`；镜像里再写 `PMSTUDIO_DB` 就是双真相源。"""
 
     envs = _directives(_text(BACKEND_DOCKERFILE), "ENV")
-    assert any("PMSTUDIO_DB=/data/" in line for line in envs)
+    assert not any("PMSTUDIO_DB=" in line for line in envs)
 
 
 # —— R（需求）：compose ——
@@ -136,6 +136,59 @@ def test_the_compose_file_sets_the_forwarded_allow_ips() -> None:
     assert "PMSTUDIO_FORWARDED_ALLOW_IPS" in text, (
         "跨容器反代必须给 PMSTUDIO_FORWARDED_ALLOW_IPS（见 scripts/dev.py 的注释）"
     )
+
+
+def _service_block(text: str, name: str) -> str:
+    """取 compose 里某个服务的文本块（遇到顶格 `volumes:` 或下一个服务结束）。"""
+
+    pattern = (
+        rf"^  {re.escape(name)}:\n"
+        r"(.*?)(?=^  [a-zA-Z0-9_-]+:\n|^volumes:\n|\Z)"
+    )
+    match = re.search(pattern, text, re.MULTILINE | re.DOTALL)
+    assert match is not None, f"compose 缺服务：{name}"
+    return match.group(0)
+
+
+def test_the_compose_file_pins_the_postgres_and_pgbouncer_images() -> None:
+    text = _text(COMPOSE)
+    db = _service_block(text, "db")
+    pgbouncer = _service_block(text, "pgbouncer")
+    assert "pgvector/pgvector:0.8.7-pg18-trixie@sha256:" in db
+    assert "edoburu/pgbouncer:v1.26.1-p0@sha256:" in pgbouncer
+
+
+def test_pgbouncer_uses_transaction_mode_without_prepared_statements() -> None:
+    block = _service_block(_text(COMPOSE), "pgbouncer")
+    assert re.search(r"POOL_MODE:\s*transaction", block)
+    assert re.search(r"MAX_PREPARED_STATEMENTS:\s*\"0\"", block)
+    assert re.search(r"MAX_CLIENT_CONN:\s*\"64\"", block)
+    assert re.search(r"DEFAULT_POOL_SIZE:\s*\"10\"", block)
+    assert not re.search(r"^\s+ports:", block, re.MULTILINE), "PgBouncer admin 不能发布端口"
+    assert not re.search(r"^\s+ports:", _service_block(_text(COMPOSE), "db"), re.MULTILINE)
+
+
+def test_db_and_pgbouncer_have_healthchecks() -> None:
+    text = _text(COMPOSE)
+    for name in ("db", "pgbouncer"):
+        block = _service_block(text, name)
+        assert "healthcheck:" in block, f"{name} 缺 healthcheck"
+        assert "pg_isready" in block, f"{name} 的 healthcheck 要真的探库"
+
+
+def test_backend_connects_through_pgbouncer_only() -> None:
+    block = _service_block(_text(COMPOSE), "backend")
+    # 只看生效的键，不看解释性注释。
+    code = "\n".join(line.split("#", 1)[0] for line in block.splitlines())
+    assert "PMSTUDIO_DATABASE_URL" in code
+    assert "pgbouncer:6432" in code
+    assert "PMSTUDIO_DIRECT_DATABASE_URL" not in code, "backend 不许拿直连 URL"
+
+
+def test_backend_waits_for_db_and_pgbouncer() -> None:
+    block = _service_block(_text(COMPOSE), "backend")
+    assert re.search(r"db:\s*\n\s+condition:\s*service_healthy", block)
+    assert re.search(r"pgbouncer:\s*\n\s+condition:\s*service_healthy", block)
 
 
 def test_the_compose_file_proxies_to_the_service_name_not_localhost() -> None:
@@ -371,11 +424,23 @@ def test_the_dev_stack_script_uses_the_same_env_keys_as_compose() -> None:
     #: · `FASTEMBED_CACHE_PATH`：compose 要把模型缓存指到**挂卷**的目录
     #:   （容器重建不丢）；本机的缓存落在 fastembed 默认的 `${TMPDIR}/fastembed_cache`。
     #: · `PUBLIC_DOMAIN`：compose 的 Caddy 站点地址；本机没有 Caddy。
-    compose_only = {"PMSTUDIO_WEB_ROOT", "FASTEMBED_CACHE_PATH", "PUBLIC_DOMAIN"}
+    compose_only = {
+        "PMSTUDIO_WEB_ROOT",
+        "FASTEMBED_CACHE_PATH",
+        "PUBLIC_DOMAIN",
+        # backend 容器里连的是 compose 服务名；原生 dev_stack 的 PG/PgBouncer
+        # 启动顺序归 T7，T1 不在这里造一个假的本机 URL。
+        "PMSTUDIO_DATABASE_URL",
+    }
     #: 脚本独有、compose **故意**没有的键 —— 同理。
     #: `PMSTUDIO_WEB_PORT`：compose 的前端是 Caddy（端口由镜像 `EXPOSE 80` 固定）；
     #: 本机是 vite dev server，端口要能挑（默认 5173）。
-    script_only = {"PMSTUDIO_WEB_PORT"}
+    script_only = {
+        "PMSTUDIO_WEB_PORT",
+        # 原生 dev_stack 仍在 SQLite 上跑（T1 不删旧运行时）；PG/PgBouncer 的
+        # 启动序列与 URL 归 T7。这里不把旧键伪装成"compose 也有"。
+        "PMSTUDIO_DB",
+    }
 
     missing = compose_keys - script_keys - compose_only
     assert not missing, f"dev_stack.sh 没覆盖 compose 的这些键：{sorted(missing)}"
@@ -450,7 +515,7 @@ def test_the_ci_workflow_builds_the_images() -> None:
 def test_the_ci_parity_step_provides_model_config() -> None:
     """接口零差那一步必须给模型配置（A4）。
 
-    `Settings.from_env()` 缺 key 或模型名会**直接起不来**（`ConfigError`）——
+    `AppSettings.from_env()` 缺 key 或模型名会**直接起不来**（`ConfigError`）——
     不给的话这一步在 CI 上必红（假值即可，它不调模型）。
     """
 

@@ -1,5 +1,4 @@
 """唯一组装点。infrastructure 在这里被注入到 application，别处不许 new 实现。"""
-import sqlite3
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,7 +91,7 @@ from pmstudio.application.use_cases import (
 )
 from pmstudio.application.web_research import WebResearch
 from pmstudio.bootstrap.maintenance import MaterialMaintenance
-from pmstudio.bootstrap.settings import Settings
+from pmstudio.bootstrap.settings import AppSettings
 from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.null_repos import NoOpVectorIndex
 from pmstudio.domain.services.assigner import EvidenceAssigner
@@ -109,13 +108,15 @@ from pmstudio.infrastructure.discussion.runner import DiscussionRunner
 from pmstudio.infrastructure.graph.exploration_runner import ExplorationRunner
 from pmstudio.infrastructure.graph.graph import RoundRunner
 from pmstudio.infrastructure.personas.catalog import load_personas
+from pmstudio.infrastructure.postgres.database import PgConnection
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.seats.catalog import TomlSeatCatalog
 from pmstudio.infrastructure.security import (
     configure_gate,
     hash_password,
     verify_password_async,
 )
-from pmstudio.infrastructure.sqlite import database, owner_scope
+from pmstudio.infrastructure.sqlite import owner_scope
 from pmstudio.infrastructure.sqlite.call_log import SqliteRoundCallLog
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
@@ -141,7 +142,6 @@ from pmstudio.infrastructure.sqlite.repositories import (
 )
 from pmstudio.infrastructure.sqlite.tokenize import warm as warm_tokenizer
 from pmstudio.infrastructure.sqlite.tool_calls import SqliteToolCallRecorder
-from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from pmstudio.infrastructure.sqlite.usage import (
     SqliteAdminStatsRepository,
     SqliteUsageRepository,
@@ -150,7 +150,6 @@ from pmstudio.infrastructure.sqlite.users import (
     SqliteSessionRepository,
     SqliteUserRepository,
 )
-from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
 from pmstudio.infrastructure.templates.loader import seed_builtin_templates
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
@@ -170,11 +169,11 @@ class UuidIdGenerator:
     def new(self, prefix: str) -> str:
         return f"{prefix}-{uuid.uuid4().hex[:8]}"
 class Container:
-    def __init__(self, *, settings: Settings, app: FastAPI) -> None:
+    def __init__(self, *, settings: AppSettings, app: FastAPI) -> None:
         self.settings = settings
         self.app = app
 def _model_gateway(
-    settings: Settings, *, recorder: SqliteModelCallRecorder | None = None
+    settings: AppSettings, *, recorder: SqliteModelCallRecorder | None = None
 ) -> LiteLLMGateway:
     """造生产用的模型网关。
 
@@ -194,7 +193,7 @@ def _model_gateway(
 
 
 def _web_search_gateway(
-    settings: Settings, *, tools: TomlToolCatalog, keys: frozenset[str]
+    settings: AppSettings, *, tools: TomlToolCatalog, keys: frozenset[str]
 ) -> TavilySearchGateway | None:
     """两件事都成立才造网关：**目录说这个工具可用**（`requires` 都配上了）
     且密钥确实在手上。缺一件就是 None——用例那边会把"勾了但没有工具"当场拒掉，
@@ -202,34 +201,7 @@ def _web_search_gateway(
     if web_search_tool(tools, keys=keys) is None or settings.tavily_api_key is None:
         return None
     return TavilySearchGateway(api_key=settings.tavily_api_key)
-def _seed_first_admin(users: SqliteUserRepository, settings: Settings) -> None:
-    """首管理员种子：**users 表为空**且 env 给了用户名+密码才建（幂等，非空直接跳过）。
-
-    存量库（已有用户）不动；没配 env 就不建——不写"默认口令"那种假降级。
-
-    **"表为空"这个检查在多 worker 下不够**（高并发 P4 真跑抓到的）：N 个 worker
-    同时启动时它们都看到空表，然后都去 insert，第二个撞 `UNIQUE(username)` 直接
-    `IntegrityError` 起不来。所以这里把"别人已经种好了"当成成功——种子的目标是
-    "这个账号存在且是 active admin"，不是"由我插入"。
-
-    `backfill_owners` / `assert_owners_backfilled` 也是同样的多进程竞争面，
-    但它们是幂等的读-改-写，由 SQLite 的写锁串行化，不需要额外处理。
-    """
-    if users.list_all():
-        return
-    if not (settings.first_admin_username and settings.first_admin_password):
-        return
-    try:
-        admin_id = users.register(
-            username=settings.first_admin_username,
-            password_hash=hash_password(settings.first_admin_password),
-            role="admin",
-        )
-    except sqlite3.IntegrityError:
-        # 别的 worker 抢先种好了——那就是我们要的结果。
-        return
-    users.set_status(admin_id, "active")
-def _build_event_bus(settings: Settings):  # noqa: ANN202 —— 返回两种实现之一
+def _build_event_bus(settings: AppSettings):  # noqa: ANN202 —— 返回两种实现之一
     """按配置选事件总线：Redis 跨进程扇出，或进程内总线。
 
     **不做"Redis 配错就起不来"**：与登录限流同一条规矩——Redis 连不上时
@@ -248,7 +220,7 @@ def _build_event_bus(settings: Settings):  # noqa: ANN202 —— 返回两种实
     )
 
 
-def _build_login_guard(settings: Settings, clock: Clock) -> LoginGuard:
+def _build_login_guard(settings: AppSettings, clock: Clock) -> LoginGuard:
     """按配置选登录限流闸：Redis 共享计数，或进程内计数。
 
     **不做"Redis 配错就起不来"**：限流器不可用与限流器不存在是两回事，
@@ -287,7 +259,7 @@ def _build_login_guard(settings: Settings, clock: Clock) -> LoginGuard:
 
 
 def build_container(
-    settings: Settings,
+    settings: AppSettings,
     *,
     gateway: ModelGateway | None = None,
     web_search: WebSearchGateway | None = None,
@@ -310,16 +282,11 @@ def build_container(
     # 向量 embedder 单一实例：懒加载（首次 `embed_many` 才下载/载入模型），
     # 迁移回填与向量索引共用同一个，避免同一进程里装两份模型内存。
     embedder = FastEmbedEmbedder()
-    connection = database.connect(settings.db_path, embedder=embedder)
+    connection = PgConnection(settings.database_url)
     clock = SystemClock()
     ids = UuidIdGenerator()
     bus = _build_event_bus(settings)
     users = SqliteUserRepository(connection)
-    # 次序是契约（Ruling 13）：先种首 admin，再回填存量 owner，最后熔断。
-    # 反过来（connect 里熔断）会让"存量内容 + users 空 + FIRST_ADMIN"的首次升级永远卡住。
-    _seed_first_admin(users, settings)
-    database.backfill_owners(connection)
-    database.assert_owners_backfilled(connection)
     sessions = SqliteSessionRepository(connection)
     # 管理端用量读模型（Task 8 / Ruling 7）：只读 join，无写能力
     usage = SqliteUsageRepository(connection)
@@ -334,12 +301,8 @@ def build_container(
     discussions = SqliteDiscussionRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
     materials = SqliteMaterialStore(connection, ids=ids)
-    # 向量索引（检索阶段 2）：扩展/模型不可用 → NoOp（检索只剩 FTS5，仍可用）。
-    vector_index = (
-        SqliteVectorIndex(connection, embedder=embedder)
-        if database.load_sqlite_vec(connection)
-        else NoOpVectorIndex()
-    )
+    # 向量索引在 T5 迁到 pgvector；T1 只立运行时骨架，先保持 NoOp。
+    vector_index = NoOpVectorIndex()
     # 材料检索（检索 P1 + 阶段 2）：FTS5 词法 + jieba 预分词，向量路再叠一路 RRF 融合。
     # 换实现只改这一行（`P18` C-2c-1）——`MaterialRetriever` 协议的升级位就在这儿。
     # `SqliteHybridRetriever` 内部对向量路做了降级：扩展缺失/推理失败就退回纯 FTS5，
@@ -363,7 +326,7 @@ def build_container(
     # 改 TOML 发版即改内置；自定义模板（builtin=0）id 不同，seed 碰不到。
     # 老项目行内存的是全文快照，库里怎么变都不影响它们。
     seed_builtin_templates(template_repo)
-    uow = SqliteUnitOfWork(connection)
+    uow = PgUnitOfWork(connection)
     prompts = FilePromptLibrary(PROMPTS_DIR)
     if gateway is None:
         # 留样默认关（`PMSTUDIO_TRACE_MODEL=1` 才接）：库会长，且它是排查材料不是业务事实
@@ -953,4 +916,4 @@ def build_container(
     return Container(settings=settings, app=app)
 def build_app() -> FastAPI:
     """`uvicorn pmstudio.bootstrap.container:build_app --factory` 的入口。"""
-    return build_container(Settings.from_env()).app
+    return build_container(AppSettings.from_env()).app

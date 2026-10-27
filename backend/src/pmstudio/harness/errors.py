@@ -130,6 +130,19 @@ class DatabaseBusy(ApplicationError):
         self.retry_after = retry_after
 
 
+class DatabaseUnavailable(ApplicationError):
+    """数据库连接断了，或事务内连接断开后无法继续——503 + `Retry-After`。
+
+    与 `DatabaseBusy` 分开：那个是"库好着，只是写锁竞争"，这个可能是
+    PgBouncer / PostgreSQL 短暂不可用。两者都给 503，但错误码不同，
+    排查时能直接看出该看锁还是看连接。
+    """
+
+    def __init__(self, message: str, *, retry_after: int = 3, **details: object) -> None:
+        super().__init__(message, code="database_unavailable", **details)
+        self.retry_after = retry_after
+
+
 class StorageFull(ApplicationError):
     """**磁盘满了**——RFC 4918 的 507 `Insufficient Storage`。
 
