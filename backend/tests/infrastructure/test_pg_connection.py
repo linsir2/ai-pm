@@ -9,10 +9,12 @@ from __future__ import annotations
 from urllib.parse import parse_qsl, urlsplit
 
 import pytest
+from psycopg.errors import AdminShutdown, LockNotAvailable, QueryCanceled
 
 from pmstudio.harness.errors import DatabaseUnavailable
 from pmstudio.infrastructure.postgres.database import (
     PgConnection,
+    _is_connection_error,
     connect,
     merge_options,
     options_for,
@@ -45,6 +47,14 @@ def test_connect_options_are_parsed_from_the_dsn() -> None:
         "?options=-csearch_path%3Dtenant,public&sslmode=disable"
     )
     assert options_for(url) == "-csearch_path=tenant,public -c timezone=UTC"
+
+
+def test_only_connection_sqlstates_are_reconnectable() -> None:
+    """锁等待 / 语句取消不是连接断开，不能当成可重连错误。"""
+
+    assert _is_connection_error(AdminShutdown("terminated")) is True
+    assert _is_connection_error(LockNotAvailable("lock")) is False
+    assert _is_connection_error(QueryCanceled("timeout")) is False
 
 
 def test_schema_url_preserves_other_query_parameters() -> None:
@@ -143,7 +153,7 @@ def _terminate(pg: PgTestDatabase, pid: int) -> None:
         killer.execute("SELECT pg_terminate_backend(%s)", (pid,))
 
 
-def test_pg_connection_reconnects_outside_a_transaction(database: PgTestDatabase) -> None:
+def test_pg_connection_replays_a_read_after_reconnecting(database: PgTestDatabase) -> None:
     wrapper = PgConnection(database.direct_url)
     try:
         pid = wrapper.execute("SELECT pg_backend_pid() AS pid").fetchone()
@@ -157,61 +167,139 @@ def test_pg_connection_reconnects_outside_a_transaction(database: PgTestDatabase
         wrapper.close()
 
 
+def test_pg_connection_does_not_replay_a_write(database: PgTestDatabase) -> None:
+    """断连时写是否已提交未知；当前写只回 503，**不重放**。"""
+
+    _probe_table(database)
+    wrapper = PgConnection(database.direct_url)
+    try:
+        pid = wrapper.execute("SELECT pg_backend_pid() AS pid").fetchone()
+        assert pid is not None
+        _terminate(database, int(pid["pid"]))
+        with pytest.raises(DatabaseUnavailable, match="写"):
+            wrapper.execute(
+                f'INSERT INTO "{database.schema}".uow_probe (value) VALUES (%s)',
+                ("must-not-double-write",),
+            )
+        assert _values(database) == []
+        # 下一请求重连；读可以正常走。
+        assert wrapper.execute("SELECT 1 AS ok").fetchone() == {"ok": 1}
+    finally:
+        wrapper.close()
+        with connect(database.direct_url) as connection:
+            connection.execute(f'DROP TABLE IF EXISTS "{database.schema}".uow_probe')
+
+
+def test_lock_timeout_is_not_mapped_to_database_unavailable(
+    database: PgTestDatabase,
+) -> None:
+    """55P03 是锁等待，不是连接断开——不许被包装成 503 的 DatabaseUnavailable。"""
+
+    _probe_table(database)
+    wrapper = PgConnection(database.direct_url)
+    locker = connect(database.direct_url)
+    try:
+        wrapper.execute("SET lock_timeout = '150ms'")
+        locker.execute("BEGIN")
+        locker.execute(f'LOCK TABLE "{database.schema}".uow_probe IN ACCESS EXCLUSIVE MODE')
+        with pytest.raises(Exception) as caught:
+            wrapper.execute(
+                f'INSERT INTO "{database.schema}".uow_probe (value) VALUES (%s)',
+                ("blocked",),
+            )
+        assert not isinstance(caught.value, DatabaseUnavailable)
+        assert getattr(caught.value, "sqlstate", None) == "55P03"
+    finally:
+        locker.execute("ROLLBACK")
+        locker.close()
+        wrapper.close()
+        with connect(database.direct_url) as connection:
+            connection.execute(f'DROP TABLE IF EXISTS "{database.schema}".uow_probe')
+
+
 def test_pg_connection_returns_503_inside_a_transaction(database: PgTestDatabase) -> None:
     wrapper = PgConnection(database.direct_url)
     try:
         with pytest.raises(DatabaseUnavailable, match="事务"):
             with PgUnitOfWork(wrapper):
+                assert wrapper.transaction_depth == 1
                 pid = wrapper.execute("SELECT pg_backend_pid() AS pid").fetchone()
                 assert pid is not None
                 _terminate(database, int(pid["pid"]))
                 wrapper.execute("SELECT 1")
         assert wrapper.closed is True
+        assert wrapper.transaction_depth == 0
+        assert wrapper.execute("SELECT 1 AS ok").fetchone() == {"ok": 1}
+    finally:
+        wrapper.close()
+
+
+def test_uow_tracks_depth_and_closing_inside_a_transaction_never_reconnects(
+    database: PgTestDatabase,
+) -> None:
+    wrapper = PgConnection(database.direct_url)
+    try:
+        with PgUnitOfWork(wrapper):
+            assert wrapper.transaction_depth == 1
+        assert wrapper.transaction_depth == 0
+
+        with pytest.raises(DatabaseUnavailable, match="事务"):
+            with PgUnitOfWork(wrapper):
+                assert wrapper.transaction_depth == 1
+                wrapper.close()
+                wrapper.execute("SELECT 1")
+        assert wrapper.transaction_depth == 0
         assert wrapper.execute("SELECT 1 AS ok").fetchone() == {"ok": 1}
     finally:
         wrapper.close()
 
 
 def test_truncate_keeps_migration_and_vector_tables(database: PgTestDatabase) -> None:
-    with connect(database.direct_url) as connection:
-        connection.execute(
-            f'CREATE TABLE IF NOT EXISTS "{database.schema}".truncate_probe '
-            "(id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, value text)"
-        )
-        connection.execute(
-            f'CREATE TABLE IF NOT EXISTS "{database.schema}".schema_migrations '
-            "(version int PRIMARY KEY)"
-        )
-        connection.execute(
-            f'CREATE TABLE IF NOT EXISTS "{database.schema}".vector_index_meta '
-            "(id smallint PRIMARY KEY, profile text, dimensions int, model text)"
-        )
-        connection.execute(
-            f'INSERT INTO "{database.schema}".truncate_probe (value) VALUES (%s)',
-            ("gone",),
-        )
-        connection.execute(
-            f'INSERT INTO "{database.schema}".schema_migrations (version) VALUES (1) '
-            "ON CONFLICT DO NOTHING"
-        )
-        connection.execute(
-            f'INSERT INTO "{database.schema}".vector_index_meta '
-            "(id, profile, dimensions, model) VALUES (1, 'p', 512, 'm') "
-            "ON CONFLICT (id) DO UPDATE SET profile = EXCLUDED.profile"
-        )
+    """用独立 schema 验证 preserved 表不被清，不往共享的迁移/向量表写伪数据。"""
 
-    truncate_data_tables(database)
+    from dataclasses import replace
 
+    probe_schema = f"{database.schema}_truncate_probe"
+    probe = replace(
+        database,
+        schema=probe_schema,
+        direct_url=schema_url(database.direct_url, probe_schema),
+    )
     with connect(database.direct_url) as connection:
-        probe = connection.execute(
-            f'SELECT count(*) AS n FROM "{database.schema}".truncate_probe'
-        ).fetchone()
-        migrations = connection.execute(
-            f'SELECT count(*) AS n FROM "{database.schema}".schema_migrations'
-        ).fetchone()
-        vectors = connection.execute(
-            f'SELECT count(*) AS n FROM "{database.schema}".vector_index_meta'
-        ).fetchone()
-        assert probe == {"n": 0}
-        assert migrations == {"n": 1}
-        assert vectors == {"n": 1}
+        connection.execute(f'DROP SCHEMA IF EXISTS "{probe_schema}" CASCADE')
+        connection.execute(f'CREATE SCHEMA "{probe_schema}"')
+    try:
+        with connect(probe.direct_url) as connection:
+            connection.execute(
+                'CREATE TABLE truncate_probe '
+                "(id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, value text)"
+            )
+            connection.execute(
+                "CREATE TABLE schema_migrations (version int PRIMARY KEY)"
+            )
+            connection.execute(
+                "CREATE TABLE vector_index_meta "
+                "(id smallint PRIMARY KEY, profile text, dimensions int, model text)"
+            )
+            connection.execute("INSERT INTO truncate_probe (value) VALUES (%s)", ("gone",))
+            connection.execute("INSERT INTO schema_migrations (version) VALUES (1)")
+            connection.execute(
+                "INSERT INTO vector_index_meta (id, profile, dimensions, model) "
+                "VALUES (1, 'p', 512, 'm')"
+            )
+
+        truncate_data_tables(probe)
+
+        with connect(probe.direct_url) as connection:
+            assert connection.execute(
+                "SELECT count(*) AS n FROM truncate_probe"
+            ).fetchone() == {"n": 0}
+            assert connection.execute(
+                "SELECT count(*) AS n FROM schema_migrations"
+            ).fetchone() == {"n": 1}
+            assert connection.execute(
+                "SELECT count(*) AS n FROM vector_index_meta"
+            ).fetchone() == {"n": 1}
+    finally:
+        with connect(database.direct_url) as connection:
+            connection.execute(f'DROP SCHEMA IF EXISTS "{probe_schema}" CASCADE')

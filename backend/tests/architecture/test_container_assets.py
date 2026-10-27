@@ -191,6 +191,62 @@ def test_backend_waits_for_db_and_pgbouncer() -> None:
     assert re.search(r"pgbouncer:\s*\n\s+condition:\s*service_healthy", block)
 
 
+def test_pgbouncer_listen_port_matches_backend_and_healthcheck() -> None:
+    """LISTEN_PORT 是 PgBouncer 真正的监听端口；URL / healthcheck 必须与它一致。"""
+
+    text = _text(COMPOSE)
+    pgbouncer = _service_block(text, "pgbouncer")
+    backend = _service_block(text, "backend")
+    listen = re.search(r"LISTEN_PORT:\s*\"?(\d+)", pgbouncer)
+    url = re.search(r"@pgbouncer:(\d+)/", backend)
+    health = re.search(r"pg_isready[^\n]*-p\s+(\d+)", pgbouncer)
+    assert listen and url and health, (
+        f"端口缺来源：LISTEN_PORT={listen}, URL={url}, healthcheck={health}"
+    )
+    ports = {listen.group(1), url.group(1), health.group(1)}
+    assert ports == {"6432"}, f"PgBouncer 端口不一致：{sorted(ports)}"
+
+
+ENV_APP = ROOT / "backend" / ".env.example"
+ENV_OPS = ROOT / "backend" / ".env.ops.example"
+
+
+def _env_file_paths(service_block: str) -> list[str]:
+    match = re.search(
+        r"^\s+env_file:\s*\n((?:\s+-\s+.*\n?)+)", service_block, re.MULTILINE
+    )
+    assert match is not None, "服务缺 env_file"
+    return [
+        line.split("-", 1)[1].strip().strip("\"'")
+        for line in match.group(1).splitlines()
+        if line.strip().startswith("-")
+    ]
+
+
+def _env_keys(path: Path) -> set[str]:
+    return {
+        line.split("=", 1)[0].strip()
+        for line in _text(path).splitlines()
+        if line.strip() and not line.lstrip().startswith("#") and "=" in line
+    }
+
+
+def test_backend_mounts_only_the_app_env_file() -> None:
+    """backend 只拿 app env；direct/first-admin 属于 ops，不能随 app 进程注入。"""
+
+    backend = _service_block(_text(COMPOSE), "backend")
+    assert _env_file_paths(backend) == ["./backend/.env"]
+
+    app_keys = _env_keys(ENV_APP)
+    assert "PMSTUDIO_DATABASE_URL" in app_keys
+    assert "PMSTUDIO_DIRECT_DATABASE_URL" not in app_keys
+    assert not (app_keys & {"PMSTUDIO_FIRST_ADMIN_USER", "PMSTUDIO_FIRST_ADMIN_PASSWORD"})
+
+    ops_keys = _env_keys(ENV_OPS)
+    assert "PMSTUDIO_DIRECT_DATABASE_URL" in ops_keys
+    assert {"PMSTUDIO_FIRST_ADMIN_USER", "PMSTUDIO_FIRST_ADMIN_PASSWORD"} <= ops_keys
+
+
 def test_the_compose_file_proxies_to_the_service_name_not_localhost() -> None:
     """容器里的 127.0.0.1 是 Caddy 自己 —— 反代目标必须是服务名。"""
 
@@ -293,7 +349,14 @@ def test_the_dockerignore_excludes_secrets_and_data() -> None:
     path = ROOT / ".dockerignore"
     assert path.is_file(), "仓库根缺 .dockerignore（前端 context 是仓库根 → 密钥会进镜像）"
     text = path.read_text(encoding="utf-8")
-    for entry in (".git", "**/node_modules", "**/.venv", "backend/.env", "backend/data"):
+    for entry in (
+        ".git",
+        "**/node_modules",
+        "**/.venv",
+        "backend/.env",
+        "backend/.env.ops",
+        "backend/data",
+    ):
         assert entry in text, f".dockerignore 缺条目：{entry}"
 
 
@@ -308,7 +371,7 @@ def test_the_backend_dockerignore_excludes_secrets_data_and_venv() -> None:
     path = ROOT / "backend" / ".dockerignore"
     assert path.is_file(), "backend 缺 .dockerignore（context 是 backend/ → 根那份管不到）"
     text = path.read_text(encoding="utf-8")
-    for entry in (".env", "data", ".venv"):
+    for entry in (".env", ".env.ops", "data", ".venv"):
         assert entry in text, f"backend/.dockerignore 缺条目：{entry}"
     assert ".env.example" not in text, (
         "不能把 .env.example 也挡掉——CI 靠 `cp .env.example .env` 造占位"

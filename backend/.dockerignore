@@ -7,6 +7,7 @@
 # 但上下文白白变大、构建变慢，且 key 离镜像越远越好。
 
 .env
+.env.ops
 data
 .venv
 __pycache__

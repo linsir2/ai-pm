@@ -13,6 +13,7 @@
 **/.pytest_cache
 **/.ruff_cache
 backend/.env
+backend/.env.ops
 frontend/.env
 backend/data
 **/*.db

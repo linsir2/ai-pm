@@ -11,6 +11,7 @@ backend 每个 worker 一条连接，`prepare_threshold=None` 关掉预编译语
 from __future__ import annotations
 
 import os
+import re
 import socket
 from contextlib import suppress
 from typing import Any
@@ -29,6 +30,7 @@ DEFAULT_APPLICATION_NAME = f"pmstudio-{socket.gethostname()}-{os.getpid()}"
 
 #: 连接类 SQLSTATE：PG 的 08 类，以及运维主动断开连接的三条。
 _CONNECTION_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
+_READ_ONLY = re.compile(r"^\s*(?:select|show|values|table)\b", re.IGNORECASE)
 
 
 def merge_options(existing: str | None, *, required: str = UTC_OPTION) -> str:
@@ -103,9 +105,10 @@ def _in_transaction(connection: psycopg.Connection[Any]) -> bool:
 class PgConnection:
     """一条按需重连的连接把手。
 
-    - **事务外**断连：丢掉坏连接、下一次执行前自动重连，并把当前语句重试一次；
-    - **事务内**断连：回滚（尽力）、关连接、抛 `DatabaseUnavailable`（503）。
-      事务内不自动重试：写是否已经提交未知，重试可能重复写。
+    - **事务外**断连：丢掉坏连接；只读语句重连后安全重放，写语句**不重放**，
+      当前调用抛 `DatabaseUnavailable`，下一请求再重连；
+    - **事务内**断连 / 主动 close：回滚（尽力）、关连接、抛 `DatabaseUnavailable`
+      （503），且**绝不重连**。事务内写是否已提交未知，重放可能重复写。
     """
 
     def __init__(
@@ -119,6 +122,9 @@ class PgConnection:
         self._connect_timeout = connect_timeout
         self._application_name = application_name
         self._connection: psycopg.Connection[dict[str, Any]] | None = None
+        #: UoW 嵌套深度。`close()` 故意不清它：事务内关闭后必须继续拒绝重连，
+        #: 直到 UoW 退出把深度减回 0。
+        self._transaction_depth = 0
 
     @property
     def connection(self) -> psycopg.Connection[dict[str, Any]]:
@@ -129,10 +135,25 @@ class PgConnection:
         current = self._connection
         return current is None or current.closed or current.broken
 
+    @property
+    def transaction_depth(self) -> int:
+        return self._transaction_depth
+
+    def enter_transaction(self) -> None:
+        self._transaction_depth += 1
+
+    def leave_transaction(self) -> None:
+        self._transaction_depth = max(0, self._transaction_depth - 1)
+
     def _ensure_connection(self) -> psycopg.Connection[dict[str, Any]]:
         current = self._connection
         if current is not None and not current.closed and not current.broken:
             return current
+        if self._transaction_depth > 0:
+            self._discard()
+            raise DatabaseUnavailable(
+                "数据库连接在事务中不可用；不会重连，请重试整笔操作",
+            )
         self._discard()
         try:
             self._connection = connect(
@@ -155,9 +176,8 @@ class PgConnection:
 
     def execute(self, query: str, params: Any = None) -> psycopg.Cursor[Any]:
         current = self._ensure_connection()
-        # **错误发生后**连接状态可能变成 UNKNOWN，读不出"当时在不在事务里"。
-        # 所以在执行前记下来：autocommit 且空闲 = 事务外，可安全重连重试。
-        inside = _in_transaction(current)
+        # 错误发生后状态可能是 UNKNOWN；执行前记录事务状态与 wrapper 深度。
+        inside = self._transaction_depth > 0 or _in_transaction(current)
         try:
             return current.execute(query, params)
         except OperationalError as error:
@@ -171,9 +191,15 @@ class PgConnection:
                     "数据库连接在事务中断开，已回滚；请重试",
                 ) from error
             self._discard()
+            if not _READ_ONLY.match(query):
+                raise DatabaseUnavailable(
+                    "数据库连接在写操作中断开；当前写未重放，请重试整笔操作",
+                ) from error
             try:
                 return self._ensure_connection().execute(query, params)
             except OperationalError as retry_error:
+                if not _is_connection_error(retry_error):
+                    raise
                 self._discard()
                 raise DatabaseUnavailable(
                     "数据库连接断开且重连失败；请确认 PostgreSQL / PgBouncer 已恢复",

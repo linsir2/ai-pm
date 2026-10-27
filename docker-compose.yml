@@ -1,7 +1,8 @@
 # PM Studio 的 compose 形态：PostgreSQL + PgBouncer + 后端 + 前端（Caddy）+ Redis。
 #
 # **用法**：
-#   cp backend/.env.example backend/.env   # 填 PMSTUDIO_MODEL / PMSTUDIO_API_KEY
+#   cp backend/.env.example backend/.env           # app：model/key/app URL
+#   cp backend/.env.ops.example backend/.env.ops   # ops：direct URL/首管理员（T7 job）
 #   docker compose up -d
 #   打开 http://localhost
 #
@@ -18,8 +19,9 @@ services:
     environment:
       PMSTUDIO_PORT: "8000"
       # backend **只认 app URL**（PgBouncer transaction mode）；直连 URL 只给
-      # init / maintenance / backup（T7 的 job 自己注入 `PMSTUDIO_DIRECT_DATABASE_URL`）。
-      PMSTUDIO_DATABASE_URL: "postgresql://${POSTGRES_USER:-pmstudio}:${POSTGRES_PASSWORD:-pmstudio}@pgbouncer:6432/${POSTGRES_DB:-pmstudio}"
+      # init / maintenance / backup（从 backend/.env.ops 注入，T7）。
+      # T1 骨架用开发口令；T7 会换 pmstudio_owner / pmstudio_app 角色与 secret。
+      PMSTUDIO_DATABASE_URL: "postgresql://pmstudio:pmstudio@pgbouncer:6432/pmstudio"
       # **跨容器反代必须给**：Caddy 在另一个容器里，源 IP 是 Caddy 的。
       # 不给这个 → "每 IP 限流"退化成"全站限流"，**正常用户会互相锁死**
       # （`scripts/dev.py` 的注释点名了这条）。
@@ -56,9 +58,9 @@ services:
     # pgvector 0.8.7 + PostgreSQL 18。**按 digest 钉死**：浮动标签会随上游发版漂移。
     image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:9d9c930220cb9bf2f956d10a8f909cf9973d9672ca0278aef2c1e6facccad2e0
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-pmstudio}
-      POSTGRES_USER: ${POSTGRES_USER:-pmstudio}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pmstudio}
+      POSTGRES_DB: pmstudio
+      POSTGRES_USER: pmstudio
+      POSTGRES_PASSWORD: pmstudio
     volumes:
       # PostgreSQL 18 的 PGDATA 在 /var/lib/postgresql/18/docker；挂父目录兼容官方镜像。
       - pgdata:/var/lib/postgresql
@@ -76,9 +78,10 @@ services:
     environment:
       DB_HOST: db
       DB_PORT: "5432"
-      DB_USER: ${POSTGRES_USER:-pmstudio}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-pmstudio}
-      DB_NAME: ${POSTGRES_DB:-pmstudio}
+      LISTEN_PORT: "6432"
+      DB_USER: pmstudio
+      DB_PASSWORD: pmstudio
+      DB_NAME: pmstudio
       AUTH_TYPE: scram-sha-256
       POOL_MODE: transaction
       MAX_CLIENT_CONN: "64"

@@ -29,11 +29,22 @@ class PgUnitOfWork:
     def _closed(self) -> bool:
         return bool(getattr(self._connection, "closed", False))
 
+    def _enter_transaction(self) -> None:
+        marker = getattr(self._connection, "enter_transaction", None)
+        if callable(marker):
+            marker()
+
+    def _leave_transaction(self) -> None:
+        marker = getattr(self._connection, "leave_transaction", None)
+        if callable(marker):
+            marker()
+
     def __enter__(self) -> PgUnitOfWork:
         if self._depth == 0:
             self._connection.execute("BEGIN")
         else:
             self._connection.execute(f'SAVEPOINT "{self._savepoint()}"')
+        self._enter_transaction()
         self._depth += 1
         return self
 
@@ -44,24 +55,30 @@ class PgUnitOfWork:
         tb: TracebackType | None,
     ) -> bool:
         self._depth -= 1
-        if self._depth > 0:
-            if not self._closed():
+        try:
+            if self._depth > 0:
+                if not self._closed():
+                    if exc_type is None:
+                        self._connection.execute(
+                            f'RELEASE SAVEPOINT "{self._savepoint()}"'
+                        )
+                    else:
+                        self._connection.execute(
+                            f'ROLLBACK TO SAVEPOINT "{self._savepoint()}"'
+                        )
+                        self._connection.execute(
+                            f'RELEASE SAVEPOINT "{self._savepoint()}"'
+                        )
+                # 内层不决定整笔成败：异常继续往上抛，由最外层回滚。
+                return False
+            if self._closed():
                 if exc_type is None:
-                    self._connection.execute(
-                        f'RELEASE SAVEPOINT "{self._savepoint()}"'
-                    )
-                else:
-                    self._connection.execute(
-                        f'ROLLBACK TO SAVEPOINT "{self._savepoint()}"'
-                    )
-                    self._connection.execute(
-                        f'RELEASE SAVEPOINT "{self._savepoint()}"'
-                    )
-            # 内层不决定整笔成败：异常继续往上抛，由最外层回滚。
+                    # 连接被关闭却想正常提交：不能假装成功。走 execute 统一报 503。
+                    self._connection.execute("COMMIT")
+            elif exc_type is None:
+                self._connection.execute("COMMIT")
+            else:
+                self._connection.execute("ROLLBACK")
             return False
-        if exc_type is None:
-            self._connection.execute("COMMIT")
-        elif not self._closed():
-            # 连接已在错误点回滚并丢弃；再发 ROLLBACK 只会多一次无意义重连。
-            self._connection.execute("ROLLBACK")
-        return False
+        finally:
+            self._leave_transaction()
