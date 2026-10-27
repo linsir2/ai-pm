@@ -43,6 +43,7 @@ from tests.conftest import TEST_OWNER
 from tests.support.builders import NOW, PROJECT
 from tests.support.postgres import (
     PgTestDatabase,
+    isolated_schema,
     load_environment,
     prepare,
     truncate_data_tables,
@@ -55,7 +56,7 @@ TTL_MS = 30_000
 
 @pytest.fixture(scope="module")
 def database() -> PgTestDatabase:
-    pg = load_environment()
+    pg = isolated_schema(load_environment(), "t6_leases")
     prepare(pg)
     apply_migrations(pg.direct_url)
     return pg

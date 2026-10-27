@@ -39,6 +39,7 @@ from pmstudio.infrastructure.security import hash_password
 from pmstudio.infrastructure.sqlite.users import SqliteUserRepository
 from tests.support.postgres import (
     PgTestDatabase,
+    isolated_schema,
     load_environment,
     prepare,
     truncate_data_tables,
@@ -112,7 +113,7 @@ INTEGRATION_REPLY = json.dumps(
 
 @pytest.fixture(scope="module")
 def database() -> PgTestDatabase:
-    pg = load_environment()
+    pg = isolated_schema(load_environment(), "t6_multiworker")
     prepare(pg)
     apply_migrations(pg.direct_url)
     return pg

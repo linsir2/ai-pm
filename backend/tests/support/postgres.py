@@ -14,10 +14,13 @@ T1 只提供骨架；T8 会把这里的 helper 接进 `tests/conftest.py` 并让
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
+import uuid
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from contextlib import suppress
+from dataclasses import dataclass, replace
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 import pytest
@@ -30,6 +33,9 @@ APP_URL_ENV = "PMSTUDIO_TEST_DATABASE_URL"
 DIRECT_URL_ENV = "PMSTUDIO_TEST_DIRECT_DATABASE_URL"
 SCHEMA_ENV = "PMSTUDIO_TEST_SCHEMA"
 DEFAULT_SCHEMA = "pmstudio_test"
+
+#: 一次 pytest 进程一个后缀：并发跑同一批文件时，模块专用 schema 也必须互不重叠。
+_RUN_SUFFIX = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
 
 #: 18 张显式数据表（19 张普通表减掉 `vector_index_meta`）。测试间整批清空。
 #: 未知/临时表（例如 T1 的 `uow_probe`）不在这里，不会被顺手 TRUNCATE。
@@ -74,6 +80,7 @@ class PgTestDatabase:
             {
                 APP_URL_ENV: self.app_url,
                 DIRECT_URL_ENV: self.direct_url,
+                SCHEMA_ENV: self.schema,
                 "PMSTUDIO_DATABASE_URL": self.app_url,
                 "PMSTUDIO_DIRECT_DATABASE_URL": self.direct_url,
             }
@@ -148,6 +155,44 @@ def load_environment(env: Mapping[str, str] | None = None) -> PgTestDatabase:
         direct_url=schema_url(direct_base, schema),
         schema=schema,
     )
+
+
+def isolated_schema(database: PgTestDatabase, suffix: str) -> PgTestDatabase:
+    """在同一个测试库里派生一个**模块 + 进程专用 schema**。
+
+    设计里的默认口径仍是一个 test DB + 一个 schema（pytest 串行）；这个 helper 只给
+    T6 的租约/多进程用例用：多个 pytest 进程并行跑**同一批文件**时，不能互相
+    `TRUNCATE` 对方的行。进程号 + 随机后缀保证每次运行独立，退出时尽力清掉。
+    T8 统一测试夹具时可以删掉。
+    """
+
+    schema = f"{database.schema}_{suffix}_{_RUN_SUFFIX}"
+    isolated = replace(
+        database,
+        schema=schema,
+        app_url=schema_url(database.app_url, schema),
+        direct_url=schema_url(database.direct_url, schema),
+    )
+    _ISOLATED.append(isolated)
+    return isolated
+
+
+_ISOLATED: list[PgTestDatabase] = []
+
+
+def _drop_isolated_schemas() -> None:
+    while _ISOLATED:
+        database = _ISOLATED.pop()
+        with suppress(Exception):
+            with connect(database.direct_url) as connection:
+                # 不跟残留线程/连接死等：清不掉就留给下次容器重建。
+                connection.execute("SET lock_timeout = '2s'")
+                connection.execute(
+                    f"DROP SCHEMA IF EXISTS {_quote_identifier(database.schema)} CASCADE"
+                )
+
+
+atexit.register(_drop_isolated_schemas)
 
 
 def prepare(database: PgTestDatabase) -> None:

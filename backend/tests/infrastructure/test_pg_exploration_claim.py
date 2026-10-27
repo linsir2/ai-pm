@@ -38,6 +38,7 @@ from tests.support.builders import NOW, PROJECT, document_with_feature
 from tests.support.doubles import FixedClock, RecordingPublisher
 from tests.support.postgres import (
     PgTestDatabase,
+    isolated_schema,
     load_environment,
     prepare,
     truncate_data_tables,
@@ -54,7 +55,7 @@ class _Database:
 
 @pytest.fixture(scope="module")
 def database() -> _Database:
-    pg = load_environment()
+    pg = isolated_schema(load_environment(), "t6_exploration_claim")
     prepare(pg)
     apply_migrations(pg.direct_url)
     return _Database(pg)

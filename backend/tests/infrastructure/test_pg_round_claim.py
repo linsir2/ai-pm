@@ -76,6 +76,7 @@ from tests.support.doubles import (
 from tests.support.fakes import InMemoryMaterialStore
 from tests.support.postgres import (
     PgTestDatabase,
+    isolated_schema,
     load_environment,
     prepare,
     truncate_data_tables,
@@ -99,7 +100,7 @@ class _Database:
 
 @pytest.fixture(scope="module")
 def database() -> _Database:
-    pg = load_environment()
+    pg = isolated_schema(load_environment(), "t6_round_claim")
     prepare(pg)
     apply_migrations(pg.direct_url)
     return _Database(pg)
