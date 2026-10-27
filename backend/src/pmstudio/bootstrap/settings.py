@@ -10,6 +10,11 @@ KEY_ENV = "PMSTUDIO_API_KEY"
 BASE_ENV = "PMSTUDIO_API_BASE"
 DATABASE_URL_ENV = "PMSTUDIO_DATABASE_URL"
 DIRECT_DATABASE_URL_ENV = "PMSTUDIO_DIRECT_DATABASE_URL"
+BOOTSTRAP_DATABASE_URL_ENV = "PMSTUDIO_BOOTSTRAP_DATABASE_URL"
+APP_PASSWORD_ENV = "PMSTUDIO_APP_PASSWORD"
+OWNER_PASSWORD_ENV = "PMSTUDIO_OWNER_PASSWORD"
+PGBOUNCER_AUTH_FILE_ENV = "PMSTUDIO_PGBOUNCER_AUTH_FILE"
+PGBOUNCER_AUTH_UID_ENV = "PMSTUDIO_PGBOUNCER_AUTH_UID"
 TIMEOUT_ENV = "PMSTUDIO_MODEL_TIMEOUT"
 TRACE_ENV = "PMSTUDIO_TRACE_MODEL"
 PARAMS_ENV = "PMSTUDIO_MODEL_PARAMS"
@@ -347,3 +352,60 @@ class OpsSettings:
 #: 过渡别名：T1 期间调用点仍在逐步从 `Settings` 改名。它和 `AppSettings`
 #: 是**同一个类**，没有第二套配置语义；T7 完成迁移后删除。
 Settings = AppSettings
+
+
+@dataclass(frozen=True, slots=True)
+class BootstrapSettings:
+    """只给 `init_db --bootstrap` 的超级用户配置。
+
+    它和 `OpsSettings` 分开：bootstrap 用超级用户建 extension/角色/auth_file，
+    而 schema/finalize 用 owner 直连。**不互相回落**——缺了 bootstrap URL 就
+    明确失败，不去猜一个 superuser。
+    """
+
+    bootstrap_database_url: str
+    app_password: str
+    owner_password: str
+    #: PgBouncer auth_file 路径。`None` = 不写（只在本机手工建库时）。
+    auth_file: str | None = None
+    #: auth_file 的属主 uid（Docker 里 pgbouncer 是 postgres=70）。
+    auth_uid: int = 70
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "BootstrapSettings":
+        source = dict(os.environ if env is None else env)
+        bootstrap_url = source.get(BOOTSTRAP_DATABASE_URL_ENV, "").strip()
+        if not bootstrap_url:
+            raise ConfigError(
+                f"没有配置 bootstrap 数据库：请设置 {BOOTSTRAP_DATABASE_URL_ENV}"
+                "（只给 init --bootstrap，用超级用户）"
+            )
+        app_password = source.get(APP_PASSWORD_ENV, "").strip()
+        owner_password = source.get(OWNER_PASSWORD_ENV, "").strip()
+        missing = [
+            name
+            for name, value in (
+                (APP_PASSWORD_ENV, app_password),
+                (OWNER_PASSWORD_ENV, owner_password),
+            )
+            if not value
+        ]
+        if missing:
+            raise ConfigError(
+                "bootstrap 缺角色口令：" + "、".join(missing)
+                + "（app/owner 角色与 PgBouncer auth_file 都用它）"
+            )
+        raw_uid = source.get(PGBOUNCER_AUTH_UID_ENV, "").strip() or "70"
+        try:
+            auth_uid = int(raw_uid)
+        except ValueError as error:
+            raise ConfigError(
+                f"{PGBOUNCER_AUTH_UID_ENV} 要是整数，现在是 {raw_uid!r}"
+            ) from error
+        return cls(
+            bootstrap_database_url=bootstrap_url,
+            app_password=app_password,
+            owner_password=owner_password,
+            auth_file=source.get(PGBOUNCER_AUTH_FILE_ENV, "").strip() or None,
+            auth_uid=auth_uid,
+        )

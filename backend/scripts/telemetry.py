@@ -20,18 +20,18 @@
 这件事只有遥测能说。水位**只报不删**（`02` 的三层生命周期口径：删除只有用户能触发），
 所以这里一律 `mode=ro` 开库。
 
- 用法：
-     cd backend && uv run python scripts/telemetry.py                       # 扫 .codex/runs/**/*.db
-     cd backend && uv run python scripts/telemetry.py --db 库路径            # 只扫一个库
-     cd backend && uv run python scripts/telemetry.py --db 库路径 --memory   # 只打三层水位表
-     cd backend && uv run python scripts/telemetry.py --db 库路径 --memory-hits  # 只打记忆命中表
+ 用法（只读，直连 PostgreSQL）：
+     cd backend && uv run python scripts/telemetry.py
+     cd backend && uv run python scripts/telemetry.py --database-url postgresql://…
+     cd backend && uv run python scripts/telemetry.py --memory
+     cd backend && uv run python scripts/telemetry.py --memory-hits
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import re
-import sqlite3
 import sys
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -57,7 +57,8 @@ from pmstudio.domain.provenance.ledger import EvidenceLedger  # noqa: E402
 from pmstudio.domain.round.round import Round  # noqa: E402
 from pmstudio.domain.shared.ids import EvidenceId, ProjectId, RoundId, UserId  # noqa: E402
 from pmstudio.harness.model.prompt_log import TRUNCATION_MARK  # noqa: E402
-from pmstudio.infrastructure.sqlite.repositories import (  # noqa: E402
+from pmstudio.infrastructure.postgres.database import connect  # noqa: E402
+from pmstudio.infrastructure.postgres.repositories import (  # noqa: E402
     SqliteEvidenceRepository,
     SqliteMemoryRepository,
     SqliteRoundRepository,
@@ -65,8 +66,6 @@ from pmstudio.infrastructure.sqlite.repositories import (  # noqa: E402
 
 #: 有 E 编号、且互不重叠的槽（其余记忆层没有编号，测不了）。
 SLOTS = ("claims", "answers", "reviews", "materials")
-
-DEFAULT_RUNS_GLOB = ".codex/runs/**/*.db"
 
 #: (轮号, 该轮各槽覆盖率)
 MeasuredRounds = tuple[tuple[RoundId, tuple["SlotCoverage", ...]], ...]
@@ -141,20 +140,20 @@ def coverage(round_: Round, *, ledger: EvidenceLedger) -> tuple[SlotCoverage, ..
     )
 
 
-def analyze_db(path: Path) -> tuple[MeasuredRounds, int]:
+def analyze_db(url: str) -> tuple[MeasuredRounds, int]:
     """只读扫库：每个**有草案**的轮 → coverage；坏轮跳过（不炸整轮扫描）。
 
     返回 `(测到的轮, 跳过的轮数)`。跳过 = 没草案（半截/失败轮）或读不回来的老行。
     """
 
-    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row
+    connection = connect(url)
     try:
         rounds = SqliteRoundRepository(connection)
         evidences = SqliteEvidenceRepository(connection)
         measured: list[tuple[RoundId, tuple[SlotCoverage, ...]]] = []
         skipped = 0
-        for (raw_id,) in connection.execute("SELECT round_id FROM rounds ORDER BY rowid"):
+        for row in connection.execute("SELECT round_id FROM rounds ORDER BY seq"):
+            raw_id = str(row["round_id"])
             try:
                 round_ = rounds.get(RoundId(raw_id))
                 if round_.draft is None:
@@ -230,14 +229,22 @@ def memory_watermarks(counts: dict[str, int]) -> dict[str, LayerWatermark]:
     }
 
 
-def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
+def _table_exists(connection, table: str) -> bool:  # type: ignore[no-untyped-def]
+    row = connection.execute("SELECT to_regclass(%s) AS oid", (table,)).fetchone()
+    return row is not None and row["oid"] is not None
+
+
+def _column_exists(connection, table: str, column: str) -> bool:  # type: ignore[no-untyped-def]
     row = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        "SELECT 1 FROM information_schema.columns"
+        " WHERE table_schema = current_schema()"
+        " AND table_name = %s AND column_name = %s",
+        (table, column),
     ).fetchone()
     return row is not None
 
 
-def scan_memory_layers(path: Path) -> dict[str, LayerWatermark]:
+def scan_memory_layers(url: str) -> dict[str, LayerWatermark]:
     """只读扫三层表：行数 + 最旧 `created_at`。
 
     两种"读不到"分开处置（同本脚本扫轮次时的防守：不炸整次扫描）：
@@ -251,23 +258,24 @@ def scan_memory_layers(path: Path) -> dict[str, LayerWatermark]:
 
     counts: dict[str, int] = {}
     oldest: dict[str, str | None] = {}
-    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    connection = connect(url)
     try:
         for layer in LAYERS:
             table = LAYER_TABLES[layer]
             if not _table_exists(connection, table):
                 continue
-            counts[layer] = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            try:
-                oldest[layer] = (
-                    connection.execute(
-                        f"SELECT MIN(created_at) FROM {table}"
-                        " WHERE COALESCE(created_at, '') <> ''"
-                    ).fetchone()[0]
-                    or ""
-                )
-            except sqlite3.Error:
-                oldest[layer] = None  # 行数照样报（老库也该看得见还剩几行），时间说"查不出"
+            row = connection.execute(
+                f"SELECT COUNT(*) AS n FROM {table}"
+            ).fetchone()
+            counts[layer] = 0 if row is None else int(row["n"])
+            if not _column_exists(connection, table, "created_at"):
+                oldest[layer] = None  # 行数照样报，时间说"查不出"
+                continue
+            row = connection.execute(
+                f"SELECT MIN(created_at) AS oldest FROM {table}"
+                " WHERE COALESCE(created_at, '') <> ''"
+            ).fetchone()
+            oldest[layer] = "" if row is None or row["oldest"] is None else str(row["oldest"])
     finally:
         connection.close()
     return {
@@ -276,32 +284,31 @@ def scan_memory_layers(path: Path) -> dict[str, LayerWatermark]:
     }
 
 
-def _print_memory_report(paths: Sequence[Path]) -> int:
+def _print_memory_report(url: str) -> int:
     """水位表：一层一行，数 / 水位线 / 超没超 / 最旧时间戳。超了只标，不动数据。"""
 
-    for path in paths:
-        print(f"\n=== {path.name} · 三层记忆水位 ===")
-        try:
-            marks = scan_memory_layers(path)
-        except sqlite3.Error as error:
-            print(f"  跳过：{error}")
+    print("\n=== PostgreSQL · 三层记忆水位 ===")
+    try:
+        marks = scan_memory_layers(url)
+    except Exception as error:  # noqa: BLE001 —— 读不到就照实说
+        print(f"  跳过：{error}")
+        return 0
+    for layer in LAYERS:
+        if layer not in marks:
+            print(f"  {layer}  （读不到表 {LAYER_TABLES[layer]}，跳过）")
             continue
-        for layer in LAYERS:
-            if layer not in marks:
-                print(f"  {layer}  （读不到表 {LAYER_TABLES[layer]}，跳过）")
-                continue
-            mark = marks[layer]
-            # 三种"没有最旧时间"分开说：查不出（列不在）／一行有时间戳的都没有／有值
-            if mark.oldest is None:
-                oldest = "查不出（created_at 列不在）"
-            elif mark.oldest:
-                oldest = mark.oldest
-            else:
-                oldest = "无一行有时间戳"
-            print(
-                f"  {layer} {mark.count:>6} 行 / 水位 {mark.capacity:<4}"
-                f" {'超水位' if mark.over else '未超  '}  最旧 {oldest}"
-            )
+        mark = marks[layer]
+        # 三种"没有最旧时间"分开说：查不出（列不在）／一行有时间戳的都没有／有值
+        if mark.oldest is None:
+            oldest = "查不出（created_at 列不在）"
+        elif mark.oldest:
+            oldest = mark.oldest
+        else:
+            oldest = "无一行有时间戳"
+        print(
+            f"  {layer} {mark.count:>6} 行 / 水位 {mark.capacity:<4}"
+            f" {'超水位' if mark.over else '未超  '}  最旧 {oldest}"
+        )
     return 0
 
 
@@ -334,7 +341,7 @@ def memory_hit_counts(
     }
 
 
-def scan_memory_hits(path: Path) -> dict[str, dict[str, int]]:
+def scan_memory_hits(url: str) -> dict[str, dict[str, int]]:
     """只读扫库：每个项目 → 每条 `memory_id` × 最近 `WINDOW` 轮命中轮数。
 
     口径与生产端点（`GetMemoryUsage`）同一套：最近 WINDOW 轮 + `cited_eids` +
@@ -343,8 +350,7 @@ def scan_memory_hits(path: Path) -> dict[str, dict[str, int]]:
     """
 
     result: dict[str, dict[str, int]] = {}
-    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row  # 仓储读行用 `row["payload"]`，没它就 TypeError
+    connection = connect(url)
     try:
         if not _table_exists(connection, "project_memory"):
             return result
@@ -360,11 +366,11 @@ def scan_memory_hits(path: Path) -> dict[str, dict[str, int]]:
                 recent: list[str] = []
             else:
                 recent = [
-                    row[0]
+                    str(row["round_id"])
                     for row in connection.execute(
                         "SELECT round_id FROM rounds"
-                        " WHERE project_id = ? AND owner_id = ?"
-                        " ORDER BY rowid DESC LIMIT ?",
+                        " WHERE project_id = %s AND owner_id = %s"
+                        " ORDER BY seq DESC LIMIT %s",
                         (project_id, owner_id, MEMORY_USAGE_WINDOW),
                     ).fetchall()
                 ][::-1]
@@ -393,36 +399,37 @@ def scan_memory_hits(path: Path) -> dict[str, dict[str, int]]:
     return result
 
 
-def _print_memory_hits_report(paths: Sequence[Path]) -> int:
+def _print_memory_hits_report(url: str) -> int:
     """命中表：每条 `memory_id` × 最近 WINDOW 轮命中轮数。0 = 抽屉里标「久未使用」。"""
 
-    for path in paths:
-        print(f"\n=== {path.name} · 记忆命中（最近 {MEMORY_USAGE_WINDOW} 轮） ===")
-        try:
-            scans = scan_memory_hits(path)
-        except sqlite3.Error as error:
-            print(f"  跳过：{error}")
+    print(f"\n=== PostgreSQL · 记忆命中（最近 {MEMORY_USAGE_WINDOW} 轮） ===")
+    try:
+        scans = scan_memory_hits(url)
+    except Exception as error:  # noqa: BLE001 —— 读不到就照实说
+        print(f"  跳过：{error}")
+        return 0
+    if not scans:
+        print("  （没有记忆行）")
+        return 0
+    for project_id, hits in scans.items():
+        if not hits:
+            print(f"  {project_id}  （空记忆）")
             continue
-        if not scans:
-            print("  （没有记忆行）")
-            continue
-        for project_id, hits in scans.items():
-            if not hits:
-                print(f"  {project_id}  （空记忆）")
-                continue
-            for memory_id in sorted(hits):
-                stale = "久未使用" if hits[memory_id] == 0 else ""
-                print(
-                    f"  {memory_id}  {hits[memory_id]}/{MEMORY_USAGE_WINDOW}"
-                    f" 轮命中  {stale}"
-                )
+        for memory_id in sorted(hits):
+            stale = "久未使用" if hits[memory_id] == 0 else ""
+            print(
+                f"  {memory_id}  {hits[memory_id]}/{MEMORY_USAGE_WINDOW}"
+                f" 轮命中  {stale}"
+            )
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="消费遥测（只读）")
     parser.add_argument(
-        "--db", default=None, help="只扫这一个库（默认扫 .codex/runs/**/*.db）"
+        "--database-url",
+        default=os.environ.get("PMSTUDIO_DIRECT_DATABASE_URL", "").strip(),
+        help="只读直连 PostgreSQL（默认读 PMSTUDIO_DIRECT_DATABASE_URL）",
     )
     parser.add_argument(
         "--memory",
@@ -436,42 +443,29 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    paths = (
-        [Path(args.db)]
-        if args.db
-        else sorted(BACKEND_ROOT.parent.glob(DEFAULT_RUNS_GLOB))
-    )
-    if not paths:
-        print("没有找到库", file=sys.stderr)
+    url = args.database_url
+    if not url:
+        print("缺 --database-url / PMSTUDIO_DIRECT_DATABASE_URL", file=sys.stderr)
         return 2
 
     if args.memory:
-        return _print_memory_report(paths)
+        return _print_memory_report(url)
 
     if args.memory_hits:
-        return _print_memory_hits_report(paths)
+        return _print_memory_hits_report(url)
 
+    try:
+        measured, skipped = analyze_db(url)
+    except Exception as error:  # noqa: BLE001 —— 读不到就照实说
+        print(f"\n=== PostgreSQL ===\n  跳过：{error}")
+        return 1
+    _print_report("PostgreSQL", measured)
     totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
-    measured_rounds = 0
-    skipped_rounds = 0
-    for path in paths:
-        try:
-            measured, skipped = analyze_db(path)
-        except sqlite3.Error as error:
-            print(f"\n=== {path.name} ===\n  跳过：{error}")
-            continue
-        measured_rounds += len(measured)
-        skipped_rounds += skipped
-        _print_report(path.name, measured)
-        for _round_id, slots in measured:
-            for cell in slots:
-                totals[cell.slot][0] += cell.injected
-                totals[cell.slot][1] += cell.cited
-
-    print(
-        f"\n######## 全库汇总（{len(paths)} 库 · 测 {measured_rounds} 轮 · "
-        f"跳过 {skipped_rounds}）########"
-    )
+    for _round_id, slots in measured:
+        for cell in slots:
+            totals[cell.slot][0] += cell.injected
+            totals[cell.slot][1] += cell.cited
+    print(f"\n######## 汇总（测 {len(measured)} 轮 · 跳过 {skipped}）########")
     for slot in SLOTS:
         injected, cited = totals[slot]
         rate = f"{cited / injected:.0%}" if injected else "—"

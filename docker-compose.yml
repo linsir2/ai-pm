@@ -1,68 +1,89 @@
-# PM Studio 的 compose 形态：PostgreSQL + PgBouncer + 后端 + 前端（Caddy）+ Redis。
+# PM Studio 的 compose 形态：PostgreSQL + PgBouncer + 一次性 init/maintenance + 后端 + 前端（Caddy）+ Redis。
 #
 # **用法**：
-#   cp backend/.env.example backend/.env           # app：model/key/app URL
-#   cp backend/.env.ops.example backend/.env.ops   # ops：direct URL/首管理员（T7 job）
+#   cp backend/.env.example backend/.env           # app：model/key/app URL（pmstudio_app）
+#   cp backend/.env.ops.example backend/.env.ops   # ops：bootstrap/owner URL、角色口令、首管理员
 #   docker compose up -d
 #   打开 http://localhost
+#
+# 启动顺序：db → init（bootstrap→schema→finalize）→ pgbouncer → backend。
+# backend **不**跑迁移/seed；PgBouncer 先有 init 写好的 SCRAM auth_file 才启动。
 #
 # **这份 compose 与 `scripts/dev_stack.sh` 用同一套环境变量名**
 # ——那是它们"等价"的根据（`tests/architecture/test_container_assets.py` 盯着）。
 
+x-backend-image: &backend-image
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  image: pmstudio-backend:local
+
 services:
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    <<: *backend-image
     env_file:
       - ./backend/.env
     environment:
       PMSTUDIO_PORT: "8000"
-      # backend **只认 app URL**（PgBouncer transaction mode）；直连 URL 只给
-      # init / maintenance / backup（从 backend/.env.ops 注入，T7）。
-      # T1 骨架用开发口令；T7 会换 pmstudio_owner / pmstudio_app 角色与 secret。
-      PMSTUDIO_DATABASE_URL: "postgresql://pmstudio:pmstudio@pgbouncer:6432/pmstudio"
-      # **跨容器反代必须给**：Caddy 在另一个容器里，源 IP 是 Caddy 的。
-      # 不给这个 → "每 IP 限流"退化成"全站限流"，**正常用户会互相锁死**
-      # （`scripts/dev.py` 的注释点名了这条）。
+      # 跨容器反代必须给：Caddy 在另一个容器里，源 IP 是 Caddy 的。
       PMSTUDIO_FORWARDED_ALLOW_IPS: "172.16.0.0/12"
-      # Redis 连不上会自动降级成进程内计数（**不 fail-open 也不 fail-closed**），
-      # 但多 worker 的 SSE 扇出会静默退化成进程内 —— 所以给了 redis。
       PMSTUDIO_REDIS_URL: "redis://redis:6379/0"
-      # fastembed 的 ONNX 模型缓存（约 90MB）**必须**指到下面挂的卷上。
-      # fastembed 的默认缓存目录是 `${TMPDIR}/fastembed_cache`（可用
-      # `FASTEMBED_CACHE_PATH` 覆盖）——不显式给的话，容器里它落在 `/tmp` 下，
-      # **不挂卷**：每次重建容器都要重下 90MB 模型。
       FASTEMBED_CACHE_PATH: "/root/.cache/fastembed"
     volumes:
       - pmstudio-data:/data
       - fastembed-cache:/root/.cache/fastembed
     depends_on:
-      db:
-        condition: service_healthy
+      init:
+        condition: service_completed_successfully
       pgbouncer:
         condition: service_healthy
       redis:
         condition: service_started
     healthcheck:
-      test: ["CMD", "uv", "run", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      # **就绪**而不是存活：DB/PgBouncer 掉线时 /api/health 仍 200，不能拿它收流量。
+      # 用系统 python（urllib 足够）：`uv run` 会再走一遍 sync，健康检查不该依赖网络。
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=3)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
-    # SSE 是长期未完成的响应：关停时必须给够宽限期，
-    # 否则 `docker stop` 会把长连接 SIGKILL（`timeout_graceful_shutdown=5` 在 dev.py 里）。
     stop_grace_period: 15s
+
+  init:
+    <<: *backend-image
+    # ops 配置只给一次性 job：backend 的 env_file 里没有 direct/bootstrap URL。
+    env_file:
+      - path: ./backend/.env.ops
+        required: false
+    environment:
+      PMSTUDIO_PGBOUNCER_AUTH_FILE: "/pgbouncer-auth/userlist.txt"
+      PMSTUDIO_PGBOUNCER_AUTH_UID: "70"
+    volumes:
+      - pgbouncer-auth:/pgbouncer-auth
+    command: ["uv", "run", "--no-sync", "python", "scripts/init_db.py", "--all"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  maintenance:
+    <<: *backend-image
+    env_file:
+      - path: ./backend/.env.ops
+        required: false
+    command: ["uv", "run", "--no-sync", "python", "scripts/maintenance_worker.py"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: "no"
 
   db:
     # pgvector 0.8.7 + PostgreSQL 18。**按 digest 钉死**：浮动标签会随上游发版漂移。
     image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:9d9c930220cb9bf2f956d10a8f909cf9973d9672ca0278aef2c1e6facccad2e0
-    environment:
-      POSTGRES_DB: pmstudio
-      POSTGRES_USER: pmstudio
-      POSTGRES_PASSWORD: pmstudio
+    env_file:
+      - path: ./backend/.env.ops
+        required: false
     volumes:
-      # PostgreSQL 18 的 PGDATA 在 /var/lib/postgresql/18/docker；挂父目录兼容官方镜像。
       - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
@@ -73,25 +94,31 @@ services:
 
   pgbouncer:
     # PgBouncer 是 backend 唯一的池：transaction mode，禁用服务端预编译语句。
+    # auth_file 由 init 以 0600 写进共享卷（app + owner 两条），admin console 用 owner。
     # **不发布 6432 端口**：admin console 不对公网暴露。
     image: edoburu/pgbouncer:v1.26.1-p0@sha256:488422e38cff912895d0d65d8963fcd306e6ac589a724398b6eb8e294e94d624
     environment:
       DB_HOST: db
       DB_PORT: "5432"
       LISTEN_PORT: "6432"
-      DB_USER: pmstudio
-      DB_PASSWORD: pmstudio
+      DB_USER: pmstudio_app
       DB_NAME: pmstudio
       AUTH_TYPE: scram-sha-256
+      AUTH_FILE: /etc/pgbouncer/auth/userlist.txt
+      ADMIN_USERS: pmstudio_owner
       POOL_MODE: transaction
       MAX_CLIENT_CONN: "64"
       DEFAULT_POOL_SIZE: "10"
+      RESERVE_POOL_SIZE: "4"
+      QUERY_WAIT_TIMEOUT: "30"
       MAX_PREPARED_STATEMENTS: "0"
+    volumes:
+      - pgbouncer-auth:/etc/pgbouncer/auth:ro
     depends_on:
-      db:
-        condition: service_healthy
+      init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U $${DB_USER} -d $${DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U pmstudio_app -d pmstudio"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -102,19 +129,11 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
     environment:
-      # 站点地址**有真实来源**：Caddyfile 的 `{$PUBLIC_DOMAIN:...}` 从这里读。
-      # 默认 `http://localhost` —— 以 `http://` 开头，Caddy 就**不会**对这个站点
-      # 自动签发 HTTPS（本地没有证书，自动 HTTPS 只会把 80 的请求 301 到 443）。
-      # 换成真域名时：`PUBLIC_DOMAIN=example.com docker compose up -d`。
       PUBLIC_DOMAIN: "http://localhost"
-      # 容器内的反代目标是**服务名**，不是 127.0.0.1（那是 Caddy 自己）。
       PMSTUDIO_API_TARGET: "backend:8000"
       PMSTUDIO_WEB_ROOT: /srv
     ports:
       - "80:80"
-    # **等后端真的健康**再收流量：Caddy 反代到一个还没起来的后端 → 用户看到 502，
-    # 而不是"页面开了但点什么都失败"。这也让 backend 的 healthcheck 有了消费者
-    # （否则它是个**没有消费者的装饰**）。
     depends_on:
       backend:
         condition: service_healthy
@@ -132,3 +151,4 @@ volumes:
   pmstudio-data:
   fastembed-cache:
   pgdata:
+  pgbouncer-auth:

@@ -3,8 +3,11 @@
 from pmstudio.domain.shared.errors import DomainError, ShapeError
 from pmstudio.harness.errors import (
     ApplicationError,
+    DatabaseBusy,
+    DatabaseUnavailable,
     ModelCallFailed,
     PacketParseError,
+    StorageFull,
 )
 
 CODE_STATUS = {
@@ -84,37 +87,39 @@ CODE_STATUS = {
 }
 
 
-def is_busy_error(error: BaseException) -> bool:
-    """这条 sqlite 错误是「等锁超时」吗？
+#: 锁等待 / 序列化失败 / 死锁 / 语句取消：都是"短事务竞争者"造成的暂时失败。
+_RETRYABLE_SQLSTATES = frozenset({"55P03", "40001", "40P01", "57014"})
+#: 连接类（08 类）与运维主动断开。`PgConnection` 已包一层；这里兜住未包装的路径。
+_CONNECTION_SQLSTATES = frozenset({"08001", "08003", "08006", "57P01", "57P02", "57P03"})
 
-    **只认 `locked` / `busy`**：`no such table`、`attempt to write a readonly
-    database` 那些是代码 bug 或部署错，回 503 等于让客户端干等一个永远不会好的
-    结果——那比回 500 更坏。
+
+def error_for_sqlstate(error: BaseException) -> ApplicationError | None:
+    """PostgreSQL SQLSTATE → 应用错误。**只认 SQLSTATE，不解析文本**。
+
+    - 55P03/40001/40P01/57014 → 503 + Retry-After（等一会儿重试）
+    - 08 类 / 57P01-03 → 503 database_unavailable
+    - 25P02（事务已中止）→ 503：调用方应重试整笔；UoW 负责回滚
+    - 53100 → 507 storage_full（重试无用，要人腾空间）
+    - 其它 → `None`（交给 500，不拿文本猜）
     """
 
-    text = str(error).lower()
-    return "locked" in text or "busy" in text
-
-
-#: SQLite 报满盘的原话。照抄真跑抓到的那句（4M tmpfs 填满时拿到的），
-#: 不写裸的 `"full"`——`unable to open database file` 之类会被一起吞进来，
-#: 而那几类是路径/权限/只读挂载，回 507 等于**指错方向**。
-_STORAGE_FULL_HINTS = ("database or disk is full", "out of disk space", "disk full")
-
-
-def is_storage_full_error(error: BaseException) -> bool:
-    """这条 sqlite 错误是「磁盘满」吗。
-
-    **必须与 `is_busy_error` 分开**：等锁回 503 + 兑现得起的 `Retry-After`，
-    磁盘满回 507（重试无用）。混了就等于给了一个兑现不了的承诺。
-
-    与 `_LITELLM` 那边同样的分层约束：`model_calls.py` 里另有一份同规则的小判据，
-    两边**不共享**——`ALLOWED_LAYER_IMPORTS` 规定 api 只能 import
-    api/application/domain/harness，api 拿不到 infrastructure 的东西，反向也不允许。
-    """
-
-    text = str(error).lower()
-    return any(hint in text for hint in _STORAGE_FULL_HINTS)
+    state = getattr(error, "sqlstate", None)
+    if not isinstance(state, str):
+        return None
+    if state == "53100":
+        return StorageFull(
+            "磁盘空间不足，这次改动没能保存——请腾出空间后重试。"
+            "已经确认写进去的内容不受影响。"
+        )
+    if state in _RETRYABLE_SQLSTATES:
+        return DatabaseBusy("数据库正忙，请稍后重试", retry_after=3)
+    if state in _CONNECTION_SQLSTATES or state.startswith("08"):
+        return DatabaseUnavailable("数据库连接不可用，请稍后重试", retry_after=3)
+    if state == "25P02":
+        return DatabaseUnavailable(
+            "事务已中止并回滚；请重试整笔操作", retry_after=3
+        )
+    return None
 
 
 def status_for(error: DomainError | ApplicationError) -> int:

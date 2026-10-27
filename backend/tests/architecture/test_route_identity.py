@@ -27,8 +27,8 @@ from tests.architecture.guards import SRC
 
 ROUTES = SRC / "pmstudio" / "api" / "routes.py"
 
-#: 无身份豁免（路径）。理由：探活。auth.py 的公开端点不在本文件，故不出现在这里。
-IDENTITY_EXEMPT: frozenset[str] = frozenset({"/health"})
+#: 无身份豁免（路径）。理由：探活/就绪。auth.py 的公开端点不在本文件，故不出现在这里。
+IDENTITY_EXEMPT: frozenset[str] = frozenset({"/health", "/ready"})
 
 _ROUTE_METHODS = frozenset({"get", "post", "put", "delete", "patch"})
 _IDENTITY_ALIAS = "CurrentUser"

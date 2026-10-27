@@ -18,7 +18,8 @@ from typing import Any
 
 import psycopg
 from pgvector.psycopg import register_vector
-from psycopg import OperationalError, ProgrammingError
+from psycopg import Error as PsycopgError
+from psycopg import OperationalError
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 
@@ -78,9 +79,11 @@ def connect(
     )
     try:
         register_vector(connection)
-    except ProgrammingError:
+    except PsycopgError:
         # 测试/早期 schema 可能还没有 vector 扩展；连接本身不该因此失败。
         # 真正走向量检索时，调用方会明确报错并退回纯词法。
+        # PgBouncer admin console 也不支持 register_vector 的探测语句——
+        # admin 连接（`SHOW POOLS`）是运维入口，不该被向量注册拦住。
         pass
     else:
         connection._pmstudio_vector_registered = True

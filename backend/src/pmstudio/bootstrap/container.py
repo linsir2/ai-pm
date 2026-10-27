@@ -90,7 +90,6 @@ from pmstudio.application.use_cases import (
     web_search_tool,
 )
 from pmstudio.application.web_research import WebResearch
-from pmstudio.bootstrap.maintenance import MaterialMaintenance
 from pmstudio.bootstrap.settings import AppSettings
 from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.services.assigner import EvidenceAssigner
@@ -150,7 +149,6 @@ from pmstudio.infrastructure.sqlite.users import (
     SqliteSessionRepository,
     SqliteUserRepository,
 )
-from pmstudio.infrastructure.templates.loader import seed_builtin_templates
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
 from pmstudio.infrastructure.tools.tavily import TavilySearchGateway
@@ -322,10 +320,7 @@ def build_container(
     digest_repo = SqliteDigestRepository(connection)
     inspiration_repo = SqliteInspirationRepository(connection)
     template_repo = SqliteTemplateRepository(connection)
-    # 内置模板 seed（幂等 upsert）：TOML 是定义源，表是运行时源。
-    # 改 TOML 发版即改内置；自定义模板（builtin=0）id 不同，seed 碰不到。
-    # 老项目行内存的是全文快照，库里怎么变都不影响它们。
-    seed_builtin_templates(template_repo)
+    # 内置模板 seed 属于 init --finalize；backend 不跑 DDL/seed。
     uow = PgUnitOfWork(connection)
     prompts = FilePromptLibrary(PROMPTS_DIR)
     if gateway is None:
@@ -898,17 +893,13 @@ def build_container(
     # "谁创建谁负责关"——进程内总线没有可关的东西，它本来就不是；照传会让 lifespan
     # 去 `await bus.start()`（不存在）而把服务整个带崩。
     background = bus if isinstance(bus, BackgroundResource) else None
-    # **材料维护**（批 7）：把块结构已过时的材料按新块宽重切、重算向量。
-    # 原始字节在库 → 不需要网络；后台跑 → 不阻塞启动。
-    maintenance = MaterialMaintenance(
-        connection=connection,
-        parser=parser,
-        store=materials,
-        vectors=vector_index,
-        owner_scope=owner_scope,
-        index=index,
+    # 材料维护是独立的一次性 job（`scripts/maintenance_worker.py`，直连 PG）；
+    # backend 进程不跑它。
+    app = create_app(
+        services,
+        background=background,
+        readiness=lambda: connection.execute("SELECT 1").fetchone(),
     )
-    app = create_app(services, background=background, maintenance=maintenance)
     app.state.auth = auth_services
     # owner 上下文由 api 层（`require_user` / SSE 归属过滤）经 `app.state` 取用：
     # api 不许 import infrastructure（分层守卫），装配点把实现注进去（依赖倒置）。

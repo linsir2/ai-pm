@@ -4,7 +4,7 @@ from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from pmstudio.api.deps import require_user
 from pmstudio.api.schemas import (
@@ -61,7 +61,29 @@ def services_of(request: Request):  # type: ignore[no-untyped-def]
 
 @router.get("/health")
 async def health(request: Request) -> dict[str, str]:
+    """**只表示进程活着**：DB/PgBouncer 掉线时它仍然 200（compose 用 /ready）。"""
+
     return {"status": "ok", "model": services_of(request).model_name}
+
+
+@router.get("/ready", include_in_schema=False)
+async def ready(request: Request) -> JSONResponse:
+    """就绪探针：真查一次数据库；DB/池掉线返回 503（不是假装健康）。"""
+
+    probe = getattr(request.app.state, "readiness", None)
+    if probe is None:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": "readiness probe not configured"},
+        )
+    try:
+        probe()
+    except Exception:  # noqa: BLE001 —— 探针不把内部异常/连接串带给调用方
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": "database unavailable"},
+        )
+    return JSONResponse(status_code=200, content={"status": "ready"})
 
 
 @router.get("/schema")

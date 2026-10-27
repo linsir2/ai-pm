@@ -3,8 +3,8 @@
 判据：双向零差。任一方向多出来 = 有人加了端点没加界面（死契约），或界面调了
 不存在的端点（404 炸）——两边都是"真相源漂移"。
 
-跑法（**不碰真库**：不给 `PMSTUDIO_DB` 就用一个**用完即删**的临时库；
-显式给了 `PMSTUDIO_DB` 且它指向仓库内 `backend/data` 则直接拒绝）：
+跑法（只读 OpenAPI；不连库、不碰真数据。仍需要 `PMSTUDIO_DATABASE_URL` /
+model / key 让 `AppSettings.from_env()` 能起来）：
 
 ```bash
 cd backend && set -a && . ./.env && set +a && python3 scripts/check_api_parity.py
@@ -14,9 +14,7 @@ cd backend && set -a && . ./.env && set +a && python3 scripts/check_api_parity.p
 """
 
 import re
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -28,31 +26,12 @@ sys.path.insert(0, str(BACKEND / "src"))
 KNOWN_NON_FETCH = {("GET", "/events")}
 
 
-#: 临时库目录（`backend_paths()` 造、`main()` 收尾时删）。
-_TEMP_DIR: Path | None = None
-
-
-def _scratch_dir() -> Path:
-    """造一个用完即删的临时目录（**不碰用户真实数据目录**）。"""
-
-    global _TEMP_DIR
-    if _TEMP_DIR is None:
-        _TEMP_DIR = Path(tempfile.mkdtemp(prefix="pmstudio-parity-"))
-    return _TEMP_DIR
-
-
 def backend_paths() -> set[tuple[str, str]]:
     from pmstudio.bootstrap.container import build_container
     from pmstudio.bootstrap.settings import Settings
 
-    # **默认给一个临时库**：`Settings.from_env()` 不给 `PMSTUDIO_DB` 时会退到
-    # `~/.pmstudio/pmstudio.db`——那是**用户真实数据目录**，在这里建库等于碰真库。
-    # 显式传 `default_db` 才把默认值换成临时的（`PMSTUDIO_DB` 若给了，仍然优先）。
-    settings = Settings.from_env(default_db=_scratch_dir() / "parity.db")
-    db = str(settings.db_path)
-    if Path(db).resolve().is_relative_to((BACKEND / "data").resolve()):
-        print(f"拒绝：PMSTUDIO_DB 指向真库目录（{db}），换一个临时库再跑", flush=True)
-        return set()
+    # 只读 OpenAPI：容器组装不连库（连接在首个请求/ready 才建立）。
+    settings = Settings.from_env()
     app = build_container(settings).app
     found: set[tuple[str, str]] = set()
     for path, item in app.openapi()["paths"].items():
@@ -105,28 +84,23 @@ def normalize(paths: set[tuple[str, str]]) -> set[tuple[str, str]]:
 
 
 def main() -> int:
-    try:
-        backend = normalize(backend_paths())
-        if not backend:
-            return 2
-        frontend = normalize(frontend_calls()) | KNOWN_NON_FETCH
-        only_backend = sorted(backend - frontend)
-        only_frontend = sorted(frontend - backend)
-        if not only_backend and not only_frontend:
-            print(
-                f"OK backend={len(backend)} frontend={len(frontend)} 双向零差",
-                flush=True,
-            )
-            return 0
-        for method, path in only_backend:
-            print(f"只有后端有：{method} {path}（死契约？界面没调）", flush=True)
-        for method, path in only_frontend:
-            print(f"只有前端调：{method} {path}（会 404？后端没这个端点）", flush=True)
-        return 1
-    finally:
-        # **用完即删**：临时库用完就收，不在磁盘上留痕。
-        if _TEMP_DIR is not None:
-            shutil.rmtree(_TEMP_DIR, ignore_errors=True)
+    backend = normalize(backend_paths())
+    if not backend:
+        return 2
+    frontend = normalize(frontend_calls()) | KNOWN_NON_FETCH
+    only_backend = sorted(backend - frontend)
+    only_frontend = sorted(frontend - backend)
+    if not only_backend and not only_frontend:
+        print(
+            f"OK backend={len(backend)} frontend={len(frontend)} 双向零差",
+            flush=True,
+        )
+        return 0
+    for method, path in only_backend:
+        print(f"只有后端有：{method} {path}（死契约？界面没调）", flush=True)
+    for method, path in only_frontend:
+        print(f"只有前端调：{method} {path}（会 404？后端没这个端点）", flush=True)
+    return 1
 
 
 if __name__ == "__main__":

@@ -24,6 +24,9 @@ from pmstudio.application.ports import WebFetcher, WebSearchGateway
 from pmstudio.bootstrap.container import build_container
 from pmstudio.bootstrap.settings import Settings
 from pmstudio.harness.model.contracts import ModelGateway, ModelReply, ModelRequest
+from pmstudio.infrastructure.postgres.database import PgConnection
+from pmstudio.infrastructure.postgres.repositories import SqliteTemplateRepository
+from pmstudio.infrastructure.templates.loader import seed_builtin_templates
 from pmstudio.infrastructure.tools.tavily import PARSER_VERSION
 from tests.support.doubles import RecordingWebFetch, RecordingWebSearch, ScriptedModelGateway
 
@@ -212,10 +215,21 @@ def create_app(
     return container.app
 
 
+def _seed_templates(settings: Settings) -> None:
+    """测试 factory 的 seed：对应生产里的 `init_db --finalize`。
+
+    backend 自己不 seed；这些进程级用例只 apply 了迁移，所以在测试专用入口补这一步。
+    """
+
+    with PgConnection(settings.database_url) as connection:
+        seed_builtin_templates(SqliteTemplateRepository(connection))
+
+
 def build_app() -> FastAPI:
     """`uvicorn ...:build_app --factory` 的测试入口。"""
 
     settings = Settings.from_env()
+    _seed_templates(settings)
     script_path = os.environ.get(SCRIPT_ENV)
     if not script_path:
         raise RuntimeError(f"测试 factory 需要 {SCRIPT_ENV}")

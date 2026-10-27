@@ -5,7 +5,7 @@
 就不必每次都重建语料、跑模型才能验算一遍。
 """
 
-from scripts.retrieval_bench import (
+from scripts.legacy.retrieval_bench import (
     p_sign_test,
     paired_increment,
     rescue_rate_from_samples,

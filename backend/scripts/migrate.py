@@ -41,9 +41,14 @@ def discover_migrations(directory: Path) -> list[tuple[int, Path]]:
 
     found: dict[int, Path] = {}
     for path in sorted(directory.iterdir()):
+        if path.suffix != ".sql":
+            continue
         match = _MIGRATION_NAME.fullmatch(path.name)
         if match is None:
-            continue
+            raise ValueError(
+                f"迁移文件名不合规：{path.name}（要 NNNN_名称.sql；"
+                "否则它会被静默跳过）"
+            )
         version = int(match.group(1))
         if version in found:
             raise ValueError(

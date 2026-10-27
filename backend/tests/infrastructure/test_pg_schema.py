@@ -615,6 +615,15 @@ def test_two_runners_serialize_on_the_advisory_lock(database: PgTestDatabase) ->
         _drop_schema(database, schema)
 
 
+def test_non_matching_migration_filenames_are_rejected(tmp_path: Path) -> None:
+    """T2 Important：`0002_add-index.sql` 不能被静默跳过。"""
+
+    (tmp_path / "0001_init.sql").write_text("SELECT 1", encoding="utf-8")
+    (tmp_path / "0002_add-index.sql").write_text("SELECT 1", encoding="utf-8")
+    with pytest.raises(ValueError, match="0002_add-index.sql"):
+        discover_migrations(tmp_path)
+
+
 def test_duplicate_migration_numbers_are_rejected(tmp_path: Path) -> None:
     (tmp_path / "0001_first.sql").write_text("SELECT 1", encoding="utf-8")
     (tmp_path / "0001_second.sql").write_text("SELECT 1", encoding="utf-8")

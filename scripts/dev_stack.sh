@@ -26,9 +26,30 @@ FRONTEND_PORT="${PMSTUDIO_WEB_PORT:-5173}"
 # ── 与 compose **完全相同**的环境变量（键名与取值口径一致）─────────────
 # 这一段是"compose 与本脚本等价"的**可核对凭据**：
 # `tests/architecture/test_container_assets.py` 盯着两边的键名不许漂。
-# 值不同是**故意的**：容器里库在 /data、反代目标是服务名；
-# 本机是相对路径、反代目标是 127.0.0.1（同机 Caddy）。
-export PMSTUDIO_DB="${PMSTUDIO_DB:-data/pmstudio.db}"
+# PostgreSQL 的 app/direct URL 从 backend/.env 与 backend/.env.ops 读
+# （已导出的环境变量优先）；backend 只拿 app URL，init/maintenance 用 direct。
+load_env_file() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" || "$line" == \#* || "$line" != *=* ]] && continue
+    local key="${line%%=*}"
+    local value="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    value="${value%\"}"; value="${value#\"}"
+    value="${value%\'}"; value="${value#\'}"
+    if [ -n "$key" ] && [ -z "${!key+x}" ]; then
+      export "$key=$value"
+    fi
+  done < "$file"
+}
+
+load_env_file "$BACKEND/.env"
+load_env_file "$BACKEND/.env.ops"
+
 export PMSTUDIO_PORT="$BACKEND_PORT"
 export PMSTUDIO_WEB_PORT="$FRONTEND_PORT"
 # 代理目标**带协议前缀**：vite 的 proxy target 与 `frontend/.env` 的
@@ -64,7 +85,9 @@ check_keys() {
   #   · PMSTUDIO_WEB_ROOT  —— Caddy 的静态根；本机跑 vite，自己伺服。
   #   · FASTEMBED_CACHE_PATH —— compose 要指到挂卷目录；本机用 fastembed 默认缓存。
   #   · PUBLIC_DOMAIN —— compose 的 Caddy 站点地址；本机没有 Caddy。
-  local compose_only="PMSTUDIO_WEB_ROOT FASTEMBED_CACHE_PATH PUBLIC_DOMAIN"
+  #   · PMSTUDIO_PGBOUNCER_AUTH_FILE/UID —— compose 的 init 写共享卷用；本机
+  #     PgBouncer 的配置由部署者自己给。
+  local compose_only="PMSTUDIO_WEB_ROOT FASTEMBED_CACHE_PATH PUBLIC_DOMAIN PMSTUDIO_PGBOUNCER_AUTH_FILE PMSTUDIO_PGBOUNCER_AUTH_UID"
   local missing=""
   while read -r key; do
     [ -z "$key" ] && continue
@@ -75,6 +98,15 @@ check_keys() {
     die "compose 里的这些键 dev_stack.sh 没覆盖：$missing"
   fi
   log "配置键名一致（$(echo "$compose_keys" | grep -c . ) 个 PMSTUDIO_* 键）"
+}
+
+check_db_env() {
+  [ -n "${PMSTUDIO_DATABASE_URL:-}" ] || die "缺 PMSTUDIO_DATABASE_URL（backend 只认 app URL）"
+  [ -n "${PMSTUDIO_DIRECT_DATABASE_URL:-}" ] || die "缺 PMSTUDIO_DIRECT_DATABASE_URL（init/maintenance/backup 直连）"
+  case "$PMSTUDIO_DATABASE_URL" in
+    *pgbouncer*|*:6432*) log "backend app URL：PgBouncer（transaction mode）" ;;
+    *) log "backend app URL：直连（本机可以，生产必须经 PgBouncer）" ;;
+  esac
 }
 
 wait_for() {
@@ -101,6 +133,7 @@ stop_all() {
 case "${1:-start}" in
   --check)
     check_keys
+    check_db_env
     exit 0
     ;;
   --stop)
@@ -110,6 +143,7 @@ case "${1:-start}" in
 esac
 
 check_keys
+check_db_env
 
 [ -f "$BACKEND/.env" ] || die "没有 backend/.env —— 先 cp backend/.env.example backend/.env 并填 key"
 command -v uv >/dev/null || die "没有 uv"
@@ -117,6 +151,15 @@ command -v uv >/dev/null || die "没有 uv"
 
 stop_all
 : > /tmp/pmstudio-devstack.pids
+
+# compose 的启动序列里 init 是**独立的一次性 job**；本机有 bootstrap URL 时
+# 复现同一段（幂等），没有就要求库已初始化。
+if [ -n "${PMSTUDIO_BOOTSTRAP_DATABASE_URL:-}" ]; then
+  log "初始化数据库（init_db.py --all，bootstrap→schema→finalize）"
+  ( cd "$BACKEND" && ./.venv/bin/python scripts/init_db.py --all ) || die "init_db --all 失败"
+else
+  log "跳过 init：没有 PMSTUDIO_BOOTSTRAP_DATABASE_URL（假定库已由 init job 初始化）"
+fi
 
 log "起后端（端口 $BACKEND_PORT）"
 (
@@ -127,7 +170,7 @@ log "起后端（端口 $BACKEND_PORT）"
 ) > /tmp/pmstudio-backend.log 2>&1 &
 echo $! >> /tmp/pmstudio-devstack.pids
 
-wait_for "http://127.0.0.1:$BACKEND_PORT/api/health" "后端"
+wait_for "http://127.0.0.1:$BACKEND_PORT/api/ready" "后端（就绪）"
 
 log "起前端（端口 $FRONTEND_PORT）"
 (
@@ -142,7 +185,8 @@ cat <<EOF
 
 两个服务都起来了：
   前端   http://127.0.0.1:$FRONTEND_PORT
-  后端   http://127.0.0.1:$BACKEND_PORT/api/health
+  后端   http://127.0.0.1:$BACKEND_PORT/api/health（存活）
+         http://127.0.0.1:$BACKEND_PORT/api/ready（就绪）
   日志   /tmp/pmstudio-backend.log · /tmp/pmstudio-frontend.log
 
 收尾：scripts/dev_stack.sh --stop

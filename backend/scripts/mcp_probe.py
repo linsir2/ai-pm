@@ -143,16 +143,17 @@ async def _run(args: argparse.Namespace) -> int:
         return 0
 
     # 造网关：**复用生产装配的那一个**（`bootstrap/container.py` 里的 `_model_gateway`）。
-    # 留样单独接一个**自己的库**——与 `scripts/eval.py` 同一纪律：
-    # 每次从干净库开始，可重复，且不污染工作库。
+    # 留样写进 PostgreSQL 的 `model_calls`。默认用 app URL；可用
+    # `PMSTUDIO_MCP_PROBE_DATABASE_URL` 指到一个专用库（仍必须是已 init 的 PG）。
     from pmstudio.bootstrap.container import _model_gateway
-    from pmstudio.infrastructure.sqlite.database import connect
+    from pmstudio.infrastructure.postgres.database import PgConnection
     from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
 
-    sample_db = Path(os.environ.get("PMSTUDIO_MCP_PROBE_DB", "/tmp/pmstudio-mcp-probe.db"))
-    if sample_db.exists():
-        sample_db.unlink()
-    connection = connect(sample_db)
+    sample_url = (
+        os.environ.get("PMSTUDIO_MCP_PROBE_DATABASE_URL", "").strip()
+        or settings.database_url
+    )
+    connection = PgConnection(sample_url)
     recorder = SqliteModelCallRecorder(connection)
     gateway = _model_gateway(settings, recorder=recorder)
     if gateway is None:
@@ -192,7 +193,7 @@ async def _run(args: argparse.Namespace) -> int:
         f"\n跑了 {result.turns_used} 轮"
         + ("（**已达轮数上限**）" if result.hit_turn_limit else "")
     )
-    print(f"留样在 {sample_db}（purpose='mcp_probe'）——可以查每一趟的提示词与回复。")
+    print("留样在 PostgreSQL（purpose='mcp_probe'）——可以查每一趟的提示词与回复。")
 
     await manager.stop()
     connection.close()

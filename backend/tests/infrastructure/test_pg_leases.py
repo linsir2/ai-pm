@@ -32,7 +32,8 @@ from pmstudio.domain.exploration.exploration import (
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.ids import ExplorationId, RoundId, UserId
 from pmstudio.domain.shared.lease import LeaseKind
-from pmstudio.infrastructure.postgres.database import connect
+from pmstudio.harness.errors import DatabaseUnavailable
+from pmstudio.infrastructure.postgres.database import PgConnection, connect
 from pmstudio.infrastructure.postgres.leases import PgLeaseStore
 from pmstudio.infrastructure.postgres.repositories import (
     SqliteExplorationRepository,
@@ -333,6 +334,82 @@ async def test_heartbeat_retries_sqlstate_lock_and_serialization() -> None:
     assert all(delay > 0 for delay in delays)
     assert scope.token is not None and scope.token.expires_at_ms == 2_000
     assert scope.lost is False
+
+
+async def test_heartbeat_retries_transient_database_unavailable() -> None:
+    """T6 Important：连接瞬断（DatabaseUnavailable）不能把心跳静默打死。"""
+
+    from pmstudio.application.lease import LeaseScope as Scope
+    from pmstudio.domain.shared.lease import LeaseToken
+
+    token = LeaseToken(
+        kind=LeaseKind.ROUND,
+        target_id="r1",
+        user_id=str(OWNER),
+        holder=HOLDER,
+        token=1,
+        expires_at_ms=1_000,
+    )
+    scope = Scope()
+    scope.bind(token)
+    calls: list[int] = []
+
+    def flaky_renew(current: LeaseToken, ttl_ms: int) -> int:
+        calls.append(ttl_ms)
+        if len(calls) == 1:
+            raise DatabaseUnavailable("connection dropped")
+        return 2_000
+
+    heartbeat = LeaseHeartbeat(
+        scope=scope,
+        renew=flaky_renew,
+        interval_seconds=0.01,
+        ttl_ms=5_000,
+        on_lost=lambda: None,
+        retry_initial_seconds=0.001,
+        retry_max_seconds=0.001,
+    )
+
+    assert await heartbeat.beat_once() is True
+    assert calls == [5_000, 5_000]
+    assert scope.token is not None and scope.token.expires_at_ms == 2_000
+    assert scope.lost is False
+
+
+async def test_heartbeat_renews_after_pg_terminates_the_connection(database) -> None:
+    """真断连：第一次 renew 抛 DatabaseUnavailable，重连后同一心跳续上。"""
+
+    from pmstudio.application.lease import LeaseScope as Scope
+
+    with connect(database.direct_url) as seed:
+        _seed_round(seed)
+    wrapper = PgConnection(database.direct_url)
+    store = PgLeaseStore(wrapper)
+    token = store.acquire(LeaseKind.ROUND, "r-lease", OWNER, HOLDER, TTL_MS)
+    assert token is not None
+    scope = Scope(holder=HOLDER, owner=OWNER)
+    scope.bind(token)
+    pid = wrapper.execute("SELECT pg_backend_pid() AS pid").fetchone()
+    assert pid is not None
+    with connect(database.direct_url) as killer:
+        killer.execute("SELECT pg_terminate_backend(%s)", (int(pid["pid"]),))
+    heartbeat = LeaseHeartbeat(
+        scope=scope,
+        renew=lambda current, ttl_ms: store.renew(
+            current.kind, current.target_id, OWNER, current.holder, current.token, ttl_ms
+        ),
+        interval_seconds=0.01,
+        ttl_ms=TTL_MS,
+        on_lost=lambda: None,
+        retry_initial_seconds=0.001,
+        retry_max_seconds=0.001,
+    )
+    try:
+        assert await heartbeat.beat_once() is True
+        assert scope.lost is False
+        assert scope.token is not None and scope.token.expires_at_ms >= token.expires_at_ms
+    finally:
+        wrapper.close()
 
 
 async def test_heartbeat_marks_lost_only_when_renew_returns_none() -> None:

@@ -7,6 +7,8 @@
 3. 起 uvicorn，并在起之前把"用的哪个模型、库在哪、key 有没有"打出来——
    缺配置时后端必须起不来（`ConfigError`），这里是让那句话在起服务前就被人看见。
 
+**backend 不跑迁移/seed**：库要先由 `scripts/init_db.py` 初始化；这里只起服务。
+
 用法：
     python3 scripts/dev.py                 # 8000，带热重载
     python3 scripts/dev.py --port 8010
@@ -17,15 +19,15 @@ from __future__ import annotations
 
 import argparse
 import os
-import sqlite3
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 SRC = BACKEND_ROOT / "src"
 ENV_FILE = BACKEND_ROOT / ".env"
 
-REQUIRED = ("PMSTUDIO_MODEL", "PMSTUDIO_API_KEY")
+REQUIRED = ("PMSTUDIO_MODEL", "PMSTUDIO_API_KEY", "PMSTUDIO_DATABASE_URL")
 
 
 def load_env_file(path: Path) -> int:
@@ -59,12 +61,12 @@ def mask(value: str) -> str:
 
 #: **每个 worker 的固定 fd 开销**（本机核验出来的清单，不是估的）：
 #: 3 标准流 + 3 asyncio（epoll + self-pipe 两端）+ 1 uvicorn 监听 socket
-#: + **3 SQLite**（库文件 + `-wal` + `-shm`，`PRAGMA journal_mode=WAL` 开着）
-#: + 1 事件扇出 reader + 1 事件扇出 publisher = 12。
+#: + **1 PostgreSQL 连接**（每 worker 一条 psycopg，PgBouncer 在另一侧）
+#: + 1 事件扇出 reader + 1 事件扇出 publisher = 10。
 #:
-#: **SQLite 那 3 个最容易漏**——`ls /proc/<pid>/fd` 能直接看到三个。
-#: 改前这个提示只算 `workers × 200`（SSE 连接数），漏掉了这一整块。
-FIXED_FDS_PER_WORKER = 12
+#: 改前是 12：SQLite 时代一个连接占 3 个 fd（库 + `-wal` + `-shm`）。切 PG 后
+#: 连接只剩 1 个；这个数变了，下面那条 fd 压力提示才没有在拿旧口径吓人。
+FIXED_FDS_PER_WORKER = 10
 
 
 def fd_budget_for(*, workers: int, redis_pool: int, connections_per_worker: int) -> int:
@@ -135,29 +137,6 @@ def _workers() -> int:
     return value
 
 
-def wal_reset_blocker(workers: int, version: str) -> str | None:
-    """多 worker + 受 WAL-reset 影响的 SQLite → 拒绝启动的理由；否则 None。
-
-    判据复用 `database.wal_reset_vulnerable()`（按分支判，不裸比版本号）：
-    多 worker 正好满足"同一库 ≥2 个跨进程连接"这一条触发条件。
-    """
-
-    if workers <= 1:
-        return None
-    from pmstudio.infrastructure.sqlite.database import wal_reset_vulnerable
-
-    if not wal_reset_vulnerable(version):
-        return None
-    return (
-        f"拒绝启动：PMSTUDIO_WORKERS={workers}，但解释器链接的 SQLite {version} "
-        "落在 WAL-reset bug 的受影响区间（3.7.0–3.51.2；修复在 3.51.3，"
-        "backport 只有 3.44.6 / 3.50.7）。\n"
-        "  多 worker = 同一库 ≥2 个跨进程连接，正好满足触发条件，可能损坏数据库。\n"
-        "  改法：设 PMSTUDIO_WORKERS=1，或换一个捆绑 ≥3.51.3 SQLite 的解释器"
-        "（生产镜像里 pin 住）。"
-    )
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="起 PM Studio 后端")
     parser.add_argument("--port", type=int, default=None, help="端口，默认读 PMSTUDIO_PORT 或 8000")
@@ -186,10 +165,10 @@ def main() -> int:
         print(f"填进 {ENV_FILE}（模板见 .env.example），或用环境变量传。", file=sys.stderr)
         return 2
 
-    db_env = os.environ.get("PMSTUDIO_DB", "").strip()
-    db_path = Path(db_env) if db_env else Path.home() / ".pmstudio" / "pmstudio.db"
-    if not db_path.is_absolute():
-        db_path = BACKEND_ROOT / db_path
+    database_url = os.environ["PMSTUDIO_DATABASE_URL"].strip()
+    parsed = urlsplit(database_url)
+    # 只打印 host/port/db，不打印 user/password（URL 里可能带口令）。
+    db_label = f"{parsed.hostname or '?'}:{parsed.port or '?'}{parsed.path or ''}"
 
     port = args.port or int(os.environ.get("PMSTUDIO_PORT", "8000"))
 
@@ -198,7 +177,7 @@ def main() -> int:
     print(f"网关：{os.environ.get('PMSTUDIO_API_BASE') or '(官方默认)'}")
     timeout = os.environ.get("PMSTUDIO_MODEL_TIMEOUT", "").strip() or "90"
     print(f"超时：{timeout} 秒/次（一次业务调用最多重试 3 次）")
-    print(f"库：{db_path}{'（已存在）' if db_path.exists() else '（还没有，首次写入时建）'}")
+    print(f"库：PostgreSQL {db_label}（backend 经 PgBouncer；迁移/seed 由 init job 负责）")
     # 留样默认关（模型与工具同一开关）：开着才会写 `model_calls` / `tool_calls`。
     # **起之前就说清楚**：管理后台「用量与失败率」恒为 0 时，先回来对一眼这行。
     trace_model = os.environ.get("PMSTUDIO_TRACE_MODEL", "").strip().lower() in {
@@ -241,15 +220,14 @@ def main() -> int:
                 f"MCP：配了 {len(configured)} 个 server（{names}）"
                 "——由 scripts/mcp_probe.py 连接（只读旁路，不进主闭环）"
             )
-    print(f"起在 http://{args.host}:{port} · 健康检查 /api/health")
+    print(f"起在 http://{args.host}:{port} · 存活 /api/health · 就绪 /api/ready")
 
     import uvicorn  # 放在 sys.path 之后导入，免得 src 还没进路径
 
     # **多 worker 的三条约束（P4 之后的状态）**：
     #  · 进程内 SSE 总线各自为政 → **P4 已解决**（配 Redis 走跨进程扇出）；
     #  · 内存登录限流不共享 → **P3 已解决**（配 Redis 共享计数）；
-    #  · SQLite 单文件写 → **仍按单进程设计**，但实测 8 进程 × 150 INSERT 零争用
-    #    （WAL + timeout=10），且它只串行化**写**，读与 SSE 不受影响。
+    #  · PostgreSQL 每 worker 一条 psycopg 连接，PgBouncer 是唯一池（transaction mode）。
     # 所以多 worker 现在**可以开**，但要配上 Redis；没配就多 worker 等于把限流与
     # 扇出静默退化回进程内——上面那行状态提示已经写明了。
     workers = _workers()
@@ -260,10 +238,6 @@ def main() -> int:
             "  · 要热重载 → 设 PMSTUDIO_WORKERS=1",
             file=sys.stderr,
         )
-        return 2
-    blocker = wal_reset_blocker(workers, sqlite3.sqlite_version)
-    if blocker is not None:
-        print(blocker, file=sys.stderr)
         return 2
     # fd 护栏：先自己抬软限（nginx 的做法），再判够不够。
     # **警告而不是退出码 2**——见 `_raise_fd_limit` 的文档串。

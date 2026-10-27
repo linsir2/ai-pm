@@ -3,6 +3,7 @@ import pytest
 from pmstudio.bootstrap.settings import (
     DEFAULT_MODEL_TIMEOUT,
     AppSettings,
+    BootstrapSettings,
     ConfigError,
     OpsSettings,
 )
@@ -167,5 +168,45 @@ def test_app_settings_do_not_read_the_direct_url():
                 "PMSTUDIO_MODEL": "m",
                 "PMSTUDIO_API_KEY": "k",
                 "PMSTUDIO_DIRECT_DATABASE_URL": DIRECT_URL,
+            }
+        )
+
+
+def test_bootstrap_settings_read_url_passwords_and_auth_file():
+    settings = BootstrapSettings.from_env(
+        {
+            "PMSTUDIO_BOOTSTRAP_DATABASE_URL": "postgresql://postgres@db:5432/pmstudio",
+            "PMSTUDIO_APP_PASSWORD": "app-pass",
+            "PMSTUDIO_OWNER_PASSWORD": "owner-pass",
+            "PMSTUDIO_PGBOUNCER_AUTH_FILE": "/run/pgbouncer/userlist.txt",
+            "PMSTUDIO_PGBOUNCER_AUTH_UID": "70",
+        }
+    )
+    assert settings.bootstrap_database_url.startswith("postgresql://postgres@")
+    assert settings.app_password == "app-pass"
+    assert settings.owner_password == "owner-pass"
+    assert settings.auth_file == "/run/pgbouncer/userlist.txt"
+    assert settings.auth_uid == 70
+
+
+def test_bootstrap_settings_require_both_role_passwords():
+    for missing in ("PMSTUDIO_APP_PASSWORD", "PMSTUDIO_OWNER_PASSWORD"):
+        env = {
+            "PMSTUDIO_BOOTSTRAP_DATABASE_URL": "postgresql://postgres@db:5432/pmstudio",
+            "PMSTUDIO_APP_PASSWORD": "app-pass",
+            "PMSTUDIO_OWNER_PASSWORD": "owner-pass",
+        }
+        env.pop(missing)
+        with pytest.raises(ConfigError, match=missing):
+            BootstrapSettings.from_env(env)
+
+
+def test_bootstrap_settings_do_not_read_ops_url():
+    with pytest.raises(ConfigError, match="PMSTUDIO_BOOTSTRAP_DATABASE_URL"):
+        BootstrapSettings.from_env(
+            {
+                "PMSTUDIO_DIRECT_DATABASE_URL": DIRECT_URL,
+                "PMSTUDIO_APP_PASSWORD": "a",
+                "PMSTUDIO_OWNER_PASSWORD": "o",
             }
         )

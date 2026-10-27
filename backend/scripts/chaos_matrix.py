@@ -4,8 +4,8 @@
 ## 它是什么、不是什么
 
 **是**：把"每种故障下按设计降级"钉成可重复跑的东西。每一行都是一次**真注入**
-（真 HTTP 5xx、真超时、真断 TCP、真锁库、真 ENOSPC），断言的都是设计文档里
-写过的行为——不是"没崩"，是"降级的方式对"。
+（真 HTTP 5xx、真超时、真断 TCP、真 PostgreSQL 锁；53100 走真异常类型/真 handler），
+断言的都是设计文档里写过的行为——不是"没崩"，是"降级的方式对"。
 
 **不是**：单元测试的替代品。分类口径（`classify`）、熔断时机、退避公式那些
 纯逻辑，`tests/harness/` 与 `tests/infrastructure/` 已经盖住了；
@@ -18,12 +18,11 @@
 | A | 上游 5xx | 桩 server 全回 500 | 计入熔断 → 开闸 → `ModelShed` → 恢复后闭合 |
 | B | 上游慢响应 | 桩 server 睡 10s（网关 timeout 2s） | 超时计入 → 开闸 → 卸载 → 恢复后闭合 |
 | C | Redis 强断 | TCP 代理掐掉已建立连接 | 降级可见 + 本机兜底 → 恢复 → 回到共享扇出 |
-| D | SQLite 写锁 | 第二连接 `BEGIN EXCLUSIVE` | 503 + `Retry-After`（复用已有测试，不复制） |
-| E | 磁盘满 | 4M tmpfs 写满 | 507 + 账本不裂 + 可恢复（复用已有测试，不复制） |
+| D | PostgreSQL 写锁 | 第二连接 `LOCK TABLE ... ACCESS EXCLUSIVE` | 503 + `Retry-After` |
+| E | 磁盘满 | `psycopg.errors.DiskFull`（53100）走真 handler | 507（不带 `Retry-After`） |
 
-D/E **不复制**：`tests/api/test_database_busy.py` 与 `tests/e2e/test_disk_full.py`
-已经是真注入（真锁/真 tmpfs），矩阵直接跑它们，挂了就是那一行红——
-同一份注入写两遍，总有一天两边漂移。
+D/E **不复制注入**：矩阵直接跑 `tests/api/test_pg_errors.py` 里对应的真库/真 handler
+用例，挂了就是那一行红。真 ENOSPC 注入（tablespace）留给 T8/T10，不在本任务伪造。
 
 ## 跑法
 
@@ -542,10 +541,16 @@ async def _main() -> dict:  # noqa: ANN201
     redis_row = await _row_redis_kill()
     rows.append(redis_row)
     print(_line(redis_row), flush=True)
-    lock_row = _row_pytest("D 写锁争用", "tests/api/test_database_busy.py")
+    lock_row = _row_pytest(
+        "D PostgreSQL 写锁",
+        "tests/api/test_pg_errors.py::test_lock_timeout_sqlstate_returns_503_with_retry_after",
+    )
     rows.append(lock_row)
     print(_line(lock_row), flush=True)
-    disk_row = _row_pytest("E 磁盘满", "tests/e2e/test_disk_full.py")
+    disk_row = _row_pytest(
+        "E 磁盘满(53100)",
+        "tests/api/test_pg_errors.py::test_disk_full_handler_returns_507_without_retry_after",
+    )
     rows.append(disk_row)
     print(_line(disk_row), flush=True)
     return {"matrix": "chaos", "rows": rows}

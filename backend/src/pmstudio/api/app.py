@@ -1,19 +1,18 @@
 """FastAPI 应用：唯一职责是把 HTTP 变成用例调用，把错误变成状态码。"""
 
-import sqlite3
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+import psycopg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from pmstudio.api import auth, routes
 from pmstudio.api.errors import (
     body_for,
-    is_busy_error,
-    is_storage_full_error,
+    error_for_sqlstate,
     status_for,
 )
 from pmstudio.application.ports import DiscussionRunner, ExplorationOrchestrator, RoundOrchestrator
@@ -64,12 +63,8 @@ from pmstudio.application.use_cases import (
     UploadMaterial,
 )
 from pmstudio.domain.shared.errors import DomainError
-from pmstudio.harness.errors import ApplicationError, DatabaseBusy, StorageFull
+from pmstudio.harness.errors import ApplicationError
 from pmstudio.harness.events import EventStream
-
-#: 等锁超时告诉客户端等多久（秒）。**常量而非配置**：这是一句提示，而我们并不
-#: 真知道竞争写要多久；做成旋钮等于让人瞎调。理由见 `DatabaseBusy` 的文档串。
-DATABASE_BUSY_RETRY_SECONDS = 3
 
 
 def _error_response(error: DomainError | ApplicationError) -> JSONResponse:
@@ -161,6 +156,7 @@ def create_app(
     *,
     background: BackgroundResource | None = None,
     maintenance: BackgroundResource | None = None,
+    readiness: Callable[[], object] | None = None,
 ) -> FastAPI:
     """`background` 是有生命周期的后台资源（当前只有 Redis 扇出总线）。
 
@@ -191,6 +187,8 @@ def create_app(
 
     app = FastAPI(title="PM Studio", version="0.2.0", lifespan=lifespan)
     app.state.services = services
+    #: `/api/ready` 的探针。`None` = 没接线，ready 明确返回 503（不是假装健康）。
+    app.state.readiness = readiness
     app.include_router(routes.router, prefix="/api")
     app.include_router(auth.router, prefix="/api")
 
@@ -200,36 +198,21 @@ def create_app(
         assert isinstance(error, (DomainError, ApplicationError))
         return _error_response(error)
 
-    @app.exception_handler(sqlite3.OperationalError)
-    async def _handle_sqlite(request: Request, error: Exception) -> JSONResponse:
-        """**SQLite 等锁超时**（高并发 P5b）。
+    @app.exception_handler(psycopg.Error)
+    async def _handle_postgres(request: Request, error: Exception) -> JSONResponse:
+        """**PostgreSQL SQLSTATE → HTTP**（只有这一处映射，不解析错误文本）。"""
 
-        多 worker 把写并发提上来之后，`BEGIN IMMEDIATE` 等锁 10 秒拿不到就抛
-        `OperationalError`。改前它落到 FastAPI 默认处理，成一个**裸 500**——
-        而 500 传达的信息是错的（"你自己或数据坏了"），客户端只会重试到天荒地老。
-
-        只有**等锁超时**才转 503：`no such table`、`readonly database` 那些是代码
-        bug 或部署错，回 503 等于让客户端干等一个永远不会好的结果。
-        """
-
-        assert isinstance(error, sqlite3.OperationalError)
-        if is_busy_error(error):
-            return _error_response(
-                DatabaseBusy("数据库正忙，请稍后重试", retry_after=DATABASE_BUSY_RETRY_SECONDS)
-            )
-        if is_storage_full_error(error):
-            # 507，**故意不带 Retry-After**：那要等有人在删文件，
-            # 客户端等不了那件事发生。判据见 `StorageFull` 的文档串。
-            return _error_response(
-                StorageFull(
-                    "磁盘空间不足，这次改动没能保存——请腾出空间后重试。"
-                    "已经确认写进去的内容不受影响。"
-                )
-            )
-        # 其余（`no such table` / `readonly database`）：代码 bug 或部署错，形状照常，内码 500。
+        assert isinstance(error, psycopg.Error)
+        mapped = error_for_sqlstate(error)
+        if mapped is not None:
+            return _error_response(mapped)
         return JSONResponse(
             status_code=500,
-            content={"code": "internal_error", "message": "数据库写入失败", "details": {}},
+            content={
+                "code": "internal_error",
+                "message": "数据库操作失败",
+                "details": {},
+            },
         )
 
     return app

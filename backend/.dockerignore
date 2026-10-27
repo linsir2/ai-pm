@@ -16,3 +16,6 @@ __pycache__
 *.db
 *.db-wal
 *.db-shm
+
+# 一次性 bench / 历史验收脚本归档：不进运行时镜像。
+scripts/legacy

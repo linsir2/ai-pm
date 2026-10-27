@@ -21,7 +21,7 @@ from pmstudio.application.errors import ExplorationBusy, LeaseLost
 from pmstudio.application.ports import LeaseStore
 from pmstudio.domain.shared.ids import ExplorationId, ProjectId, UserId
 from pmstudio.domain.shared.lease import LeaseKind, LeaseToken
-from pmstudio.harness.errors import ApplicationError
+from pmstudio.harness.errors import ApplicationError, DatabaseUnavailable
 
 #: 租约有效期；心跳按 `LEASE_HEARTBEAT_SECONDS` 续租（Task 2/3 接线）。
 LEASE_TTL_SECONDS = 90
@@ -187,6 +187,7 @@ class LeaseHeartbeat:
         sleep: Callable[[float], Awaitable[None]] | None = None,
         retry_initial_seconds: float = 0.05,
         retry_max_seconds: float = 1.0,
+        retry_budget_seconds: float = 30.0,
     ) -> None:
         self._scope = scope
         self._renew = renew
@@ -196,6 +197,10 @@ class LeaseHeartbeat:
         self._sleep = sleep or asyncio.sleep
         self._retry_initial = retry_initial_seconds
         self._retry_max = retry_max_seconds
+        #: 连接瞬断的有界重试预算。**只用于本地重试/取消决策**，不拿主机时钟
+        #: 判断租约是否过期（那仍由 DB `clock_timestamp()` 决定）。超过预算就
+        #: 标记失租并回调：长模型轮次不会在心跳已死的情况下继续跑到 TTL。
+        self._retry_budget = retry_budget_seconds
 
     async def run(self) -> None:
         """一直续到失租或任务被取消（取消由调用方负责，runner 的 finally 会收掉）。"""
@@ -214,12 +219,18 @@ class LeaseHeartbeat:
         if token is None:
             return True
         backoff = self._retry_initial
+        deadline = time.monotonic() + self._retry_budget
         while True:
             try:
                 renewed = self._renew(token, self._ttl_ms)
-            except Exception as error:  # noqa: BLE001 —— 只把锁等待/序列化失败当可重试
+            except Exception as error:  # noqa: BLE001 —— 只把锁等待/序列化/连接瞬断当可重试
                 if not _retryable_lease_error(error):
                     raise
+                if time.monotonic() >= deadline:
+                    # 连接长时间不回来：主动失租并取消主任务，别让它静默跑到 TTL。
+                    self._scope.mark_lost()
+                    self._on_lost()
+                    return False
                 await self._sleep(backoff)
                 backoff = min(backoff * 2, self._retry_max)
                 continue
@@ -231,13 +242,19 @@ class LeaseHeartbeat:
             return True
 
 
-#: 可重试的 SQLSTATE：锁等待（55P03）、序列化失败（40001）、死锁（40P01）。
-#: 只认 SQLSTATE，不解析错误文本——文本会随驱动/语言/版本变。
+#: 可重试的 SQLSTATE：锁等待（55P03）、序列化失败（40001）、死锁（40P01），
+#: 以及连接类 08 与运维主动断开。只认 SQLSTATE，不解析错误文本。
 _RETRYABLE_SQLSTATES = frozenset({"55P03", "40001", "40P01"})
+_CONNECTION_SQLSTATES = frozenset({"08001", "08003", "08006", "57P01", "57P02", "57P03"})
 
 
 def _retryable_lease_error(error: BaseException) -> bool:
-    return getattr(error, "sqlstate", None) in _RETRYABLE_SQLSTATES
+    if isinstance(error, DatabaseUnavailable):
+        return True
+    state = getattr(error, "sqlstate", None)
+    if not isinstance(state, str):
+        return False
+    return state in _RETRYABLE_SQLSTATES or state in _CONNECTION_SQLSTATES or state.startswith("08")
 
 
 _current: ContextVar[LeaseScope | None] = ContextVar("pmstudio_lease_scope", default=None)

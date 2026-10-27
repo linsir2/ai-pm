@@ -7,9 +7,11 @@ cd backend
 PMSTUDIO_MODEL=openai/qwen3.8-flash \
 PMSTUDIO_API_KEY=sk-… \
 PMSTUDIO_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1 \
-PMSTUDIO_DB=/tmp/pmstudio-smoke.db \
 python3 scripts/smoke.py
 ```
+
+它跑在一个**临时 schema**（`pmstudio_smoke_*`）里：真迁移 + finalize + 首管理员，
+跑完即删；不会碰工作库。
 
 退出码非 0 表示失败，失败时打印**哪一步**、**什么原因**。
 """
@@ -17,14 +19,19 @@ python3 scripts/smoke.py
 import asyncio
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BACKEND_ROOT / "src"))
+sys.path.insert(0, str(BACKEND_ROOT))
+
+from scripts.pg_scratch import load_env_files, scratch_database  # noqa: E402
 
 from pmstudio.bootstrap.container import build_container  # noqa: E402
-from pmstudio.bootstrap.settings import Settings  # noqa: E402
+from pmstudio.bootstrap.settings import AppSettings  # noqa: E402
 
 INPUT = (
     "想做个订单导出的功能，运营每天都要用，最好能按时间筛选，数据量大概几万。"
@@ -171,15 +178,34 @@ async def run(client: httpx.AsyncClient) -> int:
 
 
 async def main() -> int:
-    settings = Settings.from_env()
-    os.environ.setdefault("PMSTUDIO_DB", str(settings.db_path))
-    show("boot", f"模型 {settings.model}；库 {settings.db_path}")
-    app = build_container(settings).app
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://smoke") as client:
-        health = await client.get("/api/health")
-        show("health", str(health.json()))
-        return await run(client)
+    env = load_env_files(BACKEND_ROOT)
+    for key, value in env.items():
+        os.environ.setdefault(key, value)
+    username = os.environ.get("PMSTUDIO_FIRST_ADMIN_USER", "")
+    password = os.environ.get("PMSTUDIO_FIRST_ADMIN_PASSWORD", "")
+    if not username or not password:
+        show("login", "没设首管理员凭据（PMSTUDIO_FIRST_ADMIN_USER / _PASSWORD）")
+        return 2
+    with scratch_database(
+        prefix="smoke", admin_user=username, admin_password=password
+    ) as scratch:
+        settings = replace(
+            AppSettings.from_env(os.environ), database_url=scratch.app_url
+        )
+        show(
+            "boot",
+            f"模型 {settings.model}；临时 schema {scratch.schema}（用 app URL）",
+        )
+        app = build_container(settings).app
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://smoke"
+        ) as client:
+            health = await client.get("/api/health")
+            show("health", str(health.json()))
+            ready = await client.get("/api/ready")
+            show("ready", f"{ready.status_code} {ready.json()}")
+            return await run(client)
 
 
 if __name__ == "__main__":

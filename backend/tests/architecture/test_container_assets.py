@@ -124,6 +124,13 @@ def test_the_backend_dockerfile_does_not_hardcode_a_sqlite_path() -> None:
 
     envs = _directives(_text(BACKEND_DOCKERFILE), "ENV")
     assert not any("PMSTUDIO_DB=" in line for line in envs)
+    runs = _directives(_text(BACKEND_DOCKERFILE), "RUN")
+    installs = [line for line in runs if "apt-get install" in line]
+    assert installs, "Dockerfile 应该有 apt 安装步骤"
+    assert not any(" sqlite3" in line for line in installs), "镜像不许再装 sqlite3"
+    assert any("postgresql-client-18" in line for line in installs), (
+        "备份/恢复要 PostgreSQL 18 客户端（pg_dump -Fc）"
+    )
 
 
 # —— R（需求）：compose ——
@@ -177,18 +184,31 @@ def test_db_and_pgbouncer_have_healthchecks() -> None:
 
 
 def test_backend_connects_through_pgbouncer_only() -> None:
-    block = _service_block(_text(COMPOSE), "backend")
-    # 只看生效的键，不看解释性注释。
-    code = "\n".join(line.split("#", 1)[0] for line in block.splitlines())
-    assert "PMSTUDIO_DATABASE_URL" in code
-    assert "pgbouncer:6432" in code
+    """backend 只拿 app URL（env_file）；直连/bootstrap 只在 ops 文件。"""
+
+    app_keys = _env_keys(ENV_APP)
+    assert "PMSTUDIO_DATABASE_URL" in app_keys
+    app_url = next(
+        line.split("=", 1)[1]
+        for line in _text(ENV_APP).splitlines()
+        if line.startswith("PMSTUDIO_DATABASE_URL=")
+    )
+    assert "pgbouncer:6432" in app_url
+    assert "pmstudio_app" in app_url
+    assert "PMSTUDIO_DIRECT_DATABASE_URL" not in app_keys
+    assert not (app_keys & {"PMSTUDIO_BOOTSTRAP_DATABASE_URL"})
+    backend = _service_block(_text(COMPOSE), "backend")
+    code = "\n".join(line.split("#", 1)[0] for line in backend.splitlines())
     assert "PMSTUDIO_DIRECT_DATABASE_URL" not in code, "backend 不许拿直连 URL"
+    assert "PMSTUDIO_BOOTSTRAP_DATABASE_URL" not in code
 
 
-def test_backend_waits_for_db_and_pgbouncer() -> None:
+def test_backend_waits_for_init_and_pgbouncer() -> None:
     block = _service_block(_text(COMPOSE), "backend")
-    assert re.search(r"db:\s*\n\s+condition:\s*service_healthy", block)
-    assert re.search(r"pgbouncer:\s*\n\s+condition:\s*service_healthy", block)
+    assert re.search(
+        r"init:\s*\n\s+condition:\s+service_completed_successfully", block
+    )
+    assert re.search(r"pgbouncer:\s*\n\s+condition:\s+service_healthy", block)
 
 
 def test_pgbouncer_listen_port_matches_backend_and_healthcheck() -> None:
@@ -196,9 +216,11 @@ def test_pgbouncer_listen_port_matches_backend_and_healthcheck() -> None:
 
     text = _text(COMPOSE)
     pgbouncer = _service_block(text, "pgbouncer")
-    backend = _service_block(text, "backend")
     listen = re.search(r"LISTEN_PORT:\s*\"?(\d+)", pgbouncer)
-    url = re.search(r"@pgbouncer:(\d+)/", backend)
+    url = re.search(
+        r"@pgbouncer:(\d+)/",
+        _text(ENV_APP),
+    )
     health = re.search(r"pg_isready[^\n]*-p\s+(\d+)", pgbouncer)
     assert listen and url and health, (
         f"端口缺来源：LISTEN_PORT={listen}, URL={url}, healthcheck={health}"
@@ -243,8 +265,16 @@ def test_backend_mounts_only_the_app_env_file() -> None:
     assert not (app_keys & {"PMSTUDIO_FIRST_ADMIN_USER", "PMSTUDIO_FIRST_ADMIN_PASSWORD"})
 
     ops_keys = _env_keys(ENV_OPS)
-    assert "PMSTUDIO_DIRECT_DATABASE_URL" in ops_keys
-    assert {"PMSTUDIO_FIRST_ADMIN_USER", "PMSTUDIO_FIRST_ADMIN_PASSWORD"} <= ops_keys
+    assert {
+        "PMSTUDIO_BOOTSTRAP_DATABASE_URL",
+        "PMSTUDIO_DIRECT_DATABASE_URL",
+        "PMSTUDIO_APP_PASSWORD",
+        "PMSTUDIO_OWNER_PASSWORD",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "PMSTUDIO_FIRST_ADMIN_USER",
+        "PMSTUDIO_FIRST_ADMIN_PASSWORD",
+    } <= ops_keys
 
 
 def test_the_compose_file_proxies_to_the_service_name_not_localhost() -> None:
@@ -333,6 +363,48 @@ def test_the_local_caddyfile_does_not_redirect_to_https() -> None:
     assert match.group(1).startswith("http://"), (
         f"本地默认站点地址不该带 https（那会把 80 的请求 301 到 443）：{match.group(1)}"
     )
+
+
+def test_init_is_a_one_shot_job_before_pgbouncer_and_backend() -> None:
+    text = _text(COMPOSE)
+    init = _service_block(text, "init")
+    pgbouncer = _service_block(text, "pgbouncer")
+    assert "scripts/init_db.py" in init and "--all" in init
+    assert "service_completed_successfully" in pgbouncer
+    assert "./backend/.env.ops" in init
+    assert "pgbouncer-auth" in init
+    assert "nginx" not in init.lower()
+
+
+def test_maintenance_is_an_independent_direct_job() -> None:
+    block = _service_block(_text(COMPOSE), "maintenance")
+    assert "scripts/maintenance_worker.py" in block
+    assert "./backend/.env.ops" in block
+    assert "service_completed_successfully" in block
+
+
+def test_pgbouncer_uses_scram_auth_file_and_separate_admin() -> None:
+    block = _service_block(_text(COMPOSE), "pgbouncer")
+    assert re.search(r"AUTH_TYPE:\s*scram-sha-256", block)
+    assert re.search(r"AUTH_FILE:\s*/etc/pgbouncer/auth/userlist\.txt", block)
+    assert re.search(r"ADMIN_USERS:\s*pmstudio_owner", block)
+    assert re.search(r"DB_USER:\s*pmstudio_app", block)
+    assert "DB_PASSWORD" not in block, "口令只进 init 写的 auth_file，不进 compose"
+    assert "pgbouncer-auth:/etc/pgbouncer/auth:ro" in block
+
+
+def test_backend_healthcheck_uses_ready_not_liveness() -> None:
+    block = _service_block(_text(COMPOSE), "backend")
+    code = "\n".join(line.split("#", 1)[0] for line in block.splitlines())
+    assert "/api/ready" in code
+    assert "/api/health" not in code
+
+
+def test_db_only_exposes_the_bootstrap_superuser() -> None:
+    block = _service_block(_text(COMPOSE), "db")
+    assert "./backend/.env.ops" in block
+    assert "POSTGRES_USER: pmstudio_app" not in block
+    assert "POSTGRES_USER: pmstudio_owner" not in block
 
 
 # —— R（需求）：.dockerignore ——
@@ -491,18 +563,15 @@ def test_the_dev_stack_script_uses_the_same_env_keys_as_compose() -> None:
         "PMSTUDIO_WEB_ROOT",
         "FASTEMBED_CACHE_PATH",
         "PUBLIC_DOMAIN",
-        # backend 容器里连的是 compose 服务名；原生 dev_stack 的 PG/PgBouncer
-        # 启动顺序归 T7，T1 不在这里造一个假的本机 URL。
-        "PMSTUDIO_DATABASE_URL",
+        # init 容器写共享卷用；本机 PgBouncer 配置由部署者自己给。
+        "PMSTUDIO_PGBOUNCER_AUTH_FILE",
+        "PMSTUDIO_PGBOUNCER_AUTH_UID",
     }
     #: 脚本独有、compose **故意**没有的键 —— 同理。
     #: `PMSTUDIO_WEB_PORT`：compose 的前端是 Caddy（端口由镜像 `EXPOSE 80` 固定）；
     #: 本机是 vite dev server，端口要能挑（默认 5173）。
     script_only = {
         "PMSTUDIO_WEB_PORT",
-        # 原生 dev_stack 仍在 SQLite 上跑（T1 不删旧运行时）；PG/PgBouncer 的
-        # 启动序列与 URL 归 T7。这里不把旧键伪装成"compose 也有"。
-        "PMSTUDIO_DB",
     }
 
     missing = compose_keys - script_keys - compose_only
@@ -511,11 +580,17 @@ def test_the_dev_stack_script_uses_the_same_env_keys_as_compose() -> None:
     assert not extra, f"dev_stack.sh 有 compose 没有的未登记键：{sorted(extra)}"
 
 
-def test_the_dev_stack_script_reads_the_same_env_file_as_compose() -> None:
-    """两边读**同一个** `.env` —— 否则"等价"是假的。"""
+def test_the_dev_stack_script_reads_the_same_env_files_as_compose() -> None:
+    """两边读**同一套** `.env` / `.env.ops` —— 否则"等价"是假的。"""
 
-    assert "backend/.env" in _text(DEV_STACK)
-    assert "backend/.env" in _text(COMPOSE)
+    text = _text(DEV_STACK)
+    assert "backend/.env" in text
+    assert "backend/.env.ops" in text
+    assert "init_db.py --all" in text
+    assert "/api/ready" in text
+    assert "PMSTUDIO_DB" not in text
+    assert "./backend/.env" in _text(COMPOSE)
+    assert "./backend/.env.ops" in _text(COMPOSE)
 
 
 # —— R（需求）：CI ——

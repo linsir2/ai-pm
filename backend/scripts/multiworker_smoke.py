@@ -12,6 +12,9 @@ TCP、event loop、`contextvars`（owner_scope 是 contextvar，跨进程语义�
 
     PMSTUDIO_TEST_REDIS_URL=redis://127.0.0.1:6379/9 \\
         python3 scripts/multiworker_smoke.py
+
+后端跑在临时 schema（`pmstudio_multiworker_*`，跑完即删）；两个 worker 共用同一
+app URL（PgBouncer 或直连），旧 SQLite 临时文件不再使用。
 """
 
 from __future__ import annotations
@@ -30,9 +33,12 @@ from pathlib import Path
 BACKEND = Path(__file__).resolve().parents[1]
 SRC = BACKEND / "src"
 sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(BACKEND))
 
 #: cookie 名字**从源头导入**，不硬编码——我第一版写死成 `pmstudio_session`，
 #: 真名是 `pm_session`，整个脚本在 401 上白跑一轮。
+from scripts.pg_scratch import scratch_database  # noqa: E402
+
 from pmstudio.api.auth import SESSION_COOKIE  # noqa: E402
 
 WORKERS = 2
@@ -132,16 +138,14 @@ async def _wait_healthy(port: int, timeout: float = 30.0) -> bool:
     return False
 
 
-def _spawn(port: int, db: Path, redis_url: str, log: Path) -> subprocess.Popen:
+def _spawn(port: int, database_url: str, redis_url: str, log: Path) -> subprocess.Popen:
     env = {
         **os.environ,
         "PYTHONPATH": str(SRC),
         "PMSTUDIO_MODEL": "scripted",
         "PMSTUDIO_API_KEY": "smoke",
-        "PMSTUDIO_DB": str(db),
+        "PMSTUDIO_DATABASE_URL": database_url,
         "PMSTUDIO_REDIS_URL": redis_url,
-        "PMSTUDIO_FIRST_ADMIN_USER": USER,
-        "PMSTUDIO_FIRST_ADMIN_PASSWORD": PASSWORD,
         "PMSTUDIO_SESSION_TTL_DAYS": "1",
     }
     return subprocess.Popen(
@@ -172,8 +176,10 @@ async def run() -> int:
     ports = [_free_port() for _ in range(WORKERS)]
     tmp = Path(tempfile.mkdtemp(prefix="pmstudio-p4-"))
     logs = [tmp / f"worker{i}.log" for i in range(WORKERS)]
+    scratch = scratch_database(prefix="multiworker", admin_user=USER, admin_password=PASSWORD)
+    database = scratch.__enter__()
     procs = [
-        _spawn(ports[i], tmp / "p.db", redis_url, logs[i]) for i in range(WORKERS)
+        _spawn(ports[i], database.app_url, redis_url, logs[i]) for i in range(WORKERS)
     ]
 
     try:
@@ -250,6 +256,7 @@ async def run() -> int:
         for proc in procs:
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=10)
+        scratch.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

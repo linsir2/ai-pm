@@ -1,4 +1,4 @@
-"""P3a 真跑冒烟：真模型 + 真 Tavily + 真 SQLite，走一次生产 HTTP 路径。
+"""P3a 真跑冒烟：真模型 + 真 Tavily + 真 PostgreSQL，走一次生产 HTTP 路径。
 
 它验的是**主闭环里的联网申请**：
 
@@ -23,17 +23,27 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import json
 import os
-import sqlite3
 import sys
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
+sys.path.insert(0, str(BACKEND_ROOT / "src"))
+sys.path.insert(0, str(BACKEND_ROOT))
+
+from scripts.pg_scratch import drop_scratch, make_scratch  # noqa: E402
+
+from pmstudio.bootstrap.container import build_container  # noqa: E402
+from pmstudio.bootstrap.settings import Settings  # noqa: E402
+
 ENV_FILE = BACKEND_ROOT / ".env"
+ENV_OPS_FILE = BACKEND_ROOT / ".env.ops"
 #: 一次性证据目录（日期固定）。复跑用 `--out` 指到新目录，别覆盖旧证据。
 DEFAULT_OUT = REPO_ROOT / ".codex" / "runs" / "2026-10-26" / "p3a"
 #: 写盘前要替换掉的敏感值（从 `.env` 的 *KEY* / *SECRET* / *PASSWORD* / *TOKEN* 收集）。
@@ -91,7 +101,7 @@ def save(report: dict, out: Path) -> None:
         f"- 时间：{report.get('started_at', '')}",
         f"- 模型：`{report.get('model', '')}`",
         f"- Tavily 配置：{'是' if report.get('tavily_configured') else '否'}",
-        f"- SQLite：`{report.get('db_path', '')}`",
+        f"- PostgreSQL schema：`{report.get('db_schema', '')}`",
         f"- 退出码：{report.get('exit_code', '（运行中）')}",
     ]
     for slot in report.get("rounds") or ():
@@ -120,9 +130,9 @@ def save(report: dict, out: Path) -> None:
                 f"{slot.get('decision_db_web_materials_after')} 份"
             )
         lines += [
-            f"- SQLite：web 材料 {slot.get('sqlite', {}).get('web_materials')} 份 / "
-            f"{slot.get('sqlite', {}).get('web_chunks')} 块；"
-            f"web_selection={slot.get('sqlite', {}).get('web_selection_count')} 项",
+            f"- PostgreSQL：web 材料 {slot.get('db', {}).get('web_materials')} 份 / "
+            f"{slot.get('db', {}).get('web_chunks')} 块；"
+            f"web_selection={slot.get('db', {}).get('web_selection_count')} 项",
         ]
         requests = slot.get("final_web_requests") or ()
         if requests:
@@ -190,28 +200,28 @@ def request_summary(round_view: dict) -> list[dict]:
     ]
 
 
-def db_evidence(db_path: Path, project_id: str, round_id: str) -> dict:
-    """直接读 SQLite（真库证据）：材料/块数、round payload 的申请与 selection。"""
+def db_evidence(db_url: str, project_id: str, round_id: str) -> dict:
+    """直接读 PostgreSQL（真库证据）：材料/块数、round payload 的申请与 selection。"""
 
-    connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    try:
-        connection.row_factory = sqlite3.Row
+    from pmstudio.infrastructure.postgres.database import connect
+
+    with connect(db_url) as connection:
         materials = connection.execute(
-            "SELECT count(*) AS n FROM materials WHERE project_id = ? AND origin = 'web_search'",
+            "SELECT count(*) AS n FROM materials WHERE project_id = %s AND origin = 'web_search'",
             (project_id,),
         ).fetchone()["n"]
         chunks = connection.execute(
             """
             SELECT count(*) AS n FROM material_chunks c
             JOIN materials m ON m.material_id = c.material_id
-            WHERE m.project_id = ? AND m.origin = 'web_search'
+            WHERE m.project_id = %s AND m.origin = 'web_search'
             """,
             (project_id,),
         ).fetchone()["n"]
         row = connection.execute(
-            "SELECT payload FROM rounds WHERE round_id = ?", (round_id,)
+            "SELECT payload FROM rounds WHERE round_id = %s", (round_id,)
         ).fetchone()
-        payload = json.loads(row["payload"]) if row is not None else {}
+        payload = row["payload"] if row is not None else {}
         selected = payload.get("web_selection")
         return {
             "web_materials": int(materials),
@@ -221,8 +231,6 @@ def db_evidence(db_path: Path, project_id: str, round_id: str) -> dict:
             "web_selection": selected,
             "web_selection_count": None if selected is None else len(selected),
         }
-    finally:
-        connection.close()
 
 
 def verify_one_result_one_eid(round_view: dict) -> tuple[bool, list[str]]:
@@ -242,7 +250,7 @@ async def run_round(  # noqa: C901 —— 冒烟脚本按步骤线性写
     client,
     report: dict,
     out: Path,
-    db_path: Path,
+    db_url: str,
     *,
     label: str,
     allow_web: bool,
@@ -385,7 +393,7 @@ async def run_round(  # noqa: C901 —— 冒烟脚本按步骤线性写
             f"批准 {target['request_id']}（{target['origin']}）：可能再出网一次",
         )
         selected_before = len(slot["opening_web_materials"])
-        db_before = db_evidence(db_path, project_id, round_id)
+        db_before = db_evidence(db_url, project_id, round_id)
         slot["decision_db_web_materials_before"] = db_before["web_materials"]
         decided = await client.post(
             f"/api/rounds/{round_id}/web-requests/{target['request_id']}/decision",
@@ -407,7 +415,7 @@ async def run_round(  # noqa: C901 —— 冒烟脚本按步骤线性写
             slot["decision_new_selected_materials"] = (
                 len(slot["decision_web_materials"]) - selected_before
             )
-            db_after = db_evidence(db_path, project_id, round_id)
+            db_after = db_evidence(db_url, project_id, round_id)
             slot["decision_db_web_materials_after"] = db_after["web_materials"]
             log(
                 report,
@@ -457,8 +465,8 @@ async def run_round(  # noqa: C901 —— 冒烟脚本按步骤线性写
         item["status"] == 200 for item in eid_checks
     )
 
-    db = db_evidence(db_path, project_id, round_id)
-    slot["sqlite"] = db
+    db = db_evidence(db_url, project_id, round_id)
+    slot["db"] = db
     slot["web_selection"] = db.get("web_selection")
     # 只数“席位/整合者被批准或执行过”的条目；其中可能是 decision 手动批的，
     # 所以不叫 auto。自动批准触发没触发另记（opening 阶段就 done/failed 的
@@ -477,7 +485,7 @@ async def run_round(  # noqa: C901 —— 冒烟脚本按步骤线性写
     log(
         report,
         out,
-        f"{label}:sqlite",
+        f"{label}:db",
         f"真库：web 材料 {db['web_materials']} 份 / {db['web_chunks']} 块；"
         f"web_selection={db['web_selection_count']} 项；"
         f"one_result_one_eid={one_eid_ok}；"
@@ -494,13 +502,13 @@ def round_problems(slot: dict) -> list[str]:
         problems.extend(slot.get("one_result_one_eid_problems") or ["E 号不唯一"])
     if not slot.get("evidence_resolvable"):
         problems.append(f"E 号查不到：{slot.get('evidence_checks')}")
-    if (slot.get("sqlite") or {}).get("web_selection") is None:
+    if (slot.get("db") or {}).get("web_selection") is None:
         problems.append("落库 payload 没有 web_selection（旧回退不应出现在新轮）")
     return problems
 
 
 async def run(report: dict, out: Path) -> int:
-    env = load_env_file(ENV_FILE)
+    env = {**load_env_file(ENV_FILE), **load_env_file(ENV_OPS_FILE)}
     if not env:
         report["error"] = f"{ENV_FILE} 不存在或为空"
         return 2
@@ -517,15 +525,17 @@ async def run(report: dict, out: Path) -> int:
         report["error"] = "backend/.env 缺首管理员凭据（PMSTUDIO_FIRST_ADMIN_USER/_PASSWORD）"
         return 2
 
-    db_path = out / "p3a-web-smoke.db"
-    for suffix in ("", "-wal", "-shm"):
-        candidate = Path(str(db_path) + suffix)
-        if candidate.exists():
-            candidate.unlink()
     out.mkdir(parents=True, exist_ok=True)
+    database = make_scratch(
+        prefix="p3a",
+        env=env,
+        admin_user=env.get("PMSTUDIO_FIRST_ADMIN_USER"),
+        admin_password=env.get("PMSTUDIO_FIRST_ADMIN_PASSWORD"),
+    )
+    atexit.register(drop_scratch, database)
 
     run_env = dict(env)
-    run_env["PMSTUDIO_DB"] = str(db_path)
+    run_env["PMSTUDIO_DATABASE_URL"] = database.app_url
     # 本脚本是证据，不是逐调用排查；不写 model_calls/tool_calls（与默认生产一致）。
     run_env.pop("PMSTUDIO_TRACE_MODEL", None)
     for key, value in run_env.items():
@@ -538,22 +548,23 @@ async def run(report: dict, out: Path) -> int:
         and len(value) >= 4
     )
 
-    sys.path.insert(0, str(BACKEND_ROOT / "src"))
     import httpx
 
-    from pmstudio.bootstrap.container import build_container
-    from pmstudio.bootstrap.settings import Settings
-
-    settings = Settings.from_env(run_env)
+    settings = replace(Settings.from_env(run_env), database_url=database.app_url)
     report.update(
         {
             "model": settings.model,
             "tavily_configured": settings.tavily_api_key is not None,
-            "db_path": str(db_path),
+            "db_schema": database.schema,
             "started_at": datetime.now(UTC).isoformat(),
         }
     )
-    log(report, out, "config", f"模型 {settings.model}；Tavily 已配置；临时 SQLite 已建")
+    log(
+        report,
+        out,
+        "config",
+        f"模型 {settings.model}；Tavily 已配置；临时 schema {database.schema}",
+    )
 
     container = build_container(settings)
     transport = httpx.ASGITransport(app=container.app)
@@ -601,7 +612,7 @@ async def run(report: dict, out: Path) -> int:
             return 1
 
         first = await run_round(
-            client, report, out, db_path, label="round1", allow_web=True
+            client, report, out, database.direct_url, label="round1", allow_web=True
         )
         report.setdefault("rounds", []).append(first)
         report["web_search_available"] = first.get("web_search_available")
@@ -617,7 +628,7 @@ async def run(report: dict, out: Path) -> int:
         second: dict | None = None
         if first.get("decision_status_code") != 200:
             second = await run_round(
-                client, report, out, db_path, label="round2", allow_web=False
+                client, report, out, database.direct_url, label="round2", allow_web=False
             )
             report["rounds"].append(second)
             problems = round_problems(second)

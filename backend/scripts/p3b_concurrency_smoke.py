@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P3b Task 7b：两个真 uvicorn 进程共享 SQLite 的并发 / SIGKILL 冒烟。
+"""P3b Task 7b：两个真 uvicorn 进程共享 PostgreSQL 的并发 / SIGKILL 冒烟。
 
 验的是**进程边界**上的四件事：
 
@@ -27,7 +27,6 @@ import json
 import os
 import signal
 import socket
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -42,6 +41,9 @@ import httpx
 BACKEND = Path(__file__).resolve().parents[1]
 SRC = BACKEND / "src"
 sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(BACKEND))
+
+from scripts.pg_scratch import ScratchDatabase, scratch_database  # noqa: E402
 
 from pmstudio.api.deps import SESSION_COOKIE  # noqa: E402
 from pmstudio.application.errors import LeaseLost  # noqa: E402
@@ -49,11 +51,11 @@ from pmstudio.application.lease import (  # noqa: E402
     LeaseScope,
     clear_lease_scope,
     set_lease_scope,
-    wall_clock_ms,
 )
 from pmstudio.domain.shared.ids import RoundId, UserId  # noqa: E402
 from pmstudio.domain.shared.lease import LeaseKind, LeaseToken  # noqa: E402
-from pmstudio.infrastructure.sqlite.repositories import (  # noqa: E402
+from pmstudio.infrastructure.postgres.database import connect  # noqa: E402
+from pmstudio.infrastructure.postgres.repositories import (  # noqa: E402
     SqliteRoundRepository,
 )
 
@@ -190,7 +192,7 @@ def _url(port: int, path: str) -> str:
 def _spawn(
     *,
     port: int,
-    db: Path,
+    database: ScratchDatabase,
     script: Path,
     gate_port: int,
     purpose: str,
@@ -204,9 +206,7 @@ def _spawn(
         "PMSTUDIO_MODEL": "scripted",
         "PMSTUDIO_API_KEY": "test-key",
         "PMSTUDIO_TAVILY_API_KEY": "test-key",
-        "PMSTUDIO_DB": str(db),
-        "PMSTUDIO_FIRST_ADMIN_USER": USERNAME,
-        "PMSTUDIO_FIRST_ADMIN_PASSWORD": PASSWORD,
+        "PMSTUDIO_DATABASE_URL": database.app_url,
         "PMSTUDIO_SESSION_TTL_DAYS": "1",
         **INSECURE_LOGIN_ENV,
         "PMSTUDIO_TEST_SCRIPT": str(script),
@@ -342,7 +342,7 @@ class Workers:
 async def _workers(
     *,
     tmp: Path,
-    db: Path,
+    database: ScratchDatabase,
     script: Path,
     gate_port: int,
     purpose: str,
@@ -355,7 +355,7 @@ async def _workers(
     procs = tuple(
         _spawn(
             port=port,
-            db=db,
+            database=database,
             script=script,
             gate_port=gate_port,
             purpose=purpose,
@@ -426,47 +426,49 @@ async def _decide(
     )
 
 
-def _connect(db: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(db, timeout=10.0)
-    connection.row_factory = sqlite3.Row
-    return connection
+def _connect(database: ScratchDatabase):
+    return connect(database.direct_url)
 
 
-def _scalar(db: Path, sql: str, params: tuple[object, ...] = ()) -> int:
-    connection = _connect(db)
+def _scalar(database: ScratchDatabase, sql: str, params: tuple[object, ...] = ()) -> int:
+    connection = _connect(database)
     try:
-        return int(connection.execute(sql, params).fetchone()[0])
+        row = connection.execute(sql, params).fetchone()
+        _check(row is not None, "查询没有返回行")
+        return int(next(iter(row.values())))
     finally:
         connection.close()
 
 
-def _evidence(db: Path, project_id: str) -> list[dict[str, Any]]:
-    connection = _connect(db)
+def _evidence(database: ScratchDatabase, project_id: str) -> list[dict[str, Any]]:
+    connection = _connect(database)
     try:
         row = connection.execute(
-            "SELECT payload FROM evidence_ledgers WHERE project_id = ?", (project_id,)
+            "SELECT payload FROM evidence_ledgers WHERE project_id = %s", (project_id,)
         ).fetchone()
         _check(row is not None, f"项目 {project_id} 没有证据账本")
-        return list(json.loads(row["payload"]))
+        return list(row["payload"])
     finally:
         connection.close()
 
 
-def _external_refs(db: Path, project_id: str) -> list[str]:
+def _external_refs(database: ScratchDatabase, project_id: str) -> list[str]:
     refs = [
         str(item["source"]["external_ref"])
-        for item in _evidence(db, project_id)
+        for item in _evidence(database, project_id)
         if item.get("kind") == "external"
     ]
     return refs
 
 
-def _lease_row(db: Path, round_id: str) -> sqlite3.Row:
-    connection = _connect(db)
+def _lease_row(database: ScratchDatabase, round_id: str) -> dict[str, Any]:
+    connection = _connect(database)
     try:
         row = connection.execute(
-            "SELECT owner_id, lease_owner, lease_token, lease_expires_at"
-            " FROM rounds WHERE round_id = ?",
+            "SELECT owner_id, lease_owner, lease_token, lease_expires_at,"
+            " (lease_expires_at IS NOT NULL AND lease_expires_at <="
+            " (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT) AS expired"
+            " FROM rounds WHERE round_id = %s",
             (round_id,),
         ).fetchone()
         _check(row is not None, f"找不到轮次 {round_id}")
@@ -475,11 +477,11 @@ def _lease_row(db: Path, round_id: str) -> sqlite3.Row:
         connection.close()
 
 
-def _round_step(db: Path, round_id: str) -> str:
-    connection = _connect(db)
+def _round_step(database: ScratchDatabase, round_id: str) -> str:
+    connection = _connect(database)
     try:
         row = connection.execute(
-            "SELECT step FROM rounds WHERE round_id = ?", (round_id,)
+            "SELECT step FROM rounds WHERE round_id = %s", (round_id,)
         ).fetchone()
         _check(row is not None, f"找不到轮次 {round_id}")
         return str(row["step"])
@@ -533,18 +535,19 @@ async def _wait_until(
     raise SmokeError(f"超时（{timeout}s）：{what}")
 
 
-async def _wait_lease_expired(db: Path, round_id: str, *, timeout: float = 15.0) -> sqlite3.Row:
-    def _expired() -> sqlite3.Row | None:
-        row = _lease_row(db, round_id)
-        expires = row["lease_expires_at"]
-        if expires is not None and int(expires) <= wall_clock_ms():
-            return row
-        return None
+async def _wait_lease_expired(
+    database: ScratchDatabase, round_id: str, *, timeout: float = 15.0
+) -> dict[str, Any]:
+    def _expired() -> dict[str, Any] | None:
+        row = _lease_row(database, round_id)
+        return row if row["expired"] else None
 
     return await _wait_until(_expired, timeout=timeout, what=f"{round_id} 的租约没有过期")
 
 
-def _assert_old_token_fenced(db: Path, round_id: str, old: sqlite3.Row) -> None:
+def _assert_old_token_fenced(
+    database: ScratchDatabase, round_id: str, old: dict[str, Any]
+) -> None:
     """旧 worker 的迟到写：用真仓储 + 旧 token 保存，必须抛 `LeaseLost`。"""
 
     owner = UserId(str(old["owner_id"]))
@@ -556,7 +559,7 @@ def _assert_old_token_fenced(db: Path, round_id: str, old: sqlite3.Row) -> None:
         token=int(old["lease_token"]),
         expires_at_ms=int(old["lease_expires_at"]),
     )
-    connection = _connect(db)
+    connection = _connect(database)
     try:
         repository = SqliteRoundRepository(connection)
         round_ = repository.get(RoundId(round_id), owner=owner)
@@ -576,16 +579,16 @@ def _assert_old_token_fenced(db: Path, round_id: str, old: sqlite3.Row) -> None:
 
 
 def _check_evidence_materials(
-    db: Path,
+    database: ScratchDatabase,
     *,
     project_id: str,
     expected_evidence: int,
     expected_materials: int,
     expected_external: int,
 ) -> None:
-    evidence = _evidence(db, project_id)
+    evidence = _evidence(database, project_id)
     materials = _scalar(
-        db, "SELECT COUNT(*) FROM materials WHERE project_id = ?", (project_id,)
+        database, "SELECT COUNT(*) AS n FROM materials WHERE project_id = %s", (project_id,)
     )
     _check(
         len(evidence) == expected_evidence,
@@ -595,17 +598,17 @@ def _check_evidence_materials(
         materials == expected_materials,
         f"材料数不对：期望 {expected_materials}，实际 {materials}",
     )
-    refs = _external_refs(db, project_id)
+    refs = _external_refs(database, project_id)
     _check(
         len(refs) == expected_external,
         f"外部 E 条数不对：期望 {expected_external}，实际 {len(refs)}",
     )
     _check(len(refs) == len(set(refs)), f"外部 E 出现重复 external_ref：{refs}")
     material_ids = _scalar(
-        db,
-        "SELECT COUNT(DISTINCT c.material_id) FROM material_chunks c"
+        database,
+        "SELECT COUNT(DISTINCT c.material_id) AS n FROM material_chunks c"
         " JOIN materials m ON m.material_id = c.material_id"
-        " WHERE m.project_id = ?",
+        " WHERE m.project_id = %s",
         (project_id,),
     )
     _check(
@@ -614,13 +617,13 @@ def _check_evidence_materials(
     )
 
 
-async def stage_opening(db: Path, script: Path, tmp: Path) -> None:
+async def stage_opening(database: ScratchDatabase, script: Path, tmp: Path) -> None:
     print("[1/4] 同轮 opening：一个 200 / 一个 409", flush=True)
     call_log = tmp / "opening-calls.jsonl"
     async with _socket_gate() as (gate, gate_port):
         async with _workers(
             tmp=tmp,
-            db=db,
+            database=database,
             script=script,
             gate_port=gate_port,
             purpose="seat_review",
@@ -655,7 +658,7 @@ async def stage_opening(db: Path, script: Path, tmp: Path) -> None:
             _check(len(view["draft"]["proposals"]) == 1, "草案应恰好一条提议")
 
             _check_evidence_materials(
-                db,
+                database,
                 project_id=project_id,
                 expected_evidence=2,
                 expected_materials=0,
@@ -677,13 +680,13 @@ async def stage_opening(db: Path, script: Path, tmp: Path) -> None:
             print("      ✓ 409 round_busy；放闸后 200；E=2 / 材料=0；模型调用各 1", flush=True)
 
 
-async def stage_decision(db: Path, script: Path, tmp: Path) -> None:
+async def stage_decision(database: ScratchDatabase, script: Path, tmp: Path) -> None:
     print("[2/4] 同轮 decision：一成一败 + 失败者重试", flush=True)
     call_log = tmp / "decision-calls.jsonl"
     async with _socket_gate() as (gate, gate_port):
         async with _workers(
             tmp=tmp,
-            db=db,
+            database=database,
             script=script,
             gate_port=gate_port,
             purpose="web_search",
@@ -702,7 +705,7 @@ async def stage_decision(db: Path, script: Path, tmp: Path) -> None:
             requests = [item for item in view["web_requests"] if item["state"] == "proposed"]
             _check(len(requests) == 2, f"应有 2 条 proposed 申请，实际 {len(requests)}")
             first, second = requests[0]["request_id"], requests[1]["request_id"]
-            baseline = len(_evidence(db, project_id))
+            baseline = len(_evidence(database, project_id))
 
             winner = asyncio.create_task(
                 _decide(workers.client(0), workers.port(0), round_id, first)
@@ -739,7 +742,7 @@ async def stage_decision(db: Path, script: Path, tmp: Path) -> None:
                 f"联网查询不对：{[call['query'] for call in searches]}",
             )
             _check_evidence_materials(
-                db,
+                database,
                 project_id=project_id,
                 expected_evidence=baseline + 2,
                 expected_materials=2,
@@ -755,13 +758,13 @@ async def stage_decision(db: Path, script: Path, tmp: Path) -> None:
             )
 
 
-async def stage_exploration(db: Path, script: Path, tmp: Path) -> None:
+async def stage_exploration(database: ScratchDatabase, script: Path, tmp: Path) -> None:
     print("[3/4] 同项目 exploration：一趟 200 / 一趟 409", flush=True)
     call_log = tmp / "exploration-calls.jsonl"
     async with _socket_gate() as (gate, gate_port):
         async with _workers(
             tmp=tmp,
-            db=db,
+            database=database,
             script=script,
             gate_port=gate_port,
             purpose="inquiry",
@@ -807,11 +810,14 @@ async def stage_exploration(db: Path, script: Path, tmp: Path) -> None:
             _check(len(result["candidates"]) == 2, "应恰好两条候选（一次调研）")
 
             rows = _scalar(
-                db, "SELECT COUNT(*) FROM explorations WHERE project_id = ?", (project_id,)
+                database,
+                "SELECT COUNT(*) AS n FROM explorations WHERE project_id = %s",
+                (project_id,),
             )
             running = _scalar(
-                db,
-                "SELECT COUNT(*) FROM explorations WHERE project_id = ? AND status = 'running'",
+                database,
+                "SELECT COUNT(*) AS n FROM explorations"
+                " WHERE project_id = %s AND status = 'running'",
                 (project_id,),
             )
             _check(rows == 1, f"同项目应只落一趟 exploration，实际 {rows}")
@@ -825,13 +831,13 @@ async def stage_exploration(db: Path, script: Path, tmp: Path) -> None:
             print("      ✓ 409 exploration_busy；放闸后 200；只落一趟；inquiry=1", flush=True)
 
 
-async def stage_sigkill(db: Path, script: Path, tmp: Path) -> None:
+async def stage_sigkill(database: ScratchDatabase, script: Path, tmp: Path) -> None:
     print("[4/4] SIGKILL 接管 / old token fence / abandon 保持", flush=True)
     call_log = tmp / "sigkill-calls.jsonl"
     async with _socket_gate() as (gate, gate_port):
         async with _workers(
             tmp=tmp,
-            db=db,
+            database=database,
             script=script,
             gate_port=gate_port,
             purpose="seat_review",
@@ -845,7 +851,7 @@ async def stage_sigkill(db: Path, script: Path, tmp: Path) -> None:
             await asyncio.wait_for(gate.arrived.wait(), timeout=30.0)
             _check(not opening.done(), "闸门到达时 opening 不该已经结束")
 
-            old = _lease_row(db, round_id)
+            old = _lease_row(database, round_id)
             _check(old["lease_owner"] is not None, "被杀的 worker 应持有 round lease")
             _check(old["lease_expires_at"] is not None, "被杀的 worker 应写过期时间")
 
@@ -862,7 +868,7 @@ async def stage_sigkill(db: Path, script: Path, tmp: Path) -> None:
             else:
                 raise SmokeError(f"worker 被 SIGKILL 后 opening 仍返回 {response.status_code}")
 
-            expired = await _wait_lease_expired(db, round_id)
+            expired = await _wait_lease_expired(database, round_id)
             _check(
                 int(expired["lease_token"]) == int(old["lease_token"]),
                 "过期阶段不该有人换过 token",
@@ -875,7 +881,7 @@ async def stage_sigkill(db: Path, script: Path, tmp: Path) -> None:
             _check(takeover.status_code == 200, f"接管 retry 失败：{takeover.text[:500]}")
             _check(takeover.json().get("waiting_on") == "draft_card", "接管后应停在草案卡")
 
-            after = _lease_row(db, round_id)
+            after = _lease_row(database, round_id)
             _check(
                 int(after["lease_token"]) > int(old["lease_token"]),
                 "接管应换 token（新 worker 拿到更大的 token）",
@@ -884,7 +890,7 @@ async def stage_sigkill(db: Path, script: Path, tmp: Path) -> None:
                 after["lease_owner"] != old["lease_owner"],
                 "接管后 lease_owner 应换人",
             )
-            _assert_old_token_fenced(db, round_id, old)
+            _assert_old_token_fenced(database, round_id, old)
 
             view_response = await workers.client(1).get(
                 _url(workers.port(1), f"/api/rounds/{round_id}")
@@ -894,7 +900,7 @@ async def stage_sigkill(db: Path, script: Path, tmp: Path) -> None:
             _check(len(view["seat_packets"]) == 1, "接管后应只有一个席位包")
             _check(len(view["draft"]["proposals"]) == 1, "接管后草案应恰好一条提议")
             _check_evidence_materials(
-                db,
+                database,
                 project_id=project_id,
                 expected_evidence=2,
                 expected_materials=0,
@@ -920,7 +926,7 @@ async def stage_sigkill(db: Path, script: Path, tmp: Path) -> None:
             )
             _check(retried.status_code == 200, f"abandon 后 retry 失败：{retried.text[:500]}")
             _check(retried.json().get("step") == "abandoned", "retry 把 abandoned 复活了")
-            _check(_round_step(db, round_id) == "abandoned", "库里 step 不是 abandoned")
+            _check(_round_step(database, round_id) == "abandoned", "库里 step 不是 abandoned")
             print(
                 "      ✓ SIGKILL 后 TTL 过期接管；旧 token save 被 fence；"
                 "E=2 / 材料=0；abandon 保持",
@@ -950,14 +956,16 @@ def _write_script(tmp: Path) -> Path:
 
 async def run() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="pmstudio-p3b-smoke-"))
-    db = tmp / "pmstudio.db"
     script = _write_script(tmp)
     print(f"临时目录：{tmp}", flush=True)
     try:
-        await stage_opening(db, script, tmp)
-        await stage_decision(db, script, tmp)
-        await stage_exploration(db, script, tmp)
-        await stage_sigkill(db, script, tmp)
+        with scratch_database(
+            prefix="p3b", admin_user=USERNAME, admin_password=PASSWORD
+        ) as database:
+            await stage_opening(database, script, tmp)
+            await stage_decision(database, script, tmp)
+            await stage_exploration(database, script, tmp)
+            await stage_sigkill(database, script, tmp)
     except SmokeError as error:
         print(f"\n❌ {error}", file=sys.stderr)
         return 1
