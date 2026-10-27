@@ -6,8 +6,14 @@
 
 import json
 
+import pytest
+
+from pmstudio.application.agents.analyzer import ClaimAnalyzer
+from pmstudio.application.errors import WebRequestRecoveryRequired
 from pmstudio.application.use_cases import (
+    RECOVERY_ABANDON_NOTE,
     IntegrateRound,
+    RecoverWebRequest,
     RunSeatRound,
     StartRound,
     SubmitOpening,
@@ -15,9 +21,11 @@ from pmstudio.application.use_cases import (
 from pmstudio.application.web_research import WebResearch
 from pmstudio.bootstrap.container import UuidIdGenerator
 from pmstudio.domain.authoring.readiness import ReadinessChecker
-from pmstudio.domain.round.web import WebRequestState
+from pmstudio.domain.round.step import Step
+from pmstudio.domain.round.web import WebRequest, WebRequestState, used_web_request_count
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.template import standard_template
+from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
 from pmstudio.infrastructure.sqlite.database import connect
 from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
@@ -34,8 +42,15 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
-from tests.support.builders import NOW, PROJECT, SEAT, make_web_packet
-from tests.support.doubles import FixedClock, RecordingPublisher, RecordingWebSearch
+from tests.support.builders import NOW, PROJECT, SEAT, make_seat, make_web_packet
+from tests.support.doubles import (
+    FixedClock,
+    RecordingPrompts,
+    RecordingPublisher,
+    RecordingWebSearch,
+    ScriptedModelGateway,
+    StaticSeatCatalog,
+)
 from tests.support.harness import Harness
 from tests.support.leases import bind_round_lease
 
@@ -247,4 +262,189 @@ async def test_real_sqlite_executes_across_steps_and_reuses_the_shared_result_nu
     assert final.web_selection == tuple(
         (ref.material_id, ref.chunk_id) for ref in final.materials
     )
+    connection.close()
+
+
+RECOVERY_CLAIMS_REPLY = json.dumps(
+    {
+        "basis": "读了空文档",
+        "claims": [
+            {
+                "text": "要做一个订单导出功能",
+                "raw_span": "想做个订单导出的功能",
+                "label": "need",
+                "zone": "body",
+                "section_id": "s5",
+            }
+        ],
+        "seats": [{"seat_id": SEAT, "why": "导出要评估数据量"}],
+        "web_queries": [],
+    },
+    ensure_ascii=False,
+)
+
+
+def _seed_over_limit(rounds, round_id):  # type: ignore[no-untyped-def]
+    """真库上 seed `3 done + 1 approved`：used=4 > limit=3。"""
+
+    round_ = rounds.get(round_id)
+    requests = [
+        WebRequest(
+            request_id=f"w{200 + index}",
+            query=f"q{index + 1}",
+            why="超额恢复 e2e",
+            origin="analyzer" if index < 3 else "seat",
+            seat_id=SEAT if index >= 3 else None,
+            pass_index=1 if index >= 3 else None,
+        )
+        for index in range(4)
+    ]
+    round_.attach_web_requests(requests)
+    for item in requests[:3]:
+        round_.decide_web_request(item.request_id, approve=True)
+        round_.mark_web_request(item.request_id, WebRequestState.DONE, result_note="已查")
+    round_.decide_web_request(requests[3].request_id, approve=True)
+    rounds.save(round_)
+    return requests[3].request_id
+
+
+async def _prepare_over_limit_round(tmp_path, *, web_search):
+    """真 SQLite + 真用例；只有模型与 Tavily 是脚本化替身（不用内存 Harness）。"""
+
+    connection = connect(tmp_path / "recovery_e2e.db")
+    ids = UuidIdGenerator()
+    store = SqliteMaterialStore(connection, ids=ids)
+    documents = SqliteDocumentRepository(connection)
+    rounds = SqliteRoundRepository(connection)
+    evidences = SqliteEvidenceRepository(connection)
+    index = SqliteWorkspaceIndex(connection)
+    uow = SqliteUnitOfWork(connection)
+    SqliteProjectFactory(connection, ids=ids).create(
+        project_id=PROJECT, title="恢复 e2e", now=NOW, template=standard_template()
+    )
+    catalog = StaticSeatCatalog((make_seat(),))
+    tools = TomlToolCatalog(DEFINITIONS_DIR)
+    keys = frozenset({"tavily_api_key"})
+    clock = FixedClock()
+    events = RecordingPublisher()
+    web_research = WebResearch(
+        rounds=rounds,
+        round_writer=rounds,
+        evidence=evidences,
+        evidence_writer=evidences,
+        materials=store,
+        tools=tools,
+        available_tool_keys=keys,
+        web_search=web_search,
+        index=index,
+        uow=uow,
+        clock=clock,
+    )
+    start = StartRound(
+        documents=documents,
+        rounds=rounds,
+        round_writer=rounds,
+        evidence=evidences,
+        evidence_writer=evidences,
+        uow=uow,
+        analyzer=ClaimAnalyzer(
+            model=ScriptedModelGateway(replies={"claims": RECOVERY_CLAIMS_REPLY}),
+            prompts=RecordingPrompts(),
+            catalog=catalog,
+        ),
+        assigner=EvidenceAssigner(),
+        checker=ReadinessChecker(),
+        clock=clock,
+        ids=ids,
+        events=events,
+        materials=store,
+        explorations=SqliteExplorationRepository(connection),
+        discussions=SqliteDiscussionRepository(connection),
+    )
+    round_id = await start.create(
+        project_id=PROJECT, user_input="想做个订单导出的功能"
+    )
+    bind_round_lease(connection, round_id)
+    await start.analyze(round_id=round_id)
+    over_id = _seed_over_limit(rounds, round_id)
+    opening = SubmitOpening(
+        rounds=rounds,
+        round_writer=rounds,
+        catalog=catalog,
+        tools=tools,
+        available_tool_keys=keys,
+        web_search=web_search,
+        evidence=evidences,
+        evidence_writer=evidences,
+        materials=store,
+        index=index,
+        uow=uow,
+        clock=clock,
+        events=events,
+        web_research=web_research,
+    )
+    recover = RecoverWebRequest(
+        rounds=rounds,
+        round_writer=rounds,
+        evidence=evidences,
+        evidence_writer=evidences,
+        tools=tools,
+        available_tool_keys=keys,
+        web_research=web_research,
+        uow=uow,
+        clock=clock,
+        events=events,
+    )
+    return connection, round_id, over_id, opening, recover, rounds, web_search
+
+
+async def test_true_sqlite_recovery_abandon_then_opening_succeeds(tmp_path):
+    web_search = RecordingWebSearch(returns=(make_web_packet(),))
+    connection, round_id, over_id, opening, recover, rounds, web_search = (
+        await _prepare_over_limit_round(tmp_path, web_search=web_search)
+    )
+
+    with pytest.raises(WebRequestRecoveryRequired):
+        await opening(round_id=round_id, seats=(SEAT,))
+
+    await recover(round_id=round_id, request_id=over_id, action="abandon")
+
+    recovered = next(
+        item for item in rounds.get(round_id).web_requests if item.request_id == over_id
+    )
+    assert recovered.state is WebRequestState.REJECTED
+    assert recovered.result_note == RECOVERY_ABANDON_NOTE
+    assert used_web_request_count(rounds.get(round_id).web_requests) == 3
+
+    await opening(round_id=round_id, seats=(SEAT,))
+
+    final = rounds.get(round_id)
+    assert final.step is Step.SEATS_RUNNING
+    assert web_search.calls == []
+    connection.close()
+
+
+async def test_true_sqlite_recovery_execute_once_then_opening_is_zero_web(tmp_path):
+    web_search = RecordingWebSearch(returns=(make_web_packet(url="https://recovered"),))
+    connection, round_id, over_id, opening, recover, rounds, web_search = (
+        await _prepare_over_limit_round(tmp_path, web_search=web_search)
+    )
+
+    with pytest.raises(WebRequestRecoveryRequired):
+        await opening(round_id=round_id, seats=(SEAT,))
+
+    await recover(round_id=round_id, request_id=over_id, action="execute")
+
+    executed = next(
+        item for item in rounds.get(round_id).web_requests if item.request_id == over_id
+    )
+    assert executed.state is WebRequestState.DONE
+    assert [query for query, _ in web_search.calls] == ["q4"]
+    assert used_web_request_count(rounds.get(round_id).web_requests) == 4
+
+    await opening(round_id=round_id, seats=(SEAT,))
+
+    final = rounds.get(round_id)
+    assert final.step is Step.SEATS_RUNNING
+    assert [query for query, _ in web_search.calls] == ["q4"]
     connection.close()

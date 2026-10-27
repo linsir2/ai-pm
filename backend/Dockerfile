@@ -8,7 +8,11 @@
 # **静默的**——`Template("").substitute()` 是合法的，于是每一轮都拿着空提示词
 # 去调模型而**不报错**（`tests/architecture/test_resource_paths.py` 点名过这个坑）。
 
-FROM python:3.13-slim
+# 基础镜像**按 digest 钉死**（浮动标签会随 Debian 发版漂移）。
+# ⚠ 这个 digest 里的 SQLite 是 Debian trixie 的 **3.46.1**，仍落在 WAL-reset
+# 受影响区间（修复在 3.51.3）。换到带修复版 SQLite 的 base 之前，
+# `scripts/dev.py` 会拒绝 `PMSTUDIO_WORKERS>1`（不是靠这条注释拦）。
+FROM python:3.13-slim@sha256:57b29a7c050c4e679e4bea572e14b3965cf4b5839de2da49d55e49ffc4024f39
 
 # lxml 需要 libxml2/libxslt；sqlite3 CLI 是 backup.sh / restore_check.sh 用的
 # （用 `sqlite3 .backup` 而不是 `cp`——WAL 模式下 `cp` 会丢 `-wal` 里的数据）。
@@ -16,8 +20,8 @@ FROM python:3.13-slim
 # ⚠ 包名是 **libxslt1.1**，不是 `libxslt1`：后者在 Debian 的源里**不存在**
 # （trixie 的 main 索引里 `Package: libxslt1` 命中 0 条，`libxslt1.1` 才是）。
 # 2026-10-23 CI 实测：`E: Unable to locate package libxslt1` → 镜像构建直接红。
-# 基础镜像 `python:3.13-slim` 是**浮动标签**，它会随 Debian 发版漂移，
-# 所以这里不钉 bookworm/trixie——包名在两者上一致（都是 `libxslt1.1`）。
+# 包名在 bookworm/trixie 上一致（都是 `libxslt1.1`），所以 digest 换 Debian 版本时
+# 这条不用改；改的是 digest 本身。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libxml2 libxslt1.1 sqlite3 ca-certificates \

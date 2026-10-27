@@ -23,10 +23,12 @@
 能直接看到 `.db` / `.db-wal` / `.db-shm` 三个。
 """
 
+from scripts import dev
 from scripts.dev import (
     FIXED_FDS_PER_WORKER,
     fd_budget_for,
     fd_pressure,
+    wal_reset_blocker,
 )
 
 
@@ -90,3 +92,46 @@ def test_worker为零不该判成有压力():
     """R：worker=0 是配置错误，不是 fd 压力——**别用错误的原因报正确的错**。"""
 
     assert fd_pressure(soft_limit=10, workers=0, redis_pool=256) is False
+
+
+def test_多worker遇到受影响的SQLite拒启():
+    """R：多 worker = 同库 ≥2 个跨进程连接，正好命中 WAL-reset 三条触发条件之一。
+    I：2 worker + 本机 3.51.0；P：门禁；R：给出可执行理由。"""
+
+    reason = wal_reset_blocker(2, "3.51.0")
+
+    assert reason is not None
+    assert "PMSTUDIO_WORKERS=2" in reason
+    assert "3.51.0" in reason
+    assert "PMSTUDIO_WORKERS=1" in reason
+
+
+def test_单worker不受WAL门禁影响():
+    """R：单 worker 不满足跨进程条件，不能拿 WAL 当理由拦。"""
+
+    assert wal_reset_blocker(1, "3.46.1") is None
+
+
+def test_已修复版本不拦多worker():
+    """R：3.51.3 是官方修复版；3.44.6 / 3.50.7 是 backport。"""
+
+    assert wal_reset_blocker(2, "3.51.3") is None
+    assert wal_reset_blocker(2, "3.50.7") is None
+    assert wal_reset_blocker(2, "3.44.6") is None
+
+
+def test_dev启动前拦下多worker并返回退出码2(tmp_path, monkeypatch):
+    """R：门禁必须在 uvicorn.run 之前生效——否则进程已经起来了才报错。
+    I：真 main() + 受影响的 SQLite 版本；P：拦 uvicorn.run；R：返回 2 且没起服务。"""
+
+    monkeypatch.setattr(dev.sqlite3, "sqlite_version", "3.51.0")
+    monkeypatch.setenv("PMSTUDIO_MODEL", "openai/test-model")
+    monkeypatch.setenv("PMSTUDIO_API_KEY", "test-key")
+    monkeypatch.setenv("PMSTUDIO_WORKERS", "2")
+    monkeypatch.setenv("PMSTUDIO_DB", str(tmp_path / "dev.db"))
+    monkeypatch.setattr("sys.argv", ["dev.py", "--no-reload"])
+    started: list[object] = []
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: started.append(args))
+
+    assert dev.main() == 2
+    assert started == []

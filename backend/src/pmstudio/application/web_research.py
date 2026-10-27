@@ -546,7 +546,11 @@ class WebResearch:
             if item.state is WebRequestState.PROPOSED
             and item.origin in ("seat", "integrator")
         )
-        if not approved and not (round_.allow_web and auto_candidates):
+        # `used == limit` 时没有名额可自动批准；别为了一个不存在的执行去
+        # `ensure_ready`——网关缺失会把后续每个模型步都打成 422（M1）。
+        if not approved and (
+            used >= limit or not (round_.allow_web and auto_candidates)
+        ):
             return None
         if used > limit:
             approved = approved_within_limit(round_, limit)

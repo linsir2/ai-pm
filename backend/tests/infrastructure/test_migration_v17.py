@@ -52,6 +52,8 @@ def _old_db(path):  # type: ignore[no-untyped-def]
             " payload, created_at, updated_at) VALUES (?, ?, 'u1', 'inquiry', ?, '{}', ?, ?)",
             (exploration_id, project_id, status, created_at, created_at),
         )
+    # 真的把老库标成 v16：只建出旧形状而不写版本号，测不到"v16 升到当前版本"这条路。
+    old.execute("PRAGMA user_version = 16")
     old.commit()
     old.close()
 

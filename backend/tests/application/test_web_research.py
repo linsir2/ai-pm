@@ -960,6 +960,40 @@ async def test_execute_approved_at_the_limit_still_runs_existing_approved():
     assert states_by_id(harness, round_id)["w102"] is WebRequestState.DONE
 
 
+async def test_at_the_limit_without_a_gateway_does_not_fail_the_model_step():
+    """M1：`used == limit` 且没有 approved 时，别为了"没有的执行"去 ensure_ready。
+
+    这里先正常开场（工具与网关都在，零网络），再把网关拿掉、跑完整席位轮：
+    没有可执行的东西就不该查网关，否则每个模型步都会 422。
+    """
+
+    harness = Harness(
+        replies={"claims": claims_reply()},
+        seat_replies={SEAT: SEAT_REPLY},
+        web_search=RecordingWebSearch(returns=(make_web_packet(),)),
+    )
+    round_id = await analyzed_round(harness)
+    seed_web_states(
+        harness,
+        round_id,
+        [
+            (WebRequestState.DONE, "q1"),
+            (WebRequestState.DONE, "q2"),
+            (WebRequestState.DONE, "q3"),
+            (WebRequestState.PROPOSED, "q4"),
+        ],
+    )
+    await harness.submit_opening()(round_id=round_id, seats=(SEAT,), allow_web=True)
+    assert harness.web_search.calls == []
+
+    harness.web_search = None
+    await harness.run_seat_round()(round_id=round_id)
+
+    round_ = harness.rounds.get(round_id)
+    assert round_.pending_seats == ()
+    assert round_.web_requests[-1].state is WebRequestState.PROPOSED
+
+
 async def test_recovery_abandon_frees_the_slot_and_opening_succeeds():
     harness = Harness(replies={"claims": claims_reply()})
     round_id = await analyzed_round(harness)

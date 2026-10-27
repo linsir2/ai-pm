@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -134,6 +135,29 @@ def _workers() -> int:
     return value
 
 
+def wal_reset_blocker(workers: int, version: str) -> str | None:
+    """多 worker + 受 WAL-reset 影响的 SQLite → 拒绝启动的理由；否则 None。
+
+    判据复用 `database.wal_reset_vulnerable()`（按分支判，不裸比版本号）：
+    多 worker 正好满足"同一库 ≥2 个跨进程连接"这一条触发条件。
+    """
+
+    if workers <= 1:
+        return None
+    from pmstudio.infrastructure.sqlite.database import wal_reset_vulnerable
+
+    if not wal_reset_vulnerable(version):
+        return None
+    return (
+        f"拒绝启动：PMSTUDIO_WORKERS={workers}，但解释器链接的 SQLite {version} "
+        "落在 WAL-reset bug 的受影响区间（3.7.0–3.51.2；修复在 3.51.3，"
+        "backport 只有 3.44.6 / 3.50.7）。\n"
+        "  多 worker = 同一库 ≥2 个跨进程连接，正好满足触发条件，可能损坏数据库。\n"
+        "  改法：设 PMSTUDIO_WORKERS=1，或换一个捆绑 ≥3.51.3 SQLite 的解释器"
+        "（生产镜像里 pin 住）。"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="起 PM Studio 后端")
     parser.add_argument("--port", type=int, default=None, help="端口，默认读 PMSTUDIO_PORT 或 8000")
@@ -236,6 +260,10 @@ def main() -> int:
             "  · 要热重载 → 设 PMSTUDIO_WORKERS=1",
             file=sys.stderr,
         )
+        return 2
+    blocker = wal_reset_blocker(workers, sqlite3.sqlite_version)
+    if blocker is not None:
+        print(blocker, file=sys.stderr)
         return 2
     # fd 护栏：先自己抬软限（nginx 的做法），再判够不够。
     # **警告而不是退出码 2**——见 `_raise_fd_limit` 的文档串。
