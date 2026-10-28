@@ -6,8 +6,8 @@
 
 ## 为什么不在应用层分词（2026-10-28）
 
-旧版用 jieba 预分词写 `tokens` / `search_tsv`，索引与查询各切一次，口径容易漂移；
-现在词法分词只发生在 pg_search 一处，应用层只负责拼原文。
+旧版在应用层预分词并写词袋列，索引与查询各切一次，口径容易漂移；现在词法分词
+只发生在 pg_search 一处，应用层只负责拼原文。
 """
 
 from collections.abc import Sequence

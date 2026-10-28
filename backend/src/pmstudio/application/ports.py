@@ -284,8 +284,8 @@ class MaterialRetriever(Protocol):
 
     实现 `SqliteFtsRetriever`：**pg_search BM25 候选 + Robertson 重排**（词级、
     词序无关、容忍停用词；分词统一由数据库的 `pmstudio_tokens` 做）。它替换掉了
-    更早的整句 `LIKE` 版（`SqliteLikeRetriever`，2026-10-17 删除）与
-    `ts_rank_cd` 版；升级前后对照见 `docs/plans/2026-10-17-检索升级验收.md`。
+    更早的整句 `LIKE` 版（`SqliteLikeRetriever`，2026-10-17 删除）与 PG 内置全文
+    检索版；升级前后对照见 `docs/plans/2026-10-17-检索升级验收.md`。
 
     再往上的升级位（向量 / 混合）仍在同一个协议后面。
 

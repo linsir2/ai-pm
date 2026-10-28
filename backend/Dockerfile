@@ -36,8 +36,7 @@ COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev
 
 COPY src ./src
-# **只 COPY 运行时脚本**：`scripts/migrate_sqlite_to_pg.py` 是迁移窗口的一次性 ETL，
-# 绝不能进生产镜像（T9）。其余 bench/验收脚本同样不是运行时依赖。
+# **只 COPY 运行时脚本**：bench/验收脚本不是运行时依赖，不进生产镜像（T9）。
 COPY scripts/dev.py scripts/init_db.py scripts/migrate.py \
      scripts/maintenance_worker.py scripts/backup.sh scripts/restore_check.sh \
      ./scripts/

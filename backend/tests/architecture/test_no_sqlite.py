@@ -1,16 +1,12 @@
 """T10 守卫：运行时、脚本、测试里都不许再出现 SQLite 的运行时痕迹。
 
 判据是 **AST import + 非 docstring 字符串字面量**（注释不进 AST，天然不扫）。
-ETL 只允许在 `scripts/migrate_sqlite_to_pg.py` 与 `tests/test_etl_cutover.py`
-里碰 SQLite；那是迁移窗口的一次性工具，不是运行时。
+SQLite ETL 已删除（2026-10-28），现在树里没有任何白名单。
 
 守卫自己也在这棵被扫的树里，所以模式都拆成两段拼——写成完整字面量就会自己抓自己。
 """
 
-from pathlib import Path
-
 from tests.architecture.guards import (
-    SQLITE_WHITELIST,
     SRC,
     sqlite_imports,
     sqlite_manifest_offenders,
@@ -60,12 +56,3 @@ def test_guard_catches_sql_literals_but_not_docstrings_or_comments() -> None:
         "SQL = 'SELECT 1'\n"
     )
     assert sqlite_sql_literals(clean) == {}
-
-
-def test_only_the_etl_script_and_test_are_whitelisted() -> None:
-    assert SQLITE_WHITELIST == {
-        "scripts/" + "migrate_sqlite_to_pg.py",
-        "tests/" + "test_etl_cutover.py",
-    }
-    for relative in SQLITE_WHITELIST:
-        assert (BACKEND / Path(relative)).is_file(), relative

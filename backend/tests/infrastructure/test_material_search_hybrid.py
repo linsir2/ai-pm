@@ -338,9 +338,9 @@ def _rare_term_corpus(conn):
 def test_a_rare_lexical_hit_survives_the_semantic_branch(conn):
     """R：目标只命中**一个罕见词**时（覆盖率低、BM25 很高），**不许被语义掀翻**。
 
-    旧口径（`ts_rank_cd` 无 IDF）下这里必须 strict xfail：覆盖率 0.25 → 掉进
-    纯语义档 → BM25 挣到的第 1 位被只命中常见词的块抢走。换成 pg_search 候选 +
-    Robertson IDF 重排后本用例转绿，xfail 删除。
+    旧的无 IDF 词面口径下这里必须 strict xfail：覆盖率 0.25 → 掉进纯语义档 →
+    BM25 挣到的第 1 位被只命中常见词的块抢走。换成 pg_search 候选 + Robertson
+    IDF 重排后本用例转绿，xfail 已删除。
     """
     from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER

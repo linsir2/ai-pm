@@ -217,14 +217,6 @@ SQLITE_SQL_PATTERNS: tuple[str, ...] = (
     "pmstudio_" + "db",
 )
 
-#: ETL 是唯一允许碰 SQLite 的地方：一次性迁移脚本与它的测试。
-SQLITE_WHITELIST = frozenset(
-    {
-        "scripts/" + "migrate_sqlite_to_pg.py",
-        "tests/" + "test_etl_cutover.py",
-    }
-)
-
 #: manifest 只查依赖名：`.toml` / `.lock` 不是 SQL 源码，硬套 SQL 模式会误伤。
 #: 同样拆两段拼——守卫测试文件也在被扫的树里。
 SQLITE_MANIFEST_PATTERNS: tuple[str, ...] = (
@@ -304,7 +296,7 @@ def _sql_file_without_comments(text: str) -> str:
 def sqlite_offenders(root: Path) -> dict[str, list[str]]:
     """扫源码树：`.py` 走 AST，`.sql` 去掉 `--` 注释后按文本找。
 
-    返回 `相对路径 -> 命中列表`；ETL 脚本/测试与 `__pycache__` 跳过。
+    返回 `相对路径 -> 命中列表`；`__pycache__` 等生成物目录跳过。
     """
 
     offenders: dict[str, list[str]] = {}
@@ -316,8 +308,6 @@ def sqlite_offenders(root: Path) -> dict[str, list[str]]:
         if any(part in excluded for part in relative.parts):
             continue
         relative_text = relative.as_posix()
-        if relative_text in SQLITE_WHITELIST:
-            continue
         if path.suffix == ".py":
             source = path.read_text(encoding="utf-8")
             hits = sorted(sqlite_imports(source)) + sorted(sqlite_sql_literals(source))

@@ -114,7 +114,7 @@ def test_all_bootstraps_roles_extension_and_auth_file(scratch_database, tmp_path
     bootstrap_database(_bootstrap(scratch_database, auth_file))
     # bootstrap 之后 owner 才能连（角色口令刚建）；schema/finalize 只用 owner URL。
     owner_url = _ops(scratch_database).direct_database_url
-    assert schema_only(owner_url) == [1]
+    assert schema_only(owner_url) == [1, 2]
     result = finalize_database(owner_url, _ops(scratch_database))
     assert result["templates"] >= 1
 

@@ -3,7 +3,7 @@
 写路径只写 `search_text`（`index_text`：标题 + 章节链 + 正文原样）；
 `search_tokens` 是 generated 列（统一由 `pmstudio_tokens` 的 jieba 产生）。
 查询侧 `pmstudio_tokens(query)` → `search_text ||| tokens::text[]` 取 200 候选，
-再按全语料 df 做 Robertson BM25 重排；不再有 `tokens` / `search_tsv` / GIN。
+再按全语料 df 做 Robertson BM25 重排；旧词袋列与 GIN 索引已删除。
 """
 
 from __future__ import annotations
