@@ -54,7 +54,7 @@
   再与 pgvector KNN 按 α=.4、每材料 2 槽融合。冻结语料验收入口
   `backend/scripts/retrieval_quality_bench.py`（fixture 在 `tests/fixtures/retrieval/`）：
   300/791 跨块 `4/15=.267`、400/646 跨块 `7/15=.467`；词面 r5 `.844`、改述 r5 `.857`。
-  **排序债仍在**：IDF 钳制后 top1/MRR 低于旧 300 目标，见 `04` §0.1 R15，不改阈值。
+  **排序债仍在**：IDF 钳制后 top1/MRR 低于旧 646/400 历史参考，见 `04` §0.1 R15，不改阈值。
 
 - 后端：测试全绿、`ruff` 无告警；结构性守卫在 `tests/architecture/` 与 `tests/contracts/`，
   含"守卫自己的判据有没有效"那一层。守卫条数与测试条数**都会过期**，这里不写数字——

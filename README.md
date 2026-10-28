@@ -263,7 +263,7 @@ cd backend && uv run python scripts/mcp_probe.py --list      # 只列工具
 - **无外部向量数据库**：词法 + 语义检索跑在 PostgreSQL 18 的 pg_search BM25 与
   pgvector/HNSW 上——零第二存储、可复现，代价是不适合百万级文档。
 - **罕见词已由 Robertson BM25 处理**：IDF 对罕见词保留高权重，小语料负 IDF 钳到 0；
-  旧 `xfail(strict=True)` 已删除。**排序债仍在**：钳制后 top1/MRR 低于旧 300 目标，
+  旧 `xfail(strict=True)` 已删除。**排序债仍在**：钳制后 top1/MRR 低于旧 646/400 历史参考，
   见 `04-未决.md` §0.1 R15；不改阈值冒充通过。
 - **SQLite 已删除**：运行时、测试、脚本都不再依赖 SQLite；旧 ETL 脚本与其测试已删，
   no-sqlite 守卫无白名单。

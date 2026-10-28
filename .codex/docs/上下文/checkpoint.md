@@ -23,9 +23,16 @@
   跨块 **4/15 = .267**；400/646：跨块 **7/15 = .467**（复现旧口径）。假阳性仍 8/8。
   **排序债**：同脚本诊断，未钳制改述 `.786/.357/.485`、钳到 0 后
   `.857/.214/.425`（r5/top1/MRR）；非负 IDF 与钳到 0 同分。见 `04` §0.1 R15；不改阈值。
-- **测试**：后端 `-m "not slow"` → **3222 passed / 56 skipped / 5 deselected /
-  0 failed**（Task 4 全量 3221 + 新增冻结 fixture 守卫 1）· `ruff` 全绿 ·
-  `uv lock --check` 通过 · 前端未改（Task 4 时 `tsc`/`vitest` 全绿）。
+- **测试（Task 6 终验，2026-10-28）**：后端 `-m "not slow"` →
+  **3232 passed / 52 skipped / 5 deselected / 0 failed**（collected 3289；
+  3 条真 PgBouncer + backup/restore 真跑不再跳过，含 Task 5 review 新增 4 条 fixture）
+  · `ruff` 全绿 · `uv lock --check` 通过 · 前端 `tsc --noEmit` 干净 /
+  `vitest` **62 files / 687 passed**。
+- **终验（Task 6）**：官方 ParadeDB 0.26.3-pg18 + 4 workers + PgBouncer
+  （100 HTTP 并发 p95 **26.5ms**、20 轮内写并发，0 失败/超时/55P03/57014）·
+  `docker compose build` 通过 · `restore_check.sh` PASS（18 行指纹、sessions 清空）·
+  pg_search / PgBouncer smoke 通过（extension 0.26.3、bm25 索引、app 角色 jieba）。
+  **R15 排序债仍未收**，不改阈值。
 - 文档入口：`02` §11.0.79、`03` 检索验收清单、`05` 检索实现、runbook、
   `README`、`AGENTS` 已同步到 pg_search 与仓库内 fixture。
 
