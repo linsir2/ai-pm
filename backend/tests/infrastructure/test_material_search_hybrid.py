@@ -70,7 +70,8 @@ def test_a_lexical_exact_hit_is_never_knocked_out_by_a_semantic_one(conn):
     # 目标块的正文**原样**含查询的每个 token；另一块只在语义上像
     _put_material(conn, "m-1", chunks=(("c1", "退货时限是七天"),))
     _put_material(conn, "m-2", chunks=(("c2", "退款周期不超过一星期"),))
-    # 让查询词的 df < N/2：小语料里全部命中时 Robertson IDF 为负，测不出"词面原样"。
+    # 查询词全部命中时 IDF 被钳到 0，词面差异只剩 1e-9；补无关文档让 IDF 为正，
+    # 才测得出"词面原样"。
     for index in range(3):
         _put_material(conn, f"m-d{index}", chunks=((f"c-d{index}", f"机柜布线规范 第 {index} 版"),))
     SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
@@ -261,7 +262,8 @@ def test_an_exact_lexical_hit_is_not_knocked_out_by_a_semantic_one(conn):
     _put_material(conn, "m-1", chunks=(("c1", "退货时限是七天"),))
     # 干扰：语义上像（共享很多字），词面上不含查询的 token
     _put_material(conn, "m-2", chunks=(("c2", "退货的期限与流程说明"),))
-    # 让查询词的 df < N/2：小语料里全部命中时 Robertson IDF 为负，测不出"词面原样"。
+    # 查询词全部命中时 IDF 被钳到 0，词面差异只剩 1e-9；补无关文档让 IDF 为正，
+    # 才测得出"词面原样"。
     for index in range(3):
         _put_material(
             conn, f"m-d{index}", chunks=((f"c-d{index}", f"机柜布线规范 第 {index} 版"),)
@@ -306,9 +308,9 @@ def _rare_term_corpus(conn):
     丢掉 BM25 挣到的名次。要让覆盖率**低**而 BM25 **高**，就得让目标只命中
     一个**罕见**词，干扰块命中三个**常见**词。
 
-    Robertson IDF 下：N=5，`紫貂` df=1 → idf=ln(4.5/1.5)=1.0986；
-    `出口/关税/报关` df=4 → idf=ln(1.5/4.5)=-1.0986。m1 只拿正项，
-    干扰块拿负项 → 平移为正分后 m1 必然第一。
+    Robertson IDF（负值钳到 0）下：N=5，`紫貂` df=1 → idf=1.0986；
+    `出口/关税/报关` df=4 → 原式 -1.0986，钳到 ~0。m1 拿高 IDF，
+    干扰块只剩极小正项 → 平移后 m1 必然第一。
     """
     docs = {
         "m1": "紫貂 皮草 拍卖 记录",

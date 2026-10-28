@@ -124,7 +124,8 @@ class _Broken(FakeEmbedder):
 def test_an_exact_lexical_hit_is_not_knocked_out_by_the_semantic_branch(conn) -> None:
     lexical = _put(conn, "退货时限是七天")
     semantic = _put(conn, "退货的期限与流程说明")
-    # 让查询词的 df < N/2：小语料里全部命中时 Robertson IDF 为负，测不出"词面原样"。
+    # 查询词全部命中时 IDF 被钳到 0，词面差异只剩 1e-9；补无关文档让 IDF 为正，
+    # 才测得出"词面原样"。
     for index in range(3):
         _put(conn, f"机柜布线规范 第 {index} 版")
     _write_vectors(conn, lexical, semantic)

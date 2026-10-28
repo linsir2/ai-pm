@@ -462,9 +462,16 @@ def _robertson_scores(  # type: ignore[no-untyped-def]
 ) -> dict[str, float]:
     """候选内按 Robertson BM25 重排；分数整体平移为正（最小 = 1e-6）。
 
-    - `idf = ln((N - df + .5)/(df + .5))`（Robertson，允许负 IDF）；
+    - `idf = max(0, ln((N - df + .5)/(df + .5))) + 1e-9`；
     - `k1=1.2`、`b=.75`；`tf` 取 `search_tokens` 中的次数，`dl` 是块 token 数；
     - `N` / `avgdl` / `df` 用**全 project/owner 语料**，不是候选集。
+
+    ## 为什么钳到 0（2026-10-28 评审）
+
+    Robertson 原式在 `df >= N/2` 时为负；2 块小语料里查询词两边都有时，
+    "多命中一次"反而扣分、短块压过长块。钳到 0 再加 `1e-9`：罕见词保留高
+    IDF，共同词不变成负权重，tf/长度仍能排序。这是 Robertson 的小语料钳制，
+    **不是换成 Lucene 的 BM25**（那条 IDF 公式不同）。
     """
 
     if not candidates or not corpus:
@@ -478,7 +485,7 @@ def _robertson_scores(  # type: ignore[no-untyped-def]
         token: sum(1 for doc in corpus.values() if token in doc) for token in unique
     }
     idf = {
-        token: math.log((total - frequency + 0.5) / (frequency + 0.5))
+        token: max(0.0, math.log((total - frequency + 0.5) / (frequency + 0.5))) + 1e-9
         for token, frequency in document_frequency.items()
     }
     raw: dict[str, float] = {}

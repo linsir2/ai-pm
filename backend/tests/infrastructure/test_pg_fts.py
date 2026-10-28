@@ -201,8 +201,23 @@ def test_special_characters_are_tokenized_not_parsed_as_query_operators(conn) ->
 
 def test_rank_is_positive_and_more_matches_rank_first(conn) -> None:
     mid = seed(conn, "异步队列 与 异步队列：两次都提了", "这里只提了一次 异步队列")
-    for index in range(3):  # 让查询词的 df < N/2，IDF 才为正（小语料里的负 IDF 是口径）
+    for index in range(3):  # 让查询词的 df < N/2，IDF 才为正（覆盖非钳制路径）
         seed(conn, f"机柜布线规范 第 {index} 版")
+    hits = SqliteFtsRetriever(conn).search(project_id=PROJECT, query="异步队列")
+
+    assert [h.chunk_id for h in hits] == [f"{mid}#c00", f"{mid}#c01"]
+    assert all(hit.score > 0 for hit in hits), [hit.score for hit in hits]
+    assert hits[0].score > hits[1].score
+
+
+def test_more_matches_rank_first_without_decoys(conn) -> None:
+    """无 decoy 的 2 块小语料：共同词不许变成负权重。
+
+    Robertson 原始 IDF 在 `df == N` 时为负，会让"多命中一次"反而扣分、
+    短块压过长块。IDF 钳到 0 后，tf/长度仍能排出先后，且分数仍为正。
+    """
+
+    mid = seed(conn, "异步队列 与 异步队列：两次都提了", "这里只提了一次 异步队列")
     hits = SqliteFtsRetriever(conn).search(project_id=PROJECT, query="异步队列")
 
     assert [h.chunk_id for h in hits] == [f"{mid}#c00", f"{mid}#c01"]
