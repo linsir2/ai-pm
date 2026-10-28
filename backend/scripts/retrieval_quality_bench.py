@@ -11,8 +11,11 @@
 
 默认读仓库内冻结语料 `tests/fixtures/retrieval/`（15 份联网正文 + 45 词面查询 +
 14 改述 + 15 跨块 + 8 负样本）；`--corpus` 可指到别的目录或 `corpus.json`。
-脚本在临时 schema 里跑，退出时销毁；`--database-url` 不给时按 `scripts/pg_scratch.py`
-的同一套 `.env` / `.env.ops` 取 URL。
+**跨块必须用冻结集**：缺文件、缺对应块宽或任一条映射失效都会直接失败，不静默
+缩小分母、也不自动重生成。脚本在临时 schema 里跑，退出时销毁；`--database-url`
+不给时按 `scripts/pg_scratch.py` 的同一套 `.env` / `.env.ops` 取 URL。
+
+耗时是**单次示例**（进程冷缓存）：p50/p95 只说明量级，不作门槛，也不承诺复现同一数字。
 
 用法：
 
@@ -53,6 +56,8 @@ from pmstudio.domain.shared.ids import ProjectId, UserId  # noqa: E402
 from pmstudio.infrastructure.postgres.database import connect  # noqa: E402
 from pmstudio.infrastructure.postgres.embedding import FastEmbedEmbedder  # noqa: E402
 from pmstudio.infrastructure.postgres.materials import (  # noqa: E402
+    _MATERIAL_SLOTS,
+    FUSION_ALPHA,
     SqliteHybridRetriever,
     SqliteMaterialStore,
 )
@@ -163,11 +168,16 @@ def _mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
-def _query_tokens(connection, query: str) -> list[str]:  # type: ignore[no-untyped-def]
-    row = connection.execute("SELECT pmstudio_tokens(%s) AS tokens", (query,)).fetchone()
-    if row is None:
-        return []
-    return [str(token) for token in row["tokens"]]
+def _url_to_index(corpus: Corpus, items: list[Any]) -> dict[str, int]:
+    """词面查询的 URL 必须全部映射到语料；缺一条就失败，不缩小分母。"""
+
+    mapping = {
+        str(document["url"]): index for index, document in enumerate(corpus.documents)
+    }
+    missing = sorted({str(url) for _word, _query, url in items if str(url) not in mapping})
+    if missing:
+        raise ValueError(f"词面查询的 URL 不在语料里：{missing}")
+    return mapping
 
 
 def _ingest(
@@ -225,82 +235,45 @@ def _ingest(
 
 
 def _cross_queries(
-    connection,  # type: ignore[no-untyped-def]
     corpus: Corpus,
     *,
     chunk_chars: int,
     path: Path,
 ) -> list[dict[str, Any]]:
-    """跨块查询：优先读冻结集；自定义语料没有冻结集时按同一规则现生成。"""
+    """读冻结跨块集；缺文件、缺宽度或任一条映射失效都直接失败。
 
-    frozen = _load_json(path) if path.is_file() else {}
-    group = frozen.get(str(chunk_chars)) if isinstance(frozen, dict) else None
-    if isinstance(group, list) and group:
-        rows = []
-        for item in group:
-            index = int(item["material_index"])
-            material_id = corpus.materials.get(index)
-            if material_id is None:
-                continue
-            ids = corpus.chunk_ids[material_id]
-            wanted = [f"{material_id}#c{int(ordinal):02d}" for ordinal in item["chunks"]]
-            if any(chunk_id not in ids for chunk_id in wanted):
-                continue
-            rows.append(
-                {
-                    "query": str(item["query"]),
-                    "material_index": index,
-                    "wanted": wanted,
-                }
+    **不静默重生成**：跨块是硬门，冻结集失效时自动换一套查询会让 n 和答案
+    悄悄变化，验收就失去可比性。自定义语料请显式给 `--cross-queries`。
+    """
+
+    if not path.is_file():
+        raise ValueError(f"缺冻结跨块查询文件：{path}")
+    frozen = _load_json(path)
+    if not isinstance(frozen, dict):
+        raise ValueError(f"{path} 不是按块宽分组的对象")
+    group = frozen.get(str(chunk_chars))
+    if not isinstance(group, list) or not group:
+        raise ValueError(f"{path} 没有 {chunk_chars} 宽度的跨块查询")
+    rows: list[dict[str, Any]] = []
+    for position, item in enumerate(group):
+        index = int(item["material_index"])
+        material_id = corpus.materials.get(index)
+        if material_id is None:
+            raise ValueError(
+                f"{path} 第 {position + 1} 条 material_index={index} 映射不到材料"
             )
-        if len(rows) == len(group):
-            return rows
-
-    # 自定义语料：chunks[6] / chunks[10] 各取一个语料稀有词；词面按 pg_search
-    # jieba（与生产同一把尺子），限制在材料级词频里出现 < N/2 的词。
-    token_sets: dict[str, set[str]] = {}
-    for material_id, ids in corpus.chunk_ids.items():
-        tokens: set[str] = set()
-        for chunk_id in ids:
-            row = connection.execute(
-                "SELECT search_tokens FROM material_chunks WHERE chunk_id = %s",
-                (chunk_id,),
-            ).fetchone()
-            if row is not None:
-                tokens.update(str(token) for token in row["search_tokens"])
-        token_sets[material_id] = tokens
-    frequency: dict[str, int] = {}
-    for tokens in token_sets.values():
-        for token in tokens:
-            frequency[token] = frequency.get(token, 0) + 1
-    common = {token for token, count in frequency.items() if count >= len(token_sets) / 2}
-    rows = []
-    for index, material_id in sorted(corpus.materials.items()):
-        ids = corpus.chunk_ids[material_id]
-        if len(ids) < 11:
-            continue
-        first = [
-            token
-            for token in _query_tokens(connection, corpus.chunk_texts[material_id][6])
-            if token not in common
-        ]
-        second = [
-            token
-            for token in _query_tokens(connection, corpus.chunk_texts[material_id][10])
-            if token not in common
-        ]
-        if not first or not second:
-            continue
-        first.sort(key=lambda token: frequency.get(token, 0))
-        second.sort(key=lambda token: frequency.get(token, 0))
+        ids = set(corpus.chunk_ids[material_id])
+        wanted = [f"{material_id}#c{int(ordinal):02d}" for ordinal in item["chunks"]]
+        missing = [chunk_id for chunk_id in wanted if chunk_id not in ids]
+        if missing:
+            raise ValueError(
+                f"{path} 第 {position + 1} 条目标块不存在：{missing}"
+            )
         rows.append(
             {
-                "query": f"{first[0]} {second[0]}",
+                "query": str(item["query"]),
                 "material_index": index,
-                "wanted": [
-                    f"{material_id}#c06",
-                    f"{material_id}#c10",
-                ],
+                "wanted": wanted,
             }
         )
     return rows
@@ -321,7 +294,6 @@ def _search(
 
 
 def _evaluate(
-    connection,  # type: ignore[no-untyped-def]
     corpus: Corpus,
     *,
     chunk_chars: int,
@@ -334,15 +306,18 @@ def _evaluate(
     paraphrases = _load_json(queries_dir / "paraphrases.json")["paraphrases"]
     negatives = _load_json(queries_dir / "negative_queries.json")
     cross = _cross_queries(
-        connection,
         corpus,
         chunk_chars=chunk_chars,
         path=chunk_queries_path,
     )
-
-    url_to_index = {
-        str(document["url"]): index for index, document in enumerate(corpus.documents)
-    }
+    url_to_index = _url_to_index(corpus, frozen["items"])
+    missing_paraphrases = sorted(
+        index
+        for index in paraphrases
+        if int(index) not in corpus.materials
+    )
+    if missing_paraphrases:
+        raise ValueError(f"改述索引映射不到材料：{missing_paraphrases}")
     latencies: list[float] = []
     candidate_rows: list[dict[str, int]] = []
 
@@ -365,12 +340,8 @@ def _evaluate(
         reciprocal: list[float] = []
         block_recalled: list[float] = []
         for word, _query, url in items:
-            index = url_to_index.get(str(url))
-            if index is None:
-                continue
-            material_id = corpus.materials.get(index)
-            if material_id is None:
-                continue
+            index = url_to_index[str(url)]
+            material_id = corpus.materials[index]
             # 词面判据的查询就是**取自目标材料中段的那个词**，不是第三列之外的
             # 概括问句（旧基线 `retrieval_baseline.json` 同口径）。
             _, hits = run(str(word))
@@ -406,9 +377,7 @@ def _evaluate(
         recalled: list[float] = []
         reciprocal: list[float] = []
         for index_text, group in sorted(items.items(), key=lambda item: int(item[0])):
-            material_id = corpus.materials.get(int(index_text))
-            if material_id is None:
-                continue
+            material_id = corpus.materials[int(index_text)]
             for query in group:
                 _, hits = run(str(query))
                 hit_ids = [hit.material_id for hit in hits]
@@ -546,7 +515,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             retriever = SqliteHybridRetriever(connection, embedder=embedder)
             started = time.perf_counter()
             result = _evaluate(
-                connection,
                 corpus,
                 chunk_chars=args.chunk_chars,
                 queries_dir=queries_dir,
@@ -557,8 +525,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result["ingest_seconds"] = ingest_seconds
             result["measure_seconds"] = time.perf_counter() - started
             result["embedding_model"] = "BAAI/bge-small-zh-v1.5"
-            result["fusion_alpha"] = 0.4
-            result["material_slots"] = 2
+            result["fusion_alpha"] = FUSION_ALPHA
+            result["material_slots"] = _MATERIAL_SLOTS
             result["limit"] = LIMIT
             return result
         finally:
@@ -628,7 +596,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--cross-queries",
         type=Path,
         default=None,
-        help="跨块查询文件；默认读语料目录的 cross_queries.json",
+        help="冻结跨块查询文件；默认读语料目录的 cross_queries.json，缺失即失败",
     )
     parser.add_argument(
         "--database-url",
