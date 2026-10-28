@@ -78,11 +78,24 @@ mkdir -p "$dest/daily" "$dest/weekly"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 out="$dest/daily/pmstudio-$stamp.dump"
 
+# ParadeDB 官方镜像在 template1 预装 pg_search / postgis / pg_ivm 等扩展，
+# 新库会继承。postgis 的配置表数据 owner 读不了、pg_search 的 schema 又与
+# 恢复时预建的扩展冲突，因此备份只取业务对象；扩展由 restore_check 显式预建。
 PGAPPNAME=pmstudio-backup pg_dump \
   --dbname="$url" \
   --format=custom \
   --no-owner \
   --no-password \
+  --exclude-extension=pg_search \
+  --exclude-extension=pg_ivm \
+  --exclude-extension=postgis \
+  --exclude-extension=postgis_topology \
+  --exclude-extension=postgis_tiger_geocoder \
+  --exclude-schema=paradedb \
+  --exclude-schema=pdb \
+  --exclude-schema=pgivm \
+  --exclude-schema=tiger \
+  --exclude-schema=topology \
   --file="$out"
 chmod 600 "$out"
 

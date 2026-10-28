@@ -139,7 +139,7 @@ def load_environment(env: Mapping[str, str] | None = None) -> PgTestDatabase:
     if missing:
         pytest.exit(
             "缺测试数据库 URL：" + "、".join(missing)
-            + "。起一个 pgvector/pgvector:0.8.7-pg18-trixie，再导出两个 URL；"
+            + "。起一个 paradedb/paradedb:0.26.3-pg18，再导出两个 URL；"
             "不回落 SQLite。",
             returncode=2,
         )
@@ -152,12 +152,24 @@ def load_environment(env: Mapping[str, str] | None = None) -> PgTestDatabase:
 
 
 def prepare(database: PgTestDatabase) -> None:
-    """建 schema、确保 pgvector 扩展可用，并断言 current_schema / timezone。"""
+    """建 schema、确保 pgvector / pg_search 扩展可用，并断言 current_schema / timezone。"""
 
     schema = _quote_identifier(database.schema)
     try:
         with connect(database.direct_url) as connection:
+            # PG18 只允许 superuser / pg_read_all_settings 查看该参数；owner URL
+            # （PgBouncer CI job）不查，扩展能被 CREATE 本身就是预加载的证据。
+            privileged = connection.execute(
+                "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
+            ).fetchone()
+            if privileged is not None and privileged["rolsuper"]:
+                row = connection.execute("SHOW shared_preload_libraries").fetchone()
+                assert row is not None and "pg_search" in {
+                    part.strip()
+                    for part in str(row["shared_preload_libraries"]).split(",")
+                }, "测试库必须用 ParadeDB 官方镜像（shared_preload_libraries 缺 pg_search）"
             connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            connection.execute("CREATE EXTENSION IF NOT EXISTS pg_search CASCADE")
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
             row = connection.execute("SELECT current_schema() AS schema").fetchone()
             assert row is not None and row["schema"] == database.schema
@@ -167,6 +179,10 @@ def prepare(database: PgTestDatabase) -> None:
                 "SELECT extversion FROM pg_extension WHERE extname = 'vector'"
             ).fetchone()
             assert row is not None, "pgvector 扩展不可用"
+            row = connection.execute(
+                "SELECT extversion FROM pg_extension WHERE extname = 'pg_search'"
+            ).fetchone()
+            assert row is not None, "pg_search 扩展不可用"
     except OperationalError as error:
         pytest.exit(
             f"连不上测试数据库 {_safe_label(database.direct_url)}：{error}",

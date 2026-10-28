@@ -80,8 +80,11 @@ services:
     restart: "no"
 
   db:
-    # pgvector 0.8.7 + PostgreSQL 18。**按 digest 钉死**：浮动标签会随上游发版漂移。
-    image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:9d9c930220cb9bf2f956d10a8f909cf9973d9672ca0278aef2c1e6facccad2e0
+    # ParadeDB 0.26.3 + PostgreSQL 18（pgvector + pg_search，shared_preload 已开）。
+    # **按 digest 钉死**：浮动标签会随上游发版漂移。
+    # 官方镜像的 PGDATA 是 /var/lib/postgresql/18/docker，卷必须挂父目录。
+    # **切镜像必须空卷**（旧 pgdata 卷不迁移）：先 `docker compose down -v`。
+    image: paradedb/paradedb:0.26.3-pg18@sha256:9b15fc383bcd771f1e32e222bd1603c4c29856c481f6bd06f1960e89608c02f0
     env_file:
       - path: ./backend/.env.ops
         required: false

@@ -76,8 +76,12 @@ docker compose up -d
 
 换域名：`PUBLIC_DOMAIN=example.com docker compose up -d`。
 
+> **从旧 pgvector 镜像切过来必须空库**：新 db 是 ParadeDB 0.26.3-pg18
+> （PGDATA `/var/lib/postgresql/18/docker`，pg_search 已预加载）。先
+> `docker compose down -v` 丢掉旧 `pgdata` 卷，再 `up`——旧数据不迁移。
+
 > **镜像已验证**：T10 用 `docker compose build backend` 构建过当前镜像，并跑通
-> PG18 + pgvector + PgBouncer 的 init/schema/finalize。启动参数由
+> PG18 + pgvector + pg_search（ParadeDB）+ PgBouncer 的 init/schema/finalize。启动参数由
 > `tests/architecture/test_container_assets.py` 钉住（含前端 COPY 路径、Caddy 占位符来源、
 > `.dockerignore` 挡密钥）。首次 `docker compose up` 若起不来，先看 `.env` / `.env.ops`
 > 的 key、口令与 URL 是否一致。

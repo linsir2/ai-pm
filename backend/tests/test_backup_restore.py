@@ -291,7 +291,15 @@ async def test_backup_dump_and_restore_check(
     try:
         with psycopg_connect(bootstrap_scratch, autocommit=True) as connection:
             connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            connection.execute("CREATE EXTENSION IF NOT EXISTS pg_search CASCADE")
             connection.execute("GRANT USAGE ON TYPE vector TO pmstudio_owner")
+            connection.execute(
+                "GRANT USAGE ON SCHEMA pdb, paradedb TO pmstudio_owner"
+            )
+            connection.execute(
+                "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pdb, paradedb"
+                " TO pmstudio_owner"
+            )
             connection.execute(
                 f'ALTER DATABASE "{scratch_name}" OWNER TO pmstudio_owner'
             )

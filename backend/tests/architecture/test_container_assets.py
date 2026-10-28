@@ -26,6 +26,10 @@ COMPOSE = ROOT / "docker-compose.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 DEV_STACK = ROOT / "scripts" / "dev_stack.sh"
 CADDYFILE = ROOT / "Caddyfile"
+PARADEDB_IMAGE = (
+    "paradedb/paradedb:0.26.3-pg18@sha256:"
+    "9b15fc383bcd771f1e32e222bd1603c4c29856c481f6bd06f1960e89608c02f0"
+)
 
 
 def _text(path: Path) -> str:
@@ -161,8 +165,17 @@ def test_the_compose_file_pins_the_postgres_and_pgbouncer_images() -> None:
     text = _text(COMPOSE)
     db = _service_block(text, "db")
     pgbouncer = _service_block(text, "pgbouncer")
-    assert "pgvector/pgvector:0.8.7-pg18-trixie@sha256:" in db
+    assert PARADEDB_IMAGE in db
     assert "edoburu/pgbouncer:v1.26.1-p0@sha256:" in pgbouncer
+
+
+def test_the_compose_uses_the_official_image_pgdata_root() -> None:
+    """官方 ParadeDB 镜像的 PGDATA 是 `/var/lib/postgresql/18/docker`；
+    卷只能挂在它的父目录 `/var/lib/postgresql`，不能再覆盖 PGDATA。"""
+
+    db = _service_block(_text(COMPOSE), "db")
+    assert re.search(r"pgdata:/var/lib/postgresql\s*$", db, re.MULTILINE)
+    assert not re.search(r"^\s+PGDATA:", db, re.MULTILINE)
 
 
 def test_pgbouncer_uses_transaction_mode_without_prepared_statements() -> None:
@@ -638,14 +651,16 @@ def test_the_ci_workflow_runs_frontend_typecheck_and_tests() -> None:
     assert "vitest run" in text
 
 
-def test_the_ci_workflow_runs_against_pgvector_18() -> None:
-    """测试库必须是真 PostgreSQL 18 + pgvector，且两个测试 URL 都指向它。"""
+def test_the_ci_workflow_runs_against_paradedb_pg18() -> None:
+    """测试库必须是真 PostgreSQL 18 + pgvector + pg_search，且两个测试 URL 都指向它。"""
 
     text = _text(CI_WORKFLOW)
-    assert "pgvector/pgvector:0.8.7-pg18-trixie@" in text, "CI 必须用 pgvector 18 服务"
+    assert PARADEDB_IMAGE in text, "CI 必须用钉死 digest 的 ParadeDB PG18 服务"
     assert "PMSTUDIO_TEST_DATABASE_URL" in text
     assert "PMSTUDIO_TEST_DIRECT_DATABASE_URL" in text
     assert "CREATE EXTENSION IF NOT EXISTS vector" in text
+    assert "CREATE EXTENSION IF NOT EXISTS pg_search CASCADE" in text
+    assert "shared_preload_libraries" in text, "CI 必须断言 pg_search 已预加载"
     assert "actions/setup-python" in text, "CI 必须显式用 setup-python 装解释器"
     assert "UV_PYTHON" in text, "要显式钉住 uv 用哪个解释器"
 
@@ -662,6 +677,25 @@ def test_the_ci_has_a_pgbouncer_smoke_job() -> None:
     assert "PMSTUDIO_TEST_DIRECT_DATABASE_URL" in job, "PgBouncer job 必须导出直连测试 URL"
     assert "6432" in job
     assert "skip 视为失败" in job or "缺 URL 会 fail" in job
+
+
+def test_the_backup_excludes_image_managed_extensions() -> None:
+    """官方镜像在 template1 预装 postgis/pg_ivm/pg_search；owner 备份不了
+    这些扩展的配置表，pg_search 的 schema 还会和恢复时预建的扩展冲突。"""
+
+    text = _text(ROOT / "backend" / "scripts" / "backup.sh")
+    for extension in ("pg_search", "pg_ivm", "postgis", "postgis_topology"):
+        assert f"--exclude-extension={extension}" in text
+    assert "--exclude-schema=paradedb" in text
+
+
+def test_the_restore_drill_creates_pg_search_before_restoring() -> None:
+    """恢复 scratch 必须先有 pg_search；否则 bm25 索引会在 restore 时才炸。"""
+
+    text = _text(ROOT / "backend" / "scripts" / "restore_check.sh")
+    assert "CREATE EXTENSION IF NOT EXISTS pg_search CASCADE" in text
+    assert "GRANT USAGE ON SCHEMA pdb, paradedb" in text
+    assert "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pdb, paradedb" in text
 
 
 def test_the_ci_workflow_builds_the_images() -> None:

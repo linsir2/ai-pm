@@ -128,8 +128,10 @@ def test_all_bootstraps_roles_extension_and_auth_file(scratch_database, tmp_path
     )
     with connect(owner_url) as owner:
         tables = owner.execute(
-            "SELECT count(*) AS n FROM information_schema.tables"
-            " WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'"
+            "SELECT count(*) AS n FROM pg_class c"
+            " JOIN pg_namespace n ON n.oid = c.relnamespace"
+            " WHERE n.nspname = current_schema() AND c.relkind = 'r'"
+            " AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)"
         ).fetchone()
         assert tables is not None and int(tables["n"]) == 20
         extension = owner.execute(
@@ -171,6 +173,65 @@ def test_all_bootstraps_roles_extension_and_auth_file(scratch_database, tmp_path
     again = finalize_database(owner_url, _ops(scratch_database))
     assert again["owners"] == 0
     assert again["templates"] == result["templates"]
+
+
+def test_bootstrap_installs_pg_search_and_grants_the_app_role(
+    scratch_database, tmp_path
+) -> None:
+    """官方镜像预加载 pg_search；bootstrap 建扩展，app 能 tokenize / score。"""
+
+    # 官方镜像的 template1 自带 pg_search；先删掉，证明扩展是 bootstrap 装的。
+    with psycopg_connect(scratch_database, autocommit=True) as connection:
+        row = connection.execute("SHOW shared_preload_libraries").fetchone()
+        assert row is not None
+        assert "pg_search" in {
+            part.strip() for part in str(row[0]).split(",")
+        }, "测试库必须用 ParadeDB 官方镜像（shared_preload_libraries 缺 pg_search）"
+        connection.execute("DROP EXTENSION IF EXISTS pg_search CASCADE")
+
+    bootstrap_database(_bootstrap(scratch_database, tmp_path / "userlist.txt"))
+    owner_url = _ops(scratch_database).direct_database_url
+    dbname = urlsplit(scratch_database).path.lstrip("/")
+    app_url = _as_user(
+        scratch_database, user=APP_ROLE, password=APP_PASSWORD, dbname=dbname
+    )
+
+    with connect(owner_url) as owner:
+        row = owner.execute(
+            "SELECT extversion FROM pg_extension WHERE extname = 'pg_search'"
+        ).fetchone()
+        assert row is not None, "bootstrap 没装 pg_search"
+        owner.execute(
+            "CREATE TABLE pg_search_probe ("
+            "id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, body text)"
+        )
+        owner.execute(
+            "INSERT INTO pg_search_probe (body) VALUES ('hello world'), ('产品经理')"
+        )
+        owner.execute(
+            "CREATE INDEX pg_search_probe_bm25 ON pg_search_probe USING bm25 (id, body)"
+        )
+
+    # 收回 PUBLIC 的默认权限：app 仍能调用，只能来自 bootstrap 的显式授权。
+    with psycopg_connect(scratch_database, autocommit=True) as connection:
+        connection.execute("REVOKE USAGE ON SCHEMA pdb FROM PUBLIC")
+        connection.execute("REVOKE USAGE ON SCHEMA paradedb FROM PUBLIC")
+        connection.execute("REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA pdb FROM PUBLIC")
+        connection.execute(
+            "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA paradedb FROM PUBLIC"
+        )
+
+    with connect(app_url) as app:
+        tokens = app.execute(
+            "SELECT paradedb.tokenize(%s::jsonb, %s) AS tokens",
+            ('{"type":"jieba"}', "产品经理"),
+        ).fetchone()
+        assert tokens is not None and tokens["tokens"]
+        scored = app.execute(
+            "SELECT pdb.score(id) AS score FROM pg_search_probe WHERE body ||| %s",
+            ("hello",),
+        ).fetchone()
+        assert scored is not None and float(scored["score"]) > 0
 
 
 def test_scratch_schema_grants_the_real_app_role(scratch_database, tmp_path) -> None:

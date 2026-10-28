@@ -110,6 +110,7 @@ def make_scratch(
     schema = f"pmstudio_{prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     with connect(direct_base) as connection:
         connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        connection.execute("CREATE EXTENSION IF NOT EXISTS pg_search CASCADE")
         connection.execute(f"CREATE SCHEMA {_quote_identifier(schema)}")
         # 临时 schema 必须给 app 角色 USAGE；表/序列授权由 finalize 按 current_schema()
         # 补齐（`init_db._grant_app_role`）。没有真 app 角色时跳过。

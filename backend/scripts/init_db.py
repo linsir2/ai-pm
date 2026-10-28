@@ -54,6 +54,9 @@ from pmstudio.infrastructure.templates.loader import seed_builtin_templates  # n
 OWNER_ROLE = "pmstudio_owner"
 APP_ROLE = "pmstudio_app"
 
+#: pg_search 扩展的 schema：`pdb` 是查询/评分函数，`paradedb` 是索引与分词函数。
+PG_SEARCH_SCHEMAS: tuple[str, ...] = ("pdb", "paradedb")
+
 #: 角色级 DB 超时（`ALTER ROLE ... SET`，不是 session SET / 连接池参数）。
 #: app 是请求路径：锁等待 3s、语句 15s、泄漏事务 15s；owner 是迁移/维护/备份：给更宽的窗口。
 APP_STATEMENT_TIMEOUT = "15s"
@@ -152,6 +155,93 @@ def _database_name(url: str) -> str:
     return str(name)
 
 
+def _grant_owned_objects(
+    connection,  # type: ignore[no-untyped-def]
+    schema: str,
+    app_role: str,
+    *,
+    owner_role: str | None = None,
+) -> None:
+    """只把 owner 自己创建的表/序列/函数授给 app。
+
+    官方 ParadeDB 镜像在 public 里预装 postgis / pg_stat_statements 等扩展对象，
+    属主是 postgres。以 owner 身份执行 `GRANT ... ON ALL ... IN SCHEMA public`
+    会因为对扩展对象没有 grant option 直接 42501；这些对象也不该授给 app。
+    """
+
+    if owner_role is None:
+        relation_owner = (
+            "c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)"
+        )
+        function_owner = (
+            "p.proowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)"
+        )
+        params: tuple[str, ...] = (schema,)
+    else:
+        relation_owner = "c.relowner = (SELECT oid FROM pg_roles WHERE rolname = %s)"
+        function_owner = "p.proowner = (SELECT oid FROM pg_roles WHERE rolname = %s)"
+        params = (schema, owner_role)
+
+    relations = connection.execute(
+        sql.SQL(
+            """
+            SELECT c.relname, c.relkind
+              FROM pg_class c
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = %s
+               AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+               AND """
+        )
+        + sql.SQL(relation_owner)
+        + sql.SQL(" ORDER BY c.relname"),
+        params,
+    ).fetchall()
+    for row in relations:
+        name = str(row["relname"])
+        if row["relkind"] == "S":
+            connection.execute(
+                sql.SQL("GRANT USAGE, SELECT ON SEQUENCE {}.{} TO {}").format(
+                    sql.Identifier(schema),
+                    sql.Identifier(name),
+                    sql.Identifier(app_role),
+                )
+            )
+        else:
+            connection.execute(
+                sql.SQL(
+                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {}.{} TO {}"
+                ).format(
+                    sql.Identifier(schema),
+                    sql.Identifier(name),
+                    sql.Identifier(app_role),
+                )
+            )
+
+    functions = connection.execute(
+        sql.SQL(
+            """
+            SELECT p.proname, pg_get_function_identity_arguments(p.oid) AS args
+              FROM pg_proc p
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = %s
+               AND p.prokind IN ('f', 'p', 'w')
+               AND """
+        )
+        + sql.SQL(function_owner)
+        + sql.SQL(" ORDER BY p.proname, p.oid"),
+        params,
+    ).fetchall()
+    for row in functions:
+        connection.execute(
+            sql.SQL("GRANT EXECUTE ON FUNCTION {}.{}({}) TO {}").format(
+                sql.Identifier(schema),
+                sql.Identifier(str(row["proname"])),
+                sql.SQL(str(row["args"])),
+                sql.Identifier(app_role),
+            )
+        )
+
+
 def _write_auth_file(path: Path, entries: dict[str, str], *, uid: int) -> None:
     """把 PgBouncer auth_file 落成 0600 的只读 secret。
 
@@ -192,6 +282,7 @@ def bootstrap_database(settings: BootstrapSettings) -> None:
         _session_lock(connection)
         try:
             connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            connection.execute("CREATE EXTENSION IF NOT EXISTS pg_search CASCADE")
             _set_role(connection, OWNER_ROLE, settings.owner_password)
             _set_role(connection, APP_ROLE, settings.app_password)
             _set_role_timeouts(
@@ -269,22 +360,29 @@ def bootstrap_database(settings: BootstrapSettings) -> None:
                 ).format(sql.Identifier(OWNER_ROLE), sql.Identifier(APP_ROLE))
             )
 
-            # 已有对象（重复 bootstrap / 迁移窗口）也补齐。
-            connection.execute(
-                sql.SQL(
-                    "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {}"
-                ).format(sql.Identifier(APP_ROLE))
+            # 已有对象（重复 bootstrap / 迁移窗口）也补齐；只授 owner 自己的对象。
+            _grant_owned_objects(
+                connection, "public", APP_ROLE, owner_role=OWNER_ROLE
             )
-            connection.execute(
-                sql.SQL(
-                    "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {}"
-                ).format(sql.Identifier(APP_ROLE))
-            )
-            connection.execute(
-                sql.SQL("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO {}").format(
-                    sql.Identifier(APP_ROLE)
+
+            # pg_search 的查询/分词函数不在 public，显式给 app 与 owner 使用权限。
+            for extension_schema in PG_SEARCH_SCHEMAS:
+                connection.execute(
+                    sql.SQL("GRANT USAGE ON SCHEMA {} TO {}, {}").format(
+                        sql.Identifier(extension_schema),
+                        sql.Identifier(APP_ROLE),
+                        sql.Identifier(OWNER_ROLE),
+                    )
                 )
-            )
+                connection.execute(
+                    sql.SQL(
+                        "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {} TO {}, {}"
+                    ).format(
+                        sql.Identifier(extension_schema),
+                        sql.Identifier(APP_ROLE),
+                        sql.Identifier(OWNER_ROLE),
+                    )
+                )
         finally:
             _session_unlock(connection)
 
@@ -383,21 +481,7 @@ def _grant_app_role(connection) -> None:  # type: ignore[no-untyped-def]
             sql.Identifier(schema), sql.Identifier(APP_ROLE)
         )
     )
-    connection.execute(
-        sql.SQL(
-            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {} TO {}"
-        ).format(sql.Identifier(schema), sql.Identifier(APP_ROLE))
-    )
-    connection.execute(
-        sql.SQL(
-            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {} TO {}"
-        ).format(sql.Identifier(schema), sql.Identifier(APP_ROLE))
-    )
-    connection.execute(
-        sql.SQL("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {} TO {}").format(
-            sql.Identifier(schema), sql.Identifier(APP_ROLE)
-        )
-    )
+    _grant_owned_objects(connection, schema, APP_ROLE)
 
 
 def _ensure_vector_profile(connection) -> None:  # type: ignore[no-untyped-def]

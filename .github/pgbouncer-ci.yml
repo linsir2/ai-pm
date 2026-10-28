@@ -1,4 +1,5 @@
 # CI 覆盖：把 db 5432 与 PgBouncer 6432 暴露给 runner。
+# - db 镜像 / shared_preload 继承 docker-compose.yml（ParadeDB 0.26.3-pg18）；
 # - 5432：session 夹具要两个 test URL（测试 schema 在 init 建好的库上派生）；
 # - 6432：test_pgbouncer.py 真连 transaction pool / admin console。
 services:

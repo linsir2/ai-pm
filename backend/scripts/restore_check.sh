@@ -3,12 +3,14 @@
 # 恢复演练（手册式 · 跑一次贴输出）。
 #
 # **真调用 `scripts/backup.sh`** 产出备份，再把它恢复到一个临时 scratch 库：
-#   用 bootstrap/superuser 建 scratch + `CREATE EXTENSION vector` + 授权，
-#   再以 **owner 角色** `pg_restore --exit-on-error --no-owner`
+#   用 bootstrap/superuser 建 scratch + `CREATE EXTENSION vector` /
+#   `pg_search` + 授权，再以 **owner 角色**
+#   `pg_restore --exit-on-error --no-owner`
 #   → owner `TRUNCATE sessions` → 行数/指纹逐字比对。
 #
-# 为什么必须用 superuser 建扩展：`pgvector` 的 control 没有 `trusted = true`，
-# 新库里 owner（NOSUPERUSER）装不了。恢复本身仍由 owner 完成——这才是生产口径。
+# 为什么必须用 superuser 建扩展：pgvector / pg_search 的 control 没有
+# `trusted = true`，新库里 owner（NOSUPERUSER）装不了。恢复本身仍由 owner
+# 完成——这才是生产口径。
 # 两个 URL 必须指向**同一个 PostgreSQL 集群**（compose 里都是 db:5432）。
 #
 # 恢复后 sessions 为空 = 旧 cookie 必然 401（端到端那条由
@@ -90,12 +92,18 @@ perm="$(stat -c '%a' "$dump")"
 echo "   dump: $dump（权限 $perm）"
 [[ "$perm" == "600" ]] || { echo "FAIL：dump 权限不是 600" >&2; exit 1; }
 
-echo "== 2. bootstrap 建 scratch（superuser 装 vector + 授权给 owner）=="
+echo "== 2. bootstrap 建 scratch（superuser 装 vector / pg_search + 授权给 owner）=="
 psql "$bootstrap_maint" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$scratch\"" >/dev/null
 psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
   -c "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null
 psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
+  -c "CREATE EXTENSION IF NOT EXISTS pg_search CASCADE" >/dev/null
+psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
   -c "GRANT USAGE ON TYPE vector TO pmstudio_owner" >/dev/null
+psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
+  -c "GRANT USAGE ON SCHEMA pdb, paradedb TO pmstudio_owner" >/dev/null
+psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
+  -c "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pdb, paradedb TO pmstudio_owner" >/dev/null
 psql "$bootstrap_maint" -v ON_ERROR_STOP=1 \
   -c "ALTER DATABASE \"$scratch\" OWNER TO pmstudio_owner" >/dev/null
 psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
