@@ -7,7 +7,7 @@ from psycopg.types.json import Jsonb
 
 from pmstudio.application.errors import UnknownTemplate
 from pmstudio.domain.shared.template import standard_template, template_from_dict
-from pmstudio.infrastructure.sqlite.repositories import SqliteTemplateRepository
+from pmstudio.infrastructure.postgres.repositories import SqliteTemplateRepository
 from tests.support.postgres import open_direct
 
 
@@ -110,7 +110,7 @@ def test_old_document_row_without_template_reads_back_as_standard():
     """无模板的老行读回即 STANDARD：真存一份，再把列手写回 '{}' 模拟老行。"""
 
     from pmstudio.domain.shared.template import STANDARD_TEMPLATE_ID
-    from pmstudio.infrastructure.sqlite.repositories import SqliteDocumentRepository
+    from pmstudio.infrastructure.postgres.repositories import SqliteDocumentRepository
     from tests.support.builders import PROJECT, make_document
 
     connection = open_direct()
@@ -128,7 +128,7 @@ def test_old_document_row_without_template_reads_back_as_standard():
 
 
 def test_template_json_round_trip():
-    from pmstudio.infrastructure.sqlite import serialization
+    from pmstudio.infrastructure.postgres import serialization
 
     template = standard_template()
     assert serialization.template_from_json(serialization.template_to_json(template)) == template
@@ -140,7 +140,7 @@ def test_project_summary_carries_template_ref():
 
     from pmstudio.domain.authoring.document import Document
     from pmstudio.domain.shared.ids import DocumentId, ProjectId
-    from pmstudio.infrastructure.sqlite.repositories import (
+    from pmstudio.infrastructure.postgres.repositories import (
         SqliteDocumentRepository,
         SqliteWorkspaceIndex,
     )
@@ -173,7 +173,7 @@ def test_project_summary_carries_template_ref():
 def test_template_json_roundtrip_keeps_criteria_declarations():
     """判据声明要跟着文档行走：快照丢字段 = 老项目换模板后判据静默变空。"""
 
-    from pmstudio.infrastructure.sqlite import serialization
+    from pmstudio.infrastructure.postgres import serialization
     from pmstudio.infrastructure.templates import loader
 
     template = loader.load_template_file(loader.TEMPLATES_DIR / "light.toml")
@@ -184,7 +184,7 @@ def test_template_json_roundtrip_keeps_criteria_declarations():
 def test_template_json_from_legacy_snapshot_falls_back_to_no_declaration():
     """切片 1 存的老行没有这两个键：读回来是"没声明"，不是炸（老项目照样打开）。"""
 
-    from pmstudio.infrastructure.sqlite import serialization
+    from pmstudio.infrastructure.postgres import serialization
 
     legacy = serialization.template_to_json(
         serialization.template_from_json(

@@ -34,8 +34,8 @@ from pmstudio.infrastructure.postgres.owner_scope import (
     set_owner_scope,
 )
 from pmstudio.infrastructure.postgres.repositories import SqliteRoundRepository
+from pmstudio.infrastructure.postgres.users import SqliteUserRepository
 from pmstudio.infrastructure.security import hash_password
-from pmstudio.infrastructure.sqlite.users import SqliteUserRepository
 from tests.support.postgres import PgTestDatabase, truncate_data_tables
 
 BACKEND = Path(__file__).resolve().parents[2]

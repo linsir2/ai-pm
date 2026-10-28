@@ -1,4 +1,4 @@
-"""P2.0：材料冻结判据在**真 SQLite** 上走一遍（不是内存替身）。
+"""P2.0：材料冻结判据在**真 PG** 上走一遍（不是内存替身）。
 
 三种引用形状都要挡住"删"与"就地改"：
 - 已投影的块（带 E 号）——编号指向它，删了/改了编号就改指；
@@ -21,14 +21,14 @@ from pmstudio.domain.round.round import MaterialRef, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EvidenceId, ProjectId, RoundId
 from pmstudio.domain.shared.template import standard_template
-from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
+from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteEvidenceRepository,
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 from tests.e2e.conftest import E2E_USERNAME, build_app
 from tests.support.api_client import async_client

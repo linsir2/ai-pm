@@ -14,7 +14,7 @@ from pmstudio.domain.memory.observations import (
     ObservationType,
     RoundObservation,
 )
-from pmstudio.infrastructure.sqlite.observations_repo import SqliteObservationRepository
+from pmstudio.infrastructure.postgres.observations_repo import SqliteObservationRepository
 from tests.support.postgres import open_direct
 
 NOW = datetime(2026, 10, 8, 10, 0, 0)

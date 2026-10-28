@@ -60,6 +60,7 @@ from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.infrastructure.postgres import serialization as ser
 from pmstudio.infrastructure.postgres.database import connect
+from pmstudio.infrastructure.postgres.owner_scope import set_owner_scope
 from pmstudio.infrastructure.postgres.repositories import (
     SqliteDiscussionRepository,
     SqliteDocumentRepository,
@@ -70,7 +71,6 @@ from pmstudio.infrastructure.postgres.repositories import (
     SqliteWorkspaceIndex,
 )
 from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.owner_scope import set_owner_scope
 from tests.support.builders import NOW, PROJECT, SEAT, make_document, make_round
 from tests.support.postgres import (
     PgTestDatabase,
@@ -146,7 +146,7 @@ def _bind(token: LeaseToken) -> tuple[object, object]:  # type: ignore[no-untype
 
 def _unbind(tokens: tuple[object, object]) -> None:  # type: ignore[no-untyped-def]
     clear_lease_scope(tokens[1])  # type: ignore[arg-type]
-    from pmstudio.infrastructure.sqlite.owner_scope import clear_owner_scope
+    from pmstudio.infrastructure.postgres.owner_scope import clear_owner_scope
 
     clear_owner_scope(tokens[0])  # type: ignore[arg-type]
 
@@ -217,7 +217,7 @@ def test_project_factory_creates_empty_document_and_ledger_in_one_transaction(
     conn,
 ) -> None:
     from pmstudio.domain.shared.template import standard_template
-    from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
+    from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
 
     class _Ids:
         def new(self, prefix: str) -> str:

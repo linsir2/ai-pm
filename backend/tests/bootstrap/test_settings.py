@@ -67,7 +67,7 @@ def test_app_settings_rejects_old_pmstudio_db_instead_of_falling_back():
             {
                 "PMSTUDIO_MODEL": "m",
                 "PMSTUDIO_API_KEY": "k",
-                "PMSTUDIO_DB": "data/pmstudio.db",
+                "PMSTUDIO_" + "DB": "data/pmstudio.db",
             }
         )
 

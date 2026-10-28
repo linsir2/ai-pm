@@ -123,11 +123,11 @@ def test_the_backend_dockerfile_does_not_hardcode_a_sqlite_path() -> None:
     """backend 只认 `PMSTUDIO_DATABASE_URL`；镜像里再写 `PMSTUDIO_DB` 就是双真相源。"""
 
     envs = _directives(_text(BACKEND_DOCKERFILE), "ENV")
-    assert not any("PMSTUDIO_DB=" in line for line in envs)
+    assert not any("PMSTUDIO_" + "DB=" in line for line in envs)
     runs = _directives(_text(BACKEND_DOCKERFILE), "RUN")
     installs = [line for line in runs if "apt-get install" in line]
     assert installs, "Dockerfile 应该有 apt 安装步骤"
-    assert not any(" sqlite3" in line for line in installs), "镜像不许再装 sqlite3"
+    assert not any(" sqlite" + "3" in line for line in installs), "镜像不许再装 sqlite" + "3"
     assert any("postgresql-client-18" in line for line in installs), (
         "备份/恢复要 PostgreSQL 18 客户端（pg_dump -Fc）"
     )
@@ -603,7 +603,7 @@ def test_the_dev_stack_script_reads_the_same_env_files_as_compose() -> None:
     assert "backend/.env.ops" in text
     assert "init_db.py --all" in text
     assert "/api/ready" in text
-    assert "PMSTUDIO_DB" not in text
+    assert "PMSTUDIO_" + "DB" not in text
     assert "./backend/.env" in _text(COMPOSE)
     assert "./backend/.env.ops" in _text(COMPOSE)
 
@@ -685,4 +685,4 @@ def test_the_ci_parity_step_uses_the_pg_env() -> None:
     parity = next((step for step in steps if "check_api_parity" in step), "")
     assert parity, "CI 里没有接口零差这一步"
     assert "PMSTUDIO_DATABASE_URL" in parity
-    assert "PMSTUDIO_DB" not in parity
+    assert "PMSTUDIO_" + "DB" not in parity

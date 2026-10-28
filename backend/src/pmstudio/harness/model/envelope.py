@@ -10,7 +10,7 @@
   （`02` §11.0.35"一条都不许默默丢掉"）。以前它们挂在各 agent 的 Outcome 上、
   信封是另一份载体——**现在只有这里一处**。
 **这里刻意没有 `raw` / `usage` / `model`**：它们与网关旁路留样（`model_calls` 表，
-`infrastructure/sqlite/model_calls.py`）逐字同源，而那张表连"空回包 / 非 JSON"那两条路
+`infrastructure/postgres/model_calls.py`）逐字同源，而那张表连"空回包 / 非 JSON"那两条路
 都记，是**更完整**的一份；信封这一份既没人读、又活不过一次请求，留着就是第二真相源
 （复现要用原文，那件事由留样表负责，不是由信封负责）。
 

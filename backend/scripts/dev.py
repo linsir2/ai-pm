@@ -191,7 +191,7 @@ def main() -> int:
         print("登录限流：**进程内计数**（没配 PMSTUDIO_REDIS_URL）")
         print("  ⚠ 多 worker 下每个进程各有一份，等于锁不住；上多 worker 前先配 Redis")
     print("事件：进程内总线（单 worker，不跨进程扇出）")
-    # 向量检索的模型源：下不动会静默退化成纯 FTS5，所以**起之前就说清楚**，
+    # 向量检索的模型源：下不动会静默退化成纯词法检索，所以**起之前就说清楚**，
     # 免得上线后只发现"搜不到换个说法的内容"却不知道模型压根没下下来。
     endpoint = os.environ.get("HF_ENDPOINT", "").strip()
     no_xet = os.environ.get("HF_HUB_DISABLE_XET", "").strip().upper() in {
@@ -200,7 +200,7 @@ def main() -> int:
     if endpoint:
         print(f"向量模型源：镜像 {endpoint}{'（已禁 Xet）' if no_xet else ''}")
     else:
-        print("向量模型源：huggingface.co 默认源——连不上就退回纯 FTS5（无语义召回）")
+        print("向量模型源：huggingface.co 默认源——连不上就退回纯词法检索（无语义召回）")
     # MCP 是**只读旁路**（`04-未决.md` 的裁决）：不进主闭环、不进 API 层、不写库，
     # 目前只有 `scripts/mcp_probe.py` 真的去连它。所以这里报的是**配置状态**，
     # 不是连接状态——把"配了没配、配了哪几个"打出来，配置写错（JSON 不合法、

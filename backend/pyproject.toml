@@ -29,7 +29,6 @@ dependencies = [
     # （原子性 / 连接池 / 超时），所以上界放到 <9 而非跟着 extra 降级。
     "redis>=6,<9",
     "jieba>=0.42.1",
-    "sqlite-vec>=0.1.9",
     "fastembed>=0.9.0",
     "mcp>=2.3",
     "psycopg[binary]>=3.2",

@@ -7,7 +7,7 @@
 `exploration_to_payload` 的 6 键同形。
 """
 
-from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
+from pmstudio.infrastructure.postgres.serialization import round_from_payload, round_to_payload
 from tests.support.builders import PROJECT, ROUND_ID, make_round
 
 

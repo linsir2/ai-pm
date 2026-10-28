@@ -1,4 +1,4 @@
-"""P2.6：整合失败重试的**真实上下文链路**（真 SQLite + 真 FTS + 真 `IntegrateRound`）。
+"""P2.6：整合失败重试的**真实上下文链路**（真 PG + 真 FTS + 真 `IntegrateRound`）。
 
 这一条钉的是"解析失败可以重装，但检索只查一次、编号不许变"：
 
@@ -29,19 +29,19 @@ from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import EvidenceId
 from pmstudio.domain.shared.template import standard_template
 from pmstudio.harness.errors import ModelCallFailed
-from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.materials import (
+from pmstudio.infrastructure.postgres.materials import (
     SqliteFtsRetriever,
     SqliteMaterialStore,
 )
-from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
     SqliteMemoryRepository,
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_seat
 from tests.support.doubles import (
     FixedClock,

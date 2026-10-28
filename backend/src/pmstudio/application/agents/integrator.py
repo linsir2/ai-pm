@@ -82,11 +82,10 @@ class DispositionOutcome:
 #: **最多一次丢 16 条提案，用户拿不到**，只在留痕里——`02` §11.0.42）→
 #: 改成「**按算好的预算限条数，并事前告知模型**」。
 #:
-#: **这个数怎么来的**（`scripts/measure_integration_output.py`，读应用自己的库
-#: `backend/data/pmstudio.db` 的 27 次**真实**整合调用，用**供应商报的实际 token 数**，
-#: 不是估的）：回包 token 的 **P99 = 7048** → × 1.2 = **8457**。
-#: **什么时候重量**：真跑的分布变了就重跑那个脚本（`python
-#: scripts/measure_integration_output.py`）。
+#: **这个数怎么来的**（批 14 的一次性测量脚本，读当时库里的 27 次**真实**整合调用，
+#: 用**供应商报的实际 token 数**，不是估的）：回包 token 的 **P99 = 7048** → × 1.2 = **8457**。
+#: **什么时候重量**：真跑的分布变了就按同一口径从 PG 的 `model_calls` 重新量
+#: （旧 SQLite 测量脚本已随 T10 退役）。
 INTEGRATION_MAX_TOKENS = 8457
 
 #: 单条提案占多少 token（**P95**：实测单条 418 字 × 0.936 token/字 ≈ 391）。

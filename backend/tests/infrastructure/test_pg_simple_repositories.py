@@ -25,19 +25,19 @@ from pmstudio.domain.memory.inspiration import InspirationItem, InspirationOrigi
 from pmstudio.domain.memory.observations import ObservationType, RoundObservation
 from pmstudio.domain.shared.ids import UserId
 from pmstudio.domain.shared.template import standard_template
+from pmstudio.infrastructure.postgres.call_log import SqliteRoundCallLog
 from pmstudio.infrastructure.postgres.database import connect
-from pmstudio.infrastructure.sqlite.call_log import SqliteRoundCallLog
-from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
-from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
-from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
-from pmstudio.infrastructure.sqlite.observations_repo import SqliteObservationRepository
-from pmstudio.infrastructure.sqlite.repositories import SqliteTemplateRepository
-from pmstudio.infrastructure.sqlite.tool_calls import SqliteToolCallRecorder
-from pmstudio.infrastructure.sqlite.usage import (
+from pmstudio.infrastructure.postgres.digest_repo import SqliteDigestRepository
+from pmstudio.infrastructure.postgres.inspiration_repo import SqliteInspirationRepository
+from pmstudio.infrastructure.postgres.model_calls import SqliteModelCallRecorder
+from pmstudio.infrastructure.postgres.observations_repo import SqliteObservationRepository
+from pmstudio.infrastructure.postgres.repositories import SqliteTemplateRepository
+from pmstudio.infrastructure.postgres.tool_calls import SqliteToolCallRecorder
+from pmstudio.infrastructure.postgres.usage import (
     SqliteAdminStatsRepository,
     SqliteUsageRepository,
 )
-from pmstudio.infrastructure.sqlite.users import (
+from pmstudio.infrastructure.postgres.users import (
     SqliteSessionRepository,
     SqliteUserRepository,
 )

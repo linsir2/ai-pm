@@ -6,8 +6,8 @@ import pytest
 from psycopg.errors import NotNullViolation
 
 from pmstudio.domain.memory.inspiration import InspirationItem, InspirationOrigin
+from pmstudio.infrastructure.postgres.inspiration_repo import SqliteInspirationRepository
 from pmstudio.infrastructure.postgres.owner_scope import require_owner
-from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
 from tests.support.postgres import open_direct
 
 NOW = datetime(2026, 10, 8, 10, 0, 0)

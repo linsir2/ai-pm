@@ -7,7 +7,7 @@ import pytest
 
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
 from pmstudio.domain.shared.ids import ProjectId
-from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
+from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
 from tests.support.builders import NOW, PROJECT
 from tests.support.doubles import SeqIds
 from tests.support.postgres import open_direct

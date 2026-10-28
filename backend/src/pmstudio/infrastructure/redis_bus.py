@@ -49,7 +49,7 @@ from redis.exceptions import ConnectionError as _RedisConnectionError
 from redis.exceptions import TimeoutError as _RedisTimeoutError
 
 from pmstudio.harness.events import Event, InProcessEventBus
-from pmstudio.infrastructure.sqlite import owner_scope
+from pmstudio.infrastructure.postgres import owner_scope
 
 logger = logging.getLogger(__name__)
 

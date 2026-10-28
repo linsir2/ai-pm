@@ -39,7 +39,7 @@ def test_fake_embedder_puts_similar_texts_close():
 @pytest.mark.slow
 def test_real_model_embeds_chinese_and_matches_the_declared_dimension():
     """真模型（联网、首次会下 ~90MB）：只在显式选择它时跑。"""
-    from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
+    from pmstudio.infrastructure.postgres.embedding import FastEmbedEmbedder
 
     embedder = FastEmbedEmbedder()
     vectors = embedder.embed_many(["用户退货流程", "怎么把货退回去"])
@@ -62,7 +62,7 @@ def test_the_vector_side_embeds_natural_language_not_a_token_bag():
 
     判别方式：分词串里 "退货时限" 会被切成 "退货 时限"，自然语言里它是连续的。
     """
-    from pmstudio.infrastructure.sqlite.tokenize import index_source, index_text
+    from pmstudio.infrastructure.postgres.tokenize import index_source, index_text
 
     body = "退货时限是七天"
     natural = index_text(title="手册", heading_path=("售后",), text=body)
@@ -103,7 +103,7 @@ class _Encoding:
 
 def test_a_text_inside_the_window_is_untouched():
     """R：装得下的输入**一个字都不动**（闸门不该改变正常输入）。"""
-    from pmstudio.infrastructure.sqlite.embedding import fit_to_window
+    from pmstudio.infrastructure.postgres.embedding import fit_to_window
 
     text = "向量检索在企业知识库里的召回效果"
 
@@ -115,7 +115,7 @@ def test_a_text_inside_the_window_is_untouched():
 
 def test_a_text_over_the_window_is_cut_at_a_token_boundary():
     """R：超窗的输入被裁到窗内，**按 token 边界**（不切碎词），并报出裁了多少。"""
-    from pmstudio.infrastructure.sqlite.embedding import fit_to_window
+    from pmstudio.infrastructure.postgres.embedding import fit_to_window
 
     text = "向量检索" * 100        # 400 字 + 2 个特殊 token
 
@@ -128,7 +128,7 @@ def test_a_text_over_the_window_is_cut_at_a_token_boundary():
 
 def test_the_window_limit_comes_from_the_model_contract():
     """R：上限是**模型契约**（512），不是随手写的数——它与 `MODEL_NAME` 同处一个文件。"""
-    from pmstudio.infrastructure.sqlite import embedding
+    from pmstudio.infrastructure.postgres import embedding
 
     assert embedding.MODEL_MAX_TOKENS == 512
     assert embedding.EMBED_INPUT_MAX_TOKENS < embedding.MODEL_MAX_TOKENS
@@ -141,7 +141,7 @@ def test_the_real_model_sees_the_tail_of_a_normal_block():
     实测过的反例：块宽 500 时，尾部加独特标记词 → 向量余弦 **1.000000**（尾部完全
     不可见）。现在块宽 400 + token 闸门，尾部必须**看得见**。
     """
-    from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
+    from pmstudio.infrastructure.postgres.embedding import FastEmbedEmbedder
 
     body = "企业知识库里的向量检索要同时兼顾召回率与精度。" * 12   # ≈360 字
     marker = "尾部独特标记词：紫貂氢氯"
@@ -158,7 +158,7 @@ def test_the_real_model_sees_the_tail_of_a_normal_block():
 @pytest.mark.slow
 def test_the_real_model_gate_cuts_an_oversized_input(caplog):
     """R：超窗的输入被**裁**（而不是静默截断），且裁后仍能算出向量。"""
-    from pmstudio.infrastructure.sqlite.embedding import (
+    from pmstudio.infrastructure.postgres.embedding import (
         EMBED_INPUT_MAX_TOKENS,
         FastEmbedEmbedder,
     )

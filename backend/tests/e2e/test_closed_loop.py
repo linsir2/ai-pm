@@ -1,6 +1,6 @@
 """一次完整迭代：输入 → 开场卡 → 席位 → 问卷 → 答卷（含跳过）→ 草案 → 确认 → 多一版。
 
-全程走 HTTP（ASGI transport）+ 真 SQLite + 真 LangGraph；只有模型是脚本化的。
+全程走 HTTP（ASGI transport）+ 真 PG + 真 LangGraph；只有模型是脚本化的。
 """
 
 import json

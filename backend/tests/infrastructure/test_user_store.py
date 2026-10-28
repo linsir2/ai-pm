@@ -8,7 +8,7 @@ import hashlib
 from datetime import UTC, datetime
 
 from pmstudio.domain.shared.ids import UserId
-from pmstudio.infrastructure.sqlite.users import (
+from pmstudio.infrastructure.postgres.users import (
     SqliteSessionRepository,
     SqliteUserRepository,
 )

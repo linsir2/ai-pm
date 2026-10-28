@@ -280,7 +280,7 @@ class RecordingWebFetch:
 class RecordingMaterialRetriever:
     """材料检索替身：记录每次查询，按配置回命中（**只在测试里**）。
 
-    真实现是 `infrastructure/sqlite/materials.py` 的 `SqliteFtsRetriever`——
+    真实现是 `infrastructure/postgres/materials.py` 的 `SqliteFtsRetriever`——
     排序口径只在那边测一次，这里不复制一份，免得两套口径慢慢漂移。
     """
 
@@ -298,7 +298,7 @@ class RecordingMaterialRetriever:
 class RecordingCallLog:
     """调用轨迹读模型替身：记录查询，按配置回条目（**只在测试里**）。
 
-    真实现是 `infrastructure/sqlite/call_log.py` 的 `SqliteRoundCallLog`
+    真实现是 `infrastructure/postgres/call_log.py` 的 `SqliteRoundCallLog`
     （`model_calls` / `tool_calls` 两张表 `UNION ALL`）；这里只让"用例拿到条目后
     怎么组装成 `RoundCallsView`"可被断言，**不复制那一份 SQL**——两套口径会漂。
     """

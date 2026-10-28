@@ -1,4 +1,4 @@
-"""P（生产·真跑）：真 SQLite + 真 FTS 检索器 + 真用例，走完 SEED→SEAT→INTEGRATE。
+"""P（生产·真跑）：真 PostgreSQL + 真 FTS 检索器 + 真用例，走完 SEED→SEAT→INTEGRATE。
 
 模型是脚本化的（仓库 e2e 的既有口径：检索/投影/发号/落库全是真的，只有模型回包是预置的）。
 本文件钉的是**上下文数据流**，不是答案质量：
@@ -27,13 +27,12 @@ from pmstudio.domain.round.retrieval import RetrievalStage
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.template import standard_template
-from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.materials import (
+from pmstudio.infrastructure.postgres.materials import (
     SqliteFtsRetriever,
     SqliteMaterialStore,
 )
-from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteDiscussionRepository,
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
@@ -42,6 +41,7 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_seat
 from tests.support.doubles import FixedClock, RecordingPublisher
 from tests.support.harness import Harness

@@ -15,7 +15,7 @@
 
 ## 为什么住在 `bootstrap/`
 
-它要**按材料逐个设 owner 作用域**（`infrastructure.sqlite.owner_scope`）——
+它要**按材料逐个设 owner 作用域**（`infrastructure.postgres.owner_scope`）——
 应用层不许 import 基础设施（架构守卫），而后台任务没有请求上下文、没有身份。
 维护任务天生跨账号（每个 owner 的材料都要按新块宽重切），所以它读材料时
 **不带 owner 过滤**（与 `optional_owner` 的"查询本身就要包含全局行"同一性质，

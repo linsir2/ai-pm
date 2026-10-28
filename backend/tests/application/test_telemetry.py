@@ -37,7 +37,7 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
 from pmstudio.harness.model.prompt_log import PROMPT_LIMIT, TRUNCATION_MARK
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
     SqliteRoundRepository,

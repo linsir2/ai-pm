@@ -8,7 +8,7 @@ import pytest
 
 from pmstudio.domain.round.round import Round, SeedRef
 from pmstudio.domain.shared.errors import ShapeError
-from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
+from pmstudio.infrastructure.postgres.serialization import round_from_payload, round_to_payload
 from tests.support.builders import NOW, PROJECT, ROUND_ID, make_round
 
 

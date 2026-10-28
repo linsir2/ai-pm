@@ -3,13 +3,13 @@
 ## 为什么还要这一份
 
 api 那份跑的是 harness-app（内存仓储 + `FakeTransaction`）——它验 HTTP 映射，
-但验不到**真 SQLite 的写串行**，而"跳过与交回无 TOCTOU"的证明恰恰立在
-`SqliteUnitOfWork` 的 `BEGIN IMMEDIATE` 上。内存仓储里两个并发写 Doe 不存在锁，
+但验不到**真 PostgreSQL 的行锁**，而"跳过与交回无 TOCTOU"的证明恰恰立在
+`SELECT ... FOR UPDATE` 上。内存仓储里两个并发写不存在锁，
 那个证明在 api 那份里是**没被执行过的**。
 
-所以这里用真容器（`build_container` + 落盘库 + 真认证 + 真 HTTP，唯一非生产件是
+所以这里用真容器（`build_container` + 真 PG + 真认证 + 真 HTTP，唯一非生产件是
 脚本化网关——文档化的测试注入口，`test_no_fakes_in_production` 守着生产路径）。
-席位调用挂住（事件门），在真锁上复现"任务先起 → 用户跳过 → 任务再结束"。
+目标席位的调用挂住（事件门），在真行锁上复现"任务先起 → 用户跳过 → 任务再结束"。
 """
 
 import asyncio
@@ -17,7 +17,7 @@ import os
 
 from pmstudio.bootstrap.container import build_container
 from pmstudio.bootstrap.settings import AppSettings
-from pmstudio.infrastructure.sqlite import owner_scope  # noqa: E402
+from pmstudio.infrastructure.postgres import owner_scope  # noqa: E402
 from tests.api.test_routes import QUESTION_REPLY  # noqa: E402
 from tests.application.test_seat_round import (
     SEAT_REPLY,
@@ -37,17 +37,20 @@ class _BlockingGateway(ScriptedModelGateway):
     def __init__(self, **kwargs) -> None:  # noqa: ANN003
         super().__init__(**kwargs)
         self.release = asyncio.Event()
-        self._hung_once = False
+        self.hung = asyncio.Event()
 
     async def complete(self, request):  # noqa: ANN001, ANN202
-        if request.purpose == "seat_review" and not self._hung_once:
-            self._hung_once = True
+        if (
+            request.purpose == "seat_review"
+            and request.metadata.get("seat_id") == "seat.data_scale"
+        ):
+            self.hung.set()
             await self.release.wait()
         return await super().complete(request)
 
 
 def _build_real_app():
-    """真容器 + 落盘库。照抄 `tests/e2e/conftest.build_app`，只换网关。"""
+    """真容器 + 真 PG。照抄 `tests/e2e/conftest.build_app`，只换网关。"""
 
     owner_scope.set_owner_scope(E2E_OWNER)
     gateway = _BlockingGateway(
@@ -74,7 +77,7 @@ def _build_real_app():
 
 
 async def test_真锁上_跳过与迟交两序都闭合():
-    """R：与单测 R6 同一幕，但在真 SQLite 写串行上重演。
+    """R：与单测 R6 同一幕，但在真 PG 行锁上重演。
 
     I：opening 在后台挂起（真锁）；P：跳过 → 放行 → opening 跑完；
     R：200 + 包变 skipped + 迟交被丢弃（`current_reviews` 无它）+
@@ -100,7 +103,7 @@ async def test_真锁上_跳过与迟交两序都闭合():
                 json={"seats": ["seat.data_scale", "seat.permissions"]},
             )
         )
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(gateway.hung.wait(), timeout=5)
         try:
             skipped = await client.post(
                 f"/api/rounds/{round_id}/skip-seat",

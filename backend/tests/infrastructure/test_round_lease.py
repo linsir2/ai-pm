@@ -1,6 +1,6 @@
 """RoundRunner 的 DB 租约：start 同事务、心跳续租/失租、finally 释放、abandon 接管。
 
-全部用**真 SQLite + 真容器**（只有模型是脚本化的）。时间相关的用例把
+全部用**真 PostgreSQL + 真容器**（只有模型是脚本化的）。时间相关的用例把
 `RoundRunner._lease_heartbeat_seconds` 调小，避免等 30 秒。
 """
 
@@ -29,7 +29,7 @@ from pmstudio.domain.shared.ids import RoundId
 from pmstudio.domain.shared.lease import LeaseKind, LeaseToken
 from pmstudio.harness.errors import ModelCallFailed
 from pmstudio.infrastructure.postgres.leases import PgLeaseStore
-from pmstudio.infrastructure.sqlite.repositories import SqliteRoundRepository
+from pmstudio.infrastructure.postgres.repositories import SqliteRoundRepository
 from tests.conftest import TEST_OWNER
 from tests.support.doubles import ScriptedModelGateway
 from tests.support.postgres import open_direct

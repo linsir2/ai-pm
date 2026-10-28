@@ -9,7 +9,7 @@ from pmstudio.domain.memory.observations import (
     RoundObservation,
 )
 from pmstudio.domain.shared.ids import UserId
-from pmstudio.infrastructure.sqlite.owner_scope import require_owner
+from pmstudio.infrastructure.postgres.owner_scope import require_owner
 
 
 class SqliteObservationRepository:

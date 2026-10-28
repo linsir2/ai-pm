@@ -8,7 +8,7 @@
 3. `allow_web` 只自动批准 seat / integrator，且受每轮执行名额限制；
 4. 同一条结果再次出现时只复用已覆盖块的编号，新块不发号（TOOL 留痕）；
 5. 跨步累计不重复发号、web 预算仍共用一本账；
-6. 真实 SQLite 上跑通 opening → seat → integrate 的多步执行。
+6. 真实 PG 上跑通 opening → seat → integrate 的多步执行。
 """
 
 import json
@@ -1093,14 +1093,14 @@ async def test_two_direct_decisions_on_different_requests_never_push_used_over_l
     from pmstudio.application.lease import LeaseScope, clear_lease_scope, set_lease_scope
     from pmstudio.application.use_cases import DecideWebRequest
     from pmstudio.application.web_research import WebResearch
-    from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-    from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-    from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
-    from pmstudio.infrastructure.sqlite.repositories import (
+    from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
+    from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
+    from pmstudio.infrastructure.postgres.repositories import (
         SqliteEvidenceRepository,
         SqliteRoundRepository,
         SqliteWorkspaceIndex,
     )
+    from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
     from tests.support.builders import NOW, PROJECT, ROUND_ID
     from tests.support.leases import bind_round_lease
     from tests.support.postgres import open_direct

@@ -1,6 +1,6 @@
 """认证加固回归（多用户改造 Task 9 · `§0.10`）：爆破锁定 + 恒定耗时。
 
-真 SQLite + 真容器 + HTTP；argon2 **真跑**（不 monkeypatch `verify_password`），
+真 PostgreSQL + 真容器 + HTTP；argon2 **真跑**（不 monkeypatch `verify_password`），
 计时才有意义。锁定与恒定耗时都要求"真触发"，不接受假证明。
 """
 

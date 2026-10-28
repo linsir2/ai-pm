@@ -7,7 +7,7 @@
 import logging
 
 from pmstudio.harness.model.prompt_log import PROMPT_LIMIT
-from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
+from pmstudio.infrastructure.postgres.model_calls import SqliteModelCallRecorder
 from tests.support.builders import NOW
 from tests.support.postgres import open_direct
 

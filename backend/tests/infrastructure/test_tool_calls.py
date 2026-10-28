@@ -10,7 +10,7 @@ import inspect
 import logging
 
 from pmstudio.harness.tools.recorder import ToolCallRecorder
-from pmstudio.infrastructure.sqlite.tool_calls import SqliteToolCallRecorder
+from pmstudio.infrastructure.postgres.tool_calls import SqliteToolCallRecorder
 from tests.support.builders import NOW
 from tests.support.postgres import open_direct
 
@@ -124,7 +124,7 @@ def _tool_warnings(caplog):  # noqa: ANN202
     return [
         record
         for record in caplog.records
-        if record.name == "pmstudio.infrastructure.sqlite.tool_calls"
+        if record.name == "pmstudio.infrastructure.postgres.tool_calls"
     ]
 
 

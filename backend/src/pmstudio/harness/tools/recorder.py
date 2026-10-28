@@ -17,7 +17,7 @@ from typing import Protocol, runtime_checkable
 class ToolCallRecorder(Protocol):
     """留样的旁路出口：记下每一次工具调用，给排查用，不参与业务。
 
-    实现是 `infrastructure/sqlite/tool_calls.py`；网关/用例默认不接
+    实现是 `infrastructure/postgres/tool_calls.py`；网关/用例默认不接
     （`recorder=None` 时什么都不记）。
     """
 

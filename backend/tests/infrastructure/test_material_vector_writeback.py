@@ -15,9 +15,9 @@ import pytest
 from psycopg.pq import TransactionStatus
 
 from pmstudio.application.use_cases import DeleteMaterial, ReparseMaterial, UploadMaterial
+from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
 from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
+from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
 from tests.conftest import TEST_OWNER
 from tests.support.builders import PROJECT
 from tests.support.doubles import SeqIds
@@ -239,12 +239,12 @@ def test_a_web_result_also_gets_a_vector():
     联网材料是"用户不知道它长什么样"的那一类（外部来源），恰恰最需要语义召回
     （用户只能用自己的话描述需求）。没有向量 = 换个说法就搜不到它。
 
-    装配是**真的**：真 SQLite 仓 + 真向量索引 + 真用例（`SubmitOpening`）。
+    装配是**真的**：真 PG 仓 + 真向量索引 + 真用例（`SubmitOpening`）。
     """
     from pmstudio.application.use_cases import SubmitOpening
+    from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
     from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-    from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-    from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
+    from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
     from tests.support.builders import PROJECT, make_web_packet
     from tests.support.doubles import RecordingWebSearch
     from tests.support.harness import Harness

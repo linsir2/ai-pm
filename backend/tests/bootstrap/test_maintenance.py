@@ -14,8 +14,8 @@
 """
 
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
-from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
+from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
+from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
 from pmstudio.infrastructure.tools.extract import HTML_PARSER_ID, LocalMaterialParser
 from tests.conftest import TEST_OWNER  # noqa: E402 —— 真 owner（conftest 装了作用域默认值）
 from tests.support.embedding import FakeEmbedder

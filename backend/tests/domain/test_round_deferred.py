@@ -24,7 +24,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
+from pmstudio.infrastructure.postgres.serialization import round_from_payload, round_to_payload
 from tests.support.builders import NOW, PROJECT, ROUND_ID, make_round
 
 

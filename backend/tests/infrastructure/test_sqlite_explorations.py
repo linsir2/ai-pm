@@ -15,7 +15,7 @@ from pmstudio.domain.exploration.exploration import (
 from pmstudio.domain.exploration.item import BlindSpot, Grounding, Hypothesis
 from pmstudio.domain.shared.ids import EvidenceId, ExplorationId, ProjectId
 from pmstudio.infrastructure.postgres import owner_scope
-from pmstudio.infrastructure.sqlite.repositories import SqliteExplorationRepository
+from pmstudio.infrastructure.postgres.repositories import SqliteExplorationRepository
 from tests.support.postgres import open_direct
 
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)

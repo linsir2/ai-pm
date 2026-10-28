@@ -1,4 +1,4 @@
-"""可观测性 v2 · P/R 类：真 SQLite + 真 `WebResearch` 路径 + **真端点**（TestClient）。
+"""可观测性 v2 · P/R 类：真 PG + 真 `WebResearch` 路径 + **真端点**（TestClient）。
 
 **如实标注**：本环境没有 `PMSTUDIO_TAVILY_API_KEY`，所以工具侧降级为**注入的替身**
 （`RecordingWebSearch`）——真 `TavilySearchGateway` 会出网。模型侧是脚本化网关
@@ -9,8 +9,8 @@ import json
 from datetime import UTC, datetime
 
 import pmstudio.bootstrap.container as container_module
+from pmstudio.infrastructure.postgres.model_calls import SqliteModelCallRecorder
 from pmstudio.infrastructure.security import hash_password
-from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
 from tests.support.api_client import async_client
 from tests.support.builders import make_web_packet
 from tests.support.doubles import RecordingWebSearch
@@ -103,7 +103,7 @@ async def _admin_cookie(client):
 async def test_a_real_round_writes_tool_calls_and_serves_them_with_injected_tool_double(
     make_app, monkeypatch
 ):
-    """P：真 SQLite + 真执行层路径 + 真端点；工具侧是注入的替身（本环境无 Tavily key）。"""
+    """P：真 PG + 真执行层路径 + 真端点；工具侧是注入的替身（本环境无 Tavily key）。"""
 
     monkeypatch.setattr(
         container_module, "_web_search_gateway", _injected_web_search((make_web_packet(url="https://a"),))

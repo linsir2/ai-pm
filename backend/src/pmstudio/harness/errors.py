@@ -1,7 +1,7 @@
 """运行时错误：机制在 harness，词汇在 application。
 
 为什么错误表要拆开：`application/errors.py` 名义上是"应用层错误"，实际是**全项目错误总表**
-（`infrastructure/tools/*`、`sqlite/repositories.py`、`graph.py` 都 import 它）。
+（`infrastructure/tools/*`、`postgres/repositories.py`、`graph.py` 都 import 它）。
 其中五个类只因为"模型会胡说八道"或"外部调用会失败"而存在，搬进 harness 之后
 `litellm_gateway.py` 才不必反向依赖 application——依赖方向必须单向。
 

@@ -9,7 +9,7 @@
 
 [![后端](https://img.shields.io/badge/backend-Python%203.13-3776AB?logo=python&logoColor=white)](https://docs.python.org/3/)
 [![前端](https://img.shields.io/badge/frontend-React%2018%20%2B%20TS%20strict-61DAFB?logo=react&logoColor=white)](https://react.dev/)
-[![架构](https://img.shields.io/badge/architecture-LangGraph%20%2B%20FastAPI%20%2B%20SQLite-9C27B0)](https://langchain-ai.github.io/langgraph/)
+[![架构](https://img.shields.io/badge/architecture-LangGraph%20%2B%20FastAPI%20%2B%20PostgreSQL-9C27B0)](https://langchain-ai.github.io/langgraph/)
 [![协议](https://img.shields.io/badge/protocol-MCP%20(Model%20Context%20Protocol)-8A2BE2)](https://modelcontextprotocol.io/)
 
 ---
@@ -50,43 +50,51 @@
 
 ### 方式一：Docker（推荐）
 
-**前置条件**——`backend/.env` 是唯一的配置来源（模板 `backend/.env.example`）：
+**前置条件**——app 侧配置在 `backend/.env`（模板 `backend/.env.example`），
+运维侧（PG 引导/角色/首管理员）在 `backend/.env.ops`（模板 `backend/.env.ops.example`）：
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
 | `PMSTUDIO_MODEL` | ✅ | LiteLLM 模型名，如 `openai/qwen3.7-flash` |
 | `PMSTUDIO_API_KEY` | ✅ | 供应商密钥 |
 | `PMSTUDIO_API_BASE` | 视供应商 | 非 OpenAI 官方端点时给 |
+| `PMSTUDIO_DATABASE_URL` | ✅ | app 侧 URL，指向 PgBouncer `pgbouncer:6432` |
 | `PMSTUDIO_MODEL_PARAMS` | 可选 | JSON，如关思考 `{"extra_body":{"enable_thinking":false}}` |
 | `PMSTUDIO_MCP_SERVERS` | 可选 | MCP server 列表（JSON 数组），留空 = 不启用 |
 | `PMSTUDIO_SECRET_KEY` | 多用户时 | 会话签名密钥 |
 
-compose 还会注入几个**容器专属**变量（`PMSTUDIO_DB=/data/...`、`PMSTUDIO_FORWARDED_ALLOW_IPS`
-等），**不用手写**——写在 `.env` 里也只对源码形态生效。
+`backend/.env.ops` 提供 `PMSTUDIO_BOOTSTRAP_DATABASE_URL` / `PMSTUDIO_DIRECT_DATABASE_URL`、
+两个 PG 角色口令与首管理员；compose 的 `db` 服务也读它。
+compose 还会注入几个**容器专属**变量（`PMSTUDIO_FORWARDED_ALLOW_IPS` 等），**不用手写**。
 
 ```bash
-cp backend/.env.example backend/.env     # 填 PMSTUDIO_MODEL / PMSTUDIO_API_KEY
+cp backend/.env.example backend/.env
+cp backend/.env.ops.example backend/.env.ops   # 改掉 change-me-* 与首管理员
 docker compose up -d
 # 打开 http://localhost（站点地址以 http:// 开头，Caddy 不会强制跳 https）
 ```
 
 换域名：`PUBLIC_DOMAIN=example.com docker compose up -d`。
 
-> ⚠️ **镜像尚未在构建机上验证过**：`docker compose config` 与全部启动参数已由
+> **镜像已验证**：T10 用 `docker compose build backend` 构建过当前镜像，并跑通
+> PG18 + pgvector + PgBouncer 的 init/schema/finalize。启动参数由
 > `tests/architecture/test_container_assets.py` 钉住（含前端 COPY 路径、Caddy 占位符来源、
-> `.dockerignore` 挡密钥），但镜像本身没在本机构建过（构建环境缺 `CAP_SYS_ADMIN`）。
-> **首次 `docker compose up` 请照着上面的日志看**——若容器起不来，多半是 `.env` 里的 key
-> 或 SQLite 版本（见下方"已知边界"）。
+> `.dockerignore` 挡密钥）。首次 `docker compose up` 若起不来，先看 `.env` / `.env.ops`
+> 的 key、口令与 URL 是否一致。
 
 ### 方式二：本地源码
 
 ```bash
+# 先起 PG/PgBouncer 并 init（可复用 compose 的 db/pgbouncer/init 服务）
+docker compose up -d db pgbouncer
+
 # 后端
-cd backend && uv sync && cp .env.example .env   # 填 key
-uv run python scripts/dev.py                    # http://127.0.0.1:8000
+cd backend && uv sync
+cp .env.example .env && cp .env.ops.example .env.ops   # 改掉 change-me-* 与首管理员
+uv run python scripts/dev.py                            # http://127.0.0.1:8000
 
 # 前端
-cd frontend && npm install && npm run dev       # http://127.0.0.1:5173
+cd frontend && npm install && npm run dev               # http://127.0.0.1:5173
 ```
 
 ### 方式三：一条脚本起两个（无 Docker）
@@ -113,7 +121,7 @@ graph TD
     API["api/ · FastAPI<br/>HTTP 动作入口 + SSE 推送口（按 owner 裁剪）"]
     APP["application/ · 用例编排<br/>StartRound / RunSeatRound / Integrate / ConfirmDraft"]
     DOM["domain/ · 聚合与不变式<br/>authoring · provenance · round · memory<br/>零外部依赖（AST 守卫强制）"]
-    INF["infrastructure/ · LangGraph 图 · LiteLLM 网关<br/>SQLite 仓储 · 席位目录 · MCP 客户端"]
+    INF["infrastructure/ · LangGraph 图 · LiteLLM 网关<br/>PostgreSQL/PgBouncer 仓储 · 席位目录 · MCP 客户端"]
     HAR["harness/ · 运行时控制平面<br/>统一信封 · 结构化输出归一化 · 失败分类<br/>熔断/隔离舱/重试预算 · agentic 循环"]
 
     FE --> API --> APP --> DOM
@@ -167,12 +175,12 @@ POST /rounds/{id}/confirm
 |---|---|
 | **Agent 框架与编排** | LangGraph 状态图 · 10 个领域化 Agent · fan-out/fan-in · 声明式基类 + 注册表 |
 | **协议** | **MCP**（Model Context Protocol，只读侧 + 模型自主调）· Tool/Function Calling · SSE |
-| **RAG** | 混合检索（SQLite FTS5 + jieba + sqlite-vec + bge-small-zh）· 凸组合融合 · 文档解析（docx/xlsx/pdf/网页） |
+| **RAG** | 混合检索（PostgreSQL tsvector + jieba + pgvector + bge-small-zh）· 凸组合融合 · 文档解析（docx/xlsx/pdf/网页） |
 | **记忆与上下文** | 五层记忆 · 跨轮记忆（出处强制 + 用户确认唯一写入口）· 上下文预算治理 |
 | **LLM 工程** | LiteLLM 网关 · 结构化输出归一化（三档口径）· 失败分类权威表 · Prompt 工程 |
 | **韧性与生产** | 熔断 + 隔离舱 + 重试预算 + 抖动退避 · argon2 异步隔离舱 · 三维登录限流 · 混沌工程 |
 | **评测** | 真模型 eval（11 用例 + 12 条纯函数结构断言）· 检索质量验收（配对增量 + 符号检验） |
-| **工程化** | FastAPI · SQLite（WAL）· Redis · Docker · CI · DDD + 架构守卫 |
+| **工程化** | FastAPI · PostgreSQL 18 + pgvector · PgBouncer · Redis · Docker · CI · DDD + 架构守卫 |
 | **前端** | React 18 · Vite 6 · TypeScript strict · 零第三方 UI 依赖 · 自建设计系统 |
 
 ---
@@ -193,7 +201,7 @@ POST /rounds/{id}/confirm
 
 | 指标 | 数值 |
 |---|---|
-| FTS5 替换整句 LIKE | top1 命中 **34 → 134**，recall@5 **39 → 169**（184 查询） |
+| 词法索引替换整句 LIKE（SQLite FTS5 时代实测；现为 PG tsvector） | top1 命中 **34 → 134**，recall@5 **39 → 169**（184 查询） |
 | 查询用 OR 不用 AND | recall@5 **45/45**（AND 39/45，LIKE 15/45） |
 | 联网材料整页入库 | 混合命中 **29% → 71%** |
 | 向量预算按"字数"而非"块数" | 语义覆盖 **41% → 66%** |
@@ -239,19 +247,15 @@ cd backend && uv run python scripts/mcp_probe.py --list      # 只列工具
 
 ## 已知边界（如实说，不藏）
 
-- **单用户本地应用**：SQLite 只允许一个写事务，**不承诺高并发写入**。
-  多 worker 的真实收益是读吞吐、SSE 分发、argon2 这类 CPU 密集的并行。
-- **无外部向量数据库**：混合检索跑在 SQLite 单库里（FTS5 + vec0 + jieba）——
-  零运维、可复现，代价是不适合百万级文档。
-- **sqlite-vec 装不上时自动降级纯 FTS5**（语义召回消失，其余照常）。
-  本机实测：某些 Python 构建缺 `enable_load_extension`（uv 自己下载的 3.13 构建就没有，
-  发行版的 python3.12 有）。**CI 因此显式用 `actions/setup-python` 装解释器**，
-  不吃 uv 下载的那个。
-- **SQLite WAL-reset bug**：链接的 SQLite 落在受影响区间（3.7.0–3.51.2，修复在 3.51.3）。
-  本仓改不了（Python 的 `sqlite3` 链接的是**解释器自带的** libsqlite3，加依赖无效）。
-  **镜像没有 pin 解释器**（用 `python:3.13-slim`），所以运行时**启动会打印一条告警**；
-  要真正消除只能换一个捆绑 ≥3.51.3 的解释器。
-- **Docker 镜像未在构建机验证过**（见"快速开始"）。
+- **单用户本地应用**：backend 只经 PgBouncer（transaction mode）连 PG；4 workers
+  负载门已过（100 HTTP + 20 轮内写，0 错误/超时/55P03/57014，HTTP p95 88ms）。
+  跨 worker 的轮内 in-flight / 条件 claim 仍归 P3b-1。
+- **无外部向量数据库**：词法 + 语义检索跑在 PostgreSQL 18 的 tsvector/GIN 与
+  pgvector/HNSW 上——零第二存储、可复现，代价是不适合百万级文档。
+- **T5 罕见词召回门仍开**：PG `ts_rank_cd` 没有 IDF，罕见词会被常见词压过；
+  对应 `xfail(strict=True)` 保留，不修 FTS 算法、不算通过。
+- **SQLite 已删除**：运行时、测试、脚本都不再依赖 SQLite；只有一次性 ETL
+  `scripts/migrate_sqlite_to_pg.py` 与它的测试在 no-sqlite 守卫白名单里。
 
 ---
 
@@ -273,6 +277,7 @@ cd backend && uv run python scripts/mcp_probe.py --list      # 只列工具
 # 后端（PYTHONDONTWRITEBYTECODE / no:cacheprovider：不在磁盘上留 __pycache__ / .pytest_cache）
 cd backend
 uv sync
+# 先导出 PMSTUDIO_TEST_DATABASE_URL / PMSTUDIO_TEST_DIRECT_DATABASE_URL（真 PG）
 uv run pytest -q -p no:cacheprovider                                  # 全量测试
 uv run pytest -m "not slow" -q -p no:cacheprovider                     # CI 用的（排掉要真模型的）
 uv run ruff check --no-cache .
@@ -290,6 +295,6 @@ cd backend && uv run python scripts/chaos_matrix.py
 cd backend && uv run python scripts/check_api_parity.py
 ```
 
-**测试是真跑**：e2e 用真 SQLite、真用例、真席位目录，只有模型是脚本化的
+**测试是真跑**：e2e 用真 PostgreSQL/PgBouncer、真用例、真席位目录，只有模型是脚本化的
 （`ScriptedModelGateway`）。生产路径**不提供**"用假模型"的开关——
 `tests/architecture/test_no_fakes_in_production.py` 盯着这件事。

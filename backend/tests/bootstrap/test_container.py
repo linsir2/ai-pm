@@ -24,8 +24,8 @@ async def test_container_wires_everything_and_serves_health():
 
     with open_direct() as connection:
         seed_builtin_templates(SqliteTemplateRepository(connection))
+        from pmstudio.infrastructure.postgres.users import SqliteUserRepository
         from pmstudio.infrastructure.security import hash_password
-        from pmstudio.infrastructure.sqlite.users import SqliteUserRepository
 
         users = SqliteUserRepository(connection)
         user_id = users.register(
@@ -80,7 +80,7 @@ def test_search_project_uses_keyword_retrieval_only():
     """
 
     from pmstudio.application.use_cases import SearchProject
-    from pmstudio.infrastructure.sqlite.materials import SqliteFtsRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteFtsRetriever
 
     container = build_container(_settings())
 

@@ -14,7 +14,7 @@ from psycopg.errors import UniqueViolation
 from pmstudio.application.errors import DigestAlreadyWritten
 from pmstudio.domain.memory.digest import RoundDigest
 from pmstudio.domain.shared.ids import UserId
-from pmstudio.infrastructure.sqlite.owner_scope import require_owner
+from pmstudio.infrastructure.postgres.owner_scope import require_owner
 
 
 def _now() -> str:

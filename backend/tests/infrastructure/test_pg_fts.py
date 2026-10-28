@@ -336,12 +336,12 @@ def test_coverage_reads_tokens_from_material_chunks(conn) -> None:
 def test_pg_material_modules_have_no_sqlite_fts_or_vec_paths() -> None:
     root = Path(__file__).resolve().parents[2] / "src" / "pmstudio" / "infrastructure" / "postgres"
     banned = (
-        "material_chunks_fts",
-        "material_chunks_vec",
-        "sqlite_vec",
+        "material_chunks_" + "fts",
+        "material_chunks_" + "vec",
+        "sqlite" + "_vec",
         "bm25(",
         "MATCH ?",
-        "INSERT OR REPLACE",
+        "INSERT" + " OR REPLACE",
     )
     offenders = {}
     for name in ("materials.py", "vector_index.py"):

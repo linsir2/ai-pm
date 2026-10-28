@@ -3,10 +3,10 @@
 ## 为什么（批 12 的 R8 → 批 13 扩到每次检索）
 
 检索的判据**全是「从文档反推」的合成查询**——真实的用户查询分布是**空的**
-→ 语义召回的增量没法证明（R9：真数据 r@5 9/11 与纯 FTS5 持平，"改述增量"一直是 0）。
+→ 语义召回的增量没法证明（R9：真数据 r@5 9/11 与纯词法检索持平，"改述增量"一直是 0）。
 要看到增量，得先有**真查询**。
 
-`SqliteHybridRetriever.search` 现在每次检索都记一行**分解**：
+混合检索器（`SqliteHybridRetriever`，实现是 PostgreSQL）每次检索都记一行**分解**：
 
     material_search project=p1 query='导出权限谁来定' fts_candidates=20 \
         vec_candidates=12 fts_hits=3 hybrid_hits=5

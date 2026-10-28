@@ -1,6 +1,6 @@
 """P（生产·真跑·slow）：真 PostgreSQL + 真 `SqliteHybridRetriever` + 真 fastembed。
 
-这条是 P2.9 的硬证据：语义那条材料**与查询没有任何词面重合**——纯 FTS5 查不到它，
+这条是 P2.9 的硬证据：语义那条材料**与查询没有任何词面重合**——纯词法检索查不到它，
 只有向量分支能把它带进 SEAT 投影。不这样做的话，"FTS 也能查到"会让测试绿着但
 什么都没证明（见 `test_round_context_pool_e2e.py` 的 FTS e2e）。
 
@@ -18,19 +18,19 @@ from pmstudio.bootstrap.container import UuidIdGenerator
 from pmstudio.domain.round.retrieval import RetrievalStage
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.shared.template import standard_template
-from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
-from pmstudio.infrastructure.sqlite.materials import (
+from pmstudio.infrastructure.postgres.embedding import FastEmbedEmbedder
+from pmstudio.infrastructure.postgres.materials import (
     SqliteFtsRetriever,
     SqliteHybridRetriever,
     SqliteMaterialStore,
 )
-from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteEvidenceRepository,
     SqliteRoundRepository,
 )
-from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
+from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
 from tests.support.builders import NOW, PROJECT, ROUND_ID
 from tests.support.doubles import FixedClock
 from tests.support.leases import bind_round_lease
@@ -104,14 +104,14 @@ def test_a_semantic_only_material_reaches_the_seat_projection():
             (semantic_chunk,),
         ).fetchone(), "语义那条的向量没写进去"
 
-        # 前置鉴别力：纯 FTS5 查不到语义那条。否则"混合检索命中"可能是词面兜的底。
+        # 前置鉴别力：纯词法检索查不到语义那条。否则"混合检索命中"可能是词面兜的底。
         fts_hits = SqliteFtsRetriever(connection).search(
             project_id=PROJECT, query=QUERY, limit=SEARCH_LIMIT
         )
         fts_chunks = {hit.chunk_id for hit in fts_hits}
         assert lexical_chunk in fts_chunks, "词面那条都查不到——语料/查询没有鉴别力"
         assert semantic_chunk not in fts_chunks, (
-            "语义那条被纯 FTS5 命中了——这条测试证明不了向量分支"
+            "语义那条被纯词法命中了——这条测试证明不了向量分支"
         )
 
         # 生产检索器：`SqliteHybridRetriever`（不是手工拼 FTS + 向量）。

@@ -8,7 +8,7 @@ import pytest
 
 from pmstudio.application.errors import DigestAlreadyWritten
 from pmstudio.domain.memory.digest import RoundDigest
-from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
+from pmstudio.infrastructure.postgres.digest_repo import SqliteDigestRepository
 from tests.support.postgres import open_direct
 
 

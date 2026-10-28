@@ -41,7 +41,7 @@ def _log(text: str) -> None:
 def main() -> int:
     import numpy as np
 
-    from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
+    from pmstudio.infrastructure.postgres.embedding import FastEmbedEmbedder
 
     embedder = FastEmbedEmbedder()
     _log("造语料：每块 尾部埋一句答案，其余是填充…")

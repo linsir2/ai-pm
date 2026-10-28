@@ -1,4 +1,4 @@
-"""B3 真 SQLite 端到端：opening 执行一次、下一步自动批准并执行、编号复用。
+"""B3 真 PG 端到端：opening 执行一次、下一步自动批准并执行、编号复用。
 
 工具侧是 `RecordingWebSearch`（本环境没有 Tavily key；真网关会出网），
 模型侧照 e2e 惯例脚本化；材料、账本、轮次、事务全部是真的。
@@ -26,13 +26,12 @@ from pmstudio.domain.round.web import WebRequest, WebRequestState, used_web_requ
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.template import standard_template
 from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
-from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
-from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
-from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-from pmstudio.infrastructure.sqlite.observations_repo import SqliteObservationRepository
-from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.digest_repo import SqliteDigestRepository
+from pmstudio.infrastructure.postgres.inspiration_repo import SqliteInspirationRepository
+from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
+from pmstudio.infrastructure.postgres.observations_repo import SqliteObservationRepository
+from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteDiscussionRepository,
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
@@ -41,6 +40,7 @@ from pmstudio.infrastructure.sqlite.repositories import (
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from tests.support.builders import NOW, PROJECT, SEAT, make_seat, make_web_packet
 from tests.support.doubles import (
     FixedClock,
@@ -307,7 +307,7 @@ def _seed_over_limit(rounds, round_id):  # type: ignore[no-untyped-def]
 
 
 async def _prepare_over_limit_round(*, web_search):
-    """真 SQLite + 真用例；只有模型与 Tavily 是脚本化替身（不用内存 Harness）。"""
+    """真 PG + 真用例；只有模型与 Tavily 是脚本化替身（不用内存 Harness）。"""
 
     connection = open_direct()
     ids = UuidIdGenerator()

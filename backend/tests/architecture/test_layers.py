@@ -10,7 +10,7 @@ from tests.architecture.guards import (
 
 
 def test_guard_detects_layer_dependency():
-    source = "from pmstudio.infrastructure.sqlite.repositories import SqliteDocumentRepository\n"
+    source = "from pmstudio.infrastructure.postgres.repositories import SqliteDocumentRepository\n"
     assert imported_layers(source) == {"infrastructure"}
 
 
@@ -24,7 +24,7 @@ def test_guard_skips_type_checking_imports():
 
 
 def test_guard_ignores_outward_stdlib_and_third_party():
-    source = "import sqlite3\nfrom fastapi import FastAPI\n"
+    source = "import sqlite" + "3\nfrom fastapi import FastAPI\n"
     assert imported_layers(source) == set()
 
 

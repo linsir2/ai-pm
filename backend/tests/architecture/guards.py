@@ -1,6 +1,7 @@
 """结构性防线的纯函数实现。守卫自己能被测，才不会退化成永远通过。"""
 
 import ast
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -194,6 +195,126 @@ def unregistered_packages(root: Path = SRC) -> frozenset[str]:
         and (child.is_dir() or child.suffix == ".py")
     )
 
+
+
+# —— no-sqlite 守卫（T10）——
+
+#: 只在运行时/测试源码里扫描的 SQLite 运行时名字。**拆成两段拼**：
+#: 守卫自己也在被扫的树里，写成完整字面量会让它抓住自己。
+SQLITE_IMPORT_PATTERNS: tuple[str, ...] = (
+    "sqlite" + "3",
+    "sqlite" + "_vec",
+    "sqlite" + "-vec",
+)
+
+SQLITE_SQL_PATTERNS: tuple[str, ...] = (
+    *(pattern.casefold() for pattern in SQLITE_IMPORT_PATTERNS),
+    "vec" + "0",
+    "fts" + "5",
+    "pra" + "gma",
+    "insert" + r"\s+or\b",
+    r"\brow" + r"id\b",
+    "pmstudio_" + "db",
+)
+
+#: ETL 是唯一允许碰 SQLite 的地方：一次性迁移脚本与它的测试。
+SQLITE_WHITELIST = frozenset(
+    {
+        "scripts/" + "migrate_sqlite_to_pg.py",
+        "tests/" + "test_etl_cutover.py",
+    }
+)
+
+_SQL_PATTERN = re.compile(
+    "|".join(f"(?:{pattern})" for pattern in SQLITE_SQL_PATTERNS),
+    re.IGNORECASE,
+)
+
+
+def sqlite_imports(source: str) -> set[str]:
+    """AST 找 `import sqlite3` / `from sqlite_vec import …` 这类 import。"""
+
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        modules: list[str] = []
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules = [node.module]
+        for module in modules:
+            lowered = module.casefold()
+            for pattern in SQLITE_IMPORT_PATTERNS:
+                if lowered == pattern or lowered.startswith(pattern + "."):
+                    found.add(module)
+    return found
+
+
+def _docstring_constants(tree: ast.AST) -> set[int]:
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            continue
+        body = node.body
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            ids.add(id(body[0].value))
+    return ids
+
+
+def sqlite_sql_literals(source: str) -> dict[str, list[str]]:
+    """找非 docstring 字符串里的 SQLite 运行时痕迹；注释不进 AST，天然不扫。"""
+
+    tree = ast.parse(source)
+    docstrings = _docstring_constants(tree)
+    found: dict[str, list[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if id(node) in docstrings:
+            continue
+        for match in _SQL_PATTERN.finditer(node.value):
+            found.setdefault(match.group(0).casefold(), []).append(node.value)
+    return found
+
+
+def _sql_file_without_comments(text: str) -> str:
+    return "\n".join(line.split("--", 1)[0] for line in text.splitlines())
+
+
+def sqlite_offenders(root: Path) -> dict[str, list[str]]:
+    """扫源码树：`.py` 走 AST，`.sql` 去掉 `--` 注释后按文本找。
+
+    返回 `相对路径 -> 命中列表`；ETL 脚本/测试与 `__pycache__` 跳过。
+    """
+
+    offenders: dict[str, list[str]] = {}
+    excluded = {".venv", "__pycache__", "data", ".pytest_cache", ".ruff_cache"}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root)
+        if any(part in excluded for part in relative.parts):
+            continue
+        relative_text = relative.as_posix()
+        if relative_text in SQLITE_WHITELIST:
+            continue
+        if path.suffix == ".py":
+            source = path.read_text(encoding="utf-8")
+            hits = sorted(sqlite_imports(source)) + sorted(sqlite_sql_literals(source))
+        elif path.suffix == ".sql":
+            text = _sql_file_without_comments(path.read_text(encoding="utf-8"))
+            hits = sorted({match.group(0) for match in _SQL_PATTERN.finditer(text)})
+        else:
+            continue
+        if hits:
+            offenders[relative_text] = sorted(set(hits))
+    return offenders
 
 
 def _type_checking_spans(tree: ast.AST) -> list[tuple[int, int]]:

@@ -37,13 +37,13 @@ from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
 from pmstudio.infrastructure.postgres import owner_scope, serialization
 from pmstudio.infrastructure.postgres.leases import PgLeaseStore
-from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
     SqliteRoundRepository,
     SqliteWorkspaceIndex,
 )
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from tests.support.builders import NOW, PROJECT, make_document, make_round
 from tests.support.leases import bind_round_lease
 from tests.support.postgres import open_direct

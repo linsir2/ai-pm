@@ -8,7 +8,7 @@ from pmstudio.bootstrap.settings import AppSettings
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.ids import ProjectId, RoundId
-from pmstudio.infrastructure.sqlite.repositories import SqliteRoundRepository
+from pmstudio.infrastructure.postgres.repositories import SqliteRoundRepository
 from tests.support.doubles import ScriptedModelGateway
 from tests.support.postgres import open_direct
 

@@ -28,10 +28,10 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template import standard_template
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
+from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
+from pmstudio.infrastructure.postgres.repositories import SqliteRoundRepository
 from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
-from pmstudio.infrastructure.sqlite.repositories import SqliteRoundRepository
 from tests.application.test_materials import make_material
 from tests.support.builders import NOW, PROJECT, ROUND_ID, make_round
 from tests.support.harness import Harness
@@ -189,7 +189,7 @@ async def test_attach_rejects_more_than_ten_manual_chunks_per_round():
 
 
 async def test_attach_round_trips_through_real_pg():
-    """P：真 SQLite + 真材料仓 + 真轮次仓。"""
+    """P：真 PG + 真材料仓 + 真轮次仓。"""
 
     connection = open_direct()
     ids = UuidIdGenerator()

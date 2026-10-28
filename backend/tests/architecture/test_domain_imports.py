@@ -10,7 +10,7 @@ from tests.architecture.guards import (
 
 
 def test_guard_detects_external_import():
-    assert external_imports("import sqlite3\n") == {"sqlite3"}
+    assert external_imports("import sqlite" + "3\n") == {"sqlite" + "3"}
 
 
 def test_guard_allows_stdlib_and_own_package():

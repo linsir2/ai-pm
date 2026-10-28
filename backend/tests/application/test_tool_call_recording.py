@@ -1,6 +1,6 @@
 """工具留样的**写侧**行为（可观测性 v2）：成功也记、失败带分类、炸了也留痕、旁路不搞死轮。
 
-用例全部走**真 `_search` 路径**（`SubmitOpening._search`）+ **真 SQLite 留样器**；
+用例全部走**真 `_search` 路径**（`SubmitOpening._search`）+ **真 PG 留样器**；
 唯一的替身是联网检索（`RecordingWebSearch`，与既有 `test_web_search_round.py` 同款）
 ——真 `TavilySearchGateway` 会出网，本仓明令不许拿它跑测试。
 """
@@ -14,7 +14,7 @@ from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.ids import RoundId
 from pmstudio.harness.errors import ToolCallFailed
 from pmstudio.harness.model import failure
-from pmstudio.infrastructure.sqlite.tool_calls import SqliteToolCallRecorder
+from pmstudio.infrastructure.postgres.tool_calls import SqliteToolCallRecorder
 from tests.support.builders import PROJECT, SEAT, make_web_packet
 from tests.support.doubles import RecordingWebSearch
 from tests.support.harness import Harness

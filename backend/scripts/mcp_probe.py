@@ -147,7 +147,7 @@ async def _run(args: argparse.Namespace) -> int:
     # `PMSTUDIO_MCP_PROBE_DATABASE_URL` 指到一个专用库（仍必须是已 init 的 PG）。
     from pmstudio.bootstrap.container import _model_gateway
     from pmstudio.infrastructure.postgres.database import PgConnection
-    from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
+    from pmstudio.infrastructure.postgres.model_calls import SqliteModelCallRecorder
 
     sample_url = (
         os.environ.get("PMSTUDIO_MCP_PROBE_DATABASE_URL", "").strip()

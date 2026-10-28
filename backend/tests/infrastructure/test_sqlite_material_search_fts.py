@@ -12,7 +12,7 @@ import logging
 import pytest
 
 from pmstudio.domain.shared.ids import ProjectId
-from pmstudio.infrastructure.sqlite.materials import (
+from pmstudio.infrastructure.postgres.materials import (
     SqliteFtsRetriever,
     SqliteMaterialStore,
 )

@@ -61,7 +61,11 @@ MECHANISM_CASES = [
     ("uses_symbol", "DocumentWriter.append(x)\n", "用属性方式调用写入能力"),
     ("forbidden_names", "return FakeModel()\n", "生产路径出现假模型"),
     ("forbidden_names", "StubGateway()\n", "生产路径出现替身"),
-    ("imported_layers", "from pmstudio.infrastructure.sqlite import database\n", "layer 向外依赖"),
+    (
+        "imported_layers",
+        "from pmstudio.infrastructure.postgres import database\n",
+        "layer 向外依赖",
+    ),
     ("imported_layers", "import pmstudio.harness.errors\n", "领域层反向依赖内层运行时"),
 ]
 
@@ -114,7 +118,7 @@ def test_imported_layers_matches_on_prefix_not_equality():
     for module, layer in [
         ("pmstudio.application.ports", "application"),
         ("pmstudio.domain.round.round", "domain"),
-        ("pmstudio.infrastructure.sqlite.database", "infrastructure"),
+        ("pmstudio.infrastructure.postgres.database", "infrastructure"),
         ("pmstudio.harness.model.failure", "harness"),
         ("pmstudio.api.routes", "api"),
         ("pmstudio.bootstrap.container", "bootstrap"),
@@ -135,7 +139,7 @@ def test_harness_layer_violations_flags_outward_imports():
     for module in (
         "pmstudio.application.ports",
         "pmstudio.domain.round.round",
-        "pmstudio.infrastructure.sqlite.database",
+        "pmstudio.infrastructure.postgres.database",
         "pmstudio.api.routes",
         "pmstudio.bootstrap.container",
     ):

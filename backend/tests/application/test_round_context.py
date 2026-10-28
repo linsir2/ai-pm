@@ -23,16 +23,16 @@ from pmstudio.domain.round.retrieval import ManualChunk, RetrievalStage, Retriev
 from pmstudio.domain.round.round import DropSource, MaterialRef, Round
 from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.shared.template import standard_template
-from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.materials import (
+from pmstudio.infrastructure.postgres.materials import (
     SqliteFtsRetriever,
     SqliteMaterialStore,
 )
-from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteEvidenceRepository,
     SqliteRoundRepository,
 )
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from tests.api.test_routes import QUESTION_REPLY
 from tests.application.test_materials import make_material
 from tests.application.test_seat_round import (

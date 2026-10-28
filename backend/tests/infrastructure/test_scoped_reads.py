@@ -43,11 +43,11 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.template import template_from_dict
 from pmstudio.harness.errors import ApplicationError
 from pmstudio.infrastructure.postgres import owner_scope
-from pmstudio.infrastructure.sqlite.digest_repo import SqliteDigestRepository
-from pmstudio.infrastructure.sqlite.inspiration_repo import SqliteInspirationRepository
-from pmstudio.infrastructure.sqlite.materials import SqliteMaterialStore
-from pmstudio.infrastructure.sqlite.observations_repo import SqliteObservationRepository
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.digest_repo import SqliteDigestRepository
+from pmstudio.infrastructure.postgres.inspiration_repo import SqliteInspirationRepository
+from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
+from pmstudio.infrastructure.postgres.observations_repo import SqliteObservationRepository
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteDiscussionRepository,
     SqliteDocumentRepository,
     SqliteExplorationRepository,

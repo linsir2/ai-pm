@@ -15,7 +15,7 @@ from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.round.web import WebRequest, WebRequestState
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import EvidenceId
-from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
+from pmstudio.infrastructure.postgres.serialization import round_from_payload, round_to_payload
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_claim
 
 LEGACY_WHY = "旧版复述卡勾选，无逐条理由"

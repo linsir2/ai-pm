@@ -39,9 +39,16 @@
   同批收口技术债：记忆抽屉 `.prop` 布局、turn 上限进 `/schema.limits`、问卷题快照断线上线、
   G10① 销账、03 满轮 ⬜ 真跑补记
 - **P3a 联网申请（2026-10-26）**：分析者/席位/整合者的联网申请统一进 `Round.web_requests`，
-  逐条授权、批准即执行；旧 `web_queries*` 只读迁移。当前部署是**单 worker**（进程内串行），
-  多 worker 安全留 **P3b**；P3b 同时收历史趟 TOOL 留痕可见性、stale id 无工具 422、
-  `used>limit` 恢复口径。
+  逐条授权、批准即执行；旧 `web_queries*` 只读迁移。`RoundRunner` 的进程内串行仍在，
+  跨 worker 的 in-flight / 条件 claim 留 **P3b-1**；P3b-1 同时收历史趟 TOOL 留痕可见性、
+  stale id 无工具 422、`used>limit` 恢复口径。
+- **PG 全量切换（T10，2026-10-28）**：运行时/测试/脚本**只连 PostgreSQL 18 + pgvector**，
+  backend 走 PgBouncer transaction mode，init/maintenance/backup 直连。SQLite 包、
+  `sqlite-vec` 依赖、旧 SQLite 脚本已删；no-sqlite 守卫（AST import + 非 docstring
+  SQL 字面量，ETL 脚本/测试白名单）已启用。4 workers 负载门通过（100 HTTP + 20 轮内写，
+  0 错误/超时/55P03/57014，HTTP p95 88ms；DB 连接池查询 p95 43ms 仅诊断）。
+  **T5 recall gate 仍开**：罕见词被常见词压过的 `xfail(strict=True)` 原样保留，
+  不修 FTS 算法、不算通过。
 
 - 后端：测试全绿、`ruff` 无告警；结构性守卫在 `tests/architecture/` 与 `tests/contracts/`，
   含"守卫自己的判据有没有效"那一层。守卫条数与测试条数**都会过期**，这里不写数字——
@@ -67,24 +74,26 @@ MCP 读/写侧。
 
 ## 环境（一次装好，之后不用再 export 一堆变量）
 
-后端配置只从环境变量读（`bootstrap/settings.py` 明令：缺 key 或模型名必须起不来）。
-写法是**文件**：`backend/.env`（本地、不进库，模板 `.env.example` 进库），
-由 `backend/scripts/dev.py` 读；前端那条代理目标放 `frontend/.env`（同样有 `.env.example`）。
+后端配置只从环境变量读（`bootstrap/settings.py` 明令：缺 key、模型名或 app URL 必须起不来）。
+写法是**文件**：`backend/.env`（app 侧：模型/key/PgBouncer URL；本地、不进库，模板
+`.env.example` 进库）与 `backend/.env.ops`（运维侧：direct/bootstrap URL、角色口令、
+首管理员；模板 `.env.ops.example` 进库）。`backend/scripts/dev.py` 只读 `.env`；
+前端那条代理目标放 `frontend/.env`（同样有 `.env.example`）。
 
 | 用途 | 命令 |
 |------|------|
 | 后端依赖 | `cd backend && uv sync`（建 `.venv` 并锁版本；`uv.lock` 进库，`.venv` 不进库） |
-| 后端配置 | `cd backend && cp .env.example .env` 然后填 key |
-| **后端起服务** | `cd backend && uv run python scripts/dev.py`（端口读 `.env`；`--port`、`--no-reload` 可选） |
-| 后端测试 | `cd backend && uv run pytest`（`src` 在路径上，pytest 配置里已经配好） |
+| 后端配置 | `cd backend && cp .env.example .env && cp .env.ops.example .env.ops` 然后填 key/口令 |
+| **后端起服务** | 先起 PG/PgBouncer（或 `docker compose up -d db pgbouncer`），再 `cd backend && uv run python scripts/dev.py` |
+| 后端测试 | 先导出 `PMSTUDIO_TEST_DATABASE_URL` / `PMSTUDIO_TEST_DIRECT_DATABASE_URL`，再 `cd backend && uv run pytest -m "not slow"` |
 | 后端 lint | `cd backend && uv run ruff check --no-cache .` |
 | 前端依赖 | `npm install`（在 `frontend/`） |
 | **前端开发** | `cd frontend && npm run dev`（5173，`/api` 代理到 `frontend/.env` 里的后端地址） |
 | 前端类型检查 | `npx tsc --noEmit` |
 | 前端单测（纯函数） | `npx vitest run`（在 `frontend/`） |
-| **Docker 一键起** | `docker compose up -d`（后端 + Caddy + Redis；`.env` 读 `backend/.env`） |
+| **Docker 一键起** | `docker compose up -d`（后端 + PG + PgBouncer + Caddy + Redis；app 读 `backend/.env`，ops 读 `backend/.env.ops`） |
 | **镜像构建** | `docker compose build`（CI 也跑这一步——Dockerfile 的错**不构建一次发现不了**） |
-| **无 Docker 时起** | `scripts/dev_stack.sh`（原生进程复现 compose 的启动序列；`--check` 只核对配置键名、`--stop` 收尾） |
+| **无 Docker 时起** | `scripts/dev_stack.sh`（原生进程复现 compose 的启动序列；需已有可达 PG/PgBouncer；`--check` 只核对配置键名、`--stop` 收尾） |
 | **MCP 真跑验证** | `cd backend && uv run python scripts/mcp_probe.py --builtin`（真模型 + 真 MCP server） |
 | **MCP stdio 用例** | `cd backend && uv run pytest tests/infrastructure/test_mcp_client.py -k stdio`（**真子进程**，不是进程内替身） |
 | 混沌矩阵 | `cd backend && uv run python scripts/chaos_matrix.py`（真注入 5 类故障） |
@@ -93,8 +102,8 @@ MCP 读/写侧。
 
 | 形态 | 怎么起 | 反代目标 | 库 |
 |---|---|---|---|
-| 本机 | `scripts/dev_stack.sh` | `127.0.0.1:8000` | `backend/data/pmstudio.db` |
-| Docker | `docker compose up -d` | `backend:8000`（**服务名**，容器里的 127.0.0.1 是 Caddy 自己） | 挂卷 `/data/pmstudio.db` |
+| 本机 | `scripts/dev_stack.sh` | `127.0.0.1:8000` | 已有可达 PG + PgBouncer |
+| Docker | `docker compose up -d` | `backend:8000`（**服务名**，容器里的 127.0.0.1 是 Caddy 自己） | compose 的 `pgdata` 卷 + PgBouncer |
 
 ⚠️ **跨容器反代必须给 `PMSTUDIO_FORWARDED_ALLOW_IPS`**——它在 `scripts/dev.py` 里
 （**不在 `settings.py`**，照着 settings 抄会漏）。不给 → Caddy 后面所有请求的源 IP
@@ -129,7 +138,7 @@ find . -path ./.git -prune -o -type d \
 ```
 frontend/  React + Vite：文档区（约 70%）+ 闭环区（约 30%）+ 弹出层（问卷 / 草案）
 api/       FastAPI：HTTP 动作入口 + SSE 推送口
-infrastructure/  LangGraph 图 · LiteLLM 网关 · SQLite 仓储 · 席位定义 · MCP 客户端
+infrastructure/  LangGraph 图 · LiteLLM 网关 · PostgreSQL/PgBouncer 仓储 · 席位定义 · MCP 客户端
 application/     用例（StartRound / RunSeatRound / Integrate / SubmitAnswers / ConfirmDraft）
 domain/          authoring（文档与版本）· provenance（出处账本）· round（回合）
 harness/         运行时控制平面（最内层）：统一信封 · 结构化输出归一化 · 失败分类 ·
@@ -152,7 +161,7 @@ pydantic/litellm/pybreaker，见 `tests/architecture/test_harness_imports.py`）
 
 DDD 分层，详细设计见 `.codex/docs/设计/05-DDD架构.md`。三条硬规矩（违反即设计错误）：
 
-1. **`domain/` 不 import 任何外部包**（不 import fastapi / langgraph / litellm / sqlite3），
+1. **`domain/` 不 import 任何外部包**（不 import fastapi / langgraph / litellm / psycopg），
    用测试扫 import 来守。
 2. **写入路径唯一**：只有确认端点能写文档，编排层拿不到写库能力。
 3. **LangGraph 的 state 只放引用（round_id / step），不放业务状态**：真相源是 Round 聚合，
@@ -199,8 +208,8 @@ DDD 分层，详细设计见 `.codex/docs/设计/05-DDD架构.md`。三条硬规
 - 一次改动 = 一版；版本只增不改。
 - **界面不造后端给不出的东西**：没有的端点就不做那个功能，别用假数据填上（`06-前端.md` §1 与 §5
   是逐项核对的账）。
-- **别用 `cp` 拷正在跑的 SQLite 库**：数据可能还在 `-wal` 里，拷出来会少东西。要备份就用
-  `sqlite3 库文件 ".backup 目标文件"`（这条是验证时真踩过的：拷出来的库少了整个项目）。
+- **别直接 `cp` 正在跑的 PG 数据目录**：备份只用 PG18 的 `pg_dump -Fc`（恢复走
+  `pg_restore --no-owner`，恢复后 `TRUNCATE sessions`）；拷文件系统会拿到不一致的快照。
 
 ## 验证阶梯（从便宜到贵）
 

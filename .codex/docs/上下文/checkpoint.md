@@ -1,10 +1,32 @@
-# 检查点 · 2026-10-22（**最新状态在下面这块；再往下是历史流水，当档案看**）
+# 检查点 · 2026-10-28（**最新状态在下面这块；再往下是历史流水，当档案看**）
 
 > 用途：新会话或换人接手时，读这一份就能知道"做到哪、为什么这么做、下一步是什么"。
 > 更新时机：长暂停前、切分支前、交给别的 agent 前。
 >
 > **读法**：先读下面「当前状态」；历史流水（P1–P38、M1–M15、各次执行结果）保留作档案，
 > 里面的"下一步/剩下来的活"**全部过期**，以当前状态为准。
+
+## 当前状态（2026-10-28：T10 PG 全量切换完成）
+
+**分支** `new-branch`（T10 提交 `refactor(pg): 删除 SQLite 并收口`）·
+后端 `-m "not slow"` → **3226 passed / 57 skipped / 1 xfailed / 0 failed** ·
+`ruff` 全绿 · 前端 `tsc --noEmit` 干净 / `vitest` **62 files / 687 passed**。
+
+**T10 · 删除 SQLite / PgBouncer 收口**（2026-10-28）：
+- 运行时/测试/脚本只连 PG18 + pgvector；`infrastructure/sqlite/`、`sqlite-vec` 依赖、
+  旧 SQLite 脚本已删。一次性 bench/probe（影响清单 B3）无生产/CI 消费者，按计划删除；
+  `tests/application/test_retrieval_increment.py` 与 SQLite 无关，已恢复并把纯统计函数
+  搬到 `scripts/retrieval_stats.py`。
+- no-sqlite 守卫：AST import + 非 docstring SQL 字面量；ETL
+  `scripts/migrate_sqlite_to_pg.py` / `tests/test_etl_cutover.py` 白名单；不扫注释、不误报自己。
+- 4 workers 负载门（真 PG18 + PgBouncer）：100 HTTP（并发 50）+ 20 轮内写（并发 20），
+  **0 错误/超时/55P03/57014，HTTP p95 88ms**；DB 池查询 p95 **43ms**（仅诊断），
+  轮内写 p95 7.2s（非门）。
+- **T5 recall gate 仍开**：`test_a_rare_lexical_hit_survives_the_semantic_branch`
+  保留 `xfail(strict=True)`（PG `ts_rank_cd` 无 IDF，罕见词被常见词压过）；不修 FTS 算法、
+  不算通过。
+- 未变：P3b-1（跨 worker in-flight / 条件 claim、历史趟 TOOL 留痕、stale id 422、
+  `used>limit`）仍待后续；`RoundRunner._running_rounds` 进程内串行仍在。
 
 ## 当前状态（2026-10-26：P3a 已交付）
 

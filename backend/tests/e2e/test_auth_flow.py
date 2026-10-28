@@ -1,4 +1,4 @@
-"""认证全链路（真 SQLite + 真容器 + HTTP；模型零调用）。
+"""认证全链路（真 PG + 真容器 + HTTP；模型零调用）。
 
 闭环：注册 → pending 登录被拒 → 管理员审批 → 登录（发 `pm_session`）→ /me → 登出 →
 会话失效。另加三条：批准后 active、封禁后下一次请求即 401、过期会话即 401。
@@ -373,7 +373,7 @@ async def test_admin_usage_aggregates_model_calls_by_owner(make_app):
     没有轮次 / 没有调用的用户计 0——用量是行数，不是"有没有这个人"。
     """
 
-    from pmstudio.infrastructure.sqlite.model_calls import SqliteModelCallRecorder
+    from pmstudio.infrastructure.postgres.model_calls import SqliteModelCallRecorder
 
     app, _ = make_app(replies={"claims": CLAIMS_REPLY}, autologin=False)
     async with async_client(app) as client:

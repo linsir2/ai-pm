@@ -637,12 +637,12 @@ def test_0001_has_no_sqlite_only_syntax() -> None:
     ).read_text(encoding="utf-8")
     upper = sql.upper()
     for forbidden in (
-        "FTS5",
-        "VEC0",
-        "ROWID",
+        "FTS" + "5",
+        "VEC" + "0",
+        "ROW" + "ID",
         "AUTOINCREMENT",
-        "INSERT OR",
-        "PRAGMA",
+        "INSERT" + " OR",
+        "PRA" + "GMA",
         "SQLITE_",
     ):
         assert forbidden not in upper

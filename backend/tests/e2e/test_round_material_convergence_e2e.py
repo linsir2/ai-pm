@@ -1,8 +1,8 @@
-"""P（生产·真跑）：真 SQLite + FTS fallback + 真 `StartRound`。
+"""P（生产·真跑）：真 PostgreSQL + 词法 fallback + 真 `StartRound`。
 
 只验**上下文形状**（哪些块进了这一轮、预算守不守得住），**不烧真模型答题**——
 正确率的对照实验在 `experiment-v5`。这里用 `SqliteHybridRetriever(connection, None)`：
-没有 embedder，向量分支必然失败并退回纯 FTS5——**不是真 hybrid**（真 hybrid 见
+没有 embedder，向量分支必然失败并退回纯词法检索——**不是真 hybrid**（真 hybrid 见
 `test_round_context_pool_hybrid_e2e.py`）。
 
 **为什么不放 `tests/application/`**：那里的 harness 材料仓是内存的、检索器是替身；
@@ -20,17 +20,17 @@ from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.ids import UserId
 from pmstudio.domain.shared.template import standard_template
-from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
-from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever, SqliteMaterialStore
-from pmstudio.infrastructure.sqlite.owner_scope import set_owner_scope
-from pmstudio.infrastructure.sqlite.project_factory import SqliteProjectFactory
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever, SqliteMaterialStore
+from pmstudio.infrastructure.postgres.owner_scope import set_owner_scope
+from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteDiscussionRepository,
     SqliteDocumentRepository,
     SqliteEvidenceRepository,
     SqliteExplorationRepository,
     SqliteRoundRepository,
 )
+from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from tests.support.builders import NOW, PROJECT
 from tests.support.doubles import FixedClock, RecordingPublisher
 from tests.support.postgres import open_direct
@@ -126,7 +126,7 @@ async def test_a_real_round_converges_from_the_whole_library(tmp_path):
         materials=store,
         explorations=SqliteExplorationRepository(connection),
         discussions=SqliteDiscussionRepository(connection),
-        # **真**检索器：FTS5 走真库（本环境没有 sqlite-vec → 它内部退回纯 FTS5）。
+        # **真**检索器：词法路走真 PG（没有 embedder → 它内部退回纯词法检索）。
         retriever=SqliteHybridRetriever(connection, None),
     )
 
@@ -158,7 +158,7 @@ async def test_a_real_round_converges_from_the_whole_library(tmp_path):
 
 
 async def test_a_real_round_caps_a_huge_pinned_block_and_keeps_the_auto_segment(tmp_path):
-    """P：真 SQLite + 真 FTS——SEED 先检索自动段，再按同一个 split 选块。
+    """P：真 PostgreSQL + 真词法检索——SEED 先检索自动段，再按同一个 split 选块。
 
     合成单块 3000 字手勾装不进手勾 cap（60%），自动段 700 字装得进余量：
     手勾不该靠地板复活，自动段必须进得来，两者合计 + 收尾 ≤ 4000。

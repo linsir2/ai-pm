@@ -35,7 +35,7 @@ def blocks() -> list[str]:
 
     corpus = Path("../.codex/runs/2026-10-19/tavily_raw/C raw_content-净.json")
     if not corpus.exists():
-        raise SystemExit("冻结语料不在，先跑 scripts/tavily_raw_bench.py")
+        raise SystemExit("冻结语料不在：先在 .codex/runs/2026-10-19/tavily_raw/ 准备冻结语料")
     items = json.loads(corpus.read_text(encoding="utf-8"))
     out: list[str] = []
     for item in items:

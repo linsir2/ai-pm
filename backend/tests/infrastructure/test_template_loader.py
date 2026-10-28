@@ -100,7 +100,7 @@ def test_seed_builtin_templates_is_idempotent_and_keeps_customs():
 
     from pmstudio.domain.shared.ids import SectionId
     from pmstudio.domain.shared.template import DocumentTemplate, TemplatedSection, TemplateRole
-    from pmstudio.infrastructure.sqlite.repositories import SqliteTemplateRepository
+    from pmstudio.infrastructure.postgres.repositories import SqliteTemplateRepository
     from pmstudio.infrastructure.templates import loader
     from tests.support.postgres import open_direct
 

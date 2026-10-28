@@ -5,7 +5,7 @@
 
 from pmstudio.domain.round.round import MaterialRef, Round
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
-from pmstudio.infrastructure.sqlite.serialization import round_from_payload, round_to_payload
+from pmstudio.infrastructure.postgres.serialization import round_from_payload, round_to_payload
 from tests.support.builders import NOW, PROJECT, ROUND_ID, make_round
 
 

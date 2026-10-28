@@ -11,7 +11,7 @@
 - **扩展名自相矛盾**：`seats/definitions/*.yaml`，而真实是 `.toml`；
 - **漏了整层与 12+ 个真实模块**：`harness/`、`domain/memory/`、`application/agents/`、
   `infrastructure/tools/`、`application/context.py`、`assembly.py`、`errors.py`、`events.py`、
-  `repair.py`、`narrowing.py`、`deliverable.py`、`sqlite/model_calls.py`。
+  `repair.py`、`narrowing.py`、`deliverable.py`、`postgres/model_calls.py`。
 
 一张写着不存在文件的架构图，比没有图更坏：读的人会照着它去找，找不到就以为代码丢了。
 

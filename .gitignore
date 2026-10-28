@@ -42,7 +42,7 @@ htmlcov/
 secrets.*
 *.secret
 
-# ── 本项目数据（单用户本地 SQLite，绝不入库）─────────────
+# ── 本项目数据与本地备份（绝不入库）───────────────────────
 *.sqlite
 *.sqlite3
 *.sqlite3-journal

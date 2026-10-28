@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from pmstudio.api.deps import require_user
 from pmstudio.application.use_cases import UserView
 from pmstudio.domain.shared.ids import UserId
-from pmstudio.infrastructure.sqlite import owner_scope
+from pmstudio.infrastructure.postgres import owner_scope
 
 #: 静态 Harness 应用里的固定身份（只有内部一致性有意义；不参与跨用户断言）。
 _HARNESS_USER = UserView(

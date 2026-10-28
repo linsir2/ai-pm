@@ -30,7 +30,7 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.memory import MemoryChange, MemoryKind, MemoryOp
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import WriteOp
-from pmstudio.infrastructure.sqlite.repositories import (
+from pmstudio.infrastructure.postgres.repositories import (
     SqliteMemoryRepository,
     SqliteRoundRepository,
 )

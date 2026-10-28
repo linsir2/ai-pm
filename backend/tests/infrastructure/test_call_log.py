@@ -4,7 +4,7 @@
 **模型侧 `error_kind` 恒为 NULL**——只有 `error` 文本，重算分类要造假异常（不硬凑）。
 """
 
-from pmstudio.infrastructure.sqlite.call_log import SqliteRoundCallLog
+from pmstudio.infrastructure.postgres.call_log import SqliteRoundCallLog
 from tests.support.postgres import open_direct
 
 

@@ -36,7 +36,7 @@ def _log(text: str) -> None:
 
 
 def main() -> int:
-    from pmstudio.infrastructure.sqlite.embedding import FastEmbedEmbedder
+    from pmstudio.infrastructure.postgres.embedding import FastEmbedEmbedder
 
     _log("取真数据…")
     rows = _fetch_real()

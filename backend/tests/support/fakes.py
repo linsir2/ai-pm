@@ -153,7 +153,7 @@ class InMemoryExplorationRepository(_InMemoryRepository):
 
 
 class InMemoryMaterialStore:
-    """材料仓储替身：与 SQLite 实现同一套口径（盖章、去重、列表只回摘要）。"""
+    """材料仓储替身：与 PG 实现同一套口径（盖章、去重、列表只回摘要）。"""
 
     def __init__(self) -> None:
         self._packets: dict[str, MaterialPacket] = {}
@@ -226,7 +226,7 @@ class InMemoryMaterialStore:
         self._raw.pop(material_id, None)
 
     def replace_chunks(self, material_id: str, parsed):  # type: ignore[no-untyped-def]
-        """就地换块（与 SQLite 实现同口径：id / 去重键 / 原始字节都不动）。"""
+        """就地换块（与 PG 实现同口径：id / 去重键 / 原始字节都不动）。"""
 
         known = self._packets.get(material_id)
         if known is None:
@@ -254,7 +254,7 @@ class InMemoryMaterialStore:
         return updated
 
     def refresh(self, material_id: str, *, parsed, content: bytes):  # type: ignore[no-untyped-def]
-        """就地刷新（与 SQLite 实现同口径：id / 去重键 / `created_at` 都不动，
+        """就地刷新（与 PG 实现同口径：id / 去重键 / `created_at` 都不动，
         原始字节、块、解析器身份一起换）——用途是"同一个网址再抓一次"。"""
 
         known = self._packets.get(material_id)

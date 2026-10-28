@@ -32,7 +32,7 @@ from pmstudio.domain.exploration.exploration import (
 from pmstudio.domain.shared.ids import ExplorationId, ProjectId, UserId
 from pmstudio.domain.shared.lease import LeaseKind
 from pmstudio.infrastructure.postgres.leases import PgLeaseStore
-from pmstudio.infrastructure.sqlite.repositories import SqliteExplorationRepository
+from pmstudio.infrastructure.postgres.repositories import SqliteExplorationRepository
 from tests.e2e.conftest import _ensure_authed_user
 from tests.support.api_client import async_client
 from tests.support.doubles import ScriptedModelGateway
@@ -188,7 +188,7 @@ def _running_count(project_id: str) -> int:
 
 
 async def test_start_writes_lease_and_keep_dismiss_do_not_need_one() -> None:
-    """C2：真 SQLite 的 M8 不再 500；收下/删掉是 done 行上的短控制写。"""
+    """C2：真 PG 的 M8 不再 500；收下/删掉是 done 行上的短控制写。"""
 
     app = _app(ScriptedModelGateway(replies={"inquiry": INQUIRY_REPLY}))
 

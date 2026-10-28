@@ -102,7 +102,7 @@ class _RoundHeadIndex:
 
     def list_rounds(self, project_id, *, limit: int = 20):  # type: ignore[no-untyped-def]
         from pmstudio.application.dto import round_head_view
-        from pmstudio.infrastructure.sqlite.serialization import round_to_payload
+        from pmstudio.infrastructure.postgres.serialization import round_to_payload
 
         rounds = [item for item in self._rounds.all_rounds() if item.project_id == project_id]
         rounds.sort(key=lambda item: (item.created_at, str(item.round_id)), reverse=True)
@@ -302,7 +302,7 @@ class Harness:
         self.web_search = web_search or RecordingWebSearch()
         self.fetcher = fetcher or RecordingWebFetch()
         self.material_retriever = material_retriever or RecordingMaterialRetriever()
-        # 调用轨迹读模型替身（可观测性 v2）：真实现是 `SqliteRoundCallLog`（真 SQLite）。
+        # 调用轨迹读模型替身（可观测性 v2）：真实现是 `SqliteRoundCallLog`（真 PG）。
         self.call_log = RecordingCallLog()
         #: 工具留样器：默认 None = 什么都不记（与生产 `trace_model` 默认关同一条纪律）。
         #: 用例要验留样时自己塞一个真的 `SqliteToolCallRecorder`。

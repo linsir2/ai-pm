@@ -416,7 +416,7 @@ def test_sse_only_delivers_my_events():
     from pmstudio.domain.shared.ids import DocumentId, ProjectId, UserId
     from pmstudio.harness.events import Event
     from pmstudio.infrastructure.postgres import owner_scope
-    from pmstudio.infrastructure.sqlite.repositories import (
+    from pmstudio.infrastructure.postgres.repositories import (
         SqliteDocumentRepository,
         SqliteWorkspaceIndex,
     )

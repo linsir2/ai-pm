@@ -46,7 +46,7 @@ from pmstudio.application.use_cases import (
 from pmstudio.domain.round.step import Step
 from pmstudio.domain.shared.ids import ProjectId, RoundId, UserId
 from pmstudio.domain.shared.lease import LeaseKind
-from pmstudio.infrastructure.sqlite.owner_scope import require_owner
+from pmstudio.infrastructure.postgres.owner_scope import require_owner
 
 __all__ = ["RESUME_ROUTES", "RoundCommand", "RoundRunner", "RoundState", "build_graph"]
 
@@ -150,7 +150,7 @@ class RoundRunner:
     async def run(self, command: RoundCommand) -> RoundView:
         """跑一次用户动作。**同一个 round 同时只允许一个动作**。
 
-        两道闸：`_running_rounds` 只保护本进程（快路径）；真正的互斥是 SQLite 行上的
+        两道闸：`_running_rounds` 只保护本进程（快路径）；真正的互斥是 PG 行上的
         DB lease——两个 worker 各跑一个进程时，第二条请求在 `acquire` 处拿不到锁，
         直接 409，不会进图、不会重复调模型。
 

@@ -12,7 +12,7 @@ from pmstudio.domain.shared.errors import UnknownMemoryEntry
 from pmstudio.domain.shared.ids import ProjectId
 from pmstudio.domain.shared.memory import MemoryChange, MemoryKind, MemoryOp
 from pmstudio.infrastructure.postgres import owner_scope, serialization
-from pmstudio.infrastructure.sqlite.repositories import SqliteMemoryRepository
+from pmstudio.infrastructure.postgres.repositories import SqliteMemoryRepository
 from tests.support.doubles import SeqIds
 from tests.support.postgres import open_direct
 

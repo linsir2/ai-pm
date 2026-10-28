@@ -22,8 +22,8 @@ from pmstudio.domain.discussion.thread import (
 )
 from pmstudio.domain.shared.ids import DiscussionId, EvidenceId, ProjectId
 from pmstudio.infrastructure.postgres import owner_scope
-from pmstudio.infrastructure.sqlite.repositories import SqliteDiscussionRepository
-from pmstudio.infrastructure.sqlite.serialization import (
+from pmstudio.infrastructure.postgres.repositories import SqliteDiscussionRepository
+from pmstudio.infrastructure.postgres.serialization import (
     discussion_from_payload,
     discussion_to_payload,
 )
@@ -295,7 +295,7 @@ def test_panel_thread_round_trips_with_participants_authors_and_summaries(store)
 
 def test_old_rows_without_panel_keys_read_back_as_single_member(store) -> None:  # type: ignore[no-untyped-def]
     """M18 兼容：M9 老行没有 participants/summaries/author/round 键，读回即单成员 panel。"""
-    from pmstudio.infrastructure.sqlite.serialization import discussion_from_payload
+    from pmstudio.infrastructure.postgres.serialization import discussion_from_payload
 
     restored = discussion_from_payload(
         {

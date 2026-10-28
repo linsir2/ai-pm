@@ -15,7 +15,7 @@ import pytest
 
 from pmstudio.domain.round.round import DroppedItem
 from pmstudio.domain.shared.errors import ShapeError
-from pmstudio.infrastructure.sqlite.serialization import _dropped_from_payload
+from pmstudio.infrastructure.postgres.serialization import _dropped_from_payload
 
 NOW = datetime(2026, 10, 4, tzinfo=UTC)
 

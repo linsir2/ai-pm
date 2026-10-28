@@ -33,7 +33,7 @@ from pmstudio.domain.exploration.exploration import ExplorationScope
 from pmstudio.domain.ports import ExplorationReader
 from pmstudio.domain.shared.ids import ExplorationId, ProjectId, UserId
 from pmstudio.domain.shared.lease import LeaseToken
-from pmstudio.infrastructure.sqlite.owner_scope import require_owner
+from pmstudio.infrastructure.postgres.owner_scope import require_owner
 
 __all__ = ["ExplorationRunner"]
 

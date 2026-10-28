@@ -20,7 +20,7 @@ from pmstudio.domain.shared.errors import DuplicateProposalId, ShapeError
 from pmstudio.domain.shared.ids import DraftId, EntryId, EvidenceId, ProposalId, RoundId
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.writing import BlockKind, WriteOp
-from pmstudio.infrastructure.sqlite.serialization import (
+from pmstudio.infrastructure.postgres.serialization import (
     proposal_from_json,
     proposal_to_json,
     round_from_payload,

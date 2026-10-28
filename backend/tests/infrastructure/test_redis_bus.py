@@ -197,7 +197,7 @@ async def test_owner_id_由总线盖章_业务侧不传(pair: _Pair):
     """R：owner 是**投递侧**的事，业务侧透传要改 41 处，而且业务层根本
     import 不到 owner_scope（分层守卫）。P：在 owner_scope 里设了 u7 再发；R：收到 u7。"""
 
-    from pmstudio.infrastructure.sqlite import owner_scope
+    from pmstudio.infrastructure.postgres import owner_scope
 
     listener = asyncio.create_task(_drain(pair.b, 1))
     await asyncio.sleep(0.25)
@@ -217,7 +217,7 @@ async def test_没有_owner_scope_时_owner_id_留空(pair: _Pair):
     P：显式清掉 owner scope（`tests/conftest.py` 有 autouse 默认值）；R：owner_id
     为 None，但事件**照送**。"""
 
-    from pmstudio.infrastructure.sqlite import owner_scope
+    from pmstudio.infrastructure.postgres import owner_scope
 
     listener = asyncio.create_task(_drain(pair.b, 1))
     await asyncio.sleep(0.25)

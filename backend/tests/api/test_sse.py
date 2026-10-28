@@ -8,7 +8,7 @@ from pmstudio.application.events import PACKET_EMITTED
 from pmstudio.application.use_cases import UserView
 from pmstudio.domain.shared.ids import UserId
 from pmstudio.harness.events import Event
-from pmstudio.infrastructure.sqlite import owner_scope
+from pmstudio.infrastructure.postgres import owner_scope
 
 NOW = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
 

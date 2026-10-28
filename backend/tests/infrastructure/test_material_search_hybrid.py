@@ -8,9 +8,9 @@ import logging
 
 import pytest
 
-from pmstudio.infrastructure.sqlite.materials import SqliteFtsRetriever
-from pmstudio.infrastructure.sqlite.tokenize import index_source
-from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
+from pmstudio.infrastructure.postgres.materials import SqliteFtsRetriever
+from pmstudio.infrastructure.postgres.tokenize import index_source
+from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
 from tests.support.embedding import FakeEmbedder
 from tests.support.postgres import open_direct
 
@@ -50,7 +50,7 @@ def test_rrf_is_kept_only_as_a_reference_implementation():
     留它是为了让"当初为什么换掉它"可复算：交叉两列时"两边都在"的条目得分更高，
     这正是它**对称**、因而压不住"词法第 1 但语义第 50"的块的原因。
     """
-    from pmstudio.infrastructure.sqlite.materials import reciprocal_rank_fusion
+    from pmstudio.infrastructure.postgres.materials import reciprocal_rank_fusion
 
     fused = reciprocal_rank_fusion([["a", "b"], ["b", "a"]])
     assert fused == ("b", "a")          # 交叉两列 → 两边都在的 "b" 优先
@@ -64,7 +64,7 @@ def test_a_lexical_exact_hit_is_never_knocked_out_by_a_semantic_one(conn):
     （用户升级后反而搜不到以前能搜到的），所以融合换成"按词面覆盖率分档、
     档内按语义分排"。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -84,9 +84,9 @@ def test_a_lexical_exact_hit_is_never_knocked_out_by_a_semantic_one(conn):
 def test_semantic_query_hits_where_fts_misses(conn):
     """R（本批的主需求）：换个说法也能命中。
 
-    先断言 **FTS5 单独查不到**（否则这条测试没有鉴别力），再断言混合查得到。
+    先断言 **词法路单独查不到**（否则这条测试没有鉴别力），再断言混合查得到。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -111,7 +111,7 @@ def test_a_lexical_hit_is_never_knocked_out_by_the_vector_branch(conn):
     标题用中性词「手册」：`index_source` 会把标题并进每块的 token 流，
     标题若含检索词就会污染另一块，前置断言（词法只中 c2）就不成立了。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -131,7 +131,7 @@ def test_a_lexical_hit_is_never_knocked_out_by_the_vector_branch(conn):
 def test_another_owners_chunks_are_never_returned(conn):
     """R：隔离。别人的材料块既不该被本项目命中，也不该在候选里冒头。"""
     from pmstudio.domain.shared.ids import UserId
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -156,7 +156,7 @@ def test_another_projects_chunks_are_never_returned(conn):
 
     跨项目这条比跨 owner 更要紧：owner 通常只有一个人的时候，隔离全靠项目这一层。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -172,8 +172,8 @@ def test_another_projects_chunks_are_never_returned(conn):
 
 
 def test_a_broken_embedder_still_returns_lexical_hits(conn):
-    """R：推理炸了不许把检索整个打死——退回纯 FTS5，词法结果照旧。"""
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    """R：推理炸了不许把检索整个打死——退回纯词法检索，词法结果照旧。"""
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -197,7 +197,7 @@ def test_the_first_hit_carries_the_largest_score(conn):
     与它上一行的注释正好相反。消费方（`dto.py:780`）不重排，所以只错在数值——
     但"越大越好"是 `MaterialHit` 的对外约定（`ports.py` 里明写着），不能反着来。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -220,7 +220,7 @@ def test_the_vector_side_gives_the_real_cosine_not_a_rank(conn):
     （TOIS 2023：凸组合 > RRF，in/out-of-domain 都赢）。
     两个 embedder 都已归一（实测 L2 范数 1.0）→ L2 距离 d 换算 `cos = 1 - d²/2`。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -249,9 +249,9 @@ def test_an_exact_lexical_hit_is_not_knocked_out_by_a_semantic_one(conn):
 
     这是 RRF 一族的通病（纯名次函数丢掉了分数幅度）：语义第 1、词面第 2 的块
     会赢过词面第 1、语义第 50 的块。实测（真数据）：旧口径让"同词换序"类少 1 条、
-    "同义改述"类少 2 条；改成凸组合后两类都与纯 FTS5 持平。
+    "同义改述"类少 2 条；改成凸组合后两类都与纯词法检索持平。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -274,7 +274,7 @@ def test_the_fusion_score_is_a_bounded_combination(conn):
 
     语义是真余弦（[-1,1]），词面是饱和归一（[0,1)），`α·语义 + (1−α)·词面` 落在 [-1,1]。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -300,7 +300,7 @@ def _rare_term_corpus(conn):
     一个**罕见**词（覆盖率 1/4），干扰块命中三个**常见**词（覆盖率 3/4）。
     实测这时的 BM25：m1 = 1.0986（罕见词 IDF 高）vs m2 = 0.3365。
     """
-    from pmstudio.infrastructure.sqlite.tokenize import index_source
+    from pmstudio.infrastructure.postgres.tokenize import index_source
 
     docs = {
         "m1": "紫貂 皮草 拍卖 记录",
@@ -333,9 +333,9 @@ def test_a_rare_lexical_hit_survives_the_semantic_branch(conn):
 
     这是"离散分档"口径的病根：覆盖率 0.25 → 掉进纯语义档 → BM25 挣到的
     第 1 位被一个只命中常见词的块抢走。实测（真数据）：旧口径让"同词换序"少 1 条、
-    "同义改述"少 2 条；凸组合后两类都与纯 FTS5 持平。
+    "同义改述"少 2 条；凸组合后两类都与纯词法检索持平。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -376,9 +376,9 @@ def test_a_query_the_lexer_misses_still_finds_the_material_by_substring(conn):
 
     这里的 embedder **故意坏掉**：假 embedder 按字符分桶，"vecto" 与 "vector"
     有共同字符 → 向量路也会找到它 → 那样就分不清是谁捞回来的。坏掉之后混合检索
-    退化成纯 FTS5，**多出来的结果只可能来自兜底**。
+    退化成纯词法检索，**多出来的结果只可能来自兜底**。
     """
-    from pmstudio.infrastructure.sqlite.materials import (
+    from pmstudio.infrastructure.postgres.materials import (
         SqliteFtsRetriever,
         SqliteHybridRetriever,
     )
@@ -405,7 +405,7 @@ def test_a_query_the_lexer_misses_still_finds_the_material_by_substring(conn):
 
 def test_the_substring_fallback_only_fills_empty_slots(conn):
     """R：兜底**只补空槽**——已有的好结果一个都不许被挤掉。"""
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -430,7 +430,7 @@ def test_the_substring_fallback_only_fills_empty_slots(conn):
 
 def test_a_search_that_is_already_full_does_not_use_the_fallback(conn):
     """R：结果已经找满时**不跑兜底**（不往结果里塞弱匹配的噪音）。"""
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -466,7 +466,7 @@ def test_one_material_takes_at_most_two_slots_in_the_results(conn):
     都来自每份材料的前 8 块，不去重就占满 top5，**改述召回从 10/14 掉到 4/14**，
     比不用向量还差）。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -497,8 +497,8 @@ def test_a_target_ranked_beyond_the_first_twenty_by_bm25_is_still_found(conn):
 
     造法：60 个块，前 20 个都含查询词（它们 BM25 更高），目标块排第 30。
     """
-    from pmstudio.infrastructure.sqlite import materials as materials_module
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres import materials as materials_module
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -513,7 +513,7 @@ def test_a_target_ranked_beyond_the_first_twenty_by_bm25_is_still_found(conn):
     )
 
     class Broken(FakeEmbedder):
-        """**故意坏掉**：让混合检索退化成纯 FTS5。
+        """**故意坏掉**：让混合检索退化成纯词法检索。
 
         为什么必须坏掉：假 embedder 按字符分桶，"机柜布线规范"与目标块字符完全相同
         → KNN 路会直接把它排第一 → 测不出 FTS 候选数的作用（没有鉴别力）。
@@ -562,7 +562,7 @@ def test_every_search_is_observed_with_its_breakdown(conn, caplog):
     合成查询** → 真实用户查询分布是**空的** → 语义召回的增量没法证明（R9）；
     而有了分解，「为什么没命中」当场可诊断（词面没召回？语义没召回？都没有？）。
     """
-    from pmstudio.infrastructure.sqlite.materials import SqliteHybridRetriever
+    from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
     from tests.support.builders import PROJECT
 
@@ -593,7 +593,7 @@ def test_the_lexical_baseline_uses_the_same_material_dedup():
     → **增量被高估** → 结论会错。两边必须同一把尺子。
     """
     from pmstudio.application.dto import MaterialHit
-    from pmstudio.infrastructure.sqlite.materials import dedup_by_material
+    from pmstudio.infrastructure.postgres.materials import dedup_by_material
 
     def hit(chunk_id: str, material_id: str) -> MaterialHit:
         return MaterialHit(

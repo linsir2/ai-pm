@@ -7,7 +7,7 @@ from pmstudio.application.ports import MaterialVectorIndex
 from pmstudio.domain.null_repos import NoOpVectorIndex
 from pmstudio.domain.shared.ids import UserId
 from pmstudio.infrastructure.postgres.tokenize import index_source
-from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
+from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
 from tests.support.embedding import FakeEmbedder
 from tests.support.postgres import open_direct
 
@@ -124,7 +124,7 @@ def test_the_protocol_is_satisfied_by_both_impls(conn):
 
 def test_the_vector_budget_only_applies_to_web_materials():
     """R：预算**只限联网材料**——上传与抓网页是用户精挑要精读的，不该限。"""
-    from pmstudio.infrastructure.sqlite.vector_index import vector_char_budget
+    from pmstudio.infrastructure.postgres.vector_index import vector_char_budget
     from pmstudio.infrastructure.tools.limits import WEB_VECTOR_CHARS
 
     assert vector_char_budget("web_search") == WEB_VECTOR_CHARS
@@ -134,7 +134,7 @@ def test_the_vector_budget_only_applies_to_web_materials():
 
 def test_the_block_budget_is_measured_in_characters_not_blocks():
     """R：预算的量纲是**字**（`blocks_within_budget`），不是块数。"""
-    from pmstudio.infrastructure.sqlite.vector_index import blocks_within_budget
+    from pmstudio.infrastructure.postgres.vector_index import blocks_within_budget
 
     rows = [{"text": "字" * 400} for _ in range(30)]  # 共 12000 字
 
@@ -149,7 +149,7 @@ def test_the_block_budget_is_measured_in_characters_not_blocks():
 
 def test_a_web_material_only_gets_vectors_within_its_char_budget(conn):
     """R：联网材料只写**字数预算内**的块的向量（**FTS 仍覆盖全部块**）。"""
-    from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
+    from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
     from pmstudio.infrastructure.tools.limits import WEB_VECTOR_CHARS
 
     body = "字" * 400
@@ -169,7 +169,7 @@ def test_a_web_material_only_gets_vectors_within_its_char_budget(conn):
 
 def test_an_upload_material_still_gets_a_vector_for_every_chunk(conn):
     """R：上传材料**不受限**（回归：批 5/6a 的语义召回能力不能被这次改动削掉）。"""
-    from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
+    from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
 
     _put_material(
         conn,
@@ -184,7 +184,7 @@ def test_an_upload_material_still_gets_a_vector_for_every_chunk(conn):
 
 def test_an_explicit_limit_overrides_the_origin_rule(conn):
     """R：`max_blocks` 显式给上限时按它走（调用方说了算）。"""
-    from pmstudio.infrastructure.sqlite.vector_index import SqliteVectorIndex
+    from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
 
     _put_material(
         conn,

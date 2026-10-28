@@ -133,7 +133,7 @@ def test_a_non_hit_chunk_uses_zero_as_its_score() -> None:
 
 
 def _roundtrip(round_):
-    from pmstudio.infrastructure.sqlite.serialization import (
+    from pmstudio.infrastructure.postgres.serialization import (
         round_from_payload,
         round_to_payload,
     )
@@ -227,7 +227,7 @@ def test_new_fields_round_trip() -> None:
 
 
 def test_an_old_payload_without_new_keys_still_loads() -> None:
-    from pmstudio.infrastructure.sqlite.serialization import (
+    from pmstudio.infrastructure.postgres.serialization import (
         round_from_payload,
         round_to_payload,
     )

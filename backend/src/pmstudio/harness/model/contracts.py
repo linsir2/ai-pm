@@ -82,7 +82,7 @@ class ModelGateway(Protocol):
 class ModelCallRecorder(Protocol):
     """留样的旁路出口（`02` §5.3）：记下每一次模型调用，给排查用，不参与业务。
 
-    实现是 `infrastructure/sqlite/model_calls.py`；网关默认不接（`recorder=None` 时什么都不记）。
+    实现是 `infrastructure/postgres/model_calls.py`；网关默认不接（`recorder=None` 时什么都不记）。
     提示词给的是**原文**——只存哈希复现不了，而复现是这张表唯一的目的。
 
     关联键叫 `trace_id`（M4 从 `round_id` 改名）：它只是"这次调用挂在哪个上下文下"的

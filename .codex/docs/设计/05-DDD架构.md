@@ -1,6 +1,6 @@
 # 05 · DDD 架构（怎么实现）
 
-> 技术选型已定：**SQLite + LiteLLM + FastAPI + React/Vite**。
+> 技术选型已定：**PostgreSQL 18 + pgvector + PgBouncer + LiteLLM + FastAPI + React/Vite**。
 > 这份回答：分几个限界上下文、聚合与不变量落在哪、端口怎么切、LangGraph 放哪。
 
 ---
@@ -108,10 +108,10 @@
 
 | 端口 | 关键方法 | 实现 | 声明位置 |
 |------|---------|------|---------|
-| `DocumentReader` / `DocumentWriter` | `get(project_id)` / `save(document)` | SQLite | `domain/ports.py` |
-| `RoundReader` / `RoundWriter` | `get(round_id)` / `save(round)` | SQLite | `domain/ports.py` |
-| `EvidenceReader` / `EvidenceWriter` | `get(project_id) -> EvidenceLedger` / `save(ledger)` | SQLite | `domain/ports.py` |
-| `UnitOfWork` | 上下文管理器：正常退出即提交，抛异常即回滚 | SQLite | `domain/ports.py` |
+| `DocumentReader` / `DocumentWriter` | `get(project_id)` / `save(document)` | PostgreSQL | `domain/ports.py` |
+| `RoundReader` / `RoundWriter` | `get(round_id)` / `save(round)` | PostgreSQL | `domain/ports.py` |
+| `EvidenceReader` / `EvidenceWriter` | `get(project_id) -> EvidenceLedger` / `save(ledger)` | PostgreSQL | `domain/ports.py` |
+| `UnitOfWork` | 上下文管理器：正常退出即提交，抛异常即回滚 | PostgreSQL | `domain/ports.py` |
 | `ModelGateway` | `complete(messages, response_format)` | **LiteLLM** | `application/ports.py`（P2） |
 | `SeatCatalog` | `all()` / `match(input)` | 静态定义（JSON/YAML） | `application/ports.py`（P2） |
 | `EventPublisher` | `publish(event)` | 进程内 → SSE | `application/ports.py`（P2） |
@@ -198,7 +198,6 @@ backend/src/pmstudio/
 │   └── agents/
 ├── infrastructure/
 │   ├── postgres/
-│   ├── sqlite/
 │   ├── seats/
 │   ├── personas/
 │   ├── tools/
@@ -252,8 +251,7 @@ domain/shared/        ids.py errors.py invariants.py lease.py target.py label.py
 application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py discusser.py sim_inquirer.py persona_simulator.py definitions.py
 infrastructure/        security.py redis_limiter.py redis_bus.py
 infrastructure/templates/ loader.py standard.toml light.toml
-infrastructure/postgres/ database.py unit_of_work.py
-infrastructure/sqlite/ database.py repositories.py leases.py serialization.py unit_of_work.py materials.py tokenize.py model_calls.py tool_calls.py call_log.py project_factory.py observations_repo.py digest_repo.py inspiration_repo.py users.py owner_scope.py usage.py embedding.py vector_index.py
+infrastructure/postgres/ database.py unit_of_work.py repositories.py leases.py serialization.py materials.py tokenize.py model_calls.py tool_calls.py call_log.py project_factory.py observations_repo.py digest_repo.py inspiration_repo.py users.py owner_scope.py usage.py embedding.py vector_index.py
 infrastructure/seats/ catalog.py definitions/*.toml
 infrastructure/personas/ catalog.py personas.toml
 infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py webclean.py webdedup.py
@@ -268,7 +266,7 @@ infrastructure/discussion/ roles.py
 
 **依赖方向**：`api → application → domain`；
 `infrastructure` 实现端口协议，被 bootstrap 注入；
-**`domain` 不 import 任何外部包**（不 import fastapi / langgraph / litellm / sqlite3）。
+**`domain` 不 import 任何外部包**（不 import fastapi / langgraph / litellm / psycopg）。
 这条用测试守：扫 `domain/` 的 import，出现外部包即失败。
 
 **P3a 联网申请（2026-10-26）**：`domain/round/web.py` 是 5 状态申请与其状态机
@@ -292,10 +290,11 @@ infrastructure/discussion/ roles.py
 
 ## 9. 事务与一致性
 
-- **一轮推进**：每个用例一个小事务，聚合整体读写（SQLite 行级 + 单写者）。
+- **一轮推进**：每个用例一个小事务，聚合整体读写（PG 行锁 `SELECT ... FOR UPDATE`；模型/网络在 UoW 外）。
 - **确认写入**：`ConfirmDraft` 一个事务里完成"应用提案 + 生成版本 + 记录出处关联"。
 - **跨聚合的最终一致**：事件驱动（进程内），v1 不做补偿逻辑；失败即整轮失败可重试。
-- **单实例**：v1 单用户单进程，SQLite 用文件锁防双开。
+- **部署**：backend 经 PgBouncer（transaction mode）连 PG；init/maintenance/backup 直连。
+  4 workers 负载门已过；跨 worker 的轮内 in-flight / 条件 claim 仍归 P3b-1。
 
 ## 10. 测试策略
 
@@ -304,7 +303,7 @@ infrastructure/discussion/ roles.py
 | domain | 不变量 D1–D6 / E1–E3 / R1–R6；每个聚合方法 | 无（纯对象） |
 | domain services | 可追溯回溯、写范围校验、编号分配 | 假仓储 |
 | application | 每个用例的编排与事务边界 | 假端口（含假模型） |
-| infrastructure | SQLite 仓储往返；LiteLLM 网关的解析与失败 | 内存库；假 HTTP |
+| infrastructure | PostgreSQL 仓储往返；LiteLLM 网关的解析与失败 | 真 PG；假 HTTP |
 | api | 路由与 SSE 事件形状 | 假应用服务 |
 | e2e | 一次完整迭代（输入 → 复述 → 席位 → 问卷 → 草案 → 确认 → 多一版） | 假模型 |
 
