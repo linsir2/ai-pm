@@ -5,7 +5,7 @@
 #   cp backend/.env.ops.example backend/.env.ops   # ops：bootstrap/owner URL、角色口令
 #   # 然后把 .env.ops 里的 change-me-* 与首管理员全部改成真实值（首管理员必填，
 #   # 空值会让 init --finalize 硬失败，compose 不会起 backend）
-#   docker compose up -d
+#   docker compose up -d --build
 #   打开 http://localhost
 #
 # 启动顺序：db → init（bootstrap→schema→finalize）→ pgbouncer → backend。
@@ -91,7 +91,9 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      # 必须走 TCP：官方镜像在 init 脚本前会起一个只开 Unix socket 的临时 server，
+      # 默认 pg_isready 会命中它，让 init 在最终 server ready 前就开跑。
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 12

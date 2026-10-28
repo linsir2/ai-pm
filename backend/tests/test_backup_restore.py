@@ -80,6 +80,18 @@ def _tool_environment() -> dict[str, str]:
     return env
 
 
+def _dump_toc(env: dict[str, str], dump: Path) -> str:
+    listed = subprocess.run(
+        [shutil.which("pg_restore", path=env["PATH"]), "--list", str(dump)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert listed.returncode == 0, listed.stderr
+    return listed.stdout
+
+
 def _require_pg18_tools() -> dict[str, str]:
     env = _tool_environment()
     for name in ("pg_dump", "pg_restore", "psql"):
@@ -217,6 +229,23 @@ async def test_backup_dump_and_restore_check(
     assert dump.stat().st_mode & 0o777 == 0o600
     assert not list((backup_dir / "daily").glob("*.db")), "不许再产出 SQLite 备份"
 
+    # 真 dump 的 TOC：业务表/数据必须在，镜像自带的扩展/schema 必须不在。
+    toc = _dump_toc(env, dump)
+    for table in ("documents", "material_chunks", "users"):
+        assert f"TABLE public {table} " in toc
+    assert "TABLE DATA public documents " in toc
+    for excluded in (
+        "EXTENSION - pg_search",
+        "EXTENSION - pg_ivm",
+        "EXTENSION - postgis",
+        "SCHEMA - paradedb",
+        "SCHEMA - pdb",
+        "SCHEMA - pgivm",
+        "SCHEMA - tiger",
+        "SCHEMA - topology",
+    ):
+        assert excluded not in toc
+
     # RPO 自检：刚备完应通过；把最新文件改成 2 小时前、上限 1 小时应失败。
     check = subprocess.run(
         ["bash", str(BACKUP), "--check"],
@@ -294,11 +323,12 @@ async def test_backup_dump_and_restore_check(
             connection.execute("CREATE EXTENSION IF NOT EXISTS pg_search CASCADE")
             connection.execute("GRANT USAGE ON TYPE vector TO pmstudio_owner")
             connection.execute(
-                "GRANT USAGE ON SCHEMA pdb, paradedb TO pmstudio_owner"
+                "GRANT USAGE ON SCHEMA pdb, paradedb"
+                " TO pmstudio_owner, pmstudio_app"
             )
             connection.execute(
                 "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pdb, paradedb"
-                " TO pmstudio_owner"
+                " TO pmstudio_owner, pmstudio_app"
             )
             connection.execute(
                 f'ALTER DATABASE "{scratch_name}" OWNER TO pmstudio_owner'
@@ -323,6 +353,14 @@ async def test_backup_dump_and_restore_check(
         with connect(owner_scratch) as connection:
             connection.execute("TRUNCATE sessions")
         assert _fingerprint(owner_scratch) == original
+
+        # 恢复库的 app 角色也要能 tokenize/score（PUBLIC 权限可能已被收回）。
+        with connect(app_scratch) as app_connection:
+            tokens = app_connection.execute(
+                "SELECT paradedb.tokenize(%s::jsonb, %s) AS tokens",
+                ('{"type":"jieba"}', "产品经理"),
+            ).fetchone()
+            assert tokens is not None and tokens["tokens"]
 
         settings = AppSettings(
             database_url=app_scratch,

@@ -101,9 +101,9 @@ psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
 psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
   -c "GRANT USAGE ON TYPE vector TO pmstudio_owner" >/dev/null
 psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
-  -c "GRANT USAGE ON SCHEMA pdb, paradedb TO pmstudio_owner" >/dev/null
+  -c "GRANT USAGE ON SCHEMA pdb, paradedb TO pmstudio_owner, pmstudio_app" >/dev/null
 psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \
-  -c "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pdb, paradedb TO pmstudio_owner" >/dev/null
+  -c "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pdb, paradedb TO pmstudio_owner, pmstudio_app" >/dev/null
 psql "$bootstrap_maint" -v ON_ERROR_STOP=1 \
   -c "ALTER DATABASE \"$scratch\" OWNER TO pmstudio_owner" >/dev/null
 psql "$bootstrap_scratch" -v ON_ERROR_STOP=1 \

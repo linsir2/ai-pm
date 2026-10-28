@@ -194,6 +194,10 @@ def test_db_and_pgbouncer_have_healthchecks() -> None:
         block = _service_block(text, name)
         assert "healthcheck:" in block, f"{name} 缺 healthcheck"
         assert "pg_isready" in block, f"{name} 的 healthcheck 要真的探库"
+        assert "pg_isready -h 127.0.0.1" in block, (
+            f"{name} healthcheck 必须走 TCP——默认 Unix socket 会命中 ParadeDB "
+            "init 前的临时 server"
+        )
 
 
 def test_backend_connects_through_pgbouncer_only() -> None:
@@ -661,6 +665,9 @@ def test_the_ci_workflow_runs_against_paradedb_pg18() -> None:
     assert "CREATE EXTENSION IF NOT EXISTS vector" in text
     assert "CREATE EXTENSION IF NOT EXISTS pg_search CASCADE" in text
     assert "shared_preload_libraries" in text, "CI 必须断言 pg_search 已预加载"
+    assert '--health-cmd "pg_isready -h 127.0.0.1' in text, (
+        "CI service healthcheck 必须走 TCP，避开 ParadeDB 临时 server"
+    )
     assert "actions/setup-python" in text, "CI 必须显式用 setup-python 装解释器"
     assert "UV_PYTHON" in text, "要显式钉住 uv 用哪个解释器"
 
@@ -684,9 +691,17 @@ def test_the_backup_excludes_image_managed_extensions() -> None:
     这些扩展的配置表，pg_search 的 schema 还会和恢复时预建的扩展冲突。"""
 
     text = _text(ROOT / "backend" / "scripts" / "backup.sh")
-    for extension in ("pg_search", "pg_ivm", "postgis", "postgis_topology"):
+    for extension in (
+        "pg_search",
+        "pg_ivm",
+        "postgis",
+        "postgis_topology",
+        "postgis_tiger_geocoder",
+    ):
         assert f"--exclude-extension={extension}" in text
-    assert "--exclude-schema=paradedb" in text
+    for schema in ("paradedb", "pdb", "pgivm", "tiger", "topology"):
+        assert f"--exclude-schema={schema}" in text
+    assert "--exclude-schema=public" not in text, "业务表在 public，不能整段排除"
 
 
 def test_the_restore_drill_creates_pg_search_before_restoring() -> None:
@@ -694,8 +709,11 @@ def test_the_restore_drill_creates_pg_search_before_restoring() -> None:
 
     text = _text(ROOT / "backend" / "scripts" / "restore_check.sh")
     assert "CREATE EXTENSION IF NOT EXISTS pg_search CASCADE" in text
-    assert "GRANT USAGE ON SCHEMA pdb, paradedb" in text
-    assert "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pdb, paradedb" in text
+    assert "GRANT USAGE ON SCHEMA pdb, paradedb TO pmstudio_owner, pmstudio_app" in text
+    assert (
+        "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pdb, paradedb"
+        " TO pmstudio_owner, pmstudio_app" in text
+    )
 
 
 def test_the_ci_workflow_builds_the_images() -> None:
