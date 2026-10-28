@@ -1,4 +1,4 @@
-"""真 PostgreSQL：0001 schema、原生类型、seq、FTS/vector 索引与迁移账本。
+"""真 PostgreSQL：0001+0002 最终 schema、原生类型、seq、检索/vector 索引与迁移账本。
 
 每个模块用一个**独立空 schema** 跑迁移：表集/列集/类型必须精确，不能夹带别的
 用例留下的表；共享的 `pmstudio_test` 只用来建/删这个 schema。
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from psycopg.errors import CheckViolation, UniqueViolation
-from scripts.migrate import apply_migrations, discover_migrations
+from scripts.migrate import MIGRATIONS_DIR, apply_migrations, discover_migrations
 
 from pmstudio.infrastructure.postgres.database import connect
 from tests.support.postgres import (
@@ -36,7 +36,6 @@ BIGINT = ("bigint", "int8")
 INTEGER = ("integer", "int4")
 SMALLINT = ("smallint", "int2")
 VECTOR = ("USER-DEFINED", "vector")
-TSVECTOR = ("tsvector", "tsvector")
 
 EXPECTED_COLUMNS: dict[str, dict[str, tuple[str, str]]] = {
     "documents": {
@@ -126,8 +125,8 @@ EXPECTED_COLUMNS: dict[str, dict[str, tuple[str, str]]] = {
         "text": TEXT,
         "heading_path": TEXT_ARRAY,
         "anchor": TEXT,
-        "tokens": TEXT,
-        "search_tsv": TSVECTOR,
+        "search_text": TEXT,
+        "search_tokens": TEXT_ARRAY,
         "embedding": VECTOR,
     },
     "explorations": {
@@ -265,6 +264,7 @@ NULLABLE_COLUMNS = frozenset(
         ("evidence_ledgers", "owner_id"),
         ("materials", "owner_id"),
         ("material_chunks", "owner_id"),
+        ("material_chunks", "search_tokens"),
         ("material_chunks", "embedding"),
         ("explorations", "owner_id"),
         ("explorations", "lease_owner"),
@@ -330,7 +330,7 @@ EXPECTED_INDEXES = frozenset(
         "idx_round_digests_owner",
         "idx_inspirations_owner",
         "idx_templates_owner",
-        "idx_material_chunks_search_tsv",
+        "idx_material_chunks_search_text_bm25",
         "idx_material_chunks_embedding",
     }
 )
@@ -380,7 +380,7 @@ def database() -> PgTestDatabase:
 def migrated(database: PgTestDatabase):
     schema = _create_schema(database)
     try:
-        assert apply_migrations(schema.url) == [1]
+        assert apply_migrations(schema.url) == [1, 2]
         yield schema
     finally:
         _drop_schema(database, schema)
@@ -451,12 +451,52 @@ def test_identity_columns_are_generated_by_default(migrated: MigratedSchema) -> 
         assert columns[key]["identity_generation"] == "BY DEFAULT", key
 
 
-def test_search_tsv_is_a_generated_tsvector(migrated: MigratedSchema) -> None:
-    row = _columns(migrated)[("material_chunks", "search_tsv")]
+def test_search_tokens_is_generated_by_pmstudio_tokens(migrated: MigratedSchema) -> None:
+    row = _columns(migrated)[("material_chunks", "search_tokens")]
     assert row["is_generated"] == "ALWAYS"
-    assert "to_tsvector" in str(row["generation_expression"])
-    assert "tokens" in str(row["generation_expression"])
-    assert row["is_nullable"] == "NO"
+    assert "pmstudio_tokens" in str(row["generation_expression"])
+    assert "search_text" in str(row["generation_expression"])
+    assert row["is_nullable"] == "YES"
+
+
+def test_pmstudio_tokens_is_immutable_parallel_safe_jieba(migrated: MigratedSchema) -> None:
+    rows = _rows(
+        migrated,
+        """
+        SELECT p.provolatile, p.proparallel,
+               pg_get_function_result(p.oid) AS result,
+               pg_get_functiondef(p.oid) AS definition
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = %s AND p.proname = 'pmstudio_tokens'
+        """,
+        (migrated.name,),
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["provolatile"] == "i"
+    assert row["proparallel"] == "s"
+    assert row["result"] == "text[]"
+    definition = str(row["definition"])
+    assert "IMMUTABLE" in definition
+    assert "PARALLEL SAFE" in definition
+    assert "paradedb.tokenize" in definition
+    assert '"type":"jieba"' in definition
+
+
+def test_legacy_fts_columns_and_gin_index_are_gone(migrated: MigratedSchema) -> None:
+    columns = _columns(migrated)
+    assert ("material_chunks", "search_tsv") not in columns
+    assert ("material_chunks", "tokens") not in columns
+    indexes = {
+        str(row["indexname"])
+        for row in _rows(
+            migrated,
+            "SELECT indexname FROM pg_indexes WHERE schemaname = %s",
+            (migrated.name,),
+        )
+    }
+    assert "idx_material_chunks_search_tsv" not in indexes
 
 
 def test_expected_indexes_are_created(migrated: MigratedSchema) -> None:
@@ -476,8 +516,9 @@ def test_expected_indexes_are_created(migrated: MigratedSchema) -> None:
     assert "CREATE UNIQUE INDEX" in dedupe
     assert "(project_id, sha256)" in dedupe
 
-    fts = indexes["idx_material_chunks_search_tsv"]
-    assert "USING gin (search_tsv)" in fts
+    lexical = indexes["idx_material_chunks_search_text_bm25"]
+    assert "USING bm25 (chunk_id, search_text)" in lexical
+    assert '"jieba"' in lexical
 
     vector = indexes["idx_material_chunks_embedding"]
     assert "USING hnsw (embedding vector_cosine_ops)" in vector
@@ -545,7 +586,7 @@ def test_vector_index_meta_is_single_row(migrated: MigratedSchema) -> None:
         assert remaining is not None and remaining["n"] == 0
 
 
-def test_tokens_feed_search_tsv_and_embedding_has_512_dimensions(
+def test_search_text_feeds_generated_tokens_and_embedding_has_512_dimensions(
     migrated: MigratedSchema,
 ) -> None:
     with connect(migrated.url) as connection:
@@ -563,18 +604,27 @@ def test_tokens_feed_search_tsv_and_embedding_has_512_dimensions(
         connection.execute(
             """
             INSERT INTO material_chunks
-                (chunk_id, material_id, ordinal, text, heading_path, anchor, tokens)
-            VALUES ('m-1#c01', 'm-1', 0, '正文', '{}', 'anchor', '产品 设计')
+                (chunk_id, material_id, ordinal, text, heading_path, anchor,
+                 search_text)
+            VALUES ('m-1#c01', 'm-1', 0, '正文', '{}', 'anchor',
+                    '产品经理 用户登录流程，Hello World! v2.0')
             """
         )
         row = connection.execute(
-            "SELECT search_tsv::text AS tsv, embedding,"
-            " search_tsv @@ to_tsquery('simple', '产品') AS matched"
+            "SELECT search_tokens, embedding"
             " FROM material_chunks WHERE chunk_id = 'm-1#c01'"
         ).fetchone()
         assert row is not None
-        assert row["tsv"] == "'产品':1 '设计':2"
-        assert row["matched"] is True
+        assert row["search_tokens"] == [
+            "产品",
+            "经理",
+            "用户",
+            "登录",
+            "流程",
+            "hello",
+            "world",
+            "v2.0",
+        ]
         assert row["embedding"] is None
 
         connection.execute(
@@ -588,11 +638,65 @@ def test_tokens_feed_search_tsv_and_embedding_has_512_dimensions(
         assert row is not None and row["dims"] == 512
 
 
+def test_0002_backfills_search_text_from_title_heading_and_text(
+    database: PgTestDatabase, tmp_path: Path
+) -> None:
+    schema = _create_schema(database)
+    try:
+        legacy = tmp_path / "legacy"
+        legacy.mkdir()
+        source = MIGRATIONS_DIR / "0001_init.sql"
+        (legacy / source.name).write_text(
+            source.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        assert apply_migrations(schema.url, directory=legacy) == [1]
+        with connect(schema.url) as connection:
+            connection.execute(
+                """
+                INSERT INTO materials
+                    (material_id, project_id, origin, title, source_ref, media_type,
+                     bytes_len, sha256, parser_id, parser_version, schema_version,
+                     truncated, warnings, content, created_at)
+                VALUES ('m-1', 'p-1', 'upload', '产品经理', 'ref', 'text/plain',
+                        1, 'sha-1', 'parser', '1', 1, false, '{}', %s, now())
+                """,
+                (b"x",),
+            )
+            connection.execute(
+                """
+                INSERT INTO material_chunks
+                    (chunk_id, material_id, ordinal, text, heading_path, anchor,
+                     tokens)
+                VALUES ('m-1#c01', 'm-1', 0, '用户登录流程',
+                        ARRAY['需求', '规格'], 'anchor', '用户 登录 流程')
+                """
+            )
+        assert apply_migrations(schema.url, directory=MIGRATIONS_DIR) == [2]
+        with connect(schema.url) as connection:
+            row = connection.execute(
+                "SELECT search_text, search_tokens FROM material_chunks"
+                " WHERE chunk_id = 'm-1#c01'"
+            ).fetchone()
+        assert row is not None
+        assert row["search_text"] == "产品经理 需求 规格 用户登录流程"
+        assert row["search_tokens"] == [
+            "产品",
+            "经理",
+            "需求",
+            "规格",
+            "用户",
+            "登录",
+            "流程",
+        ]
+    finally:
+        _drop_schema(database, schema)
+
+
 def test_migrations_are_idempotent(migrated: MigratedSchema) -> None:
     before = _rows(
         migrated, "SELECT version, applied_at FROM schema_migrations ORDER BY version"
     )
-    assert [row["version"] for row in before] == [1]
+    assert [row["version"] for row in before] == [1, 2]
     assert apply_migrations(migrated.url) == []
     after = _rows(
         migrated, "SELECT version, applied_at FROM schema_migrations ORDER BY version"
@@ -605,12 +709,12 @@ def test_two_runners_serialize_on_the_advisory_lock(database: PgTestDatabase) ->
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: apply_migrations(schema.url), range(2)))
-        assert sorted(results) == [[], [1]]
+        assert sorted(results) == [[], [1, 2]]
         with connect(schema.url) as connection:
             rows = connection.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
-        assert [row["version"] for row in rows] == [1]
+        assert [row["version"] for row in rows] == [1, 2]
     finally:
         _drop_schema(database, schema)
 
