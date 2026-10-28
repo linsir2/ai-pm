@@ -85,12 +85,14 @@ docker compose up -d
 ### 方式二：本地源码
 
 ```bash
-# 先起 PG/PgBouncer 并 init（可复用 compose 的 db/pgbouncer/init 服务）
-docker compose up -d db pgbouncer
+# 先起 PG/PgBouncer 并 init，同时把 PgBouncer 发布到 loopback：
+# 宿主进程解析不到 compose 的 `pgbouncer` 服务名，所以必须走 loopback override。
+docker compose -f docker-compose.yml -f docker-compose.loopback.yml up -d --wait db pgbouncer
 
 # 后端
 cd backend && uv sync
 cp .env.example .env && cp .env.ops.example .env.ops   # 改掉 change-me-* 与首管理员
+# 把 .env 的 PMSTUDIO_DATABASE_URL 改成 @127.0.0.1:6432（不是 @pgbouncer:6432）
 uv run python scripts/dev.py                            # http://127.0.0.1:8000
 
 # 前端

@@ -35,7 +35,7 @@
 ## 0.3 v5 修订（终审 Important 收口）
 
 - **Bootstrap 超级用户**：新增 `PMSTUDIO_BOOTSTRAP_DATABASE_URL`，只给 `init_db --bootstrap`；它创建 `vector` extension、`pmstudio_owner`/`pmstudio_app` 角色、GRANT、PgBouncer auth material。`--schema-only` 用 owner URL；app 用 app URL。首次空库/迁移窗口都先 bootstrap；compose 的 PG superuser 只用于 bootstrap，不暴露给 app。
-- **Vector profile 生命周期**：`vector_index_meta(id=1, profile, dimensions, model)` 由 finalize upsert；维度≠512 时 finalize 明确失败（不在线 ALTER）；换模型/维度需显式迁移；maintenance 在 advisory lock 下清空 embedding/重建 HNSW。fresh/ETL/换 profile 均有用例。
+- **Vector profile 生命周期**：`vector_index_meta(id=1, profile, dimensions, model)` 由 finalize upsert；维度≠512 时 finalize 明确失败（不在线 ALTER）；换模型/维度需显式迁移。profile 变更时 finalize 在 advisory lock 下清空 embedding 并重建 HNSW；maintenance 按 `embedding IS NULL` 分批重嵌（advisory lock，只写向量、不动块正文）。fresh/ETL/换 profile 均有用例。
 - **测试 truncate**：只 truncate 显式数据表；不清 `schema_migrations`/`vector_index_meta`；每次 truncate 后 upsert profile；`current_schema()` 断言。
 - **数量口径**：`sqlite3|PMSTUDIO_DB|.db` 命中 50 个测试文件、50 个 scripts；设计/计划/附录统一用 50/50，不再写 56/26+。
 - **负载门**：HTTP p95≤2s + 0 连接错误/超时 + 0 SQLSTATE 55P03/57014 是硬门；DB p95 只作诊断（pg_stat_statements/应用计时），不设无测量的硬阈值。`load_probe` 串登录→建项目→20 次轮内写，4 workers，非零退出。
@@ -116,7 +116,7 @@ init / maintenance / backup ──(PMSTUDIO_DIRECT_DATABASE_URL, 5432)┘
 - `duration_ms`/计数保留 INTEGER；ID 主键保持 TEXT（`p-`/`r-` 前缀）。
 
 **FTS**：`material_chunks.tokens TEXT NOT NULL` 保存 `index_source(title, heading_path, text)`；`search_tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', tokens)) STORED` + GIN；查询 `to_tsquery('simple', %s)` 逐 token 引号/转义；排序 `ts_rank_cd`（正分），删除 bm25 负号；pivot/α 用冻结语料重标。`LIKE` 子串兜底改 `ILIKE`，测试 `% _ \`/中文。
-**向量**：`embedding vector(512)`；`<=>` cosine，分数 `1-distance`（不是 `1-d²/2`）；HNSW `vector_cosine_ops`；过滤后候选不足用 over-fetch/`hnsw.iterative_scan`（事务内 `SET LOCAL`）；profile 变更清空 embedding 后重建。
+**向量**：`embedding vector(512)`；`<=>` cosine，分数 `1-distance`（不是 `1-d²/2`）；HNSW `vector_cosine_ops`；过滤后候选不足用 over-fetch/`hnsw.iterative_scan`（事务内 `SET LOCAL`）；profile 变更时 finalize 清空 embedding；maintenance 按 `embedding IS NULL` 分批重嵌（advisory lock + 批）。
 
 **迁移/锁**：`schema_migrations(version int primary key, applied_at timestamptz)`；init job 直连执行，`pg_advisory_lock`（session）；`explorations(project_id) WHERE status='running'` 唯一索引在 0001 建；ETL 插入前把重复 running 标 abandoned（保行）；`rounds` 的读改写（claim/SkipSeat/review/auto-approve）必须 `SELECT ... FOR UPDATE`，或 SERIALIZABLE+40001 重试；`round_skips` 与 review 锁同一 round 行；lease DB 时间。
 
@@ -125,7 +125,7 @@ init / maintenance / backup ──(PMSTUDIO_DIRECT_DATABASE_URL, 5432)┘
 - 只对 backend 使用 transaction mode；`prepare_threshold=None` + `max_prepared_statements=0`；不使用 session 级 `SET`/advisory/LISTEN/临时表；`SET LOCAL` 只放在显式事务内。
 - `PMSTUDIO_DATABASE_URL`（app, 6432）与 `PMSTUDIO_DIRECT_DATABASE_URL`（init/maintenance/backup, 5432）必须分开；缺失各自失败，不能相互推导/回落。
 - 连接预算：4 workers = 4 client + 直连 2–3；PgBouncer `max_client_conn=64`、`default_pool_size=10`、`reserve_pool_size=4`、`query_wait_timeout=30`。16/64 workers 按 100/16、200/24 调整；PG `max_connections=100` 单机足够。
-- `statement_timeout=15s`、`lock_timeout=3s`、`idle_in_transaction_session_timeout=15s`；`55P03`→503+Retry-After，`40001/40P01`→回滚/有限重试，`08006`→503+重连，`25P02`→rollback，`23505`→ON CONFLICT/savepoint。
+- 角色级超时由 `init --bootstrap` 的 `ALTER ROLE` 落库（不靠 session SET / PgBouncer 池）：`pmstudio_app` = 15s / 3s / 15s，`pmstudio_owner` = 60s / 10s / 60s（statement / lock / idle-in-transaction）。`55P03`→503+Retry-After，`57014`→503+Retry-After，`40001/40P01`→回滚/有限重试，`08006`→503+重连，`25P02`→rollback，`23505`→ON CONFLICT/savepoint。
 - PgBouncer 不是延展单 worker 内并发的方案；sync DB 仍阻塞事件循环。用 N workers + 负载门；不达标再单独立项 async。
 
 ## 5. 数据迁移与切换

@@ -1,4 +1,4 @@
-"""启动后的**材料维护**：把「块结构已过时」的材料按新块宽重切重算（批 7，2026-10-21）。
+"""启动后的**材料维护**：重切过时块 + 补算 profile 变更后清空的向量（批 7，2026-10-21）。
 
 ## 为什么要有
 
@@ -103,8 +103,11 @@ class MaterialMaintenance:
                     refreshed += 1
             except Exception as error:  # noqa: BLE001 —— 一份坏了不连累别的
                 logger.warning("材料 %s 重解析失败（跳过）: %s", material_id, error)
+        reembedded = self._vectors.reembed_missing()
         if refreshed:
             logger.info("材料维护：重切了 %d 份", refreshed)
+        if reembedded:
+            logger.info("材料维护：重嵌入了 %d 份", reembedded)
         return refreshed
 
     def _reparse(self, material_id: str, owner_id: str, packet) -> bool:

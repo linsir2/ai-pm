@@ -54,6 +54,15 @@ from pmstudio.infrastructure.templates.loader import seed_builtin_templates  # n
 OWNER_ROLE = "pmstudio_owner"
 APP_ROLE = "pmstudio_app"
 
+#: 角色级 DB 超时（`ALTER ROLE ... SET`，不是 session SET / 连接池参数）。
+#: app 是请求路径：锁等待 3s、语句 15s、泄漏事务 15s；owner 是迁移/维护/备份：给更宽的窗口。
+APP_STATEMENT_TIMEOUT = "15s"
+APP_LOCK_TIMEOUT = "3s"
+APP_IDLE_IN_TRANSACTION_TIMEOUT = "15s"
+OWNER_STATEMENT_TIMEOUT = "60s"
+OWNER_LOCK_TIMEOUT = "10s"
+OWNER_IDLE_IN_TRANSACTION_TIMEOUT = "60s"
+
 #: 12 张项目域表 + `templates` + `round_skips`（与 SQLite 时代同一口径）。
 #: `templates` 的 builtin 行 owner 留 NULL；其余表查全部 NULL。
 OWNER_TABLES: tuple[str, ...] = (
@@ -107,6 +116,35 @@ def _set_role(connection, role: str, password: str) -> None:  # type: ignore[no-
         )
 
 
+def _set_role_timeouts(
+    connection,
+    role: str,
+    *,
+    statement_timeout: str,
+    lock_timeout: str,
+    idle_in_transaction_session_timeout: str,
+) -> None:  # type: ignore[no-untyped-def]
+    """把超时写进角色默认值；新连接（含 PgBouncer 复用的服务端连接）才生效。
+
+    刻意**不**用 session `SET`，也不改 PgBouncer 池参数：transaction mode 下
+    session 设置会串到别的客户端；角色默认值才是每个新事务的稳定口径。
+    """
+
+    for setting, value in (
+        ("statement_timeout", statement_timeout),
+        ("lock_timeout", lock_timeout),
+        (
+            "idle_in_transaction_session_timeout",
+            idle_in_transaction_session_timeout,
+        ),
+    ):
+        connection.execute(
+            sql.SQL("ALTER ROLE {} SET {} = {}").format(
+                sql.Identifier(role), sql.SQL(setting), sql.Literal(value)
+            )
+        )
+
+
 def _database_name(url: str) -> str:
     name = conninfo_to_dict(url).get("dbname")
     if not name:
@@ -156,6 +194,20 @@ def bootstrap_database(settings: BootstrapSettings) -> None:
             connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
             _set_role(connection, OWNER_ROLE, settings.owner_password)
             _set_role(connection, APP_ROLE, settings.app_password)
+            _set_role_timeouts(
+                connection,
+                OWNER_ROLE,
+                statement_timeout=OWNER_STATEMENT_TIMEOUT,
+                lock_timeout=OWNER_LOCK_TIMEOUT,
+                idle_in_transaction_session_timeout=OWNER_IDLE_IN_TRANSACTION_TIMEOUT,
+            )
+            _set_role_timeouts(
+                connection,
+                APP_ROLE,
+                statement_timeout=APP_STATEMENT_TIMEOUT,
+                lock_timeout=APP_LOCK_TIMEOUT,
+                idle_in_transaction_session_timeout=APP_IDLE_IN_TRANSACTION_TIMEOUT,
+            )
 
             # owner 负责 DDL/ETL；restore_check 要在同一 URL 上建 scratch 库。
             connection.execute(

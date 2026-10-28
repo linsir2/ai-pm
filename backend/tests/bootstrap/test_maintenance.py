@@ -134,6 +134,55 @@ async def test_the_maintenance_is_idempotent():
     assert second == 0, "第二遍不该再重切（幂等）"
 
 
+async def test_a_profile_change_is_repaired_by_reembedding_without_rechunking():
+    """R：profile 变更清空 embedding 后，维护任务**补算向量**，但不重切块/不改正文。
+
+    I：当前档位材料 + 已写向量；ensure_vector_profile 换 profile（清空）；
+    P：MaterialMaintenance.run_once（块档位已是当前 → 不重切）；
+    R：refreshed=0、embedding 恢复、块正文逐字不变。
+    """
+    from pmstudio.bootstrap.maintenance import MaterialMaintenance
+    from pmstudio.infrastructure.postgres import owner_scope
+    from pmstudio.infrastructure.postgres.vector_index import ensure_vector_profile
+    from pmstudio.infrastructure.tools.extract import html_parser_version
+
+    connection = _store_with_material(parser_version=html_parser_version())
+    store = SqliteMaterialStore(connection, ids=_SeqIds())
+    vectors = SqliteVectorIndex(connection, embedder=FakeEmbedder(dimensions=512))
+    vectors.write("m-old")
+
+    def vector_count() -> int:
+        return connection.execute(
+            "SELECT count(*) AS n FROM material_chunks WHERE embedding IS NOT NULL"
+        ).fetchone()["n"]
+
+    before = connection.execute(
+        "SELECT text FROM material_chunks WHERE chunk_id = 'm-old#c00'"
+    ).fetchone()
+    assert vector_count() == 1
+    assert ensure_vector_profile(
+        connection, profile="other-profile", model="other-model"
+    )
+    assert vector_count() == 0, "profile 变更应先清空"
+
+    task = MaterialMaintenance(
+        connection=connection,
+        parser=LocalMaterialParser(),
+        store=store,
+        vectors=vectors,
+        owner_scope=owner_scope,
+        index=_Index({"m-old": ("E7",)}),
+    )
+    refreshed = await task.run_once()
+
+    assert refreshed == 0, "块档位已是当前，不该重切"
+    assert vector_count() == 1, "清空后的 embedding 没有被维护任务补回"
+    after = connection.execute(
+        "SELECT text FROM material_chunks WHERE chunk_id = 'm-old#c00'"
+    ).fetchone()
+    assert after == before, "重嵌入不许改块正文"
+
+
 async def test_a_referenced_material_is_not_touched():
     """R：**已被编号引用**的材料一个字都不动（编号指着旧块，改块 = 改指编号）。"""
     from pmstudio.bootstrap.maintenance import MaterialMaintenance

@@ -60,6 +60,9 @@ class NoOpVectorIndex:
     def drop(self, material_id: str) -> None:
         pass
 
+    def reembed_missing(self, *, max_materials: int = 20) -> int:
+        return 0
+
 
 # 模块级单例：用例默认值引用这些实例，不在参数里调构造函数。
 NO_OBSERVATIONS = NoOpObservationRepository()

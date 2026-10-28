@@ -47,7 +47,7 @@ sqlite3 "data/backups/legacy/pmstudio-$stamp.db" "PRAGMA integrity_check; PRAGMA
 cd /srv/pmstudio
 set -a; . backend/.env.ops; set +a   # 只为把 URL/口令交给下面的 compose run
 
-docker compose up -d db
+docker compose up -d --wait db
 docker compose run --rm --no-deps init \
   uv run --no-sync python scripts/init_db.py --bootstrap
 docker compose run --rm --no-deps init \
@@ -56,6 +56,9 @@ docker compose run --rm --no-deps init \
 
 - `init` 服务继承 `.env.ops`、`PMSTUDIO_PGBOUNCER_AUTH_FILE` 与共享卷，正好满足
   bootstrap 的 auth_file 来源；不要用宿主进程直接跑 `--bootstrap` 来代替它。
+- 角色级 DB 超时（app 15s/3s/15s、owner 60s/10s/60s）只对**新连接**生效：
+  bootstrap 之后再启动 PgBouncer/backend；在线重跑 bootstrap 时先重启 PgBouncer
+  （或让池重连），否则旧服务端连接仍是旧值。
 - `--schema-only` 只跑编号迁移；此时目标 19 张普通表为空。**不要**先跑
   `--finalize`，否则 ETL 会以“目标表非空”拒绝合并。
 
@@ -69,6 +72,10 @@ set -a; . .env.ops; set +a
 # 将 @db:5432 改成本机可达地址（例如临时发布的 127.0.0.1:5432 或隧道）
 export PMSTUDIO_DIRECT_DATABASE_URL="postgresql://pmstudio_owner:...@127.0.0.1:5432/pmstudio"
 export PMSTUDIO_BOOTSTRAP_DATABASE_URL="postgresql://pmstudio_bootstrap:...@127.0.0.1:5432/pmstudio"
+# auth_file 必须让 **pgbouncer 容器**读得到：默认的 named volume 宿主路径读不到。
+# 这条宿主分支要求把同一宿主目录 bind mount 到 init 的 /pgbouncer-auth 与
+# pgbouncer 的 /etc/pgbouncer/auth（替换 compose 里的 `pgbouncer-auth` named volume），
+# 否则请回到上面的容器 bootstrap。
 export PMSTUDIO_PGBOUNCER_AUTH_FILE="/srv/pmstudio/pgbouncer-auth/userlist.txt"
 uv run python scripts/init_db.py --bootstrap
 uv run python scripts/init_db.py --schema-only
@@ -121,6 +128,12 @@ docker compose run --rm --no-deps init \
 
 finalize 会 seed 首管理员/内置模板、回填 owner、断言孤儿、upsert
 `vector_index_meta`（维度 ≠ 512 明确失败）、给 app 角色授权。**ETL 后必须 finalize**。
+
+> **向量 profile 变了 / ETL 因旧 profile 不兼容跳过嵌入**：finalize 会清空
+> `material_chunks.embedding`。随后必须跑维护任务
+> （`docker compose run --rm maintenance`，或 `scripts/maintenance_worker.py`）：
+> 它按 `embedding IS NULL` 分批重嵌（advisory lock，只写向量、不动块正文）。
+> 不跑 = 语义检索为空。
 
 ## 5. 校验
 
@@ -180,4 +193,4 @@ docker compose run --rm --no-deps \
 
 - 不双写、不回写 SQLite、不做影子读。
 - 不把 ETL 脚本进镜像；T10 的 no-sqlite 守卫会把它和对应测试加白名单。
-- 不在线 `ALTER COLUMN TYPE vector(N)`；换 profile/维度走显式迁移 + 重建 HNSW。
+- 不在线 `ALTER COLUMN TYPE vector(N)`；换 profile/维度走显式迁移 + 重建 HNSW + 维护任务重嵌。

@@ -36,6 +36,18 @@ OWNER_PASSWORD = "t7-owner-pass"
 ADMIN_USER = "root"
 ADMIN_PASSWORD = "root-pass"
 
+#: `pg_settings.setting` 统一是毫秒字符串（SHOW 会把 60000 显示成 1min）。
+APP_TIMEOUTS = {
+    "statement_timeout": "15000",
+    "lock_timeout": "3000",
+    "idle_in_transaction_session_timeout": "15000",
+}
+OWNER_TIMEOUTS = {
+    "statement_timeout": "60000",
+    "lock_timeout": "10000",
+    "idle_in_transaction_session_timeout": "60000",
+}
+
 
 def _replace_database(url: str, dbname: str) -> str:
     parts = urlsplit(url)
@@ -132,9 +144,25 @@ def test_all_bootstraps_roles_extension_and_auth_file(scratch_database, tmp_path
             "SELECT username, status, role FROM users"
         ).fetchall()
         assert users == [{"username": ADMIN_USER, "status": "active", "role": "admin"}]
+        owner_timeouts = {
+            str(row["name"]): str(row["setting"])
+            for row in owner.execute(
+                "SELECT name, setting FROM pg_settings WHERE name = ANY(%s)",
+                (list(OWNER_TIMEOUTS),),
+            ).fetchall()
+        }
+        assert owner_timeouts == OWNER_TIMEOUTS
 
     with connect(app_url) as app:
         assert app.execute("SELECT count(*) AS n FROM users").fetchone() == {"n": 1}
+        app_timeouts = {
+            str(row["name"]): str(row["setting"])
+            for row in app.execute(
+                "SELECT name, setting FROM pg_settings WHERE name = ANY(%s)",
+                (list(APP_TIMEOUTS),),
+            ).fetchall()
+        }
+        assert app_timeouts == APP_TIMEOUTS
         with pytest.raises(Exception) as caught:
             app.execute("CREATE TABLE app_must_not_ddl (x int)")
         assert getattr(caught.value, "sqlstate", None) == "42501"

@@ -332,8 +332,9 @@ def test_a_rare_lexical_hit_survives_the_semantic_branch(conn):
     """R：目标只命中**一个罕见词**时（覆盖率低、BM25 很高），**不许被语义掀翻**。
 
     这是"离散分档"口径的病根：覆盖率 0.25 → 掉进纯语义档 → BM25 挣到的
-    第 1 位被一个只命中常见词的块抢走。实测（真数据）：旧口径让"同词换序"少 1 条、
-    "同义改述"少 2 条；凸组合后两类都与纯词法检索持平。
+    第 1 位被一个只命中常见词的块抢走。T5 迁 PG 后的实测**不是持平**：
+    词面材料 r5 0.867→0.844、改述材料 r5 0.786→0.714（各少 1 条）。
+    本用例 strict xfail 记录 gate 仍开；不把 open gate 写成"持平"。
     """
     from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER

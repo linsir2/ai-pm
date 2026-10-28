@@ -16,7 +16,8 @@
   `round_skips` / `vector_index_meta` 有则迁（v15 没有，v17 有）。
 - 失败后目标表可用 `--truncate` 清空重跑；默认遇到非空目标直接报错，不合并。
 - `tokens` 由 `index_source(title, heading_path, text)` 回填；向量按当前 profile 重嵌入
-  （旧向量不是真相源）。旧 profile 与当前不一致时不清空重算，留给 finalize/维护任务。
+  （旧向量不是真相源）。旧 profile 与当前不一致时 ETL 不嵌入：finalize 清空 embedding，
+  维护任务按 `embedding IS NULL` 分批重嵌。
 """
 
 from __future__ import annotations
@@ -268,7 +269,7 @@ def _source_table_names(source: sqlite3.Connection) -> list[str]:
     missing = sorted(REQUIRED_SOURCE_TABLES.difference(names))
     if missing:
         raise EtlError(
-            "旧库缺少必需表：" + "、".join(missing) + "（只支持 v15 及以上的旧库）"
+            "旧库缺少必需表：" + "、".join(missing) + "（只支持 v15 / v17 的旧库）"
         )
     return sorted(names)
 
@@ -1179,7 +1180,8 @@ def migrate(
             reason=(
                 None
                 if compatible or vector_meta is None
-                else "旧向量 profile 与当前不一致；finalize 会清空并由维护任务重建"
+                else "旧向量 profile 与当前不一致；finalize 会清空，"
+                "维护任务按 embedding IS NULL 重嵌"
             ),
         )
     return report

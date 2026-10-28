@@ -1,0 +1,8 @@
+# 本机源码跑 backend 时的 loopback 发布：宿主机才能用 127.0.0.1:6432 连 PgBouncer。
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.loopback.yml up -d --wait db pgbouncer
+#   backend/.env: PMSTUDIO_DATABASE_URL=postgresql://pmstudio_app:...@127.0.0.1:6432/pmstudio
+services:
+  pgbouncer:
+    ports:
+      - "127.0.0.1:6432:6432"

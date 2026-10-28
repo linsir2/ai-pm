@@ -8,8 +8,9 @@
 
 ## 当前状态（2026-10-28：T10 PG 全量切换完成）
 
-**分支** `new-branch`（T10 提交 `refactor(pg): 删除 SQLite 并收口`）·
-后端 `-m "not slow"` → **3226 passed / 57 skipped / 1 xfailed / 0 failed** ·
+**分支** `new-branch`（T10 提交 `refactor(pg): 删除 SQLite 并收口` +
+`fix(pg): 收口 T10 终审` + `fix(pg): 收口最终评审`）·
+后端 `-m "not slow"` → **3229 passed / 57 skipped / 1 xfailed / 0 failed** ·
 `ruff` 全绿 · 前端 `tsc --noEmit` 干净 / `vitest` **62 files / 687 passed**。
 
 **T10 · 删除 SQLite / PgBouncer 收口**（2026-10-28）：
@@ -19,9 +20,14 @@
   搬到 `scripts/retrieval_stats.py`。
 - no-sqlite 守卫：AST import + 非 docstring SQL 字面量；ETL
   `scripts/migrate_sqlite_to_pg.py` / `tests/test_etl_cutover.py` 白名单；不扫注释、不误报自己。
-- 4 workers 负载门（真 PG18 + PgBouncer）：100 HTTP（并发 50）+ 20 轮内写（并发 20），
-  **0 错误/超时/55P03/57014，HTTP p95 88ms**；DB 池查询 p95 **43ms**（仅诊断），
-  轮内写 p95 7.2s（非门）。
+- 4 workers 负载门（真 PG18 + PgBouncer）：100 HTTP（**并发 100**）+ 20 轮内写（并发 20），
+  **0 错误/超时/55P03/57014，HTTP p95 88.5ms**；DB 池查询 p95 **24.7ms**（仅诊断），
+  轮内写 p95 4.07s（非门）；4 个 worker PID 都实际接活。
+- **最终评审两修**：`--bootstrap` 给 app/owner 落角色级 DB 超时
+  （app 15s/3s/15s，owner 60s/10s/60s，PgBouncer 上新连接实测 `SHOW` 一致，
+  55P03/57014 → `DatabaseBusy` 503）；profile 变更清空 embedding 后，
+  `MaterialMaintenance.run_once` 调 `reembed_missing()` 按 all-null + advisory lock
+  + 批补算（只写向量，不动块正文）。
 - **T5 recall gate 仍开**：`test_a_rare_lexical_hit_survives_the_semantic_branch`
   保留 `xfail(strict=True)`（PG `ts_rank_cd` 无 IDF，罕见词被常见词压过）；不修 FTS 算法、
   不算通过。

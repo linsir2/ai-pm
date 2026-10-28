@@ -34,8 +34,8 @@ def _put_material(conn, material_id="m-1", *, project_id="p1",
         " media_type, bytes_len, sha256, parser_id, parser_version, schema_version, truncated,"
         " warnings, content, created_at)"
         " VALUES (%s, %s, %s, %s, '退货说明', '退货说明.pdf', 'application/pdf', 0,"
-        " 'sha-x', 'plain', '1', 1, false, '{}', %s, '2026-10-18T00:00:00+00:00')",
-        (material_id, str(project_id), str(ALICE), origin, b""),
+        " %s, 'plain', '1', 1, false, '{}', %s, '2026-10-18T00:00:00+00:00')",
+        (material_id, str(project_id), str(ALICE), origin, f"sha-{material_id}", b""),
     )
     for ordinal, (chunk_id, text) in enumerate(chunks):
         conn.execute(
@@ -145,6 +145,39 @@ def test_the_block_budget_is_measured_in_characters_not_blocks():
     assert blocks_within_budget(smaller, 9600) == 48
     covered = sum(len(row["text"]) for row in smaller[: blocks_within_budget(smaller, 9600)])
     assert covered == 9600
+
+
+def test_reembed_missing_fills_all_null_materials_in_batches(conn):
+    """R：profile 清空后的 all-null 材料按批补算，每次不超过 `max_materials`。"""
+    _put_material(conn, material_id="m-1", chunks=(("m1-c1", "第一份材料"),))
+    _put_material(conn, material_id="m-2", chunks=(("m2-c1", "第二份材料"),))
+    index = SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512))
+
+    assert index.reembed_missing(max_materials=1) == 1
+    assert _vector_count(conn) == 1
+    assert index.reembed_missing(max_materials=1) == 1
+    assert _vector_count(conn) == 2
+    assert index.reembed_missing(max_materials=1) == 0
+
+
+def test_reembed_missing_does_not_chase_partial_web_budgets(conn):
+    """R：联网材料尾部块是**预算内故意为空**，不能被当成缺向量反复重算。"""
+    from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
+    from pmstudio.infrastructure.tools.limits import WEB_VECTOR_CHARS
+
+    body = "字" * 400
+    _put_material(
+        conn,
+        chunks=tuple((f"c{index}", body) for index in range(30)),
+        origin="web_search",
+    )
+    index = SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512))
+    index.write("m-1")
+    embedded = _vector_count(conn)
+    assert embedded == WEB_VECTOR_CHARS // 400
+
+    assert index.reembed_missing() == 0
+    assert _vector_count(conn) == embedded
 
 
 def test_a_web_material_only_gets_vectors_within_its_char_budget(conn):

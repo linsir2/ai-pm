@@ -6,7 +6,8 @@
 
 profile 记在 `vector_index_meta(id=1, profile, dimensions, model)`；维度不是 512
 时明确失败（在线 `ALTER COLUMN TYPE` 不在本任务做）；profile 变更时在事务级
-advisory lock 下清空 `embedding` 并重建 HNSW。
+advisory lock 下清空 `embedding` 并重建 HNSW；清空后的补算由 `reembed_missing()`
+按批完成（只写向量，不动块正文）。
 """
 
 import logging
@@ -28,6 +29,12 @@ logger = logging.getLogger(__name__)
 
 #: 事务级 advisory lock：向量 profile 的清空/重建只能有一方在做。
 PROFILE_LOCK_KEY = 0x504D535456454354
+
+#: 重嵌入锁：profile 变更清空后，维护任务按批补算；同一时刻只让一方扫。
+REEMBED_LOCK_KEY = 0x504D53545245454D
+
+#: 一次维护最多补算多少份材料；下一趟继续（不把一次 job 拖成无限长）。
+REEMBED_BATCH_SIZE = 20
 
 #: HNSW 索引名（0001 迁移建）。
 HNSW_INDEX = "idx_material_chunks_embedding"
@@ -176,6 +183,43 @@ class SqliteVectorIndex:
             (material_id,),
         )
 
+    def reembed_missing(self, *, max_materials: int = REEMBED_BATCH_SIZE) -> int:
+        """补算「所有块都没有向量」的材料；返回本次处理份数。
+
+        - **判据是 all-null**：联网材料按字数预算只嵌前 N 字，尾部块**故意**没有向量；
+          只看单块 NULL 会把它们反复重算，所以要求 `count(embedding) = 0`。
+        - **session advisory lock**：拿不到就跳过，不排队等（维护 job 可重跑）。
+        - **只写 embedding**：不碰块正文/编号，已被引用的材料也安全。
+        - 每批最多 `max_materials` 份；`write` 内部按来源预算与批次原样复用。
+        """
+        if max_materials <= 0:
+            return 0
+        raw = _raw_connection(self._connection)
+        locked = raw.execute(
+            "SELECT pg_try_advisory_lock(%s) AS locked", (REEMBED_LOCK_KEY,)
+        ).fetchone()
+        if not locked or not locked["locked"]:
+            logger.info("向量重嵌入：已有实例在跑，本次跳过")
+            return 0
+        try:
+            rows = self._connection.execute(
+                "SELECT c.material_id FROM material_chunks c"
+                " GROUP BY c.material_id"
+                " HAVING count(*) > 0 AND count(c.embedding) = 0"
+                " ORDER BY c.material_id LIMIT %s",
+                (max_materials,),
+            ).fetchall()
+            for row in rows:
+                self.write(str(row["material_id"]))
+            if rows:
+                logger.info("向量重嵌入：补算 %d 份材料", len(rows))
+            return len(rows)
+        finally:
+            with suppress(Exception):
+                raw.execute(
+                    "SELECT pg_advisory_unlock(%s)", (REEMBED_LOCK_KEY,)
+                )
+
 
 def read_vector_profile(connection) -> dict | None:  # type: ignore[no-untyped-def]
     row = connection.execute(
@@ -195,7 +239,8 @@ def ensure_vector_profile(
 
     返回是否发生了变更。**维度不是 512 直接 `ValueError`**：本任务不做在线
     `ALTER COLUMN TYPE vector(N)`，也不静默清空。profile/model/维度任一变化 =
-    旧向量口径不同 → 在 advisory lock 下清空 `embedding` 并重建 HNSW。
+    旧向量口径不同 → 在 advisory lock 下清空 `embedding` 并重建 HNSW；清空后由
+    维护任务的 `reembed_missing()` 补算。
     """
     if dimensions != DIMENSIONS:
         raise ValueError(
