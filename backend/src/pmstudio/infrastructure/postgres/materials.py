@@ -542,6 +542,25 @@ class SqliteFtsRetriever:
         tokens = _query_tokens(self._connection, query)
         if not tokens:
             return ()
+        return self._search_with_tokens(
+            project_id=project_id,
+            query=query,
+            tokens=tokens,
+            limit=limit,
+            resolved=resolved,
+        )
+
+    def _search_with_tokens(
+        self,
+        *,
+        project_id: ProjectId,
+        query: str,
+        tokens: Sequence[str],
+        limit: int,
+        resolved: UserId,
+    ) -> tuple[MaterialHit, ...]:
+        """复用调用方已算好的 tokens；混合路不再为 FTS 分支二次 tokenize。"""
+
         rows = self._connection.execute(
             self._SQL, (tokens, str(project_id), str(resolved), _FTS_CANDIDATE_LIMIT)
         ).fetchall()
@@ -575,7 +594,7 @@ class SqliteFtsRetriever:
         return hits
 
     def _hit(  # type: ignore[no-untyped-def]
-        self, row, tokens: list[str], score: float
+        self, row, tokens: Sequence[str], score: float
     ) -> MaterialHit:
         text = str(row["text"])
         # 片段以**第一个在原文里出现的命中 token**定位（跳得回原文）；一个都没出现
@@ -615,16 +634,6 @@ def _excerpt(text: str, needle: str) -> str:
 #: KNN 内层扫 200（过滤放在 SQL 里，由 HNSW + iterative scan 处理）。
 _FTS_CANDIDATES = 50
 _KNN_SCAN_LIMIT = 200
-
-#: **融合的分档阈值**（2026-10-19 实测定的，见
-#: `docs/plans/2026-10-19-B组-批5-量化与端到端验收.md`）。
-#:
-#: 档位按**词面覆盖率** `cov = |查询 token ∩ 块 token| / |查询 token|` 定：
-#: `cov >= 1.0` = 用户的话**原样**在这块里；`cov >= 0.5` = 大半的话在；
-#: 再低就是"词面说不了"（换个说法问的典型情形）。
-#: 0.5 不是调出来的魔数，是"多数"的自然边界。
-COVERAGE_FULL = 1.0
-COVERAGE_MAJORITY = 0.5
 
 #: **融合的 α**：语义那一路的权重（0=纯词面，1=纯语义）。
 #: 冻结语料（`.codex/runs/2026-10-19/tavily_raw`，15 份 / 45 词面 / 14 改述 /
@@ -709,8 +718,12 @@ class SqliteHybridRetriever:
         tokens = _query_tokens(self._connection, query)
         if not tokens or limit <= 0:
             return ()
-        fts_hits = self._fts.search(
-            project_id=project_id, query=query, limit=_FTS_CANDIDATES, owner=resolved
+        fts_hits = self._fts._search_with_tokens(
+            project_id=project_id,
+            query=query,
+            tokens=tokens,
+            limit=_FTS_CANDIDATES,
+            resolved=resolved,
         )
         vec_scores = self._knn_scores(str(project_id), str(resolved), query)
         ordered = self._fuse_by_score(fts_hits, vec_scores, query)

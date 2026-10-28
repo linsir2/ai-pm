@@ -17,10 +17,9 @@ from scripts.migrate import apply_migrations
 
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
 from pmstudio.domain.shared.ids import ProjectId, UserId
+from pmstudio.infrastructure.postgres import materials
 from pmstudio.infrastructure.postgres.database import connect
 from pmstudio.infrastructure.postgres.materials import (
-    COVERAGE_FULL,
-    COVERAGE_MAJORITY,
     FUSION_ALPHA,
     SqliteFtsRetriever,
     SqliteHybridRetriever,
@@ -227,7 +226,24 @@ def test_every_search_logs_the_breakdown(conn, caplog) -> None:
         assert field in lines[0]
 
 
+def test_hybrid_tokenizes_the_query_once(conn, monkeypatch) -> None:
+    mid = _put(conn, "退货时限是七天")
+    _write_vectors(conn, mid)
+    calls: list[str] = []
+    original = materials._query_tokens
+
+    def counting(connection, query: str):  # type: ignore[no-untyped-def]
+        calls.append(query)
+        return original(connection, query)
+
+    monkeypatch.setattr(materials, "_query_tokens", counting)
+
+    SqliteHybridRetriever(conn, embedder=FakeEmbedder(dimensions=512)).search(
+        project_id=PROJECT, query="退货时限", owner=OWNER
+    )
+
+    assert calls == ["退货时限"]
+
+
 def test_frozen_fusion_parameters_are_the_measured_ones() -> None:
-    assert COVERAGE_FULL == 1.0
-    assert COVERAGE_MAJORITY == 0.5
     assert FUSION_ALPHA == 0.4

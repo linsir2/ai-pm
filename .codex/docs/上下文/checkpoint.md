@@ -25,7 +25,8 @@
   `.857/.214/.425`（r5/top1/MRR）；非负 IDF 与钳到 0 同分。见 `04` §0.1 R15；不改阈值。
 - **测试（Task 6 终验，2026-10-28）**：后端 `-m "not slow"` →
   **3232 passed / 52 skipped / 5 deselected / 0 failed**（collected 3289；
-  3 条真 PgBouncer + backup/restore 真跑不再跳过，含 Task 5 review 新增 4 条 fixture）
+  3 条真 PgBouncer + backup/restore 真跑不再跳过；Task 5 review 把 fixture 守卫
+  从 1 条扩到 7 条，+6）
   · `ruff` 全绿 · `uv lock --check` 通过 · 前端 `tsc --noEmit` 干净 /
   `vitest` **62 files / 687 passed**。
 - **终验（Task 6）**：官方 ParadeDB 0.26.3-pg18 + 4 workers + PgBouncer

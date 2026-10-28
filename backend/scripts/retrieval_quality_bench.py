@@ -54,7 +54,10 @@ from pmstudio.application.dto import MaterialHit, ParsedMaterial  # noqa: E402
 from pmstudio.bootstrap.container import UuidIdGenerator  # noqa: E402
 from pmstudio.domain.shared.ids import ProjectId, UserId  # noqa: E402
 from pmstudio.infrastructure.postgres.database import connect  # noqa: E402
-from pmstudio.infrastructure.postgres.embedding import FastEmbedEmbedder  # noqa: E402
+from pmstudio.infrastructure.postgres.embedding import (  # noqa: E402
+    MODEL_NAME,
+    FastEmbedEmbedder,
+)
 from pmstudio.infrastructure.postgres.materials import (  # noqa: E402
     _MATERIAL_SLOTS,
     FUSION_ALPHA,
@@ -524,7 +527,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
             result["ingest_seconds"] = ingest_seconds
             result["measure_seconds"] = time.perf_counter() - started
-            result["embedding_model"] = "BAAI/bge-small-zh-v1.5"
+            result["embedding_model"] = MODEL_NAME
             result["fusion_alpha"] = FUSION_ALPHA
             result["material_slots"] = _MATERIAL_SLOTS
             result["limit"] = LIMIT

@@ -79,8 +79,8 @@ docker compose up -d
 
 > **从旧 pgvector 镜像切过来必须空库**：新 db 是 ParadeDB 0.26.3-pg18
 > （PGDATA `/var/lib/postgresql/18/docker`，pg_search 已预加载）。
-> `docker compose down -v` 会删掉**本项目全部卷**（`pgdata`、`fastembed-cache`、
-> `pgbouncer-auth`）；只想删旧库就先 `docker compose down`，再
+> `docker compose down -v` 会删掉**本项目全部卷**（`pgdata`、`pmstudio-data`、
+> `fastembed-cache`、`pgbouncer-auth`）；只想删旧库就先 `docker compose down`，再
 > `docker volume rm <project>_pgdata`。旧数据不迁移。
 
 > **镜像必须用当前源码重建**：先 `docker compose build backend`（或
