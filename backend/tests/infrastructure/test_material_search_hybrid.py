@@ -9,7 +9,6 @@ import logging
 import pytest
 
 from pmstudio.infrastructure.postgres.materials import SqliteFtsRetriever
-from pmstudio.infrastructure.postgres.tokenize import index_source
 from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
 from tests.support.embedding import FakeEmbedder
 from tests.support.postgres import open_direct
@@ -38,9 +37,9 @@ def _put_material(conn, material_id="m-1", *, project_id="p1", title="手册",
     for ordinal, (chunk_id, text) in enumerate(chunks):
         conn.execute(
             "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
-            " heading_path, anchor, tokens) VALUES (%s, %s, %s, %s, %s, '{}', %s, %s)",
+            " heading_path, anchor, search_text) VALUES (%s, %s, %s, %s, %s, '{}', %s, %s)",
             (chunk_id, material_id, owner, ordinal, text, f"第{ordinal}段",
-             index_source(title=title, heading_path=(), text=text)),
+             f"{title} {text}"),
         )
 
 
@@ -108,7 +107,7 @@ def test_a_lexical_hit_is_never_knocked_out_by_the_vector_branch(conn):
     融合检索最典型的翻车是"新加一路把老结果挤掉"——用户升级后反而找不到
     以前能搜到的材料。BM25 命中的块必须仍在结果里（次序可以变）。
 
-    标题用中性词「手册」：`index_source` 会把标题并进每块的 token 流，
+    标题用中性词「手册」：`search_text` 会把标题并进每块的词法文本，
     标题若含检索词就会污染另一块，前置断言（词法只中 c2）就不成立了。
     """
     from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
@@ -300,8 +299,6 @@ def _rare_term_corpus(conn):
     一个**罕见**词（覆盖率 1/4），干扰块命中三个**常见**词（覆盖率 3/4）。
     实测这时的 BM25：m1 = 1.0986（罕见词 IDF 高）vs m2 = 0.3365。
     """
-    from pmstudio.infrastructure.postgres.tokenize import index_source
-
     docs = {
         "m1": "紫貂 皮草 拍卖 记录",
         "m2": "出口 关税 报关 流程",
@@ -319,9 +316,9 @@ def _rare_term_corpus(conn):
         )
         conn.execute(
             "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
-            " heading_path, anchor, tokens) VALUES (%s, %s, %s, 0, %s, '{}', '第1段', %s)",
+            " heading_path, anchor, search_text) VALUES (%s, %s, %s, 0, %s, '{}', '第1段', %s)",
             (f"{material_id}#c00", material_id, str(TEST_OWNER), text,
-             index_source(title="手册", heading_path=(), text=text)),
+             f"手册 {text}"),
         )
 
 

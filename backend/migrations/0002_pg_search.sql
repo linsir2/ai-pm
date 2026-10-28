@@ -14,8 +14,8 @@ ALTER TABLE material_chunks ADD COLUMN search_text TEXT;
 UPDATE material_chunks AS c
    SET search_text = concat_ws(
      ' ',
-     m.title,
-     NULLIF(array_to_string(c.heading_path, ' '), ''),
+     NULLIF(btrim(m.title), ''),
+     NULLIF(btrim(array_to_string(c.heading_path, ' ')), ''),
      c.text
    )
   FROM materials AS m

@@ -651,35 +651,67 @@ def test_0002_backfills_search_text_from_title_heading_and_text(
         )
         assert apply_migrations(schema.url, directory=legacy) == [1]
         with connect(schema.url) as connection:
-            connection.execute(
-                """
-                INSERT INTO materials
-                    (material_id, project_id, origin, title, source_ref, media_type,
-                     bytes_len, sha256, parser_id, parser_version, schema_version,
-                     truncated, warnings, content, created_at)
-                VALUES ('m-1', 'p-1', 'upload', '产品经理', 'ref', 'text/plain',
-                        1, 'sha-1', 'parser', '1', 1, false, '{}', %s, now())
-                """,
-                (b"x",),
+
+            def put(
+                material_id: str,
+                title: str,
+                chunk_id: str,
+                text: str,
+                heading_path: list[str],
+                tokens: str,
+            ) -> None:
+                connection.execute(
+                    """
+                    INSERT INTO materials
+                        (material_id, project_id, origin, title, source_ref, media_type,
+                         bytes_len, sha256, parser_id, parser_version, schema_version,
+                         truncated, warnings, content, created_at)
+                    VALUES (%s, 'p-1', 'upload', %s, 'ref', 'text/plain',
+                            1, %s, 'parser', '1', 1, false, '{}', %s, now())
+                    """,
+                    (material_id, title, f"sha-{material_id}", b"x"),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO material_chunks
+                        (chunk_id, material_id, ordinal, text, heading_path, anchor,
+                         tokens)
+                    VALUES (%s, %s, 0, %s, %s, 'anchor', %s)
+                    """,
+                    (chunk_id, material_id, text, heading_path, tokens),
+                )
+
+            put(
+                "m-1",
+                "产品经理",
+                "m-1#c01",
+                "用户登录流程",
+                ["需求", "规格"],
+                "用户 登录 流程",
             )
-            connection.execute(
-                """
-                INSERT INTO material_chunks
-                    (chunk_id, material_id, ordinal, text, heading_path, anchor,
-                     tokens)
-                VALUES ('m-1#c01', 'm-1', 0, '用户登录流程',
-                        ARRAY['需求', '规格'], 'anchor', '用户 登录 流程')
-                """
-            )
+            put("m-2", "", "m-2#c01", "正文甲", ["", "二级"], "正文 甲")
+            put("m-3", "标题乙", "m-3#c01", "正文乙", [], "标题 乙 正文")
+
         assert apply_migrations(schema.url, directory=MIGRATIONS_DIR) == [2]
         with connect(schema.url) as connection:
-            row = connection.execute(
-                "SELECT search_text, search_tokens FROM material_chunks"
-                " WHERE chunk_id = 'm-1#c01'"
-            ).fetchone()
-        assert row is not None
-        assert row["search_text"] == "产品经理 需求 规格 用户登录流程"
-        assert row["search_tokens"] == [
+            rows = connection.execute(
+                "SELECT chunk_id, search_text, search_tokens FROM material_chunks"
+                " ORDER BY chunk_id"
+            ).fetchall()
+            hit = connection.execute(
+                "SELECT chunk_id FROM material_chunks"
+                " WHERE search_text ||| pmstudio_tokens('用户登录')"
+                " ORDER BY chunk_id"
+            ).fetchall()
+            miss = connection.execute(
+                "SELECT chunk_id FROM material_chunks"
+                " WHERE search_text ||| pmstudio_tokens('量子计算')"
+            ).fetchall()
+        by_id = {str(row["chunk_id"]): row for row in rows}
+        assert by_id["m-1#c01"]["search_text"] == "产品经理 需求 规格 用户登录流程"
+        assert by_id["m-2#c01"]["search_text"] == "二级 正文甲"
+        assert by_id["m-3#c01"]["search_text"] == "标题乙 正文乙"
+        assert by_id["m-1#c01"]["search_tokens"] == [
             "产品",
             "经理",
             "需求",
@@ -688,6 +720,8 @@ def test_0002_backfills_search_text_from_title_heading_and_text(
             "登录",
             "流程",
         ]
+        assert [str(row["chunk_id"]) for row in hit] == ["m-1#c01"]
+        assert miss == []
     finally:
         _drop_schema(database, schema)
 
