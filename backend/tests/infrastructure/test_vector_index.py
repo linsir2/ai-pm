@@ -6,7 +6,7 @@ from psycopg.pq import TransactionStatus
 from pmstudio.application.ports import MaterialVectorIndex
 from pmstudio.domain.null_repos import NoOpVectorIndex
 from pmstudio.domain.shared.ids import UserId
-from pmstudio.infrastructure.postgres.tokenize import index_source
+from pmstudio.infrastructure.postgres.tokenize import index_text
 from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
 from tests.support.embedding import FakeEmbedder
 from tests.support.postgres import open_direct
@@ -40,9 +40,9 @@ def _put_material(conn, material_id="m-1", *, project_id="p1",
     for ordinal, (chunk_id, text) in enumerate(chunks):
         conn.execute(
             "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
-            " heading_path, anchor, tokens) VALUES (%s, %s, %s, %s, %s, '{}', %s, %s)",
+            " heading_path, anchor, search_text) VALUES (%s, %s, %s, %s, %s, '{}', %s, %s)",
             (chunk_id, material_id, str(ALICE), ordinal, text, f"第{ordinal}段",
-             index_source(title="退货说明", heading_path=(), text=text)),
+             index_text(title="退货说明", heading_path=(), text=text)),
         )
 
 

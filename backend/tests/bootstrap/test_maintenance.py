@@ -76,7 +76,8 @@ def _store_with_material(*, material_id="m-old", parser_version="bs4-1+x"):
     )
     connection.execute(
         "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
-        " heading_path, anchor, tokens) VALUES (%s, %s, %s, 0, '旧块', '{}', '第 1 段', '旧块')",
+        " heading_path, anchor, search_text)"
+        " VALUES (%s, %s, %s, 0, '旧块', '{}', '第 1 段', '旧文档.html 旧块')",
         (f"{material_id}#c00", material_id, OWNER),
     )
     return connection

@@ -209,7 +209,7 @@ def _flatten_with_headings(soup) -> str:  # type: ignore[no-untyped-def]
 
     原来直接 `soup.get_text("\\n", strip=True)`，`<h1>`–`<h6>` 被拍成**普通行**，
     于是网页材料的 `heading_path` **基本恒空**——章节名只以普通文本存在于**那一个块**里，
-    长章节切开后**后几块搜不到节名**（`index_source` 的 docstring 点名的问题：
+    长章节切开后**后几块搜不到节名**（`index_text` 的 docstring 点名的问题：
     "长节被切成多块时，后几块的正文里没有节名"）。
 
     加 markdown 前缀后，`chunk_text` 的 `_HEADING` 正则自然认出来 →

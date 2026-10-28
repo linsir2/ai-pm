@@ -49,27 +49,22 @@ def test_real_model_embeds_chinese_and_matches_the_declared_dimension():
     assert _cos(vectors[0], vectors[1]) > 0.6   # 同义：相似度应明显高于无关对
 
 
-# ── 向量口径：索引侧喂**自然语言**，不是 jieba 分词串（批 6a Task 2）──────────
+# ── 向量口径：索引侧喂**自然语言**（批 6a Task 2）────────────────────────────
 
 
 def test_the_vector_side_embeds_natural_language_not_a_token_bag():
     """R：喂给 embedder 的是**自然语言**（标题 + 章节链 + 正文，原样）。
 
-    为什么：FTS 要的是**词袋**（分词串），向量要的是**语义**——把自然语言退化成
-    jieba 分词后的空格串，等于把 bge 的语义优势扔掉一半。实测（批 6a）：
-    改述类 recall@5 34/40（85%）→ 38/40（95%），而同期"假 embedder"对照组几乎
-    不变（1/2）——说明变好的是**口径**在削弱真模型，不是噪声。
-
-    判别方式：分词串里 "退货时限" 会被切成 "退货 时限"，自然语言里它是连续的。
+    为什么：向量要的是**语义**——把自然语言退化成词袋，等于把 bge 的语义优势
+    扔掉一半。实测（批 6a）：改述类 recall@5 34/40（85%）→ 38/40（95%）。
+    词法侧的分词已统一由 pg_search 在库里做（`search_text` 也写这份原样文本）。
     """
-    from pmstudio.infrastructure.postgres.tokenize import index_source, index_text
+    from pmstudio.infrastructure.postgres.tokenize import index_text
 
     body = "退货时限是七天"
     natural = index_text(title="手册", heading_path=("售后",), text=body)
-    bag = index_source(title="手册", heading_path=("售后",), text=body)
 
     assert body in natural, f"自然语言里正文应连续，实得 {natural!r}"
-    assert body not in bag, f"分词串里正文被打散了（{bag!r}）——那正是要改掉的"
     assert "售后" in natural, "章节链也要在"
     assert "手册" in natural, "标题也要在"
 

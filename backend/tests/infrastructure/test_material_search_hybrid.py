@@ -70,6 +70,9 @@ def test_a_lexical_exact_hit_is_never_knocked_out_by_a_semantic_one(conn):
     # 目标块的正文**原样**含查询的每个 token；另一块只在语义上像
     _put_material(conn, "m-1", chunks=(("c1", "退货时限是七天"),))
     _put_material(conn, "m-2", chunks=(("c2", "退款周期不超过一星期"),))
+    # 让查询词的 df < N/2：小语料里全部命中时 Robertson IDF 为负，测不出"词面原样"。
+    for index in range(3):
+        _put_material(conn, f"m-d{index}", chunks=((f"c-d{index}", f"机柜布线规范 第 {index} 版"),))
     SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
     SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-2")
 
@@ -258,6 +261,11 @@ def test_an_exact_lexical_hit_is_not_knocked_out_by_a_semantic_one(conn):
     _put_material(conn, "m-1", chunks=(("c1", "退货时限是七天"),))
     # 干扰：语义上像（共享很多字），词面上不含查询的 token
     _put_material(conn, "m-2", chunks=(("c2", "退货的期限与流程说明"),))
+    # 让查询词的 df < N/2：小语料里全部命中时 Robertson IDF 为负，测不出"词面原样"。
+    for index in range(3):
+        _put_material(
+            conn, f"m-d{index}", chunks=((f"c-d{index}", f"机柜布线规范 第 {index} 版"),)
+        )
     SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
     SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-2")
 
@@ -294,10 +302,13 @@ def _rare_term_corpus(conn):
 
     """一个能放大病灶的语料：**罕见词**在 m1、常见词在别人家。
 
-    为什么要这么造：病灶是「目标的词面覆盖率落在 0.5 上下 → 掉进纯语义档 →
-    丢掉 BM25 挣到的名次」。要让覆盖率**低**而 BM25 **高**，就得让目标只命中
-    一个**罕见**词（覆盖率 1/4），干扰块命中三个**常见**词（覆盖率 3/4）。
-    实测这时的 BM25：m1 = 1.0986（罕见词 IDF 高）vs m2 = 0.3365。
+    为什么要这么造：旧口径下目标的词面覆盖率落在 0.5 上下时会掉进纯语义档、
+    丢掉 BM25 挣到的名次。要让覆盖率**低**而 BM25 **高**，就得让目标只命中
+    一个**罕见**词，干扰块命中三个**常见**词。
+
+    Robertson IDF 下：N=5，`紫貂` df=1 → idf=ln(4.5/1.5)=1.0986；
+    `出口/关税/报关` df=4 → idf=ln(1.5/4.5)=-1.0986。m1 只拿正项，
+    干扰块拿负项 → 平移为正分后 m1 必然第一。
     """
     docs = {
         "m1": "紫貂 皮草 拍卖 记录",
@@ -322,16 +333,12 @@ def _rare_term_corpus(conn):
         )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="T10 IDF/BM25 gate：PG ts_rank_cd 无 IDF，罕见词被常见词压过"
-)
 def test_a_rare_lexical_hit_survives_the_semantic_branch(conn):
     """R：目标只命中**一个罕见词**时（覆盖率低、BM25 很高），**不许被语义掀翻**。
 
-    这是"离散分档"口径的病根：覆盖率 0.25 → 掉进纯语义档 → BM25 挣到的
-    第 1 位被一个只命中常见词的块抢走。T5 迁 PG 后的实测**不是持平**：
-    词面材料 r5 0.867→0.844、改述材料 r5 0.786→0.714（各少 1 条）。
-    本用例 strict xfail 记录 gate 仍开；不把 open gate 写成"持平"。
+    旧口径（`ts_rank_cd` 无 IDF）下这里必须 strict xfail：覆盖率 0.25 → 掉进
+    纯语义档 → BM25 挣到的第 1 位被只命中常见词的块抢走。换成 pg_search 候选 +
+    Robertson IDF 重排后本用例转绿，xfail 删除。
     """
     from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever
     from tests.conftest import TEST_OWNER
@@ -509,6 +516,11 @@ def test_a_target_ranked_beyond_the_first_twenty_by_bm25_is_still_found(conn):
         "m-target",
         chunks=(("c-target", "机柜布线规范" + "另外还有一些别的内容。" * 40),),
     )
+    # 查询词 df=41 时，N 必须 > 82 才让 Robertson IDF 为正；否则长文档反而"负得少"
+    for index in range(45):
+        _put_material(
+            conn, f"m-x{index}", chunks=((f"c-x{index}", f"完全无关的归档记录 {index}"),)
+        )
 
     class Broken(FakeEmbedder):
         """**故意坏掉**：让混合检索退化成纯词法检索。

@@ -8,12 +8,15 @@
   改写只发生在这一处，别处不再拼；
 - **列表只回摘要**：块正文一个字都不进列表（要正文只有一个地方——本轮带进去的块）。
 
-词法索引与块同表：`tokens` 是 `index_source` 的分词串（写路径唯一来源），
-`search_tsv` 是 generated tsvector，查询用 `to_tsquery('simple', ...)` +
-`ts_rank_cd`（正分）；子串兜底用 `ILIKE`。不再有 FTS5/vec0 影子表。
+词法索引与块同表：写路径只写 `search_text`（`index_text`：标题 + 章节链 + 正文原样），
+`search_tokens` 是 generated 列（pg_search jieba，经 `pmstudio_tokens` 统一产生）；
+查询用 `search_text ||| tokens::text[]` 取候选，`pdb.score` 排序，再按全语料 df 做
+Robertson BM25 重排。子串兜底用 `ILIKE`。不再有 FTS5/vec0 影子表。
 """
 
 import logging
+import math
+from collections import Counter
 from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import replace
@@ -35,21 +38,9 @@ from pmstudio.application.dto import (
 from pmstudio.application.ports import IdGenerator
 from pmstudio.domain.shared.ids import ProjectId, UserId
 from pmstudio.infrastructure.postgres.owner_scope import require_owner
-from pmstudio.infrastructure.postgres.tokenize import (
-    index_source,
-    match_expr,
-    query_tokens,
-)
+from pmstudio.infrastructure.postgres.tokenize import index_text
 
 logger = logging.getLogger(__name__)
-
-_TSQUERY = "to_tsquery('simple', %s)"
-
-#: `ts_rank_cd` 的长度归一化（第三个参数）。0 = 不按文档长度归一，长块里命中
-#: 一个常见词也能压过短块里命中稀有词；2 = 按文档长度归一，更接近原 BM25 的
-#: 长度惩罚。用冻结语料扫过 0/1/2/4/8/16/32：2 与 8 的改述召回最好，
-#: 2 更接近 BM25 的口径。
-TS_RANK_NORMALIZATION = 2
 
 
 def _raw_connection(connection):  # type: ignore[no-untyped-def]
@@ -247,12 +238,13 @@ class SqliteMaterialStore:
         self, material_id: str, stamped: ParsedMaterial, *, owner: str
     ) -> None:
         for chunk in stamped.chunks:
-            # 词法索引与块**同一行**：`tokens` 是写路径唯一来源，`search_tsv`
-            # 由数据库 generated 列维护。
+            # 词法索引与块**同一行**：只写原样 `search_text`；`search_tokens`
+            # 由数据库 generated 列（pg_search jieba）维护。
             self._connection.execute(
                 """
                 INSERT INTO material_chunks
-                    (chunk_id, material_id, owner_id, ordinal, text, heading_path, anchor, tokens)
+                    (chunk_id, material_id, owner_id, ordinal, text, heading_path, anchor,
+                     search_text)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
@@ -263,7 +255,7 @@ class SqliteMaterialStore:
                     chunk.text,
                     list(chunk.heading_path),
                     chunk.anchor,
-                    index_source(
+                    index_text(
                         title=stamped.title, heading_path=chunk.heading_path, text=chunk.text
                     ),
                 ),
@@ -432,23 +424,95 @@ def _restamp(parsed: ParsedMaterial, material_id: str) -> ParsedMaterial:
     )
 
 
-class SqliteFtsRetriever:
-    """材料检索的纯词法实现：PostgreSQL generated tsvector + jieba 预分词。
+#: pg_search 词法候选深度：先按 `pdb.score` 取这么多，再在应用层做 Robertson 重排。
+#: Task 0 在冻结语料（646 块 / 400 宽）上按 200 验证过跨块证据完整率 .467。
+_FTS_CANDIDATE_LIMIT = 200
 
-    四条口径（块级返回 + 锚点 + 空查询回空 + 项目/owner 隔离）不变；
-    `score` 是 `ts_rank_cd` 的**正分**（越大越相关），不再取负 BM25。
-    """
+#: Robertson BM25 参数（与 Task 0 复现脚本一致）。
+_BM25_K1 = 1.2
+_BM25_B = 0.75
 
-    _SQL = f"""
-        WITH query AS (SELECT {_TSQUERY} AS q)
-        SELECT c.chunk_id, c.material_id, c.text, c.anchor, c.ordinal,
-               m.title, m.source_ref, m.origin,
-               ts_rank_cd(c.search_tsv, query.q, {TS_RANK_NORMALIZATION}) AS rank
+
+def _query_tokens(connection, query: str) -> list[str]:  # type: ignore[no-untyped-def]
+    """查询侧 token：与索引侧同一份 `pmstudio_tokens`（pg_search jieba）。"""
+
+    row = connection.execute("SELECT pmstudio_tokens(%s) AS tokens", (query,)).fetchone()
+    if row is None:
+        return []
+    return [str(token) for token in row["tokens"]]
+
+
+def _corpus_tokens(connection, project_id: str, owner: str) -> dict[str, tuple[str, ...]]:  # type: ignore[no-untyped-def]
+    """同 project/owner 的全部块 token：Robertson 的 N / avgdl / df 都在这里算。"""
+
+    rows = connection.execute(
+        """
+        SELECT c.chunk_id, c.search_tokens
         FROM material_chunks c
         JOIN materials m ON m.material_id = c.material_id
-        CROSS JOIN query
-        WHERE c.search_tsv @@ query.q AND m.project_id = %s AND m.owner_id = %s
-        ORDER BY rank DESC, c.chunk_id
+        WHERE m.project_id = %s AND m.owner_id = %s
+        """,
+        (project_id, owner),
+    ).fetchall()
+    return {str(row["chunk_id"]): tuple(row["search_tokens"]) for row in rows}
+
+
+def _robertson_scores(  # type: ignore[no-untyped-def]
+    candidates, tokens: Sequence[str], corpus: dict[str, tuple[str, ...]]
+) -> dict[str, float]:
+    """候选内按 Robertson BM25 重排；分数整体平移为正（最小 = 1e-6）。
+
+    - `idf = ln((N - df + .5)/(df + .5))`（Robertson，允许负 IDF）；
+    - `k1=1.2`、`b=.75`；`tf` 取 `search_tokens` 中的次数，`dl` 是块 token 数；
+    - `N` / `avgdl` / `df` 用**全 project/owner 语料**，不是候选集。
+    """
+
+    if not candidates or not corpus:
+        return {}
+    total = len(corpus)
+    avgdl = sum(len(doc) for doc in corpus.values()) / total
+    if avgdl <= 0:
+        return {str(row["chunk_id"]): 1.0 for row in candidates}
+    unique = list(dict.fromkeys(tokens))
+    document_frequency = {
+        token: sum(1 for doc in corpus.values() if token in doc) for token in unique
+    }
+    idf = {
+        token: math.log((total - frequency + 0.5) / (frequency + 0.5))
+        for token, frequency in document_frequency.items()
+    }
+    raw: dict[str, float] = {}
+    for row in candidates:
+        chunk_id = str(row["chunk_id"])
+        doc = corpus.get(chunk_id, ())
+        length = len(doc)
+        frequencies = Counter(doc)
+        raw[chunk_id] = sum(
+            idf[token]
+            * (frequency * (_BM25_K1 + 1))
+            / (frequency + _BM25_K1 * (1 - _BM25_B + _BM25_B * length / avgdl))
+            for token in unique
+            if (frequency := frequencies.get(token, 0))
+        )
+    floor = min(raw.values())
+    return {chunk_id: value - floor + 1e-6 for chunk_id, value in raw.items()}
+
+
+class SqliteFtsRetriever:
+    """材料检索的纯词法实现：pg_search 候选 + Robertson BM25 重排。
+
+    四条口径（块级返回 + 锚点 + 空查询回空 + 项目/owner 隔离）不变；
+    `score` 是 Robertson BM25 平移后的**正分**（越大越相关）。
+    """
+
+    _SQL = """
+        SELECT c.chunk_id, c.material_id, c.text, c.anchor, c.ordinal,
+               m.title, m.source_ref, m.origin
+        FROM material_chunks c
+        JOIN materials m ON m.material_id = c.material_id
+        WHERE c.search_text ||| %s::text[]
+          AND m.project_id = %s AND m.owner_id = %s
+        ORDER BY pdb.score(c.chunk_id) DESC, c.chunk_id
         LIMIT %s
     """
 
@@ -466,29 +530,46 @@ class SqliteFtsRetriever:
         owner: UserId | None = None,
     ) -> tuple[MaterialHit, ...]:
         resolved = require_owner(owner)
-        expr = match_expr(query)
-        if expr == "" or limit <= 0:
+        if limit <= 0:
+            return ()
+        tokens = _query_tokens(self._connection, query)
+        if not tokens:
             return ()
         rows = self._connection.execute(
-            self._SQL, (expr, str(project_id), str(resolved), limit)
+            self._SQL, (tokens, str(project_id), str(resolved), _FTS_CANDIDATE_LIMIT)
         ).fetchall()
-        tokens = query_tokens(query)
-        hits = tuple(self._hit(row, tokens) for row in rows)
+        if not rows:
+            return ()
+        scores = _robertson_scores(
+            rows,
+            tokens,
+            _corpus_tokens(self._connection, str(project_id), str(resolved)),
+        )
+        ranked = sorted(
+            rows,
+            key=lambda row: (-scores.get(str(row["chunk_id"]), 0.0), str(row["chunk_id"])),
+        )[:limit]
+        hits = tuple(
+            self._hit(row, tokens, scores.get(str(row["chunk_id"]), 0.0)) for row in ranked
+        )
         if self._caller:
-            # 顶栏搜索没有词面/语义分解（它是纯 FTS），只记 caller/stage/命中数。
+            # 顶栏搜索没有词面/语义分解（它是纯词法），只记 caller/stage/候选/命中数。
             # R8 的真查询样本据此把"人搜索"与"建轮自动检索"分开。
             logger.info(
                 "material_search caller=%s stage=lookup project=%s query=%r"
-                " limit=%d hits=%d",
+                " candidates=%d limit=%d hits=%d",
                 self._caller,
                 project_id,
                 query,
+                len(rows),
                 limit,
                 len(hits),
             )
         return hits
 
-    def _hit(self, row, tokens: list[str]) -> MaterialHit:  # type: ignore[no-untyped-def]
+    def _hit(  # type: ignore[no-untyped-def]
+        self, row, tokens: list[str], score: float
+    ) -> MaterialHit:
         text = str(row["text"])
         # 片段以**第一个在原文里出现的命中 token**定位（跳得回原文）；一个都没出现
         # （理论上进不来）就用第一个 token，`_excerpt` 自己会兜底给开头。
@@ -496,7 +577,7 @@ class SqliteFtsRetriever:
         return MaterialHit(
             material_id=str(row["material_id"]),
             chunk_id=str(row["chunk_id"]),
-            score=float(row["rank"]),
+            score=score,
             excerpt=_excerpt(text, needle),
             anchor=str(row["anchor"]),
             source_ref=str(row["source_ref"]),
@@ -522,10 +603,9 @@ def _excerpt(text: str, needle: str) -> str:
     return f"{head}{text[start:end]}{tail}"
 
 
-#: 两个分支各取多少候选再融合。PG 的 `ts_rank_cd` 没有 BM25 的 IDF，低频词
-#: 不再自动拔高，目标块可能落到 FTS 20 名开外；冻结语料实测定 50（改述材料
-#: recall@5 0.571 → 0.714，词面不变）。KNN 内层扫 200（过滤放在 SQL 里，
-#: 由 HNSW + iterative scan 处理）。
+#: 两个分支各取多少候选再融合。词法内部先取 200 个 pg_search 候选、再 Robertson
+#: 重排，这里只留前 50 进融合（目标块可能落到词法 20 名开外；冻结语料实测定 50）。
+#: KNN 内层扫 200（过滤放在 SQL 里，由 HNSW + iterative scan 处理）。
 _FTS_CANDIDATES = 50
 _KNN_SCAN_LIMIT = 200
 
@@ -540,9 +620,9 @@ COVERAGE_FULL = 1.0
 COVERAGE_MAJORITY = 0.5
 
 #: **融合的 α**：语义那一路的权重（0=纯词面，1=纯语义）。
-#: PG 迁移后用冻结语料（`.codex/runs/2026-10-19/tavily_raw`，15 份 / 45 词面 /
-#: 14 改述 / 15 跨块 / 8 负样本）重标：α 扫描 0.2–0.7，0.4 是词面（0.844）
-#: 与改述（0.714）都不低于相邻档、跨块完整率（0.467）也守住的一档。
+#: 冻结语料（`.codex/runs/2026-10-19/tavily_raw`，15 份 / 45 词面 / 14 改述 /
+#: 15 跨块 / 8 负样本）在 pg_search + Robertson 链上重跑：α 扫描 0.2–0.7，
+#: 0.4 是词面、改述与跨块完整率都不掉的一档（Task 0）。
 #: **换个语料要重量**。
 FUSION_ALPHA = 0.4
 
@@ -597,7 +677,7 @@ def reciprocal_rank_fusion(
 
 
 class SqliteHybridRetriever:
-    """材料检索的混合实现：FTS（词法）+ pgvector KNN（语义）→ 凸组合融合。
+    """材料检索的混合实现：词法（pg_search + Robertson BM25）+ pgvector KNN → 凸组合融合。
 
     协议零改（`MaterialRetriever` 的签名与 `MaterialHit` 不动）；两个分支的形状
     与词法实现一致（块级返回 + 锚点 + 隔离 + `score` 越大越好）。
@@ -619,7 +699,7 @@ class SqliteHybridRetriever:
         owner: UserId | None = None,
     ) -> tuple[MaterialHit, ...]:
         resolved = require_owner(owner)
-        tokens = query_tokens(query)
+        tokens = _query_tokens(self._connection, query)
         if not tokens or limit <= 0:
             return ()
         fts_hits = self._fts.search(
@@ -707,12 +787,11 @@ class SqliteHybridRetriever:
     def _fuse_by_score(
         self, fts_hits, vec_scores: dict[str, float], query: str
     ) -> list[str]:
-        """两路融合：**凸组合** `α·余弦 + (1−α)·归一化 ts_rank_cd`。
+        """两路融合：**凸组合** `α·余弦 + (1−α)·归一化 BM25`。
 
-        `ts_rank_cd` 无上界（正分，越大越强），用**饱和归一** `s/(s+pivot)`：
-        pivot 取候选集里 `ts_rank_cd` 的中位数。SQLite 的 BM25 换成正分的
-        `ts_rank_cd` 后，量纲变了但"中位数归一"仍是查询内稳定、有界的做法；
-        α 用冻结语料重标（见 `FUSION_ALPHA`）。
+        Robertson BM25 已按查询平移为正分（最小候选 = 1e-6），仍无上界（越大越强），
+        用**饱和归一** `s/(s+pivot)`：pivot 取候选集里 BM25 的中位数。这个归一
+        是查询内稳定、有界的做法；α 用冻结语料重标（见 `FUSION_ALPHA`）。
         """
 
         if not fts_hits and not vec_scores:
@@ -733,26 +812,6 @@ class SqliteHybridRetriever:
             for chunk_id in candidates
         }
         return sorted(candidates, key=lambda chunk_id: -scores[chunk_id])
-
-    def _coverage(self, chunk_ids: list[str], query: str) -> dict[str, float]:
-        """每个候选块的**词面覆盖率**。
-
-        token 直接读 `material_chunks.tokens`（`index_source` 的产物）——**不重新分词**：
-        重新分词可能与建索引时那次的切法不同，覆盖率就名不副实了。
-        """
-
-        tokens = set(query_tokens(query))
-        if not tokens or not chunk_ids:
-            return {chunk_id: 0.0 for chunk_id in chunk_ids}
-        rows = self._connection.execute(
-            "SELECT chunk_id, tokens FROM material_chunks WHERE chunk_id = ANY(%s)",
-            (list(chunk_ids),),
-        ).fetchall()
-        coverage: dict[str, float] = {}
-        for row in rows:
-            doc_tokens = set(str(row["tokens"]).split())
-            coverage[str(row["chunk_id"])] = len(tokens & doc_tokens) / len(tokens)
-        return {chunk_id: coverage.get(chunk_id, 0.0) for chunk_id in chunk_ids}
 
     def _knn_scores(
         self, project_id: str, owner: str, query: str

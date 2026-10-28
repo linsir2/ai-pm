@@ -1,7 +1,8 @@
 """真 PostgreSQL：FTS + pgvector 混合检索（凸组合融合）。
 
-`ts_rank_cd` 是正分（越大越相关），语义侧是 `1 - cosine_distance`；融合仍是
-`α·语义 + (1−α)·ts_rank 饱和归一`。α/pivot 见 `materials.py` 的常量注释。
+词法是 pg_search 候选经 Robertson BM25 重排后的正分（越大越相关），语义侧是
+`1 - cosine_distance`；融合仍是 `α·语义 + (1−α)·BM25 饱和归一`。α/pivot 见
+`materials.py` 的常量注释。
 """
 
 from __future__ import annotations
@@ -123,6 +124,9 @@ class _Broken(FakeEmbedder):
 def test_an_exact_lexical_hit_is_not_knocked_out_by_the_semantic_branch(conn) -> None:
     lexical = _put(conn, "退货时限是七天")
     semantic = _put(conn, "退货的期限与流程说明")
+    # 让查询词的 df < N/2：小语料里全部命中时 Robertson IDF 为负，测不出"词面原样"。
+    for index in range(3):
+        _put(conn, f"机柜布线规范 第 {index} 版")
     _write_vectors(conn, lexical, semantic)
 
     hits = SqliteHybridRetriever(conn, embedder=FakeEmbedder(dimensions=512)).search(

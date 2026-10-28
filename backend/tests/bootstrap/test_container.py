@@ -59,19 +59,6 @@ def test_container_has_no_fake_model_switch():
         _ = container.use_fake_model  # type: ignore[attr-defined]
 
 
-def test_container_warms_the_chinese_tokenizer(monkeypatch):
-    """R（检索 P1）：组装点预热中文分词——jieba 首次 cut ~0.6s，别落在首个请求里。"""
-
-    import pmstudio.bootstrap.container as container_module
-
-    calls: list[int] = []
-    monkeypatch.setattr(container_module, "warm_tokenizer", lambda: calls.append(1))
-
-    build_container(_settings())
-
-    assert calls == [1], "组装没有预热分词器"
-
-
 def test_search_project_uses_keyword_retrieval_only():
     """P1.1：顶栏搜索走**纯 FTS**，不再碰 embedding/融合。
 

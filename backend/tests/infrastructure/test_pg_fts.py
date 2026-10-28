@@ -1,8 +1,9 @@
-"""真 PostgreSQL：材料写入、generated tsvector/GIN、tsquery 与 ILIKE。
+"""真 PostgreSQL：材料写入、pg_search BM25 候选与 Robertson 重排。
 
-FTS 口径：`material_chunks.tokens` 存 `index_source` 的 jieba 分词串，
-`search_tsv` 是 generated 列（`to_tsvector('simple', tokens)`）；查询侧只读
-`material_chunks`，不再有 FTS5 影子表。
+写路径只写 `search_text`（`index_text`：标题 + 章节链 + 正文原样）；
+`search_tokens` 是 generated 列（统一由 `pmstudio_tokens` 的 jieba 产生）。
+查询侧 `pmstudio_tokens(query)` → `search_text ||| tokens::text[]` 取 200 候选，
+再按全语料 df 做 Robertson BM25 重排；不再有 `tokens` / `search_tsv` / GIN。
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from pmstudio.infrastructure.postgres.owner_scope import (
     clear_owner_scope,
     set_owner_scope,
 )
-from pmstudio.infrastructure.postgres.tokenize import index_source, match_expr
+from pmstudio.infrastructure.postgres.tokenize import index_text
 from tests.support.doubles import SeqIds
 from tests.support.postgres import (
     PgTestDatabase,
@@ -106,23 +107,23 @@ def seed(
     ).material_id
 
 
-# ── 写路径：tokens / generated tsv / 原生类型 ─────────────────────────────────
+# ── 写路径：search_text / generated search_tokens / 原生类型 ───────────────────
 
 
-def test_index_source_tokens_are_written_and_drive_generated_tsv(conn) -> None:
+def test_search_text_is_written_and_feeds_generated_tokens(conn) -> None:
     mid = seed(conn, "权限模型 与 访问控制", title="权限说明.pdf")
     row = conn.execute(
-        "SELECT tokens, search_tsv, to_tsvector('simple', tokens) AS expected"
+        "SELECT search_text, search_tokens, pmstudio_tokens(search_text) AS expected"
         " FROM material_chunks WHERE chunk_id = %s",
         (f"{mid}#c00",),
     ).fetchone()
     assert row is not None
-    assert row["tokens"] == index_source(
+    assert row["search_text"] == index_text(
         title="权限说明.pdf", heading_path=(), text="权限模型 与 访问控制"
     )
-    assert "权限" in row["tokens"] and "模型" in row["tokens"]
-    assert row["search_tsv"] == row["expected"]
-    assert row["search_tsv"] != ""
+    assert row["search_text"] == "权限说明.pdf 权限模型 与 访问控制"
+    assert list(row["search_tokens"]) == list(row["expected"])
+    assert "权限" in row["search_tokens"] and "模型" in row["search_tokens"]
 
 
 def test_material_native_types_roundtrip(conn) -> None:
@@ -156,15 +157,15 @@ def test_material_native_types_roundtrip(conn) -> None:
     assert loaded.parsed.chunks[0].heading_path == ()
 
 
-def test_generated_tsv_is_indexed_with_gin(conn) -> None:
+def test_bm25_index_covers_search_text(conn) -> None:
     row = conn.execute(
         "SELECT indexdef FROM pg_indexes"
         " WHERE schemaname = current_schema()"
-        " AND indexname = 'idx_material_chunks_search_tsv'"
+        " AND indexname = 'idx_material_chunks_search_text_bm25'"
     ).fetchone()
     assert row is not None
-    assert "using gin" in row["indexdef"].lower()
-    assert "search_tsv" in row["indexdef"]
+    assert "using bm25" in row["indexdef"].lower()
+    assert "search_text" in row["indexdef"]
 
 
 # ── 查询：中文、OR、转义、空查询、隔离 ──────────────────────────────────────
@@ -185,27 +186,43 @@ def test_chinese_words_hit_and_order_does_not_matter(conn) -> None:
     ]
 
 
-def test_tsquery_operators_and_quotes_are_escaped(conn) -> None:
+def test_special_characters_are_tokenized_not_parsed_as_query_operators(conn) -> None:
     mid = seed(conn, "a&b 与 c:d 以及 x!y 与 100% 的说明", title="符号.md")
     retriever = SqliteFtsRetriever(conn)
 
     for query in ("a&b", "c:d", "x!y", "a'b", "100%"):
         hits = retriever.search(project_id=PROJECT, query=query)
-        assert hits, f"{query!r} 应该命中且不抛 tsquery 语法错"
+        assert hits, f"{query!r} 应该命中且不抛查询语法错"
         assert hits[0].material_id == mid
 
-    assert match_expr("   ") == ""
-    assert match_expr("!!!") == ""
     assert retriever.search(project_id=PROJECT, query="   ") == ()
+    assert retriever.search(project_id=PROJECT, query="!!!") == ()
 
 
 def test_rank_is_positive_and_more_matches_rank_first(conn) -> None:
     mid = seed(conn, "异步队列 与 异步队列：两次都提了", "这里只提了一次 异步队列")
+    for index in range(3):  # 让查询词的 df < N/2，IDF 才为正（小语料里的负 IDF 是口径）
+        seed(conn, f"机柜布线规范 第 {index} 版")
     hits = SqliteFtsRetriever(conn).search(project_id=PROJECT, query="异步队列")
 
     assert [h.chunk_id for h in hits] == [f"{mid}#c00", f"{mid}#c01"]
     assert all(hit.score > 0 for hit in hits), [hit.score for hit in hits]
     assert hits[0].score > hits[1].score
+
+
+def test_a_rare_term_beats_common_terms(conn) -> None:
+    """Robertson IDF：只命中一个罕见词的块，压过命中多个常见词的块。"""
+
+    rare = seed(conn, "紫貂 皮草 拍卖 记录")
+    for index in range(5):
+        seed(conn, f"出口 关税 报关 流程 第 {index} 版")
+
+    hits = SqliteFtsRetriever(conn).search(
+        project_id=PROJECT, query="紫貂 出口 关税 报关"
+    )
+
+    assert hits
+    assert hits[0].material_id == rare
 
 
 def test_title_and_heading_path_are_searchable(conn) -> None:
@@ -285,14 +302,14 @@ def _put_chunk(conn, chunk_id: str, text: str, *, ordinal: int = 0) -> None:
     )
     conn.execute(
         "INSERT INTO material_chunks (chunk_id, material_id, owner_id, ordinal, text,"
-        " heading_path, anchor, tokens) VALUES (%s, %s, %s, %s, %s, '{}', 'a', %s)",
+        " heading_path, anchor, search_text) VALUES (%s, %s, %s, %s, %s, '{}', 'a', %s)",
         (
             chunk_id,
             mid,
             str(OWNER),
             ordinal,
             text,
-            index_source(title="t", heading_path=(), text=text),
+            index_text(title="t", heading_path=(), text=text),
         ),
     )
 
@@ -322,12 +339,18 @@ def test_substring_fallback_uses_ilike_and_escapes_wildcards(conn) -> None:
     assert candidates("100%") == {"c1"}
 
 
-def test_coverage_reads_tokens_from_material_chunks(conn) -> None:
-    _put_chunk(conn, "c1", "权限模型 说明")
-    index = SqliteHybridRetriever(conn, embedder=object())
+def test_candidates_are_capped_before_rerank(conn, monkeypatch) -> None:
+    from pmstudio.infrastructure.postgres import materials as materials_module
 
-    assert index._coverage(["c1"], "权限模型") == {"c1": 1.0}
-    assert index._coverage(["missing"], "权限模型") == {"missing": 0.0}
+    mid = seed(conn, "退货流程 第一段", "退货流程 第二段", "退货流程 第三段")
+    monkeypatch.setattr(materials_module, "_FTS_CANDIDATE_LIMIT", 2)
+
+    hits = SqliteFtsRetriever(conn).search(
+        project_id=PROJECT, query="退货流程", limit=10
+    )
+
+    assert len(hits) == 2
+    assert all(hit.material_id == mid for hit in hits)
 
 
 # ── 守卫：FTS5 / vec0 / 影子表路径已不在 PG 模块 ───────────────────────────────

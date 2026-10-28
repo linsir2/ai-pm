@@ -329,7 +329,7 @@ async def test_the_anchor_tells_which_part_it_is():
 async def test_a_markdown_heading_in_the_content_becomes_the_heading_path():
     """R：content 里的 `## 标题` 变成 `heading_path`。
 
-    白捡的检索信号：章节链进索引源（`index_source` = 标题 + 章节链 + 正文），
+    白捡的检索信号：章节链进索引源（`index_text` = 标题 + 章节链 + 正文），
     "只在这一节出现的内容"才搜得到。今天联网材料的 `heading_path` **恒为空**。
     """
     packets = await _search_content("## 数据保护与隐私边界\n\n正文说日志要脱敏。")

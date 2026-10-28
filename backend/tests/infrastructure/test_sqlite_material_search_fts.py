@@ -175,6 +175,8 @@ def test_more_matches_rank_first(world):
 
     retriever, seed, _, _ = world
     mid = seed("异步队列 与 异步队列：两次都提了", "这里只提了一次 异步队列")
+    for index in range(3):  # 让查询词的 df < N/2，IDF 才为正（小语料里的负 IDF 是口径）
+        seed(f"机柜布线规范 第 {index} 版")
 
     hits = retriever.search(project_id=PROJECT, query="异步队列")
 

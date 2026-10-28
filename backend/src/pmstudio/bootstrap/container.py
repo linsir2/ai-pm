@@ -131,7 +131,6 @@ from pmstudio.infrastructure.postgres.repositories import (
     SqliteTemplateRepository,
     SqliteWorkspaceIndex,
 )
-from pmstudio.infrastructure.postgres.tokenize import warm as warm_tokenizer
 from pmstudio.infrastructure.postgres.tool_calls import SqliteToolCallRecorder
 from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from pmstudio.infrastructure.postgres.usage import (
@@ -272,10 +271,6 @@ def build_container(
     # 登录哈希隔离舱（高并发 P1）：容量来自 settings，**必须在事件循环跑起来之前**设。
     # argon2 每次约 64MB，这个数同时是内存上限——登录风暴排队，而不是把机器打死。
     configure_gate(settings.login_hash_concurrency)
-
-    # 中文分词预热（检索 P1）：jieba 词典首次 `cut` 要 ~0.6s——组装时加载一次，
-    # 别落在首个搜索/上传请求里。幂等，多个测试进程各付一次（本就如此）。
-    warm_tokenizer()
 
     # 向量 embedder 单一实例：懒加载（首次 `embed_many` 才下载/载入模型），
     # 迁移回填与向量索引共用同一个，避免同一进程里装两份模型内存。

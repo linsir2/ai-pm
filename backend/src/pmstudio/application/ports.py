@@ -282,10 +282,10 @@ class MaterialRetriever(Protocol):
     与 `MaterialParser` / `MaterialStore` 同一套路子：实现换过两版，**这个协议没变**，
     调用方一行没改（换实现只改 `bootstrap/container.py` 一行）：
 
-    实现 `SqliteFtsRetriever`：**PostgreSQL FTS（generated tsvector）+ jieba 预分词 +
-    OR**（词级、词序无关、容忍停用词）。它替换掉了更早的整句 `LIKE` 版
-    （`SqliteLikeRetriever`，2026-10-17 删除）；升级前后对照见
-    `docs/plans/2026-10-17-检索升级验收.md`。
+    实现 `SqliteFtsRetriever`：**pg_search BM25 候选 + Robertson 重排**（词级、
+    词序无关、容忍停用词；分词统一由数据库的 `pmstudio_tokens` 做）。它替换掉了
+    更早的整句 `LIKE` 版（`SqliteLikeRetriever`，2026-10-17 删除）与
+    `ts_rank_cd` 版；升级前后对照见 `docs/plans/2026-10-17-检索升级验收.md`。
 
     再往上的升级位（向量 / 混合）仍在同一个协议后面。
 

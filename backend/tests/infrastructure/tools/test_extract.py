@@ -340,7 +340,7 @@ def test_splitting_prefers_a_line_boundary_over_a_hard_cut():
 #
 # 为什么：`<h1>`–`<h6>` 被 `get_text` 拍成普通行 → 网页材料的 `heading_path` **基本恒空**
 # → 章节名只以普通文本存在于**那一个块**里 → 长章节切开后，**后几块搜不到节名**
-# （这正是 `index_source` 的 docstring 点名的问题）。
+# （这正是 `index_text` 的 docstring 点名的问题）。
 # 修法：拍平时给标题行加 markdown 前缀 → `chunk_text` 的 `_HEADING` 正则自然认出来
 # → 与「上传 .md」**同构**（`.md` 的 `# 标题` 就是这么进 `heading_path` 的）。零新依赖。
 
