@@ -1,0 +1,37 @@
+{
+  "_说明": "跨块查询冻结集。按块宽分组；material_index 对应 corpus.json 的下标，chunks 是同一材料的两块 ordinal（目标块 = material_index#c06 / #c10）。300/400 两组取自 2026-10-28 Task 0 复现运行，保证跨块验收可逐条复算。",
+  "300": [
+    {"query": "术语 跃居第一", "material_index": 0, "chunks": [6, 10]},
+    {"query": "开始 modelstudio", "material_index": 1, "chunks": [6, 10]},
+    {"query": "Low 实际效果", "material_index": 2, "chunks": [6, 10]},
+    {"query": "局限 CloudCanal", "material_index": 3, "chunks": [6, 10]},
+    {"query": "配电 pageId", "material_index": 4, "chunks": [6, 10]},
+    {"query": "Image Image", "material_index": 5, "chunks": [6, 10]},
+    {"query": "势必 切碎", "material_index": 6, "chunks": [6, 10]},
+    {"query": "后台 常见问题", "material_index": 7, "chunks": [6, 10]},
+    {"query": "建议您 并非易事", "material_index": 8, "chunks": [6, 10]},
+    {"query": "Facebook 内在", "material_index": 9, "chunks": [6, 10]},
+    {"query": "缓存 hit", "material_index": 10, "chunks": [6, 10]},
+    {"query": "MoE Batch", "material_index": 11, "chunks": [6, 10]},
+    {"query": "History 低成本", "material_index": 12, "chunks": [6, 10]},
+    {"query": "尽管 梳理", "material_index": 13, "chunks": [6, 10]},
+    {"query": "美股 加密", "material_index": 14, "chunks": [6, 10]}
+  ],
+  "400": [
+    {"query": "补全 详情页", "material_index": 0, "chunks": [6, 10]},
+    {"query": "modelstudio 下表中", "material_index": 1, "chunks": [6, 10]},
+    {"query": "详解 后果", "material_index": 2, "chunks": [6, 10]},
+    {"query": "7B CloudCanal", "material_index": 3, "chunks": [6, 10]},
+    {"query": "ieisystem ieisystem", "material_index": 4, "chunks": [6, 10]},
+    {"query": "Image Image", "material_index": 5, "chunks": [6, 10]},
+    {"query": "几种 切断", "material_index": 6, "chunks": [6, 10]},
+    {"query": "一件 接口", "material_index": 7, "chunks": [6, 10]},
+    {"query": "五项 努力", "material_index": 8, "chunks": [6, 10]},
+    {"query": "成较 内在", "material_index": 9, "chunks": [6, 10]},
+    {"query": "CacheManager miss", "material_index": 10, "chunks": [6, 10]},
+    {"query": "要素 借鉴", "material_index": 11, "chunks": [6, 10]},
+    {"query": "Copy MQA", "material_index": 12, "chunks": [6, 10]},
+    {"query": "尽管 Quantization", "material_index": 13, "chunks": [6, 10]},
+    {"query": "紐約期 曾淵", "material_index": 14, "chunks": [6, 10]}
+  ]
+}

@@ -296,8 +296,9 @@ def build_container(
     materials = SqliteMaterialStore(connection, ids=ids)
     # 向量索引：与材料同表（`material_chunks.embedding`），写路径在 UoW 外。
     vector_index = SqliteVectorIndex(connection, embedder=embedder)
-    # 材料检索（检索 P1 + 阶段 2）：PostgreSQL FTS（generated tsvector）+ pgvector 融合。
-    # 换实现只改这一行（`P18` C-2c-1）——`MaterialRetriever` 协议的升级位就在这儿。
+    # 材料检索（检索 P1 + 阶段 2）：pg_search BM25（search_text/search_tokens）+
+    # pgvector KNN 融合。换实现只改这一行（`P18` C-2c-1）——`MaterialRetriever`
+    # 协议的升级位就在这儿。
     # `SqliteHybridRetriever` 内部对向量路做了降级：扩展缺失/推理失败就退回纯词法，
     # 检索永远有结果，所以这里不需要再分叉。
     material_search = SqliteHybridRetriever(connection, embedder=embedder)

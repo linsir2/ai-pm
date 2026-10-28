@@ -6,11 +6,35 @@
 > **读法**：先读下面「当前状态」；历史流水（P1–P38、M1–M15、各次执行结果）保留作档案，
 > 里面的"下一步/剩下来的活"**全部过期**，以当前状态为准。
 
-## 当前状态（2026-10-28：T10 PG 全量切换完成）
+## 当前状态（2026-10-28：pg_search BM25 交付）
+
+**分支** `new-branch`（Task 5 提交 `docs(pg): 固化 pg_search 检索验收与文档`；
+前面依次是 T10 `2a170dc` + pg_search Task 1–4 `d9f81af…2a170dc`）。
+检索链已是 **pg_search BM25 + Robertson 重排 + pgvector 融合**；旧的
+`tsvector/ts_rank_cd`、罕见词 `xfail(strict=True)`、SQLite/ETL 口径全部退役。
+
+- **schema/启动**：`0002_pg_search.sql` 建 `search_text`、generated `search_tokens`、
+  `pmstudio_tokens`（pg_search jieba）与 bm25 索引；官方 ParadeDB 0.26.3-pg18
+  镜像，`shared_preload_libraries` 含 `pg_search`，空 PGDATA 初始化。
+- **检索**：200 个 pg_search 候选 → 全语料 Robertson BM25（`k1=1.2`、`b=.75`，
+  IDF 钳 0）→ 前 50 与 pgvector KNN（200）按 α=.4、每材料 2 槽融合。
+- **冻结验收**：`backend/scripts/retrieval_quality_bench.py`，数据在
+  `backend/tests/fixtures/retrieval/`。300/791：词面 r5 **.844**、改述 r5 **.857**、
+  跨块 **4/15 = .267**；400/646：跨块 **7/15 = .467**（复现旧口径）。假阳性仍 8/8。
+  **排序债**：同脚本诊断，未钳制改述 `.786/.357/.485`、钳到 0 后
+  `.857/.214/.425`（r5/top1/MRR）；非负 IDF 与钳到 0 同分。见 `04` §0.1 R15；不改阈值。
+- **测试**：后端 `-m "not slow"` → **3222 passed / 56 skipped / 5 deselected /
+  0 failed**（Task 4 全量 3221 + 新增冻结 fixture 守卫 1）· `ruff` 全绿 ·
+  `uv lock --check` 通过 · 前端未改（Task 4 时 `tsc`/`vitest` 全绿）。
+- 文档入口：`02` §11.0.79、`03` 检索验收清单、`05` 检索实现、runbook、
+  `README`、`AGENTS` 已同步到 pg_search 与仓库内 fixture。
+
+## 上一状态（2026-10-28：T10 PG 全量切换完成）
 
 **分支** `new-branch`（T10 提交 `refactor(pg): 删除 SQLite 并收口` +
 `fix(pg): 收口 T10 终审` + `fix(pg): 收口最终评审`）·
-后端 `-m "not slow"` → **3229 passed / 57 skipped / 1 xfailed / 0 failed** ·
+后端 `-m "not slow"` → **3221 passed / 56 skipped / 5 deselected / 0 failed**
+（Task 4 收口后的全量）·
 `ruff` 全绿 · 前端 `tsc --noEmit` 干净 / `vitest` **62 files / 687 passed**。
 
 **T10 · 删除 SQLite / PgBouncer 收口**（2026-10-28）：
@@ -18,8 +42,8 @@
   旧 SQLite 脚本已删。一次性 bench/probe（影响清单 B3）无生产/CI 消费者，按计划删除；
   `tests/application/test_retrieval_increment.py` 与 SQLite 无关，已恢复并把纯统计函数
   搬到 `scripts/retrieval_stats.py`。
-- no-sqlite 守卫：AST import + 非 docstring SQL 字面量；ETL
-  `scripts/migrate_sqlite_to_pg.py` / `tests/test_etl_cutover.py` 白名单；不扫注释、不误报自己。
+- no-sqlite 守卫：AST import + 非 docstring SQL 字面量；**无白名单**（ETL 脚本与
+  测试已在 Task 4 删除）；不扫注释、不误报自己。
 - 4 workers 负载门（真 PG18 + PgBouncer）：100 HTTP（**并发 100**）+ 20 轮内写（并发 20），
   **0 错误/超时/55P03/57014，HTTP p95 88.5ms**；DB 池查询 p95 **24.7ms**（仅诊断），
   轮内写 p95 4.07s（非门）；4 个 worker PID 都实际接活。
@@ -28,9 +52,9 @@
   55P03/57014 → `DatabaseBusy` 503）；profile 变更清空 embedding 后，
   `MaterialMaintenance.run_once` 调 `reembed_missing()` 按 all-null + advisory lock
   + 批补算（只写向量，不动块正文）。
-- **T5 recall gate 仍开**：`test_a_rare_lexical_hit_survives_the_semantic_branch`
-  保留 `xfail(strict=True)`（PG `ts_rank_cd` 无 IDF，罕见词被常见词压过）；不修 FTS 算法、
-  不算通过。
+- **T5 recall gate 已收**（2026-10-28）：pg_search + Robertson BM25 的罕见词用例
+  `test_a_rare_lexical_hit_survives_the_semantic_branch` 已转绿，`xfail` 删除；
+  排序债（top1/MRR）另记 `04` §0.1 R15。
 - 未变：P3b-1（跨 worker in-flight / 条件 claim、历史趟 TOOL 留痕、stale id 422、
   `used>limit`）仍待后续；`RoundRunner._running_rounds` 进程内串行仍在。
 

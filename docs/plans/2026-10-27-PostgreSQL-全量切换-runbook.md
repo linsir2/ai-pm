@@ -1,196 +1,147 @@
-# PostgreSQL 全量切换 runbook（T9）
+# PostgreSQL 部署与运维 runbook（现行）
 
-> 目标：停服 → 备份旧 SQLite（回滚用）→ bootstrap/schema-only → ETL → finalize →
-> 校验 → 切 app URL → smoke → 观察期。**不双写、不反向 ETL、不回写旧库。**
+> **当前形态**：运行时、测试、脚本只连 PostgreSQL 18 + pgvector + pg_search；
+> 词法检索是 pg_search BM25，不再有 SQLite、FTS5 或一次性 ETL 路径。
+> 本文从空库安装写到备份恢复，按顺序执行即可。
 
-## 0. 前置检查与配置来源
+## 0. 前置条件与配置来源
 
-- 旧库：`backend/data/pmstudio.db`；先确认 `PRAGMA user_version` 是 15 或 17
-  （ETL 只支持这两个版本，其它版本直接失败）。
-- 新库：PostgreSQL 18 + pgvector 0.8.7。
-- 运维侧配置只在 `backend/.env.ops`：`PMSTUDIO_DIRECT_DATABASE_URL`（owner 直连）、
-  `PMSTUDIO_BOOTSTRAP_DATABASE_URL`（超级用户，只给 `--bootstrap`）、
-  `POSTGRES_*`、`PMSTUDIO_OWNER_PASSWORD` / `PMSTUDIO_APP_PASSWORD`、首管理员 seed。
-  **backend 的 `backend/.env` 不包含这些 URL。**
-- compose 默认**不发布 db 5432**，且 `.env.ops` 里的 host 是 compose 内网 `db`：
-  宿主机进程既解析不了 `db`，也连不上 5432。默认按下面“容器内一次性命令”跑；
-  若坚持在宿主机跑，必须自己把 direct URL 变成宿主可达（临时 `127.0.0.1:5432`
-  发布或 SSH 隧道），并自行准备下面的 auth_file。
-- **PgBouncer auth_file 来源**：compose 的 `init` 服务把
-  `PMSTUDIO_PGBOUNCER_AUTH_FILE=/pgbouncer-auth/userlist.txt` 写进共享卷
-  `pgbouncer-auth`，`pgbouncer` 只读挂载同一卷。宿主机跑 `--bootstrap` 时必须
-  显式给这个环境变量/可写路径，并保证 PgBouncer 容器能读到（uid 通常 70）；
-  否则 PgBouncer 没有口令文件，切流后连不上。
-- ETL 脚本**不在镜像里**。容器内跑时把宿主 `backend/scripts/` 只读挂到
-  `/app/scripts`；ETL 只读旧库，只连 **owner 直连 URL**，不要把 app/PgBouncer
-  URL 传给它。
+- 镜像：`paradedb/paradedb:0.26.3-pg18`，**按 digest 钉死**
+  （`docker-compose.yml` 里的 `sha256:9b15fc…8c02f0`）。官方镜像已带
+  **pg_search 0.26.3** 与 **pgvector 0.8.7**，`shared_preload_libraries` 含
+  `pg_search`；**换镜像必须用空 PGDATA 卷**（先 `docker compose down -v`）。
+- PGDATA 在官方镜像里是 `/var/lib/postgresql/18/docker`，卷要挂父目录
+  `/var/lib/postgresql`，不要只挂到 `.../docker`。
+- app 侧配置只在 `backend/.env`：`PMSTUDIO_DATABASE_URL`（PgBouncer `pgbouncer:6432`）、
+  模型/key、`PMSTUDIO_PORT` 等。backend **不**跑迁移、不 seed。
+- 运维侧配置只在 `backend/.env.ops`：`PMSTUDIO_BOOTSTRAP_DATABASE_URL`（超级用户）、
+  `PMSTUDIO_DIRECT_DATABASE_URL`（owner 直连）、`POSTGRES_*`、owner/app 角色口令、
+  首管理员。
+- 三个 URL 分工固定：**bootstrap = 超级用户**（建扩展/角色/auth_file）、
+  **direct = owner**（迁移/finalize/备份/维护）、**app = PgBouncer**（请求路径）。
+  不要把 app URL 传给 init、backup 或检索基准。
 
-## 1. 停服并做旧库回滚备份（保留 30 天）
+## 1. 空库初始化
 
-1. 停后端/任何写旧库的进程；确认没有进程还开着 `pmstudio.db`。
-2. 用旧库自己的 `.backup`（**不要 `cp` 正在跑的 SQLite**；`-wal` 里的数据会少）：
+### 1.1 compose（默认）
 
 ```bash
-cd /srv/pmstudio/backend
-stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p data/backups/legacy && chmod 700 data/backups/legacy
-sqlite3 data/pmstudio.db ".backup \"data/backups/legacy/pmstudio-$stamp.db\""
-chmod 600 "data/backups/legacy/pmstudio-$stamp.db"
-sqlite3 "data/backups/legacy/pmstudio-$stamp.db" "PRAGMA integrity_check; PRAGMA user_version;"
+cp backend/.env.example backend/.env
+cp backend/.env.ops.example backend/.env.ops   # 改掉 change-me-* 与首管理员
+docker compose up -d --build
 ```
 
-3. 把备份路径写进变更记录；这份文件是**唯一回滚数据源**，保留至少 30 天。
+启动顺序由 compose 保证：`db` 健康 → `init --all`（bootstrap → schema-only →
+finalize）→ `pgbouncer` → `backend`。`init` 健康检查必须走 **TCP**
+（官方镜像在 init 脚本前会起一个只开 Unix socket 的临时 server，`pg_isready`
+默认会命中它，导致迁移过早开跑）。
 
-## 2. 初始化空 PG（默认：compose 内一次性容器）
+### 1.2 宿主直连（可选）
 
-```bash
-cd /srv/pmstudio
-set -a; . backend/.env.ops; set +a   # 只为把 URL/口令交给下面的 compose run
-
-docker compose up -d --wait db
-docker compose run --rm --no-deps init \
-  uv run --no-sync python scripts/init_db.py --bootstrap
-docker compose run --rm --no-deps init \
-  uv run --no-sync python scripts/init_db.py --schema-only
-```
-
-- `init` 服务继承 `.env.ops`、`PMSTUDIO_PGBOUNCER_AUTH_FILE` 与共享卷，正好满足
-  bootstrap 的 auth_file 来源；不要用宿主进程直接跑 `--bootstrap` 来代替它。
-- 角色级 DB 超时（app 15s/3s/15s、owner 60s/10s/60s）只对**新连接**生效：
-  bootstrap 之后再启动 PgBouncer/backend；在线重跑 bootstrap 时先重启 PgBouncer
-  （或让池重连），否则旧服务端连接仍是旧值。
-- `--schema-only` 只跑编号迁移；此时目标 19 张普通表为空。**不要**先跑
-  `--finalize`，否则 ETL 会以“目标表非空”拒绝合并。
-
-### 宿主直连替代方案（可选）
-
-只有在你已经把 direct URL 变成宿主可达时才这样做：
+只有 direct/bootstrap URL 在宿主机可达时才这样做：
 
 ```bash
-cd /srv/pmstudio/backend
+cd backend
 set -a; . .env.ops; set +a
-# 将 @db:5432 改成本机可达地址（例如临时发布的 127.0.0.1:5432 或隧道）
-export PMSTUDIO_DIRECT_DATABASE_URL="postgresql://pmstudio_owner:...@127.0.0.1:5432/pmstudio"
-export PMSTUDIO_BOOTSTRAP_DATABASE_URL="postgresql://pmstudio_bootstrap:...@127.0.0.1:5432/pmstudio"
-# auth_file 必须让 **pgbouncer 容器**读得到：默认的 named volume 宿主路径读不到。
-# 这条宿主分支要求把同一宿主目录 bind mount 到 init 的 /pgbouncer-auth 与
-# pgbouncer 的 /etc/pgbouncer/auth（替换 compose 里的 `pgbouncer-auth` named volume），
-# 否则请回到上面的容器 bootstrap。
-export PMSTUDIO_PGBOUNCER_AUTH_FILE="/srv/pmstudio/pgbouncer-auth/userlist.txt"
-uv run python scripts/init_db.py --bootstrap
-uv run python scripts/init_db.py --schema-only
+uv run python scripts/init_db.py --bootstrap      # 超级用户：扩展/角色/GRANT/auth_file
+uv run python scripts/init_db.py --schema-only    # owner：0001 + 0002
+uv run python scripts/init_db.py --finalize       # 首管理员/模板/owner 回填/授权/profile
 ```
 
-## 3. ETL
+`--bootstrap` 还会给 app/owner 落角色级 DB 超时（app 15s/3s/15s，
+owner 60s/10s/60s）；在线重跑后要让 PgBouncer 重连，旧服务端连接不会自动改。
 
-默认在 compose 网络内跑（`db:5432` 可达；脚本从宿主挂载）：
+## 2. 初始化后必须核对的五件事
+
+```sql
+-- 超级用户
+SHOW shared_preload_libraries;                    -- 必须含 pg_search
+SELECT extname, extversion FROM pg_extension
+ WHERE extname IN ('vector', 'pg_search');         -- vector 0.8.x / pg_search 0.26.x
+
+-- owner 直连
+SELECT version FROM schema_migrations ORDER BY version;  -- 1, 2
+SELECT profile, dimensions FROM vector_index_meta WHERE id = 1; -- …/natural, 512
+SELECT current_schema(), current_setting('timezone');     -- public / UTC
+
+-- app（PgBouncer）
+SELECT current_user, current_schema();            -- pmstudio_app / public
+SELECT pmstudio_tokens('中文检索');                -- 有 token
+SELECT count(*) FROM material_chunks;             -- SELECT 可用
+```
+
+- `pg_search` 的 `pdb` / `paradedb` 两个 schema 必须有 **USAGE**，函数必须有
+  **EXECUTE**；`vector` 类型必须有 **USAGE**。这些由 `--bootstrap` / `--finalize`
+  补齐，恢复或换库后要重新确认。
+- app 角色**没有 DDL 权限**：只授 `SELECT/INSERT/UPDATE/DELETE`、序列
+  `USAGE/SELECT`、函数 `EXECUTE`；建表/迁移/备份一律走 owner。
+- PgBouncer 是 transaction mode（`MAX_PREPARED_STATEMENTS=0`），backend 连接层
+  `prepare_threshold=None`；不要在请求路径上开 session 级 GUC。
+
+## 3. 备份与恢复
+
+### 3.1 每日备份（RPO ≤ 24h）
 
 ```bash
-cd /srv/pmstudio
-set -a; . backend/.env.ops; set +a
-docker compose run --rm --no-deps \
-  -e PMSTUDIO_DIRECT_DATABASE_URL="$PMSTUDIO_DIRECT_DATABASE_URL" \
-  -v "$PWD/backend/scripts:/app/scripts:ro" \
-  -v "$PWD/backend/data:/legacy:ro" \
-  backend uv run --no-sync python scripts/migrate_sqlite_to_pg.py \
-    --sqlite /legacy/backups/legacy/pmstudio-<stamp>.db
+cd backend
+PMSTUDIO_DIRECT_DATABASE_URL=... bash scripts/backup.sh
+PMSTUDIO_DIRECT_DATABASE_URL=... bash scripts/backup.sh --check   # 超 24h 未备即失败
 ```
 
-宿主直连替代方案：
+- 只用 **PG18 客户端** `pg_dump -Fc`；`--no-owner`，排除 `pg_search` / `postgis` /
+  `pg_ivm` 等扩展对象和 `paradedb` / `pdb` / `tiger` / `topology` schema
+  ——恢复时由超级用户预建扩展，避免与 template1 继承的扩展冲突。
+- 备份落盘即 `chmod 600`；保留 7 份日备 + 4 份周备。
+- **不要 `cp` 正在运行的 PGDATA**：文件系统快照可能不一致；只认 `pg_dump`。
+
+### 3.2 恢复演练 / 恢复
 
 ```bash
-cd /srv/pmstudio/backend
-set -a; . .env.ops; set +a
-export PMSTUDIO_DIRECT_DATABASE_URL="postgresql://pmstudio_owner:...@127.0.0.1:5432/pmstudio"
-uv run python scripts/migrate_sqlite_to_pg.py \
-  --sqlite data/backups/legacy/pmstudio-<stamp>.db
+cd backend
+PMSTUDIO_DIRECT_DATABASE_URL=... PMSTUDIO_BOOTSTRAP_DATABASE_URL=... \
+  bash scripts/restore_check.sh
 ```
 
-- **插入 + 校验在同一个事务里**：行数/主键/值/JSON/roundtrip/tokens 失败会整体
-  回滚。`--truncate` 在事务外先清空目标 19 表；它不碰 `schema_migrations`。
-- **embedding 是提交后的独立阶段**：模型调用在事务外；失败时业务行和部分
-  `embedding` 可能已落库。ETL 的 `_verify` **不检查 embedding**。失败后确认是
-  重跑场景再加 `--truncate` 清空重跑（不要手工合并）。
-- 输出逐表行数、running 去重、`vector_index_meta`、重嵌入块数，以及
-  `row_counts/values/json/primary_keys/tokens/roundtrip` 校验。任何一项失败都
-  不算完成。
-- 预期：`sessions` 显示“跳过（源 N / 目标 0）”；重复 running 除最新外改
-  `abandoned` 但保留全部行；重复 `(project_id, sha256)` / 未知表 / 未知源列 /
-  `user_version` 不是 15/17 都会直接中止。
+演练会真调 `backup.sh`，用超级用户建 scratch 库并装 `vector` / `pg_search`，
+再以 **owner** 执行 `pg_restore --exit-on-error --no-owner --no-comments`，
+清空 `sessions`，逐表比对行数与指纹。
 
-## 4. finalize
+生产恢复顺序：
 
-```bash
-cd /srv/pmstudio
-docker compose run --rm --no-deps init \
-  uv run --no-sync python scripts/init_db.py --finalize
-```
+1. 超级用户建空库、`CREATE EXTENSION vector` + `CREATE EXTENSION pg_search CASCADE`；
+2. 给 owner/app `GRANT USAGE ON SCHEMA pdb, paradedb` 与函数 EXECUTE；
+3. owner 执行 `pg_restore --exit-on-error --no-owner --no-comments`；
+4. `uv run python scripts/init_db.py --finalize` 重新断言 owner/模板/app 授权与
+   向量 profile（幂等；恢复库已有用户时不会重建管理员）；
+5. `TRUNCATE sessions`（旧 cookie 必然 401）；
+6. 起 backend，打 `/api/ready`，再抽查一次材料搜索（smoke，不是检索验收）。
 
-finalize 会 seed 首管理员/内置模板、回填 owner、断言孤儿、upsert
-`vector_index_meta`（维度 ≠ 512 明确失败）、给 app 角色授权。**ETL 后必须 finalize**。
+## 4. 维护与故障
 
-> **向量 profile 变了 / ETL 因旧 profile 不兼容跳过嵌入**：finalize 会清空
-> `material_chunks.embedding`。随后必须跑维护任务
-> （`docker compose run --rm maintenance`，或 `scripts/maintenance_worker.py`）：
-> 它按 `embedding IS NULL` 分批重嵌（advisory lock，只写向量、不动块正文）。
-> 不跑 = 语义检索为空。
+- **向量缺失**：`vector_index_meta` profile 变更会清空 `embedding`；随后由维护任务
+  `reembed_missing()` 按 `all-null` + advisory lock + 分批补算。不跑 = 语义检索为空。
+  手动触发：`docker compose run --rm maintenance` 或
+  `cd backend && uv run python scripts/maintenance_worker.py`。
+- **检索验收**：`cd backend && uv run python scripts/retrieval_quality_bench.py
+  --chunk-chars 300`（400 复现旧口径）。它只建临时 schema，跑完销毁，不碰生产库。
+- **`/api/ready` 200 才是就绪**：`/api/health` 只是 liveness；DB/PgBouncer
+  掉线时 health 仍可能 200。
+- **慢查询/锁等待**：app 角色有语句 15s / 锁 3s / 泄漏事务 15s 的角色级超时；
+  看到 55P03 / 57014 时先查 PgBouncer 池和长事务，不要直接抬 backend 超时。
 
-## 5. 校验
+## 5. 换镜像 / 升级
 
-- 看 ETL 输出：行数/主键哈希/值/JSON/tokens/roundtrip 全 OK。
-- 看 finalize 输出：owner 回填数、内置模板数、向量 profile 512 维。
-- **T9 的验收口径只有 tokens 相等与 roundtrip**；recall@5 / FTS/BM25/HNSW 排序
-  不在 T9 验收，挂 T5/T10 的 hard gate（现有罕见词排序用例已明确 xfail）。
-  旧库有材料时额外确认 tokens 非空即可，不能把“查得到一条”说成 recall 已验收。
-- 真备份/恢复演练（PG18 客户端；会建 scratch 库并删掉）：
+1. 先备份（custom format）。
+2. `docker compose down`；只删旧库卷：`docker volume rm <project>_pgdata`
+   （`down -v` 会连 `fastembed-cache`、`pgbouncer-auth` 一起删）。
+3. 换 `docker-compose.yml` 的镜像 digest；从**空 PGDATA** 起。
+4. 重跑 `init --all`，按 §2 核对；恢复数据走 §3.2。
+5. **不做**数据目录拷贝、不双写、不反向迁移；旧库数据未导入就是未导入，
+   恢复来源只有备份。
 
-```bash
-cd /srv/pmstudio
-docker compose run --rm --no-deps \
-  -e PMSTUDIO_DIRECT_DATABASE_URL="$PMSTUDIO_DIRECT_DATABASE_URL" \
-  -e PMSTUDIO_BOOTSTRAP_DATABASE_URL="$PMSTUDIO_BOOTSTRAP_DATABASE_URL" \
-  -v "$PWD/backend/data/backups:/backups" \
-  backend bash scripts/restore_check.sh
-```
+## 6. 明确不做
 
-## 6. 切 app URL 并 smoke
-
-1. 把 backend 的 `PMSTUDIO_DATABASE_URL` 指向 PgBouncer（6432），ops/init 仍用
-   `PMSTUDIO_DIRECT_DATABASE_URL`（5432）；两个 URL 不互相推导。
-2. 起后端；`GET /api/ready` 必须 200（`/api/health` 只是 liveness）。
-3. 登录（**所有用户重新登录**：`sessions` 不迁，旧 cookie 必然 401）。
-4. 打开一个旧项目：文档标题/版本/证据可读；打开最近一轮；材料搜索能返回结果
-   （这只是 smoke，不是 recall 验收）。
-5. 观察期至少一个工作日：错误率、`/api/ready`、慢查询、备份任务。
-
-## 7. 备份与 RPO
-
-- 切换后每日 03:00 用镜像内 PG18 客户端备份（`PostgreSQL` custom format）：
-
-```bash
-cd /srv/pmstudio
-docker compose run --rm --no-deps \
-  -e PMSTUDIO_DIRECT_DATABASE_URL="$PMSTUDIO_DIRECT_DATABASE_URL" \
-  -v "$PWD/backend/data/backups:/backups" \
-  backend bash scripts/backup.sh /backups
-```
-
-- 保留 7 日 + 4 周；**RPO ≤ 24h**；每小时 `backup.sh --check` 发现“昨天没备”。
-- 恢复演练用 `scripts/restore_check.sh`；恢复后 `TRUNCATE sessions`，旧 cookie 失效。
-- 旧 SQLite 备份保留 30 天；确认不再回滚后才删。
-
-## 8. 回滚
-
-1. 停新后端，确认没有写入 PG。
-2. 用旧镜像 + 旧配置（旧 `PMSTUDIO_DB`）指向第 1 步的 SQLite 备份；不要改旧库、
-   不反向 ETL。
-3. 为避免旧备份里的会话复活，启动前在恢复出的旧库执行 `DELETE FROM sessions;`
-   （或等价地让所有用户重新登录）。
-4. 明确损失：**切流之后写入 PG 的数据不会回到 SQLite**；回滚的 RPO 是“切流那一刻”，
-   不是 24h。PG 数据保留现场，不并入旧库、不双运行时。
-
-## 9. 明确不做
-
-- 不双写、不回写 SQLite、不做影子读。
-- 不把 ETL 脚本进镜像；T10 的 no-sqlite 守卫会把它和对应测试加白名单。
-- 不在线 `ALTER COLUMN TYPE vector(N)`；换 profile/维度走显式迁移 + 重建 HNSW + 维护任务重嵌。
+- 不需要也不提供 SQLite / FTS5 / 一次性 ETL 路径。
+- 不把 `pg_dump` 之外的 PGDATA 文件复制当备份。
+- 不在线 `ALTER COLUMN TYPE vector(N)`；换维度走显式迁移 + 重建 HNSW + 重嵌。
+- 不在请求路径上跑迁移、seed 或扩展安装。

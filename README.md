@@ -184,7 +184,7 @@ POST /rounds/{id}/confirm
 |---|---|
 | **Agent 框架与编排** | LangGraph 状态图 · 10 个领域化 Agent · fan-out/fan-in · 声明式基类 + 注册表 |
 | **协议** | **MCP**（Model Context Protocol，只读侧 + 模型自主调）· Tool/Function Calling · SSE |
-| **RAG** | 混合检索（PostgreSQL tsvector + jieba + pgvector + bge-small-zh）· 凸组合融合 · 文档解析（docx/xlsx/pdf/网页） |
+| **RAG** | 混合检索（PostgreSQL pg_search BM25 + pgvector + bge-small-zh）· 凸组合融合 · 文档解析（docx/xlsx/pdf/网页） |
 | **记忆与上下文** | 五层记忆 · 跨轮记忆（出处强制 + 用户确认唯一写入口）· 上下文预算治理 |
 | **LLM 工程** | LiteLLM 网关 · 结构化输出归一化（三档口径）· 失败分类权威表 · Prompt 工程 |
 | **韧性与生产** | 熔断 + 隔离舱 + 重试预算 + 抖动退避 · argon2 异步隔离舱 · 三维登录限流 · 混沌工程 |
@@ -210,11 +210,12 @@ POST /rounds/{id}/confirm
 
 | 指标 | 数值 |
 |---|---|
-| 词法索引替换整句 LIKE（SQLite FTS5 时代实测；现为 PG tsvector） | top1 命中 **34 → 134**，recall@5 **39 → 169**（184 查询） |
+| 词法索引替换整句 LIKE（SQLite FTS5 时代实测；现为 pg_search BM25） | top1 命中 **34 → 134**，recall@5 **39 → 169**（184 查询） |
 | 查询用 OR 不用 AND | recall@5 **45/45**（AND 39/45，LIKE 15/45） |
 | 联网材料整页入库 | 混合命中 **29% → 71%** |
 | 向量预算按"字数"而非"块数" | 语义覆盖 **41% → 66%** |
 | 融合算法选型 | RRF → 凸组合（α·余弦 + (1−α)·饱和归一 BM25），真余弦保住分数幅度 |
+| 冻结语料（pg_search + Robertson，2026-10-28） | 300/791：词面 r5 **.844**、改述 r5 **.857**、跨块 **4/15**；400/646 跨块 **7/15**（复现旧口径） |
 
 **MCP 侧**（`scripts/mcp_probe.py` 真跑）：模型**自主**选中工具并据此作答
 
@@ -259,12 +260,13 @@ cd backend && uv run python scripts/mcp_probe.py --list      # 只列工具
 - **单用户本地应用**：backend 只经 PgBouncer（transaction mode）连 PG；4 workers
   负载门已过（100 HTTP + 20 轮内写，0 错误/超时/55P03/57014，HTTP p95 88ms）。
   跨 worker 的轮内 in-flight / 条件 claim 仍归 P3b-1。
-- **无外部向量数据库**：词法 + 语义检索跑在 PostgreSQL 18 的 tsvector/GIN 与
+- **无外部向量数据库**：词法 + 语义检索跑在 PostgreSQL 18 的 pg_search BM25 与
   pgvector/HNSW 上——零第二存储、可复现，代价是不适合百万级文档。
-- **T5 罕见词召回门仍开**：PG `ts_rank_cd` 没有 IDF，罕见词会被常见词压过；
-  对应 `xfail(strict=True)` 保留，不修 FTS 算法、不算通过。
-- **SQLite 已删除**：运行时、测试、脚本都不再依赖 SQLite；只有一次性 ETL
-  `scripts/migrate_sqlite_to_pg.py` 与它的测试在 no-sqlite 守卫白名单里。
+- **罕见词已由 Robertson BM25 处理**：IDF 对罕见词保留高权重，小语料负 IDF 钳到 0；
+  旧 `xfail(strict=True)` 已删除。**排序债仍在**：钳制后 top1/MRR 低于旧 300 目标，
+  见 `04-未决.md` §0.1 R15；不改阈值冒充通过。
+- **SQLite 已删除**：运行时、测试、脚本都不再依赖 SQLite；旧 ETL 脚本与其测试已删，
+  no-sqlite 守卫无白名单。
 
 ---
 
@@ -296,6 +298,9 @@ cd frontend
 npm install
 npx tsc --noEmit
 npx vitest run
+
+# 检索验收（真 PG/pg_search + 真向量；300 当前口径 / 400 旧口径）
+cd backend && uv run python scripts/retrieval_quality_bench.py --chunk-chars 300
 
 # 混沌矩阵（真注入：上游 5xx / 慢响应 / Redis 强断 / 写锁 / 磁盘满）
 cd backend && uv run python scripts/chaos_matrix.py

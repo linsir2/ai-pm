@@ -1,6 +1,6 @@
 # 05 · DDD 架构（怎么实现）
 
-> 技术选型已定：**PostgreSQL 18 + pgvector + PgBouncer + LiteLLM + FastAPI + React/Vite**。
+> 技术选型已定：**PostgreSQL 18 + pgvector + pg_search + PgBouncer + LiteLLM + FastAPI + React/Vite**。
 > 这份回答：分几个限界上下文、聚合与不变量落在哪、端口怎么切、LangGraph 放哪。
 
 ---
@@ -276,6 +276,13 @@ infrastructure/discussion/ roles.py
 请求状态 / 留痕；`MAX_WEB_EXECUTIONS` 与生效名额也只在这里定义一份。API 的
 `POST /rounds/{id}/web-requests/{rid}/decision` 走 `RoundRunner`（`infrastructure/graph/graph.py`
 的 `decide_web_request` 节点），不新开写入路径。
+
+**材料检索实现（2026-10-28）**：`infrastructure/postgres/materials.py` 一个文件里放
+`SqliteMaterialStore`（唯一盖章/写块点）、`SqliteFtsRetriever`（pg_search 200 候选 +
+Robertson BM25 重排）与 `SqliteHybridRetriever`（pgvector KNN + 凸组合，α=.4、每材料 2 槽）。
+`tokenize.py` 只拼 `search_text`（标题 + 章节链 + 正文原样）；分词在数据库侧由
+`pmstudio_tokens`（pg_search jieba）统一完成，应用层不再依赖 jieba。检索只读，
+不写文档；`MaterialRetriever` 协议与 DTO 不变。
 
 **domain 内部的三条依赖规矩**（同样由 `tests/architecture/` 扫 AST 守）：
 

@@ -9,7 +9,7 @@
   owner 回填/断言、内置模板 seed、app 角色 GRANT、向量 profile upsert。
 - `--all`：全新安装一次跑完三步。
 
-迁移窗口里不要用 `--all`：先 `--bootstrap`、再 `--schema-only`、再 ETL、最后
+迁移窗口里不要用 `--all`：先 `--bootstrap`、再 `--schema-only`、最后
 `--finalize`。backend 自己**不**跑迁移、不 seed——它只认 app URL。
 
 每一步都持 `pg_advisory_lock`（session 级），两个 init 同时跑时串行。
@@ -66,7 +66,7 @@ OWNER_STATEMENT_TIMEOUT = "60s"
 OWNER_LOCK_TIMEOUT = "10s"
 OWNER_IDLE_IN_TRANSACTION_TIMEOUT = "60s"
 
-#: 12 张项目域表 + `templates` + `round_skips`（与 SQLite 时代同一口径）。
+#: 12 张项目域表 + `templates` + `round_skips`（与迁移账本同一口径）。
 #: `templates` 的 builtin 行 owner 留 NULL；其余表查全部 NULL。
 OWNER_TABLES: tuple[str, ...] = (
     "documents",
@@ -300,7 +300,7 @@ def bootstrap_database(settings: BootstrapSettings) -> None:
                 idle_in_transaction_session_timeout=APP_IDLE_IN_TRANSACTION_TIMEOUT,
             )
 
-            # owner 负责 DDL/ETL；restore_check 要在同一 URL 上建 scratch 库。
+            # owner 负责 DDL/迁移/备份；restore_check 要在同一 URL 上建 scratch 库。
             connection.execute(
                 sql.SQL("ALTER ROLE {} WITH CREATEDB NOSUPERUSER NOCREATEROLE").format(
                     sql.Identifier(OWNER_ROLE)
