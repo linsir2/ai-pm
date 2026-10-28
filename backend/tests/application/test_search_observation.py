@@ -2,7 +2,8 @@
 
 老观测行只有词面/语义分解，分不清是顶栏搜索还是建轮——R8 的真查询样本因此被污染。
 本文件只钉**用例层**的那一行：`caller=round stage=seed hits=N`。
-顶栏搜索那一行由 `SqliteFtsRetriever` 自己记（见 `test_sqlite_material_search_fts.py`）。
+顶栏搜索那一行由混合检索器（`SqliteFtsRetriever`，实现是 PG）自己记
+（见 `test_sqlite_material_search_fts.py`）。
 """
 
 import logging

@@ -304,7 +304,7 @@ class InMemoryEvidenceRepository(_InMemoryRepository):
 
 
 class InMemoryMemoryRepository(_InMemoryRepository):
-    """跨轮记忆替身（M6）：与 SQLite 实现同一口径——没写过 = 空记忆，覆写整份。"""
+    """跨轮记忆替身（M6）：与 PG 实现同一口径——没写过 = 空记忆，覆写整份。"""
 
     def __init__(self) -> None:
         super().__init__("memory")

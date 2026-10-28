@@ -13,6 +13,7 @@ from tests.architecture.guards import (
     SQLITE_WHITELIST,
     SRC,
     sqlite_imports,
+    sqlite_manifest_offenders,
     sqlite_offenders,
     sqlite_sql_literals,
 )
@@ -22,6 +23,12 @@ BACKEND = SRC.parent
 
 def test_no_sqlite_runtime_left_in_the_tree() -> None:
     assert sqlite_offenders(BACKEND) == {}
+
+    synthetic = 'dependencies = ["sqlite' + '-vec>=0.1.9"]\n'
+    assert sqlite_manifest_offenders(synthetic) == {"sqlite" + "-vec"}
+    for relative in ("pyproject.toml", "uv.lock"):
+        source = (BACKEND / relative).read_text(encoding="utf-8")
+        assert sqlite_manifest_offenders(source) == set(), relative
 
 
 def test_the_sqlite_package_is_gone() -> None:

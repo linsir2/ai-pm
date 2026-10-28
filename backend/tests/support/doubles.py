@@ -313,7 +313,7 @@ class RecordingCallLog:
 
 
 class StaticWorkspaceIndex:
-    """查询投影替身：表里只有本夹具造过的项目（真实现见 infrastructure/sqlite）。"""
+    """查询投影替身：表里只有本夹具造过的项目（真实现见 infrastructure/postgres）。"""
 
     def __init__(self) -> None:
         from pmstudio.application.dto import ProjectSummaryView

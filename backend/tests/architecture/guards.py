@@ -225,10 +225,24 @@ SQLITE_WHITELIST = frozenset(
     }
 )
 
+#: manifest 只查依赖名：`.toml` / `.lock` 不是 SQL 源码，硬套 SQL 模式会误伤。
+#: 同样拆两段拼——守卫测试文件也在被扫的树里。
+SQLITE_MANIFEST_PATTERNS: tuple[str, ...] = (
+    "sqlite" + "-vec",
+    "sqlite" + "_vec",
+)
+
 _SQL_PATTERN = re.compile(
     "|".join(f"(?:{pattern})" for pattern in SQLITE_SQL_PATTERNS),
     re.IGNORECASE,
 )
+
+
+def sqlite_manifest_offenders(source: str) -> set[str]:
+    """依赖 manifest 里重新引入 SQLite 向量包时返回命中项（大小写不敏感）。"""
+
+    lowered = source.casefold()
+    return {pattern for pattern in SQLITE_MANIFEST_PATTERNS if pattern in lowered}
 
 
 def sqlite_imports(source: str) -> set[str]:
