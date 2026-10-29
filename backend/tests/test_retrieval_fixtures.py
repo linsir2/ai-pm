@@ -133,3 +133,22 @@ def test_lexical_urls_must_all_map_to_materials():
 
     with pytest.raises(ValueError, match="URL 不在语料里"):
         _url_to_index(corpus, [[*items[0][:2], "https://example.test/missing"]])
+
+
+def test_heldout_synthetic_queries_are_labeled_and_map_to_materials():
+    """R：held-out synthetic 集必须明确非生产日志，且每条目标的 URL/title 都可映射。"""
+
+    heldout = _load("heldout_synthetic_queries.json")
+    corpus = _load("corpus.json")
+    by_url = {str(item["url"]): str(item["title"]) for item in corpus}
+
+    assert "synthetic held-out" in heldout["_说明"]
+    assert "not real production logs" in heldout["_说明"]
+    queries = heldout["queries"]
+    assert len(queries) == 20
+    assert len({item["query"] for item in queries}) == 20
+    assert {item["kind"] for item in queries} == {"lexical", "paraphrase"}
+    assert sum(1 for item in queries if item["kind"] == "paraphrase") == 12
+    assert all(item["target_url"] in by_url for item in queries)
+    assert all(by_url[item["target_url"]] == item["target_title"] for item in queries)
+    assert len({item["target_url"] for item in queries}) == 15

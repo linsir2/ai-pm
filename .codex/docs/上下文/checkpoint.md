@@ -10,19 +10,19 @@
 
 **分支** `new-branch`（Task 5 提交 `docs(pg): 固化 pg_search 检索验收与文档`；
 前面依次是 T10 `2a170dc` + pg_search Task 1–4 `d9f81af…2a170dc`）。
-检索链已是 **pg_search BM25 + Robertson 重排 + pgvector 融合**；旧的
+检索链已是 **pg_search BM25 + Robertson 重排 + pgvector 融合**（M2：400 宽 / 16000 向量）；旧的
 `tsvector/ts_rank_cd`、罕见词 `xfail(strict=True)`、SQLite/ETL 口径全部退役。
 
 - **schema/启动**：`0002_pg_search.sql` 建 `search_text`、generated `search_tokens`、
   `pmstudio_tokens`（pg_search jieba）与 bm25 索引；官方 ParadeDB 0.26.3-pg18
   镜像，`shared_preload_libraries` 含 `pg_search`，空 PGDATA 初始化。
 - **检索**：200 个 pg_search 候选 → 全语料 Robertson BM25（`k1=1.2`、`b=.75`，
-  IDF 钳 0）→ 前 50 与 pgvector KNN（200）按 α=.4、每材料 2 槽融合。
+  IDF 仅 df>=N-1 钳 0）→ 前 50 与 pgvector KNN（200）按 α=.4、每材料 2 槽融合。
 - **冻结验收**：`backend/scripts/retrieval_quality_bench.py`，数据在
-  `backend/tests/fixtures/retrieval/`。300/791：词面 r5 **.844**、改述 r5 **.857**、
-  跨块 **4/15 = .267**；400/646：跨块 **7/15 = .467**（复现旧口径）。假阳性仍 8/8。
-  **排序债**：同脚本诊断，未钳制改述 `.786/.357/.485`、钳到 0 后
-  `.857/.214/.425`（r5/top1/MRR）；非负 IDF 与钳到 0 同分。见 `04` §0.1 R15；不改阈值。
+  `backend/tests/fixtures/retrieval/`。M2 400/646：词面 r5 **.889**、top1/MRR **.422/.584**；
+  改述 r5 **.929**、top1/MRR **.357/.556**；跨块 **6/15 = .400**；假阳性仍 8/8。
+  300/791 只作对照（`.844/.857`、跨块 4/15）。**R15 已收**（见 `04` §0.1）；
+  20 条 held-out synthetic：top1 `.850`/r5 `1.000`/MRR `.910`。
 - **测试（Task 6 终验，2026-10-28）**：后端 `-m "not slow"` →
   **3232 passed / 52 skipped / 5 deselected / 0 failed**（collected 3289；
   3 条真 PgBouncer + backup/restore 真跑不再跳过；Task 5 review 把 fixture 守卫
@@ -33,7 +33,7 @@
   （100 HTTP 并发 p95 **26.5ms**、20 轮内写并发，0 失败/超时/55P03/57014）·
   `docker compose build` 通过 · `restore_check.sh` PASS（18 行指纹、sessions 清空）·
   pg_search / PgBouncer smoke 通过（extension 0.26.3、bm25 索引、app 角色 jieba）。
-  **R15 排序债仍未收**，不改阈值。
+  **R15 已在 M2 收口**；跨块 7→6、假阳性 8/8 如实记。
 - 文档入口：`02` §11.0.79、`03` 检索验收清单、`05` 检索实现、runbook、
   `README`、`AGENTS` 已同步到 pg_search 与仓库内 fixture。
 
@@ -62,7 +62,7 @@
   + 批补算（只写向量，不动块正文）。
 - **T5 recall gate 已收**（2026-10-28）：pg_search + Robertson BM25 的罕见词用例
   `test_a_rare_lexical_hit_survives_the_semantic_branch` 已转绿，`xfail` 删除；
-  排序债（top1/MRR）另记 `04` §0.1 R15。
+  M2 400/16000 已收 R15；跨块 7→6、假阳性 8/8 如实记。
 - 未变：P3b-1（跨 worker in-flight / 条件 claim、历史趟 TOOL 留痕、stale id 422、
   `used>limit`）仍待后续；`RoundRunner._running_rounds` 进程内串行仍在。
 
@@ -106,8 +106,8 @@
 - **真机**：真模型整轮 `r-359f622d` 跑通，留痕 **E4/E5/E7** 三条；
 - **遗留**：前端把它们归进"没挂到某个席位包上"那段；要更准得单列一段（未做）。
 
-**批 10–14（此前已交，细节见各 commit 与 `docs/plans/`）**：句优先切点 + 块宽 300；
-向量预算按字数 9600 且成硬上限；零命中观测 + 真查询样本；配对增量测量进验收；
+**批 10–14（此前已交，细节见各 commit 与 `docs/plans/`）**：句优先切点；
+M2 块宽 400、向量预算按字数 16000 且成硬上限；零命中观测 + 真查询样本；配对增量测量进验收；
 输出侧 `max_tokens` + 提案上限 21 + 上限登记表（`02` §11.0.90）。
 
 **收尾批顺手修的两笔账**：

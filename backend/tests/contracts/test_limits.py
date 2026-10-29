@@ -231,9 +231,8 @@ def test_the_remaining_documented_limits():
     # 块宽 300 → 400（2026-10-29 M2）：冻结语料 300 宽 791 块、400 宽 646 块；
     # 400 + 标题/章节链（~60）仍低于 bge-small-zh-v1.5 的 **512 token** 模型契约。
     assert tools_limits.CHUNK_CHARS == 400
-    # 联网材料的向量预算量纲仍是「字」：16000 = 400 字 × 40 块。
+    # 联网材料的向量预算量纲仍是「字」；16000 是独立预算，不能反推块宽。
     assert tools_limits.WEB_VECTOR_CHARS == 16_000
-    assert tools_limits.WEB_VECTOR_CHARS == 40 * tools_limits.CHUNK_CHARS
     # **只有一个块宽常量**：同值的两个常量就是第二个真相源（改一处忘另一处）。
     assert not hasattr(tools_limits, "WEB_CHUNK_CHARS"), "块宽常量又长出第二个来"
     assert tools_limits.MAX_MATERIAL_CHARS == 200_000

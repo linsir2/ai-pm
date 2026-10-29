@@ -215,7 +215,7 @@ POST /rounds/{id}/confirm
 | 联网材料整页入库 | 混合命中 **29% → 71%** |
 | 向量预算按"字数"而非"块数" | 语义覆盖 **41% → 66%** |
 | 融合算法选型 | RRF → 凸组合（α·余弦 + (1−α)·饱和归一 BM25），真余弦保住分数幅度 |
-| 冻结语料（pg_search + Robertson，2026-10-28） | 300/791：词面 r5 **.844**、改述 r5 **.857**、跨块 **4/15**；400/646 跨块 **7/15**（复现旧口径） |
+| 冻结语料（pg_search + Robertson，M2 2026-10-29） | 400/646：词面 r5 **.889**、改述 r5 **.929**、跨块 **6/15**；300/791 对照 `.844/.857`；20 条 held-out synthetic `.850/1.000/.910` |
 
 **MCP 侧**（`scripts/mcp_probe.py` 真跑）：模型**自主**选中工具并据此作答
 
@@ -263,8 +263,7 @@ cd backend && uv run python scripts/mcp_probe.py --list      # 只列工具
 - **无外部向量数据库**：词法 + 语义检索跑在 PostgreSQL 18 的 pg_search BM25 与
   pgvector/HNSW 上——零第二存储、可复现，代价是不适合百万级文档。
 - **罕见词已由 Robertson BM25 处理**：IDF 对罕见词保留高权重，小语料负 IDF 钳到 0；
-  旧 `xfail(strict=True)` 已删除。**排序债仍在**：钳制后 top1/MRR 低于旧 646/400 历史参考，
-  见 `04-未决.md` §0.1 R15；不改阈值冒充通过。
+  旧 `xfail(strict=True)` 已删除。M2 400/16000 后 R15 已收；跨块 7→6、假阳性 8/8 如实记。
 - **SQLite 已删除**：运行时、测试、脚本都不再依赖 SQLite；旧 ETL 脚本与其测试已删，
   no-sqlite 守卫无白名单。
 
@@ -299,8 +298,8 @@ npm install
 npx tsc --noEmit
 npx vitest run
 
-# 检索验收（真 PG/pg_search + 真向量；300 当前口径 / 400 旧口径）
-cd backend && uv run python scripts/retrieval_quality_bench.py --chunk-chars 300
+# 检索验收（真 PG/pg_search + 真向量；400 为 M2 当前口径 / 300 对照）
+cd backend && uv run python scripts/retrieval_quality_bench.py --chunk-chars 400
 
 # 混沌矩阵（真注入：上游 5xx / 慢响应 / Redis 强断 / 写锁 / 磁盘满）
 cd backend && uv run python scripts/chaos_matrix.py

@@ -474,6 +474,57 @@ def _evaluate(
     }
 
 
+def _heldout(
+    corpus: Corpus,
+    *,
+    path: Path,
+    retriever: SqliteHybridRetriever,
+    observations: _ObservationHandler,
+) -> dict[str, Any]:
+    """独立 held-out 集：按目标 URL 算材料级 top1/r5/MRR。"""
+
+    if not path.is_file():
+        raise ValueError(f"缺 held-out 查询文件：{path}")
+    payload = _load_json(path)
+    items = payload.get("queries") if isinstance(payload, dict) else None
+    if not isinstance(items, list) or not items:
+        raise ValueError(f"{path} 没有 queries")
+    url_to_index = {
+        str(document["url"]): index for index, document in enumerate(corpus.documents)
+    }
+    records: list[dict[str, Any]] = []
+    for position, item in enumerate(items):
+        url = str(item["target_url"])
+        index = url_to_index.get(url)
+        if index is None:
+            raise ValueError(f"{path} 第 {position + 1} 条 target_url 不在语料里：{url}")
+        material_id = corpus.materials[index]
+        result = _search(retriever, str(item["query"]), observations=observations)
+        material_ids = [hit.material_id for hit in result.hits]
+        rank = material_ids.index(material_id) + 1 if material_id in material_ids else None
+        records.append(
+            {
+                "query": str(item["query"]),
+                "kind": str(item.get("kind", "")),
+                "target_material": material_id,
+                "rank": rank,
+                "top1": rank == 1,
+                "r5": rank is not None and rank <= 5,
+                "rr": 1.0 / rank if rank else 0.0,
+                "latency_ms": result.elapsed_ms,
+            }
+        )
+    n = len(records)
+    return {
+        "n": n,
+        "top1": _mean([1.0 if row["top1"] else 0.0 for row in records]),
+        "r5": _mean([1.0 if row["r5"] else 0.0 for row in records]),
+        "mrr": _mean([float(row["rr"]) for row in records]),
+        "latency_ms": _mean([float(row["latency_ms"]) for row in records]),
+        "records": records,
+    }
+
+
 @contextmanager
 def _scratch(database_url: str | None) -> Iterator[Any]:
     if database_url:
@@ -498,6 +549,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     corpus_path, queries_dir = _fixture_paths(args.corpus)
     documents = _documents(corpus_path)
     chunk_queries_path = args.cross_queries or queries_dir / "cross_queries.json"
+    heldout_path = args.heldout_queries or queries_dir / "heldout_synthetic_queries.json"
     with _scratch(args.database_url) as database:
         connection = connect(database.direct_url)
         observations = _ObservationHandler()
@@ -531,6 +583,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result["fusion_alpha"] = FUSION_ALPHA
             result["material_slots"] = _MATERIAL_SLOTS
             result["limit"] = LIMIT
+            result["heldout"] = _heldout(
+                corpus,
+                path=heldout_path,
+                retriever=retriever,
+                observations=observations,
+            )
             return result
         finally:
             logger.removeHandler(observations)
@@ -575,6 +633,12 @@ def _print_summary(result: dict[str, Any]) -> None:
         f"latency_ms p50={latency['p50']:.1f} p95={latency['p95']:.1f}"
         f" mean={latency['mean']:.1f} max={latency['max']:.1f} n={latency['n']}"
     )
+    heldout = result.get("heldout")
+    if heldout:
+        print(
+            f"heldout n={heldout['n']} top1={heldout['top1']:.3f}"
+            f" r5={heldout['r5']:.3f} mrr={heldout['mrr']:.3f}"
+        )
     print(
         f"ingest={result['ingest_seconds']:.1f}s measure={result['measure_seconds']:.1f}s"
     )
@@ -586,8 +650,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--chunk-chars",
         type=int,
         choices=(300, 400),
-        default=300,
-        help="块宽：300=当前生产口径，400=旧口径；默认 300",
+        default=400,
+        help="块宽：400=当前生产口径，300=对照；默认 400",
     )
     parser.add_argument(
         "--corpus",
@@ -600,6 +664,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         default=None,
         help="冻结跨块查询文件；默认读语料目录的 cross_queries.json，缺失即失败",
+    )
+    parser.add_argument(
+        "--heldout-queries",
+        type=Path,
+        default=None,
+        help="held-out synthetic 查询；默认读语料目录的 heldout_synthetic_queries.json",
     )
     parser.add_argument(
         "--database-url",

@@ -123,7 +123,7 @@ PMSTUDIO_DIRECT_DATABASE_URL=... PMSTUDIO_BOOTSTRAP_DATABASE_URL=... \
   手动触发：`docker compose run --rm maintenance` 或
   `cd backend && uv run python scripts/maintenance_worker.py`。
 - **检索验收**：`cd backend && uv run python scripts/retrieval_quality_bench.py
-  --chunk-chars 300`（400 复现旧口径）。它只建临时 schema，跑完销毁，不碰生产库。
+  --chunk-chars 400`（300 为对照）。它只建临时 schema，跑完销毁，不碰生产库。
 - **`/api/ready` 200 才是就绪**：`/api/health` 只是 liveness；DB/PgBouncer
   掉线时 health 仍可能 200。
 - **慢查询/锁等待**：app 角色有语句 15s / 锁 3s / 泄漏事务 15s 的角色级超时；

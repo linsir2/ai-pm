@@ -1,0 +1,165 @@
+{
+  "_说明": "synthetic held-out, not real production logs",
+  "queries": [
+    {
+      "query": "RAG 优化做了几轮，怎么才能说清楚效果是真的变好了？",
+      "target_url": "https://help.aliyun.com/zh/model-studio/rag-optimization",
+      "target_title": "RAG效果优化-大模型服务平台百炼(Model Studio)-阿里云帮助中心",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "目标在“建立评估基线”：材料强调“优化前需要一套可量化的评估标准，否则无法判断改进是否有效”。"
+    },
+    {
+      "query": "用户问法和文档里的写法对不上，检索老是漏，有什么办法多覆盖几种说法？",
+      "target_url": "https://www.cnblogs.com/zhanchenjin/p/21185132",
+      "target_title": "RAG召回率提升全攻略：7大核心方法让检索更精准 - 若-飞 - 博客园",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "目标在“Query Rewrite”：材料讲“通常使用LLM生成3-5个查询变体，配合HyDE（假设文档嵌入）技术使用效果更佳”。"
+    },
+    {
+      "query": "知识库召回不准，到底是资料不全、切得不好，还是向量模型选错了？",
+      "target_url": "https://www.clougence.com/blog/ai/recall_rate_improve",
+      "target_title": "RAG 青铜升级：知识库召回率优化实战攻略 | CloudCanal-企业级数据同步",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "材料把低召回归因于数据、分块、Embedding 和结构，如“知识来源单一，未能全面汇聚 FAQ、产品文档、技术手册、历史工单等高价值内容”。"
+    },
+    {
+      "query": "企业文档里表格、公式和扫描件很多，入库解析时最容易丢什么？",
+      "target_url": "https://www.ieisystem.com/about/news/16680.html",
+      "target_title": "【元脑技术详解】改进三大关键环节，构建高精度大模型RAG知识库-浪潮信息",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "解析环节专门讲布局、表格、公式、OCR，如“精确提取文本、表格、图像、公式等多种信息文字，表格内容识别正确率超过95%”。"
+    },
+    {
+      "query": "有没有能直接拿来跑的 Python 文档切片代码，不想自己从头写？",
+      "target_url": "https://blog.csdn.net/keeppractice/article/details/149114892",
+      "target_title": "文档切片在 RAG 系统中的方法详解：原理、优劣与实战代码",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "材料给出可直接套用的 Python 实现，如“固定长度 + 滑动窗口切片（推荐）”。"
+    },
+    {
+      "query": "想先用小切片命中，再把所在段落一起交给模型，这种索引该怎么搭？",
+      "target_url": "https://cloud.tencent.com/developer/article/2585755",
+      "target_title": "构建AI智能体：优化 RAG 检索精度：深入解析 RAG 中的五种高级切片策略-腾讯云开发者社区-腾讯云",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "层次切片的核心是细粒度检索、父级补上下文：“可以先检索最细粒度的块以找到最相关的信息”。"
+    },
+    {
+      "query": "语义切片明明开了却没生效，通常是哪一步没配好？",
+      "target_url": "https://github.com/yaojingang/GEOFlow/wiki/%E7%9F%A5%E8%AF%86%E5%BA%93%E5%88%87%E7%89%87%E4%B8%8ERAG",
+      "target_title": "知识库切片与RAG · yaojingang/GEOFlow Wiki · GitHub",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "常见问题直接回答语义切片为何不生效：“检查是否选择了 LLM 语义规划策略，以及是否配置了可用的聊天模型作为规划模型”。"
+    },
+    {
+      "query": "文档切分方案这么多，产品选型时怎么在效果和成本之间取舍？",
+      "target_url": "https://www.woshipm.com/it/6141042.html",
+      "target_title": "干货分享 | RAG的5种切分策略 | 人人都是产品经理",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "材料逐项比较五种切分的成本与效果：“唯一的问题是，这种方式的计算成本是五种方法中最高的”。"
+    },
+    {
+      "query": "推理账单已经占了运营成本的大头，有哪些能落地的降本手段？",
+      "target_url": "https://intl.cloud.baidu.com/zh/article/8926960",
+      "target_title": "大模型推理成本优化实践：如何实现高效低耗的AI应用部署",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "文章从计费、缓存、混合部署讲降本，并给出“推理成本往往占据总运营成本的60%以上”的背景。"
+    },
+    {
+      "query": "上下文越拉越长，显存占用把推理成本推高了，怎么压下来？",
+      "target_url": "https://cloud.tencent.com/developer/article/2619708",
+      "target_title": "1. 大模型进入“推理成本时代“-腾讯云开发者社区-腾讯云",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "长上下文场景下“KVCache的显存占用成为推理成本的主要驱动因素”，对应 Hybrid Cache 等方案。"
+    },
+    {
+      "query": "想在本地部署大模型，几个推理框架应该怎么挑？",
+      "target_url": "https://github.com/luhengshiwo/LLMForEverybody/blob/main/02-%E7%AC%AC%E4%BA%8C%E7%AB%A0-%E9%83%A8%E7%BD%B2%E4%B8%8E%E6%8E%A8%E7%90%86/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%A1%86%E6%9E%B6%EF%BC%88%E4%B8%80%EF%BC%89%E7%BB%BC%E8%BF%B0.md",
+      "target_title": "LLMForEverybody/02-第二章-部署与推理/大模型推理框架（一）综述.md at main · luhengshiwo/LLMForEverybody · GitHub",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "综述把 Ollama 定位为本地部署框架，“旨在简化在本地环境中部署和运行大型语言模型”。"
+    },
+    {
+      "query": "推理延迟高，不换硬件的前提下还能从哪些层面优化？",
+      "target_url": "https://www.iminho.me/wiki/blog-51.html",
+      "target_title": "大模型推理性能遇瓶颈？这些优化技巧助你强势突破 - Powered by MinDoc",
+      "target_chunk": null,
+      "kind": "paraphrase",
+      "why": "性能优化篇给出量化、算子融合、动态批处理等不改硬件的路径，如“将多个连续的小计算步骤合并为一个大步骤”。"
+    },
+    {
+      "query": "知识库最大召回数量上限 20，和相似度阈值、排序模型怎么配合？",
+      "target_url": "https://www.alibabacloud.com/help/zh/model-studio/rag-knowledge-base",
+      "target_title": "知识库 - 大模型服务平台百炼 - 阿里云",
+      "target_chunk": null,
+      "kind": "lexical",
+      "why": "材料说明最大召回数量是排序后取前 K 条：“选出最相关的前K条加入大模型的输入Token供回答参考”。"
+    },
+    {
+      "query": "智能切分之后还需要人工检查修正文本切片吗？",
+      "target_url": "https://www.alibabacloud.com/help/zh/model-studio/rag-optimization",
+      "target_title": "RAG效果优化 - 大模型服务平台百炼 - 阿里云",
+      "target_chunk": null,
+      "kind": "lexical",
+      "why": "材料建议智能切分后仍要人工复核：“对文本切片的内容进行人工检查和修正”。"
+    },
+    {
+      "query": "千帆平台接入 33 个大模型，推理成本降 50% 是怎么做到的？",
+      "target_url": "https://hk.finance.yahoo.com/news/%E7%99%BE%E5%BA%A6%E6%99%BA%E8%83%BD%E9%9B%B2-%E5%8D%83%E5%B8%86%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%B9%B3%E5%8F%B0%E6%8E%A5%E5%85%A5%E6%96%B0%E6%A8%A1%E5%9E%8B-%E6%8E%A8%E7%90%86%E6%88%90%E6%9C%AC%E5%8F%AF%E9%99%8D50-073119329.html",
+      "target_title": "百度智能雲：千帆大模型平台接入新模型 推理成本可降50%",
+      "target_chunk": null,
+      "kind": "lexical",
+      "why": "标题与正文都给出 33 个模型和降本 50%：“全面接入LLaMA2全系列、ChatGLM2、RWKV及MPT等33個大模型”。"
+    },
+    {
+      "query": "构造评测集至少 100 条，事实型、比较型、教程型、分析型都要覆盖吗？",
+      "target_url": "https://help.aliyun.com/zh/model-studio/rag-optimization",
+      "target_title": "RAG效果优化-大模型服务平台百炼(Model Studio)-阿里云帮助中心",
+      "target_chunk": null,
+      "kind": "lexical",
+      "why": "评测集要求覆盖四类问题：“准备至少 100 条测试用例”。"
+    },
+    {
+      "query": "数据分隔长度 1000、分隔重叠 100 是在哪一步设置的？",
+      "target_url": "https://www.clougence.com/blog/ai/recall_rate_improve",
+      "target_title": "RAG 青铜升级：知识库召回率优化实战攻略 | CloudCanal-企业级数据同步",
+      "target_chunk": null,
+      "kind": "lexical",
+      "why": "实战步骤明确给出分隔参数：“设置数据分隔长度 1000，分隔重叠 100”。"
+    },
+    {
+      "query": "Yuan-EB 在 C-MTEB 检索任务上拿过冠军吗？",
+      "target_url": "https://www.ieisystem.com/about/news/16680.html",
+      "target_title": "【元脑技术详解】改进三大关键环节，构建高精度大模型RAG知识库-浪潮信息",
+      "target_chunk": null,
+      "kind": "lexical",
+      "why": "材料称 Yuan-EB 在 C-MTEB 检索任务夺冠：“Yuan-EB，在权威的嵌入模型测试榜单C-MTEB中斩获检索任务冠军”。"
+    },
+    {
+      "query": "PagedAttention 3.0 的动态页大小和跨 GPU 页迁移解决什么问题？",
+      "target_url": "https://cloud.tencent.com/developer/article/2619708",
+      "target_title": "1. 大模型进入“推理成本时代“-腾讯云开发者社区-腾讯云",
+      "target_chunk": null,
+      "kind": "lexical",
+      "why": "vLLM 2026 的更新点：“支持动态页大小调整和跨GPU页迁移”。"
+    },
+    {
+      "query": "MQA、GQA、Flash Attention、KV Cache 分别解决推理里的什么问题？",
+      "target_url": "https://github.com/luhengshiwo/LLMForEverybody/blob/main/02-%E7%AC%AC%E4%BA%8C%E7%AB%A0-%E9%83%A8%E7%BD%B2%E4%B8%8E%E6%8E%A8%E7%90%86/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%A1%86%E6%9E%B6%EF%BC%88%E4%B8%80%EF%BC%89%E7%BB%BC%E8%BF%B0.md",
+      "target_title": "LLMForEverybody/02-第二章-部署与推理/大模型推理框架（一）综述.md at main · luhengshiwo/LLMForEverybody · GitHub",
+      "target_chunk": null,
+      "kind": "lexical",
+      "why": "综述逐项解释这些加速技术：“MQA（Multi Query Attention）通过并行计算多个查询向量的注意力分布，可以显著提高计算效率”。"
+    }
+  ]
+}

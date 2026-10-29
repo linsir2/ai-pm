@@ -48,13 +48,13 @@
   no-sqlite 守卫（AST import + 非 docstring SQL 字面量）**无白名单**。4 workers 负载门
   通过（100 HTTP + 20 轮内写，0 错误/超时/55P03/57014，HTTP p95 88ms；DB 连接池查询
   p95 43ms 仅诊断）。
-- **pg_search BM25（2026-10-28）**：官方 ParadeDB 0.26.3-pg18 镜像；`0002_pg_search.sql`
+- **pg_search BM25（M2，2026-10-29）**：官方 ParadeDB 0.26.3-pg18 镜像；`0002_pg_search.sql`
   建 `search_text` / generated `search_tokens` / `pmstudio_tokens`（jieba）/ bm25 索引；
-  检索是 200 个 pg_search 候选 → 全语料 Robertson BM25 重排（IDF 钳 0）→ 50 进融合，
+  检索是 200 个 pg_search 候选 → 全语料 Robertson BM25 重排（仅 df>=N-1 钳 0）→ 50 进融合，
   再与 pgvector KNN 按 α=.4、每材料 2 槽融合。冻结语料验收入口
   `backend/scripts/retrieval_quality_bench.py`（fixture 在 `tests/fixtures/retrieval/`）：
-  300/791 跨块 `4/15=.267`、400/646 跨块 `7/15=.467`；词面 r5 `.844`、改述 r5 `.857`。
-  **排序债仍在**：IDF 钳制后 top1/MRR 低于旧 646/400 历史参考，见 `04` §0.1 R15，不改阈值。
+  **M2 当前 400/646**：词面 r5 `.889`、改述 r5 `.929`、跨块 `6/15=.400`、top1/MRR `.422/.357 / .584/.556`；300/791 只作对照（`.844/.857`、跨块 `4/15`）。
+  **R15 已收**：M2 400/16000 追平/超过旧 646/400；跨块 7→6 与假阳性 8/8 如实记。20 条 held-out synthetic：top1 `.850`/r5 `1.000`/MRR `.910`。
 
 - 后端：测试全绿、`ruff` 无告警；结构性守卫在 `tests/architecture/` 与 `tests/contracts/`，
   含"守卫自己的判据有没有效"那一层。守卫条数与测试条数**都会过期**，这里不写数字——
@@ -100,7 +100,7 @@ MCP 读/写侧。
 | **Docker 一键起** | `docker compose up -d`（后端 + PG + PgBouncer + Caddy + Redis；app 读 `backend/.env`，ops 读 `backend/.env.ops`） |
 | **镜像构建** | `docker compose build`（CI 也跑这一步——Dockerfile 的错**不构建一次发现不了**） |
 | **无 Docker 时起** | `scripts/dev_stack.sh`（原生进程复现 compose 的启动序列；需已有可达 PG/PgBouncer；`--check` 只核对配置键名、`--stop` 收尾） |
-| **检索验收** | `cd backend && uv run python scripts/retrieval_quality_bench.py --chunk-chars 300`（真 PG/pg_search；400 复现旧口径） |
+| **检索验收** | `cd backend && uv run python scripts/retrieval_quality_bench.py --chunk-chars 400`（真 PG/pg_search；300 为对照） |
 | **MCP 真跑验证** | `cd backend && uv run python scripts/mcp_probe.py --builtin`（真模型 + 真 MCP server） |
 | **MCP stdio 用例** | `cd backend && uv run pytest tests/infrastructure/test_mcp_client.py -k stdio`（**真子进程**，不是进程内替身） |
 | 混沌矩阵 | `cd backend && uv run python scripts/chaos_matrix.py`（真注入 5 类故障） |
