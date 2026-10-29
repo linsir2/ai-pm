@@ -24,7 +24,8 @@
     uv run python scripts/retrieval_quality_bench.py --chunk-chars 400
     uv run python scripts/retrieval_quality_bench.py --chunk-chars 300 --json /tmp/r300.json
     # held-out synthetic 默认随 fixture 一起跑；可显式：
-    uv run python scripts/retrieval_quality_bench.py --heldout-queries tests/fixtures/retrieval/heldout_synthetic_queries.json
+    uv run python scripts/retrieval_quality_bench.py \
+        --heldout-queries tests/fixtures/retrieval/heldout_synthetic_queries.json
 """
 
 from __future__ import annotations

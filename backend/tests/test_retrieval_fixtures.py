@@ -60,7 +60,7 @@ def test_frozen_retrieval_fixture_has_the_declared_shape():
 def test_frozen_corpus_chunks_to_646_blocks_at_the_production_width():
     """R：生产块宽 400 下，冻结语料应是 **15 份 / 646 块**，且标题标记与锚点不破。
 
-    300 宽是 791 块（M2 之前的当前口径）。646 是 400 宽复现旧口径的块数，也是
+    300 宽是 791 块（M2 之前的历史口径）。646 是 M2 当前 400 宽的块数，也是
     `cross_queries.json` 的 `"400"` 组能逐条映射的前提（目标块 #c06 / #c10 必须存在）。
     """
     assert CHUNK_CHARS == 400
