@@ -10,7 +10,9 @@ on:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    # PG18 客户端从 PGDG 的 noble 源安装；固定 24.04，避免 ubuntu-latest
+    # 迁移到 26 后 apt 源/包名漂移把整个 backend job 挡在测试之前。
+    runs-on: ubuntu-24.04
     defaults:
       run:
         # pytest 的 `pythonpath = ["src", "."]` 依赖工作目录是 `backend/`。
