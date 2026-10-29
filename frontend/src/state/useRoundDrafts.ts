@@ -59,6 +59,8 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     setAnswers({});
     setAccepted([]);
     setMemoryAccepted([]);
+    // 新轮的决策卡必须重新弹出（旧轮上的"收起"不许带过来）
+    setCollapsed(false);
     setSeats(round === null ? [] : defaultSeats(round));
     // 默认一条都不勾：勾了才会真联网（后端也拿这个当唯一判据）
     setWebQueries([]);
@@ -68,10 +70,11 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     setEdits(round === null ? {} : initialClaimEdits(round));
   }, [roundId]);
 
-  // 抽屉什么时候该自己展开：换轮，或"该答问卷 / 该勾草案"这件事本身变了。
-  // 用户手动收起之后，普通的数据刷新不许再把它弹开。
+  // 抽屉什么时候该自己展开：换轮，或"该交复述 / 该答问卷 / 该勾草案"这件事本身
+  // 变了。opening 与问卷/草案同权——新轮的复述卡必须自动弹出（2026-10-29 对话流），
+  // 用户手动收起之后，同一 waiting_on 的普通数据刷新不许再把它弹开（mode 不变）。
   useEffect(() => {
-    if (mode === "questionnaire" || mode === "draft") setCollapsed(false);
+    if (mode === "opening" || mode === "questionnaire" || mode === "draft") setCollapsed(false);
   }, [roundId, mode]);
 
   // 草案一到位，默认勾上"你说过的 + 它替你判断的"（它提议的默认不勾）。

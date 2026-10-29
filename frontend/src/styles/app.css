@@ -1697,7 +1697,7 @@ details.drawer__history[open] > summary::before {
 .chips {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 3px;
   justify-content: flex-end;
 }
 
@@ -1706,9 +1706,11 @@ details.drawer__history[open] > summary::before {
   /* `E12` / `E204` 是编号不是数量，但 DESIGN.md 承诺编号一律等宽数字——
      此前只有 `.mono` 带了 tabular-nums，胶囊漏了，两串编号并排时宽度会跳。 */
   font-variant-numeric: tabular-nums;
+  /* 密度（2026-10-29）：每条内容都带出处 = 一个功能卡的页面上同编号会出现 N 次；
+     行距与横向留白收窄（尺寸令牌不动），可见性（R3：看得见、点得回）不变。 */
   font-size: var(--step-0);
-  line-height: 1.7;
-  padding: 0 4px;
+  line-height: 1.5;
+  padding: 0 3px;
   border: var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--surface);

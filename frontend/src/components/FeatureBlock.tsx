@@ -8,7 +8,6 @@ import { fieldEntries, groupFields } from "../document/structure";
 import { featureFields, fieldTitle } from "../state/schema";
 import { EntryList } from "./EntryList";
 import { EvidenceChain } from "./EvidenceChain";
-import { EvidenceChip } from "./EvidenceChip";
 import { useEdit } from "./EditContext";
 
 export function FeatureBlock({
@@ -91,7 +90,6 @@ export function FeatureBlock({
               <h4 className="field__name">
                 <span className="field__num mono">{order + 1}</span>
                 {fieldTitle(block.field)}
-                <EvidenceChip eids={block.entries.flatMap((entry) => entry.refs)} />
               </h4>
               <EntryList
                 blockId={block.block_id}

@@ -183,7 +183,11 @@ function Workspace() {
   }, [pendingScroll, activeSection]);
 
   const evidence = useMemo(() => buildEvidenceIndex(round), [round]);
-  /** 点编号：先看本轮索引（快）→ 再问后端（跨轮 / 被谁用着）→ 能跳轮就跳轮，能滚内容就滚内容。 */
+  /** 点编号：先看本轮索引（快）→ 再问后端（跨轮 / 被谁用着）。
+   *  **编号的真身在轮次里**（复述卡里的主张 / 席位判断的材料块）——文档条目只是"被
+   *  证据支撑的结果"。所以跳转永远优先把原话亮出来：跨轮就切轮、本轮就展开浮层；
+   *  只有连轮次都归属不上的编号，才退回"滚到引用它的那条内容"（那一下可能
+   *  看起来原地不动，但块上会闪一下，至少告诉你"就是这条"）。 */
   const jumpToEvidenceById = useCallback(
     (eid: string) => {
       if (jumpToEvidence(eid)) return;
@@ -192,6 +196,18 @@ function Workspace() {
       void (async () => {
         try {
           const hit = await api.evidence(projectId, eid);
+          if (hit.round_id !== null) {
+            if (hit.round_id !== shownRound?.round_id) {
+              // 原话在另一轮：把那一轮调出来，浮层/流里的主张会带上 data-eid
+              await data.viewRound(hit.round_id);
+              window.setTimeout(() => jumpToEvidence(eid), 480);
+            } else {
+              // 原话在本轮，但卡收起（浮层不渲染就没有 data-eid）：先展开再跳
+              drafts.setCollapsed(false);
+              window.setTimeout(() => jumpToEvidence(eid), 480);
+            }
+            return;
+          }
           const entryId = hit.used_by[0];
           if (entryId !== undefined && doc !== null) {
             const sectionId = sectionOfEntry(doc, entryId);
@@ -202,17 +218,13 @@ function Workspace() {
               return;
             }
           }
-          if (hit.round_id !== null && hit.round_id !== shownRound?.round_id) {
-            await data.viewRound(hit.round_id);
-            return;
-          }
           data.notify(`出处 ${eid}（${hit.kind_label}）：${hit.summary} —— 还没有落到任何内容里`);
         } catch (error) {
           data.notify(error instanceof ApiError ? error.message : String(error));
         }
       })();
     },
-    [data, doc, shownRound, state.projectId],
+    [data, doc, drafts, shownRound, state.projectId],
   );
 
   // 建项目成功就进工作区（createProject 成功返回 summary，失败返回 null）。

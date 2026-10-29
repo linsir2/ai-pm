@@ -82,6 +82,25 @@ describe("useRoundDrafts", () => {
     rerender({ value: round({ round_id: "r2" }), mode: "questionnaire" });
     expect(result.current.answers).toEqual({});
   });
+
+  it("新一轮的复述卡自动弹出：上一轮收起过的状态不许带过来（2026-10-29 回归）", () => {
+    const opening = round({ waiting_on: "opening_card", step: "claims_ready", questions: [] });
+    const { result, rerender } = render(opening, "opening");
+    act(() => result.current.setCollapsed(true));
+    expect(result.current.collapsed).toBe(true);
+
+    rerender({ value: round({ round_id: "r2", waiting_on: "opening_card", step: "claims_ready" }), mode: "opening" });
+    expect(result.current.collapsed).toBe(false);
+  });
+
+  it("waiting_on 翻到 opening_card（mode 变 opening）时浮层自动弹出，即便此前收起", () => {
+    const opening = round({ waiting_on: "opening_card", step: "claims_ready", questions: [] });
+    const { result, rerender } = render(round({ waiting_on: "none", step: "started" }), "loading");
+    act(() => result.current.setCollapsed(true));
+
+    rerender({ value: opening, mode: "opening" });
+    expect(result.current.collapsed).toBe(false);
+  });
 });
 
 describe("useRoundDrafts · 联网授权（P3a）", () => {
