@@ -22,6 +22,7 @@
 
     cd backend
     uv run python scripts/retrieval_quality_bench.py --chunk-chars 400
+    # 300 为对照：
     uv run python scripts/retrieval_quality_bench.py --chunk-chars 300 --json /tmp/r300.json
     # held-out synthetic 默认随 fixture 一起跑；可显式：
     uv run python scripts/retrieval_quality_bench.py \
