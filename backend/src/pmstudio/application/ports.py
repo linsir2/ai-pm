@@ -42,6 +42,7 @@ if TYPE_CHECKING:
         OpinionSourceView,
         ParsedMaterial,
         ProjectSummaryView,
+        ResearchHit,
         RoundHeadView,
         RoundOutcomeView,
         RoundView,
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
     )
     from pmstudio.domain.exploration.exploration import ExplorationScope
     from pmstudio.domain.round.skip import RoundSkip
+    from pmstudio.harness.tools.spec import ToolCall, ToolSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +202,33 @@ class WebFetcher(Protocol):
     async def fetch(self, *, url: str) -> FetchedPage: ...
 
 
+@runtime_checkable
+class ResearchToolbox(Protocol):
+    """一趟研究的工具集合（实现是 `infrastructure/tools/research_tools.py`）。
+
+    **为什么它是个端口而不是 application 直接 new 一个实现**：工具要联网、要解析，
+    属于 infrastructure；`application` 只许依赖端口（`tests/architecture/test_layers.py`
+    钉着）。工厂由 `bootstrap` 注入——一次研究一个实例（`sources` 是 per-run 状态）。
+    """
+
+    def specs(self) -> tuple[ToolSpec, ...]: ...
+
+    async def invoke(self, spec: ToolSpec, call: ToolCall) -> str: ...
+
+    @property
+    def sources(self) -> tuple[ResearchHit, ...]: ...
+
+    @property
+    def attempts(self) -> int: ...
+
+    @property
+    def overflowed(self) -> int: ...
+
+
+#: 一次研究要一个新的 toolbox（per-run 状态：收了几条来源、试了几次）。
+ResearchToolboxFactory = Callable[[], ResearchToolbox]
+
+
 @dataclass(frozen=True, slots=True)
 class FetchedPage:
     """一次抓取的产出：**原始字节 + 媒体类型 + 最终地址 + 标题**。
@@ -293,8 +322,19 @@ class MaterialRetriever(Protocol):
     """
 
     def search(
-        self, *, project_id: ProjectId, query: str, limit: int = 5
-    ) -> tuple[MaterialHit, ...]: ...
+        self,
+        *,
+        project_id: ProjectId,
+        query: str,
+        limit: int = 5,
+        include_research_sources: bool = False,
+    ) -> tuple[MaterialHit, ...]:
+        """`include_research_sources=True` 只给**人用的全局搜索**（F6）。
+
+        研究来源不进 RAG 池（它们只走"挂到当前轮"），但用户能在材料库里看见它们，
+        顶栏搜不到就是"丢数据"——所以这条边要显式打开，而不是靠"谁都别搜"。
+        """
+        ...
 
 
 @runtime_checkable
@@ -439,6 +479,10 @@ class ExplorationOrchestrator(Protocol):
     ) -> ExplorationView: ...
 
     async def retry(self, *, exploration_id: str) -> ExplorationView: ...
+
+    async def start_research(self, *, project_id: ProjectId, topic: str) -> ExplorationView:
+        """项目级研究（P3b-1）：同步跑完，返回最终投影（done / failed）。"""
+        ...
 
 
 @runtime_checkable

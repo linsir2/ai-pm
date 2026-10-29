@@ -10,11 +10,13 @@
 
 import type { MaterialSummaryView } from "../api/types";
 import { summarizeEids } from "../api/payload";
+import { isAttachableOrigin } from "../labels";
 
 /** 材料是怎么来的（`origin` 由后端盖章时写死）。认不出的照实显示原值，不猜。 */
 const ORIGIN_TEXT: Record<string, string> = {
   upload: "上传",
   web_search: "联网检索",
+  web_research: "研究来源",
   web_fetch: "抓来的网页",
   simulation: "模拟调研（模型推演）",
 };
@@ -64,7 +66,7 @@ export function MaterialLibrary({
             {materials.map((item) => {
               const on = selected.includes(item.material_id);
               const frozen = item.frozen || item.eids.length > 0;
-              const attachable = item.origin !== "web_search";
+              const attachable = isAttachableOrigin(item.origin);
               // 被引用过的材料可能挂着几十个编号（真跑里一份材料 31 个 E18…E48）：
               // 原样铺开会把整行撑到几百像素高、把表头挤成竖条（P29 F5）。收几个，其余报数。
               const refs = summarizeEids(item.eids);
@@ -104,7 +106,7 @@ export function MaterialLibrary({
                           ? "不带进这一轮"
                           : "带进这一轮"}
                     </button>
-                    {item.origin !== "web_search" && (
+                    {isAttachableOrigin(item.origin) && (
                       <button
                         type="button"
                         className="btn btn--ghost btn--sm"

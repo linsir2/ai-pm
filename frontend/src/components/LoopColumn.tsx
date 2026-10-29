@@ -22,6 +22,7 @@ import type { RoundDrafts } from "../state/useRoundDrafts";
 import { DiscussionTray } from "./DiscussionTray";
 import { DraftDrawer } from "./DraftDrawer";
 import { InboxTray } from "./InboxTray";
+import { ResearchTray } from "./ResearchTray";
 import { LoopComposer } from "./LoopComposer";
 import { LoopPane } from "./LoopPane";
 import { OpeningCard } from "./OpeningCard";
@@ -31,7 +32,7 @@ import { SimReviewDrawer } from "./SimReviewDrawer";
 import { reviewLimits } from "../state/simReview";
 import { RoundHistory } from "./RoundHistory";
 
-export type LoopTab = "round" | "tray" | "discussion";
+export type LoopTab = "round" | "tray" | "discussion" | "research";
 
 export function LoopColumn({
   tab,
@@ -46,6 +47,14 @@ export function LoopColumn({
   history = null,
   explorations = [],
   explorationsPending = false,
+  researches = [],
+  researchesPending = false,
+  researchTopicLimit,
+  researchSourceLimit,
+  onStartWebResearch,
+  onRetryResearch,
+  onAbandonResearch,
+  onAttachResearchSources,
   discussions = [],
   discussionsPending = false,
   discussionAnchor = null,
@@ -188,6 +197,17 @@ export function LoopColumn({
   onDismissCard: (threadId: string, cardId: string) => void;
   /** 拿去验证（M13）：拿卡片原话起一趟聚焦调研（箱与讨论 tab 双处同动作）。 */
   onVerifyCard: (statement: string) => void;
+  /** 研究 tab 的数据源（P3b-1）：这个项目跑过的研究（最新在前）。 */
+  researches?: ExplorationView[];
+  researchesPending?: boolean;
+  /** 研究主题字数上限（`/schema.limits`）：输入框与"超长"提示读它。 */
+  researchTopicLimit?: number;
+  /** 一轮最多挂几张来源卡（`/schema.limits`）：给了就在满额时禁用按钮。 */
+  researchSourceLimit?: number;
+  onStartWebResearch: (topic: string) => void;
+  onRetryResearch: (explorationId: string) => void;
+  onAbandonResearch: (explorationId: string) => void;
+  onAttachResearchSources: (explorationId: string, eids: string[]) => void;
   /** 讨论 tab 的数据源（M9）：这个项目开过的线程（最新在前）。 */
   discussions?: ThreadView[];
   discussionsPending?: boolean;
@@ -223,7 +243,8 @@ export function LoopColumn({
   const showTabs = mode !== "opening";
   const onTray = tab === "tray" && showTabs;
   const onDiscussion = tab === "discussion" && showTabs;
-  const onRound = !onTray && !onDiscussion;
+  const onResearch = tab === "research" && showTabs;
+  const onRound = !onTray && !onDiscussion && !onResearch;
   // 灵感箱的未处理数：新卡 + 待过目候选（0 条不渲染徽标）
   const inbox = inboxCount(discussions, explorations);
   const drawerOpen =
@@ -291,6 +312,15 @@ export function LoopColumn({
           >
             讨论
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={onResearch}
+            className={onResearch ? "loop__tab loop__tab--on" : "loop__tab"}
+            onClick={() => onTabChange("research")}
+          >
+            研究
+          </button>
           {onCollapse !== undefined && (
             <button
               type="button"
@@ -304,7 +334,19 @@ export function LoopColumn({
         </div>
       )}
 
-      {onDiscussion ? (
+      {onResearch ? (
+        <ResearchTray
+          runs={researches}
+          pending={researchesPending ?? false}
+          topicLimit={researchTopicLimit}
+          sourceLimit={researchSourceLimit}
+          round={round}
+          onStart={onStartWebResearch}
+          onRetry={onRetryResearch}
+          onAbandon={onAbandonResearch}
+          onAttach={onAttachResearchSources}
+        />
+      ) : onDiscussion ? (
         <DiscussionTray
           threads={discussions}
           roles={roleOptions(schema)}

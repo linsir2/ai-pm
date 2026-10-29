@@ -465,6 +465,9 @@ async def test_schema_endpoint_returns_the_13_sections_and_the_limits():
         "max_discussion_turns": 30,
         # P3a：**生效值**（工具声明 ∩ 每轮 3 条执行名额）；没配工具时是 0
         "max_web_executions": 3,
+        # P3b-1：研究主题字数上限 / 一轮最多挂几张来源卡
+        "max_research_topic_chars": 500,
+        "max_research_sources": 5,
     }
 
 

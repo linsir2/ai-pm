@@ -68,6 +68,19 @@ class StartExplorationRequest(BaseModel):
     scope: ExplorationScopeRequest
 
 
+class AttachResearchSourcesRequest(BaseModel):
+    """把研究结果卡上的来源挂到当前轮（P3b-1）：一次 1..5 张。"""
+
+    exploration_id: str
+    eids: list[str] = Field(default_factory=list)
+
+
+class ResearchRequest(BaseModel):
+    """项目级研究（P3b-1）：只给一个主题。空/超长由领域判（422）。"""
+
+    topic: str
+
+
 class KeepRequest(BaseModel):
     """收下一条过目产物（调研候选 / 讨论卡同形）。JSON 键是 `as`——Python 关键字只能用别名接。"""
 

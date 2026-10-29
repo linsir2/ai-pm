@@ -12,6 +12,7 @@ from pmstudio.application.agents.schemas import (
     InquiryPacket,
     IntegrationPacket,
     MemoryPacket,
+    ResearchPacket,
     SeatPacket,
     SimInquiryPacket,
     SimReviewPacket,
@@ -205,6 +206,21 @@ SIM_REVIEW = AgentDefinition(
     ),
 )
 
+RESEARCHER = AgentDefinition(
+    agent_id="researcher",
+    purpose="research",
+    kind="research",
+    prompt="research_synthesis",
+    packet=ResearchPacket,
+    slots=(
+        "topic",
+        "sources",
+        "tool_notes",
+        "schema_json",
+        "validation_error",
+    ),
+)
+
 ALL_AGENTS = (
     ANALYZER,
     SEAT_REVIEWER,
@@ -216,4 +232,5 @@ ALL_AGENTS = (
     MEMORY_CURATOR,
     SIM_INQUIRY,
     SIM_REVIEW,
+    RESEARCHER,
 )

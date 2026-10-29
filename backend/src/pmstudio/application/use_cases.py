@@ -89,6 +89,7 @@ from pmstudio.application.context import (
     render_observations_index,
     render_prior_opinions,
     render_project_context,
+    render_research_sources,
     render_reviews,
     render_round_digest,
     render_seat_conflicts,
@@ -177,10 +178,10 @@ from pmstudio.application.errors import (
 )
 from pmstudio.application.events import (
     DOC_CHANGED,
-    EXPLORATION_UPDATED,
     GENERATION_FAILED,
     PACKET_EMITTED,
     ROUND_UPDATED,
+    publish_exploration,
 )
 from pmstudio.application.exploration import (
     candidate_material,
@@ -200,6 +201,7 @@ from pmstudio.application.lease import (
     set_lease_scope,
     wall_clock_ms,
 )
+from pmstudio.application.material_refs import ORIGIN_WEB_RESEARCH, is_web_result
 from pmstudio.application.material_refs import external_ref as _external_ref
 from pmstudio.application.material_refs import material_kind as _material_kind
 from pmstudio.application.material_synthesis import (
@@ -278,6 +280,7 @@ from pmstudio.domain.discussion.thread import (
 )
 from pmstudio.domain.exploration.exploration import (
     Exploration,
+    ExplorationKind,
     ExplorationScope,
     ExplorationStatus,
     ScopeKind,
@@ -323,6 +326,7 @@ from pmstudio.domain.round.questionnaire import (
     Question,
     QuestionKind,
 )
+from pmstudio.domain.round.research import RoundResearchSource
 from pmstudio.domain.round.retrieval import (
     ManualChunk,
     RetrievalHit,
@@ -379,6 +383,7 @@ from pmstudio.domain.shared.ids import (
 )
 from pmstudio.domain.shared.label import ClaimLabel, Zone
 from pmstudio.domain.shared.lease import LeaseKind, LeaseToken
+from pmstudio.domain.shared.research import MAX_RESEARCH_SOURCES
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template import STANDARD_TEMPLATE_ID, template_from_dict
 from pmstudio.domain.shared.template_adapter import TemplateAdapter, adapt
@@ -705,9 +710,9 @@ class StartRound:
                 # 串项目带料 = 读别人的东西：与删/重解析同一口径，按"资源不在"404，
                 # 不按"形状错"422（`test_delete_material.py` 的跨项目用例即此语义）。
                 raise UnknownMaterial(material_id)
-            if packet.parsed.origin == WEB_ORIGIN:
-                # 联网结果走 `render_web_results`（一条结果一个号）；手勾进来会
-                # 逐块发号、只渲染一个号——"编号 == 进提示词的块"那条红线。
+            if is_web_result(packet.parsed.origin):
+                # 一条结果一个号的材料（联网申请 / 研究来源）走各自的渲染段；
+                # 手勾进来会逐块发号、只渲染一个号——"编号 == 进提示词的块"那条红线。
                 raise WebMaterialNotAttachable(material_id=material_id)
             packets[material_id] = packet
         # 自动段**先查**：`split_material_budget` 要知道有没有装得进余量的自动候选，
@@ -753,10 +758,11 @@ class StartRound:
                     packet = self._materials.get(material_id)
                     if packet is None or packet.project_id != str(project_id):
                         continue
-                    if packet.parsed.origin == WEB_ORIGIN:
-                        # **联网结果走另一条渲染路**：一条结果一个号、预算 `WEB_BUDGET`、
-                        # 由 `render_web_results` 出正文。混进材料段会按块发号、按材料预算算，
-                        # 结果就是"有号但提示词里一个字没有"——"编号 == 带进提示词的块"那条红线。
+                    if is_web_result(packet.parsed.origin):
+                        # **一条结果一个号的材料走另一条渲染路**（联网申请 `web_search`
+                        # 走 `render_web_results`、研究来源 `web_research` 走来源卡）。
+                        # 混进材料段会按块发号、按材料预算算，结果就是"有号但提示词里
+                        # 一个字没有"——"编号 == 带进提示词的块"那条红线。
                         continue
                     auto[material_id] = packet
         auto_hits = [item for item in hits if item.material_id in auto]
@@ -933,7 +939,11 @@ class StartRound:
                     packet_slot=f"a{attempt}",
                     # 本轮挑中（进提示词）的材料块编号：主张只能引这些，
                     # 引没见过的等于编（`analyzer.md` 硬规矩第 5 条）。
-                    material_eids=frozenset(ref.eid for ref in round_.materials),
+                    # **来源卡也算**：它们的卡面就在 `external_material` 里
+                    # （`[E7]` 那一行），看得见就该可引用——否则模型照着写会被判"编造"，
+                    # 整包重装一次还过不了就整轮失败（`02` §11.0.61 同一条不变量）。
+                    material_eids=frozenset(ref.eid for ref in round_.materials)
+                    | frozenset(item.eid for item in round_.research_sources),
                 )
                 break
             except PacketParseError as error:
@@ -3578,8 +3588,9 @@ class AttachMaterials:
             packet = self._materials.get(material_id)
             if packet is None or packet.project_id != str(round_.project_id):
                 raise UnknownMaterial(material_id)
-            if packet.parsed.origin == WEB_ORIGIN:
-                # 联网结果一条一个号、走 WEB_BUDGET；混进材料池会破"编号==进提示词的块"。
+            if is_web_result(packet.parsed.origin):
+                # 一条结果一个号的材料（联网申请 / 研究来源）走各自的渲染段；
+                # 混进材料池会破"编号==进提示词的块"。
                 raise WebMaterialNotAttachable(material_id=material_id)
             known = {chunk.chunk_id for chunk in packet.parsed.chunks}
             outside = [item for item in wanted if item not in known]
@@ -3608,6 +3619,109 @@ class AttachMaterials:
         if round_.step not in self.ATTACHABLE_STEPS:
             raise RoundNotAttachable(round_id=round_.round_id, step=round_.step)
 
+
+
+class AttachResearchSources:
+    """把研究结果卡上的**来源卡**挂到当前轮（P3b-1 唯一能把研究写进轮次的路径）。
+
+    三件事与 `AttachMaterials` 不同，都必须写在这儿而不是提示词里：
+
+    1. **不写账本、不发号**：E 在研究落库那一刻就发好了，这里只是引用；
+    2. **不占联网名额、不碰 `Round.materials`**：来源卡不是材料块，不进证据池；
+    3. **可挂载窗口复用 `AttachMaterials.ATTACHABLE_STEPS`**（出了草案就不能再改输入）。
+
+    挂上去的是**快照**（`RoundResearchSource`）：研究之后被重跑或删掉，这一轮手里的卡不变。
+    """
+
+    ATTACHABLE_STEPS = AttachMaterials.ATTACHABLE_STEPS
+
+    def __init__(
+        self,
+        *,
+        rounds: RoundReader,
+        round_writer: RoundWriter,
+        explorations: ExplorationReader,
+        uow: UnitOfWork,
+        events: EventPublisher,
+        clock: Clock,
+    ) -> None:
+        self._rounds = rounds
+        self._round_writer = round_writer
+        self._explorations = explorations
+        self._uow = uow
+        self._events = events
+        self._clock = clock
+
+    async def __call__(
+        self,
+        *,
+        round_id: RoundId,
+        exploration_id: str,
+        eids: Sequence[str],
+    ) -> RoundView:
+        wanted = tuple(dict.fromkeys(item.strip() for item in eids if item.strip()))
+        if not wanted:
+            raise ShapeError("要挂的来源不能为空")
+        if len(wanted) > MAX_RESEARCH_SOURCES:
+            raise ShapeError(
+                f"一轮最多挂 {MAX_RESEARCH_SOURCES} 张来源卡",
+                count=len(wanted),
+                limit=MAX_RESEARCH_SOURCES,
+            )
+        with self._uow:
+            round_ = self._rounds.get(round_id)
+            exploration = self._explorations.get(ExplorationId(exploration_id))
+            # **归属先于一切**（与 `AttachMaterials` 同口径）：别人的 id 一律 404，
+            # 连"它是不是研究、跑到哪一步"都不该从这里漏出去。
+            if exploration.project_id != round_.project_id:
+                raise UnknownExploration(exploration_id)
+            if exploration.kind is not ExplorationKind.WEB_RESEARCH:
+                raise ShapeError(
+                    "这一趟不是研究，没有来源卡可挂", kind=exploration.kind.value
+                )
+            if (
+                exploration.status is not ExplorationStatus.DONE
+                or exploration.research is None
+            ):
+                # 别借"状态迁移"的措辞：用户没要求过 done。这里说的是"还没有卡可挂"。
+                raise ShapeError(
+                    f"这一趟研究还没跑完（{exploration.status.value}），没有来源卡可挂",
+                    exploration_id=exploration_id,
+                    status=exploration.status.value,
+                )
+            by_eid = {str(item.eid): item for item in exploration.research.sources}
+            unknown = [eid for eid in wanted if eid not in by_eid]
+            if unknown:
+                raise ShapeError(
+                    "这一趟研究没有这些来源：" + "、".join(unknown), eids=unknown
+                )
+            sources = tuple(
+                RoundResearchSource(
+                    eid=by_eid[eid].eid,
+                    title=by_eid[eid].title,
+                    url=by_eid[eid].url,
+                    excerpt=by_eid[eid].excerpt,
+                )
+                for eid in wanted
+            )
+            if round_.step not in self.ATTACHABLE_STEPS:
+                raise RoundNotAttachable(
+                    round_id=str(round_id), step=str(round_.step)
+                )
+            # **先减掉已挂的那些再判上限**：重复挂已挂的那张是幂等 no-op，
+            # 不该在挂满之后变成 422（域里也是这么算的，两处必须同一把尺子）。
+            known = {item.eid for item in round_.research_sources}
+            fresh = tuple(item for item in sources if item.eid not in known)
+            if len(known) + len(fresh) > MAX_RESEARCH_SOURCES:
+                raise ShapeError(
+                    f"一轮最多挂 {MAX_RESEARCH_SOURCES} 张来源卡",
+                    count=len(known) + len(fresh),
+                    limit=MAX_RESEARCH_SOURCES,
+                )
+            round_.attach_research_sources(sources)
+            self._round_writer.save(round_)
+        _publish(self._events, self._clock, round_)
+        return round_view(round_)
 
 class ConfirmDraft:
     """唯一写入路径的入口。编排层、席位、整合者都拿不到 `DocumentWriter`。"""
@@ -4504,6 +4618,15 @@ class DeleteMaterial:
         packet = self._materials.get(material_id)
         if packet is None or packet.project_id != str(project_id):
             raise UnknownMaterial(material_id)
+        if packet.parsed.origin == ORIGIN_WEB_RESEARCH:
+            # 研究来源是**发出即冻结**：它们本来就只读、只进材料库，
+            # 删它没有用例，而"扫引用才知道能不能删"要多一次全项目扫描。
+            raise MaterialFrozen(
+                material_id,
+                eids=(),
+                action="删",
+                reason="研究来源是研究那一刻的快照，只读保留（重跑研究才会出新的）",
+            )
         eids = self._index.material_references(project_id).get(material_id, ())
         if eids:
             raise MaterialFrozen(material_id, eids=eids, action="删")
@@ -4564,9 +4687,9 @@ class ReparseMaterial:
                 "这份材料没有留下原始字节，没法重解析（重新上传一份吧）",
                 material_id=str(material_id),
             )
-        if packet.parsed.origin == WEB_ORIGIN:
+        if is_web_result(packet.parsed.origin):
             raise UnsupportedMaterial(
-                "联网检索回来的材料不重解析——它是当时的网页快照，要新的就重新搜一次",
+                "联网回来的材料不重解析——它是当时的网页快照，要新的就重新搜一次",
                 material_id=str(material_id),
                 origin=packet.parsed.origin,
             )
@@ -4642,7 +4765,12 @@ class SearchProject:
             ()
             if query.strip() == ""
             else self._materials.search(
-                project_id=project_id, query=query, limit=SEARCH_LIMIT
+                project_id=project_id,
+                query=query,
+                limit=SEARCH_LIMIT,
+                # **人用的全局搜索**：研究来源在材料库里看得见，这里也必须搜得到
+                # （RAG 池那条边默认排除，见 `materials._NON_SEARCHABLE`）。
+                include_research_sources=True,
             )
         )
         results = search_hits(
@@ -5207,6 +5335,9 @@ def external_material_text(
             parts.append(f"（材料池里有 {pool_count} 块；本步没有选中）")
     if found:
         parts.append(render_web_results(found).text)
+    research_text = render_research_sources(round_.research_sources)
+    if research_text:
+        parts.append(research_text)
     if missing:
         parts.append(
             missing_line(len(missing), missing[:3], more=len(missing) > 3)
@@ -5382,22 +5513,6 @@ MAX_SIM_INQUIRIES_PER_ROUND = 2
 MAX_EXPLORATION_LIST = 20
 
 
-def _publish_exploration(
-    events: EventPublisher, clock: Clock, exploration: Exploration
-) -> None:
-    events.publish(
-        Event(
-            name=EXPLORATION_UPDATED,
-            project_id=str(exploration.project_id),
-            payload={
-                "exploration_id": str(exploration.exploration_id),
-                "status": str(exploration.status),
-            },
-            occurred_at=clock.now(),
-        )
-    )
-
-
 def _candidate_of(exploration: Exploration, candidate_id: str):  # type: ignore[no-untyped-def]
     for item in exploration.candidates():
         if item.candidate_id == candidate_id:
@@ -5477,7 +5592,7 @@ class RunInquiry:
                 holder=f"exploration:{uuid.uuid4().hex}",
                 ttl_ms=self._lease_ttl_ms,
             )
-        _publish_exploration(self._events, self._clock, exploration)
+        publish_exploration(self._events, self._clock, exploration)
         return StartedExploration(exploration_id=exploration_id, token=token)
 
     async def clear_stale(
@@ -5535,7 +5650,7 @@ class RunInquiry:
             finally:
                 if scope_token is not None:
                     clear_lease_scope(scope_token)
-            _publish_exploration(self._events, self._clock, stored)
+            publish_exploration(self._events, self._clock, stored)
 
     async def execute(
         self, exploration_id: ExplorationId, *, retry_hint: str | None = None
@@ -5607,7 +5722,7 @@ class RunInquiry:
                 overflow_count=len(outcome.overflow),
             )
             self._exploration_writer.save(stored)
-        _publish_exploration(self._events, self._clock, stored)
+        publish_exploration(self._events, self._clock, stored)
         return exploration_view(stored)
 
     def _fail(self, exploration_id: ExplorationId, reason: str) -> ExplorationView:
@@ -5615,7 +5730,7 @@ class RunInquiry:
             stored = self._explorations.get(exploration_id)
             stored.fail(reason)
             self._exploration_writer.save(stored)
-        _publish_exploration(self._events, self._clock, stored)
+        publish_exploration(self._events, self._clock, stored)
         return exploration_view(stored)
 
 
@@ -5678,7 +5793,7 @@ class RetryExploration:
         finally:
             if scope_token is not None:
                 clear_lease_scope(scope_token)
-        _publish_exploration(self._events, self._clock, stored)
+        publish_exploration(self._events, self._clock, stored)
         return ResumedExploration(hint=hint, token=token)
 
 
@@ -5748,7 +5863,7 @@ class AbandonExploration:
         finally:
             if scope_token is not None:
                 clear_lease_scope(scope_token)
-        _publish_exploration(self._events, self._clock, exploration)
+        publish_exploration(self._events, self._clock, exploration)
         await self._canceller.cancel(exploration_id)
         return exploration_view(self._explorations.get(exploration_id))
 

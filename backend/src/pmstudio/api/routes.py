@@ -10,6 +10,7 @@ from pmstudio.api.deps import require_user
 from pmstudio.api.schemas import (
     AnswersRequest,
     AttachMaterialRequest,
+    AttachResearchSourcesRequest,
     ConfirmRequest,
     CreateProjectRequest,
     DecisionRequest,
@@ -20,6 +21,7 @@ from pmstudio.api.schemas import (
     KeepSimInquiryRequest,
     OpeningRequest,
     RecoveryRequest,
+    ResearchRequest,
     RunSimReviewRequest,
     SayRequest,
     SkipSeatRequest,
@@ -582,6 +584,32 @@ async def keep_sim_inquiry(  # type: ignore[no-untyped-def]
     )
 
 
+@router.post("/rounds/{round_id}/research-sources")
+async def attach_research_sources(  # type: ignore[no-untyped-def]
+    request: Request,
+    round_id: str,
+    body: AttachResearchSourcesRequest,
+    user: CurrentUser,
+):
+    """把研究结果卡上的来源挂到当前轮（P3b-1）。
+
+    走 `short_action`（非图动作）：它不改变 step / waiting_on，只是往这一轮的输入里
+    添一张只读来源卡——与 `attach_materials` 是同一类动作、同一个可挂载窗口。
+    """
+
+    services = services_of(request)
+    return as_json(
+        await services.runner.short_action(
+            RoundId(round_id),
+            lambda: services.attach_research_sources(
+                round_id=RoundId(round_id),
+                exploration_id=body.exploration_id,
+                eids=tuple(body.eids),
+            ),
+        )
+    )
+
+
 @router.post("/rounds/{round_id}/abandon")
 async def abandon_round(request: Request, round_id: str, user: CurrentUser):  # type: ignore[no-untyped-def]
     """放弃这一轮：先记状态、再取消正在跑的模型调用（`02` §7）。
@@ -625,6 +653,22 @@ async def start_exploration(  # type: ignore[no-untyped-def]
     )
     view = await services_of(request).exploration_runner.start(
         project_id=ProjectId(project_id), scope=scope
+    )
+    return as_json(view)
+
+
+@router.post("/projects/{project_id}/research")
+async def start_web_research(  # type: ignore[no-untyped-def]
+    request: Request, project_id: str, body: ResearchRequest, user: CurrentUser
+):
+    """项目级研究（P3b-1）：请求内跑完，返回最终状态（done / failed）。
+
+    与 M8 的 `/explorations` 分开：那个是"推演用户怎么想"（要有文档），
+    这个是"去外面查"（空文档也能查）。同一个项目同一时刻只允许一趟（409）。
+    """
+
+    view = await services_of(request).exploration_runner.start_research(
+        project_id=ProjectId(project_id), topic=body.topic
     )
     return as_json(view)
 

@@ -42,6 +42,7 @@ from pmstudio.domain.round.step import MAX_SEAT_ROUNDS
 from pmstudio.domain.services.scope_guard import ScopeGuard
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
+from pmstudio.domain.shared.research import MAX_RESEARCH_SOURCES, MAX_RESEARCH_TOPIC_CHARS
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS
 from pmstudio.domain.shared.template import (
     ANCHOR_ROLES,
@@ -421,6 +422,17 @@ class ManualChunkView:
 
 
 @dataclass(frozen=True, slots=True)
+class RoundResearchSourceView:
+    """挂在这一轮上的来源卡：**编号是唯一身份**（界面据此显示"已挂"）。
+
+    卡面（标题/网址/摘要）在研究的 `ResearchView.sources` 里，轮次这侧只回答
+    "哪些编号已经挂上了"——多投影一份卡面就是第二份真相源。
+    """
+
+    eid: str
+
+
+@dataclass(frozen=True, slots=True)
 class RoundView:
     """一轮的只读投影。"""
 
@@ -465,6 +477,8 @@ class RoundView:
     web_queries: tuple[WebQueryView, ...] = ()
     #: 三方结构化联网申请（P3a）：提名 / 批准 / 执行结果
     web_requests: tuple[WebRequestView, ...] = ()
+    #: 挂到这一轮的来源卡（P3b-1）：只读快照，不进材料池、不发新号。
+    research_sources: tuple[RoundResearchSourceView, ...] = ()
     #: 用户是否允许后续申请自动批准
     allow_web: bool = False
     #: 模拟调研产物（没跑过是 None；抽屉与 eval 读它）
@@ -663,7 +677,7 @@ class ParsedMaterial:
     盖章（material_id / project_id）只发生在 `MaterialStore.put()`——所以"谁赋值"没有歧义。
     """
 
-    origin: str  # "upload" | "web_search" | "web_fetch"
+    origin: str  # "upload" | "web_search" | "web_research" | "web_fetch"
     title: str
     source_ref: str  # "attachment:需求.md" / URL
     media_type: str
@@ -673,6 +687,24 @@ class ParsedMaterial:
     parser_version: str
     truncated: bool = False
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchHit:
+    """研究这一趟收到的一条来源（**瞬态**：只活在本次请求里，不落 payload）。
+
+    带 `parsed` 与 `content` 是因为入库要用它们；带 `excerpt` 是因为账本里那条
+    `external` 出处的正文就是来源卡（一条来源一个号，正文必须是卡片本身）。
+
+    放 dto 而不是 `infrastructure/tools/research_tools.py`：它是**跨层契约**
+    （工具产出、用例消费），与 `ParsedMaterial` 同一条理由。
+    """
+
+    url: str
+    title: str
+    excerpt: str
+    parsed: ParsedMaterial
+    content: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -1124,6 +1156,10 @@ class LimitsView:
     #: 联网执行名额（P3a）：**生效值** = `min(tool.max_queries, 3)`；没配工具是 0。
     #: 前端据此显示剩余名额并禁用批准，不硬编码 3。
     max_web_executions: int
+    #: 研究主题字数上限（P3b-1）：研究页签的输入框与"超长"提示读它，不抄数字。
+    max_research_topic_chars: int
+    #: 一轮最多挂几张来源卡（P3b-1）：来源卡按钮的"还能挂几张"读它。
+    max_research_sources: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1305,6 +1341,8 @@ def schema_view(
             max_sim_review_features=MAX_SIM_REVIEW_FEATURES,
             max_discussion_turns=MAX_DISCUSSION_TURNS,
             max_web_executions=max_web_executions,
+            max_research_topic_chars=MAX_RESEARCH_TOPIC_CHARS,
+            max_research_sources=MAX_RESEARCH_SOURCES,
         ),
         discussion_roles=tuple(
             RoleSchemaView(role_id=role.role_id, title=role.title, focus=role.focus)
@@ -1549,6 +1587,10 @@ def round_view(
         unreferenced_materials=tuple(round_.unreferenced_materials),
         web_queries=_web_query_views(round_),
         web_requests=_web_request_views(round_),
+        research_sources=tuple(
+            RoundResearchSourceView(eid=str(item.eid))
+            for item in round_.research_sources
+        ),
         allow_web=round_.allow_web,
         sim_inquiry=_sim_inquiry_view(round_),
         sim_review=_sim_review_view(round_),
@@ -2195,6 +2237,35 @@ class CandidateView:
 
 
 @dataclass(frozen=True, slots=True)
+class ResearchFindingView:
+    finding_id: str
+    statement: str
+    refs: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchSourceView:
+    """来源卡：界面与"挂到当前轮"用的是这四项。
+
+    没有 `material_id`：编号（`eid`）经账本能查到那条 `external` 出处，
+    多投影一个材料 id 就是第二份指路牌。正文本来就在材料库里。
+    """
+
+    eid: str
+    title: str
+    url: str
+    excerpt: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchView:
+    findings: tuple[ResearchFindingView, ...]
+    sources: tuple[ResearchSourceView, ...]
+    open_questions: tuple[str, ...]
+    notes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ExplorationView:
     exploration_id: str
     project_id: str
@@ -2208,6 +2279,8 @@ class ExplorationView:
     abandon_reason: str | None
     overflow_count: int
     candidates: tuple[CandidateView, ...]
+    #: 研究产物（P3b-1）。调研那一路是 None——不是"空报告"，是没有这回事。
+    research: ResearchView | None = None
 
 
 def exploration_view(exploration: Exploration) -> ExplorationView:
@@ -2242,6 +2315,31 @@ def exploration_view(exploration: Exploration) -> ExplorationView:
                 next_step=item.next_step,
             )
             for item in exploration.candidates()
+        ),
+        research=(
+            None
+            if exploration.research is None
+            else ResearchView(
+                findings=tuple(
+                    ResearchFindingView(
+                        finding_id=item.finding_id,
+                        statement=item.statement,
+                        refs=tuple(str(ref) for ref in item.refs),
+                    )
+                    for item in exploration.research.findings
+                ),
+                sources=tuple(
+                    ResearchSourceView(
+                        eid=str(item.eid),
+                        title=item.title,
+                        url=item.url,
+                        excerpt=item.excerpt,
+                    )
+                    for item in exploration.research.sources
+                ),
+                open_questions=exploration.research.open_questions,
+                notes=exploration.research.notes,
+            )
         ),
     )
 

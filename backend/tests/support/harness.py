@@ -387,7 +387,39 @@ class Harness:
             retriever=retriever,
         )
 
-    # —— 探索（M8）——
+    # —— 探索（M8 / P3b-1）——
+    def research_synthesizer(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.agents.researcher import ResearchSynthesizer
+
+        return ResearchSynthesizer(model=self.gateway, prompts=self.prompts)
+
+    def start_web_research(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.project_research import StartWebResearch
+
+        return StartWebResearch(
+            documents=self.documents,
+            explorations=self.explorations,
+            exploration_writer=self.explorations,
+            evidence=self.evidences,
+            evidence_writer=self.evidences,
+            materials=self.materials,
+            uow=self.uow,
+            clock=self.clock,
+            ids=self.ids,
+            events=self.events,
+            gateway=self.gateway,
+            prompts=self.prompts,
+            synthesizer=self.research_synthesizer(),
+            toolbox=self.research_toolbox,
+        )
+
+    def research_toolbox(self):  # type: ignore[no-untyped-def]
+        from pmstudio.infrastructure.tools.research_tools import ResearchToolbox
+
+        return ResearchToolbox(
+            search=self.web_search, fetcher=self.fetcher, parser=self.parser
+        )
+
     def run_inquiry(self):  # type: ignore[no-untyped-def]
         from pmstudio.application.use_cases import RunInquiry
 
@@ -426,6 +458,7 @@ class Harness:
                 run_inquiry=self.run_inquiry(),
                 retry_exploration=self.retry_exploration(),
                 explorations=self.explorations,
+                start_web_research=self.start_web_research(),
             )
         return self._exploration_runner
 
@@ -1103,6 +1136,18 @@ class Harness:
             viewer=self.get_round(),
         )
 
+    def attach_research_sources(self):  # type: ignore[no-untyped-def]
+        from pmstudio.application.use_cases import AttachResearchSources
+
+        return AttachResearchSources(
+            rounds=self.rounds,
+            round_writer=self.rounds,
+            explorations=self.explorations,
+            uow=self.uow,
+            events=self.events,
+            clock=self.clock,
+        )
+
     def api_services(self, *, model_name: str):  # type: ignore[no-untyped-def]
         from pmstudio.api.app import ApiServices
 
@@ -1117,6 +1162,7 @@ class Harness:
                 canceller=self.exploration_runner()
             ),
             keep_candidate=self.keep_candidate(),
+            attach_research_sources=self.attach_research_sources(),
             dismiss_candidate=self.dismiss_candidate(),
             list_explorations=self.list_explorations(),
             start_discussion=self.start_discussion(),

@@ -1,12 +1,29 @@
-# 检查点 · 2026-10-28（**最新状态在下面这块；再往下是历史流水，当档案看**）
+# 检查点 · 2026-10-29（P3b-1 研究交付；再往下是历史流水，当档案看）
 
-> 用途：新会话或换人接手时，读这一份就能知道"做到哪、为什么这么做、下一步是什么"。
-> 更新时机：长暂停前、切分支前、交给别的 agent 前。
->
-> **读法**：先读下面「当前状态」；历史流水（P1–P38、M1–M15、各次执行结果）保留作档案，
-> 里面的"下一步/剩下来的活"**全部过期**，以当前状态为准。
+## 当前状态（2026-10-29：P3b-1 项目级研究）
 
-## 当前状态（2026-10-28：pg_search BM25 交付）
+**分支** `main`（工作区未提交）· 后端 `-m "not slow"` 全绿 · `ruff` 全绿 ·
+前端 `tsc --noEmit` 干净 / `vitest` 701 passed。
+
+**P3b-1 做了什么**：`POST /projects/{id}/research`（请求内跑完：`run_tool_loop` 6 轮/12 次
+→ 综合 → 一个 UoW）；`ResearchReport` 落 `explorations.payload.research`；
+来源卡挂轮 `POST /rounds/{id}/research-sources`（`short_action` + 快照）；
+`render_research_sources` 进 `RoundContextPreparer` 与 `external_material_text` 两条路径
+（编号渲染即自动可引用）；检索四路 + BM25 语料统计排除 `web_research`；删除/重解析 origin 冻结；
+维护任务不重切研究材料；前端第 4 个「研究」页签。
+
+**上限**：`domain/shared/research.py`（5/12/5/500/800）+ `RESEARCH_BUDGET=4053`（派生）+
+`RESEARCH_TIMEOUT_SECONDS=600` + 三个工具侧常量，全部登记进 `02 §11.0.90` 与 `test_limits`。
+
+**真跑**：`.codex/runs/2026-10-29/p3b/`（真模型 `openai/qwen3.7-flash` + 真 Tavily + 真 PG）：
+5 来源 / 4 结论 / 5 开放问题，35.3s；一来源一 E、E 可查、检索不召回、挂载后轮内材料块 0。
+
+**已知取舍（04 §O）**：跨趟同 URL 出两张卡；`fetch_url` 没接内容级去重；
+网页文本会进 `visible_eids` 扫描面；步骤总预算四块无总闸。
+
+---
+
+### 归档 · 当前状态（2026-10-28：pg_search BM25 交付）
 
 **分支** `new-branch`（Task 5 提交 `docs(pg): 固化 pg_search 检索验收与文档`；
 前面依次是 T10 `2a170dc` + pg_search Task 1–4 `d9f81af…2a170dc`）。

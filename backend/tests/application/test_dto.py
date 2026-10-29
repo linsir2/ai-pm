@@ -833,6 +833,9 @@ def test_schema_view_freezes_the_shape():
         max_discussion_turns=30,
         # 纯函数 `schema_view()` 没有工具目录：生效值是 0（前端据此禁用开关）
         max_web_executions=0,
+        # P3b-1：研究主题字数上限 / 一轮最多挂几张来源卡（前端不抄数字）
+        max_research_topic_chars=500,
+        max_research_sources=5,
     )
 
 
@@ -1470,3 +1473,68 @@ def test_a_material_hit_carries_material_and_chunk_identity():
     assert hit.material_id == "m1"
     assert hit.chunk_id == "m1#c03"
     assert hit.ref == "m1#c03"
+
+
+def test_exploration_view_projects_the_research_report():
+    """研究的投影是**只读五项 + 结论**；调研那一路 `research` 必须是 None。"""
+
+    from datetime import UTC, datetime
+
+    from pmstudio.domain.exploration.exploration import (
+        Exploration,
+        ExplorationKind,
+        ExplorationScope,
+        ScopeKind,
+    )
+    from pmstudio.domain.exploration.research import (
+        ResearchFinding,
+        ResearchReport,
+        ResearchSource,
+    )
+    from pmstudio.domain.shared.ids import EvidenceId, ExplorationId, ProjectId
+
+    now = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
+    inquiry = Exploration.start(
+        exploration_id=ExplorationId("x-1"),
+        project_id=ProjectId("p-1"),
+        scope=ExplorationScope(kind=ScopeKind.DOCUMENT),
+        now=now,
+    )
+    assert dto.exploration_view(inquiry).research is None
+
+    research = Exploration.start(
+        exploration_id=ExplorationId("x-2"),
+        project_id=ProjectId("p-1"),
+        scope=ExplorationScope(kind=ScopeKind.TOPIC, text="导出上限"),
+        now=now,
+        kind=ExplorationKind.WEB_RESEARCH,
+    )
+    research.complete_research(
+        ResearchReport(
+            findings=(
+                ResearchFinding(
+                    finding_id="F1",
+                    statement="主流同类产品 60 秒",
+                    refs=(EvidenceId("E7"),),
+                ),
+            ),
+            sources=(
+                ResearchSource(
+                    eid=EvidenceId("E7"),
+                    material_id="m-1",
+                    title="白皮书",
+                    url="https://example.com/a",
+                    excerpt="同类产品默认 60 秒上限。",
+                ),
+            ),
+            open_questions=("要不要断点续传？",),
+        )
+    )
+
+    view = dto.exploration_view(research)
+    assert view.candidates == ()
+    assert view.research is not None
+    assert view.research.sources[0].eid == "E7"
+    assert view.research.sources[0].url == "https://example.com/a"
+    assert view.research.findings[0].refs == ("E7",)
+    assert view.research.open_questions == ("要不要断点续传？",)

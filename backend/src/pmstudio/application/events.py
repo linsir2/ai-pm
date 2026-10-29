@@ -11,6 +11,16 @@ payload 键。改名的代价是"SSE 静默死亡但界面看起来健康"，所
 那是通用信封反向依赖业务词汇，已随事件类一起搬走并删除。
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from pmstudio.harness.events import Event
+
+if TYPE_CHECKING:
+    from pmstudio.application.ports import Clock, EventPublisher
+    from pmstudio.domain.exploration.exploration import Exploration
+
 ROUND_UPDATED = "round.updated"
 PACKET_EMITTED = "packet.emitted"
 DOC_CHANGED = "doc.changed"
@@ -32,3 +42,26 @@ EVENT_NAMES = frozenset(
         DISCUSSION_UPDATED,
     }
 )
+
+
+def publish_exploration(
+    events: EventPublisher, clock: Clock, exploration: Exploration
+) -> None:
+    """一趟探索状态变了：只推 id 与状态，真身由界面重读（M8 口径）。
+
+    放这里而不是某个用例模块里：调研（`use_cases.RunInquiry`）与研究
+    （`project_research.StartWebResearch`）两处都要发同一个事件，
+    各写一份就会在"payload 多一个键"时漂。
+    """
+
+    events.publish(
+        Event(
+            name=EXPLORATION_UPDATED,
+            project_id=str(exploration.project_id),
+            payload={
+                "exploration_id": str(exploration.exploration_id),
+                "status": str(exploration.status),
+            },
+            occurred_at=clock.now(),
+        )
+    )

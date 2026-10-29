@@ -13,15 +13,18 @@ from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.persona_simulator import PersonaSimulatorAgent
+from pmstudio.application.agents.researcher import ResearchSynthesizer
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
 from pmstudio.application.ports import Clock, LoginGuard, WebFetcher, WebSearchGateway
+from pmstudio.application.project_research import StartWebResearch
 from pmstudio.application.use_cases import (
     AbandonExploration,
     AbandonRound,
     ApproveUser,
     AssembleCards,
     AttachMaterials,
+    AttachResearchSources,
     AuthenticateUser,
     BanUser,
     CloseDiscussion,
@@ -150,6 +153,7 @@ from pmstudio.infrastructure.security import (
 )
 from pmstudio.infrastructure.tools.extract import LocalMaterialParser
 from pmstudio.infrastructure.tools.fetch import HttpxWebFetcher
+from pmstudio.infrastructure.tools.research_tools import ResearchToolbox
 from pmstudio.infrastructure.tools.tavily import TavilySearchGateway
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -542,6 +546,14 @@ def build_container(
     get_round_calls = GetRoundCalls(
         rounds=rounds, call_log=SqliteRoundCallLog(connection)
     )
+    attach_research_sources = AttachResearchSources(
+        rounds=rounds,
+        round_writer=rounds,
+        explorations=explorations,
+        uow=uow,
+        events=bus,
+        clock=clock,
+    )
     attach_materials = AttachMaterials(
         rounds=rounds, round_writer=rounds, materials=materials, uow=uow
     )
@@ -611,10 +623,31 @@ def build_container(
         # resume 同 UoW 置 RUNNING + acquire。
         leases=leases,
     )
+    research_synthesizer = ResearchSynthesizer(model=gateway, prompts=prompts)
+    start_web_research = StartWebResearch(
+        documents=documents,
+        explorations=explorations,
+        exploration_writer=explorations,
+        evidence=evidences,
+        evidence_writer=evidences,
+        materials=materials,
+        uow=uow,
+        clock=clock,
+        ids=ids,
+        events=bus,
+        gateway=gateway,
+        prompts=prompts,
+        synthesizer=research_synthesizer,
+        # 一次研究一个 toolbox（per-run 状态）；工具层是 infrastructure，用例只认端口。
+        toolbox=lambda: ResearchToolbox(search=web_search, fetcher=fetcher, parser=parser),
+        # create 在同一 UoW INSERT + acquire。
+        leases=leases,
+    )
     exploration_runner = ExplorationRunner(
         run_inquiry=run_inquiry,
         retry_exploration=retry_exploration,
         explorations=explorations,
+        start_web_research=start_web_research,
         # 心跳续租 / 失租 409 的唯一真相源。
         leases=leases,
     )
@@ -749,6 +782,7 @@ def build_container(
             uow=uow,
         ),
         keep_sim_inquiry=keep_sim_inquiry,
+        attach_research_sources=attach_research_sources,
         close_discussion=CloseDiscussion(
             discussions=discussions,
             discussion_writer=discussions,

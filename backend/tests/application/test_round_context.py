@@ -628,3 +628,45 @@ def test_dirty_multi_eid_web_result_uses_the_same_first_chunk_in_both_renderers(
     assert str(first_eid) in external
     assert str(second_eid) not in prepared.text
     assert str(second_eid) not in external
+
+
+def test_prepare_renders_attached_research_cards_with_their_eids():
+    """挂到这一轮的来源卡必须出现在**每步投影**的文本里（P3b-1）。
+
+    这是"零白名单"的主路径：`known_eids = visible ∩ 账本`，只要 `[E..]` 渲染出来，
+    来源 E 就自动成为模型可引用的编号。回退路径（`external_material_text`）在
+    `test_attach_research.py` 里另有一条。
+    """
+
+    from pmstudio.application.document_window import visible_eids
+    from pmstudio.domain.round.research import RoundResearchSource
+    from pmstudio.domain.shared.ids import EvidenceId
+
+    harness = seeded_harness(make_material("权限：管理员才能导出"))
+    round_ = harness.rounds.get(ROUND_ID)
+    round_.attach_research_sources(
+        [
+            RoundResearchSource(
+                eid=EvidenceId("E7"),
+                title="白皮书",
+                url="https://example.com/a",
+                excerpt="同类产品默认 60 秒上限。",
+            )
+        ]
+    )
+    harness.rounds.seed(round_)
+    harness.evidences.get(PROJECT).record(
+        kind=EvidenceKind.EXTERNAL,
+        text="白皮书\nhttps://example.com/a\n同类产品默认 60 秒上限。",
+        source=EvidenceSource(external_ref="https://example.com/a"),
+        now=NOW,
+        eid=EvidenceId("E7"),
+    )
+
+    prepared = preparer(harness, None).prepare(
+        round_id=ROUND_ID, stage=RetrievalStage.SEAT, query="权限"
+    )
+
+    assert "[E7]" in prepared.text
+    assert "同类产品默认 60 秒上限" in prepared.text
+    assert EvidenceId("E7") in visible_eids(prepared.text)

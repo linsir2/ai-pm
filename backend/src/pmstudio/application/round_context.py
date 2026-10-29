@@ -23,6 +23,7 @@ from pmstudio.application.context import (
     material_header,
     missing_line,
     render_materials,
+    render_research_sources,
     render_web_results,
 )
 from pmstudio.application.context_pool import (
@@ -31,7 +32,7 @@ from pmstudio.application.context_pool import (
     select_projection,
 )
 from pmstudio.application.dto import SEARCH_LIMIT, MaterialChunk, MaterialPacket
-from pmstudio.application.material_refs import external_ref, material_kind
+from pmstudio.application.material_refs import external_ref, is_web_result, material_kind
 from pmstudio.application.ports import Clock, MaterialRetriever, MaterialStore
 from pmstudio.domain.ports import (
     EvidenceReader,
@@ -241,6 +242,7 @@ class RoundContextPreparer:
                 pool_count=pool_count,
                 eid_of=eid_of,
                 web_by_material=web_by_material,
+                research_text=render_research_sources(target.research_sources),
                 missing=missing,
             )
         return prepared
@@ -344,7 +346,7 @@ class RoundContextPreparer:
                 if material_id not in missing:
                     missing.append(material_id)
                 continue
-            if packet.parsed.origin == WEB_ORIGIN:
+            if is_web_result(packet.parsed.origin):
                 continue
             allowed.setdefault(material_id, set()).update(
                 chunk.chunk_id for chunk in packet.parsed.chunks
@@ -399,6 +401,7 @@ class RoundContextPreparer:
         pool_count: int,
         eid_of: dict[tuple[str, str], EvidenceId],
         web_by_material: dict[str, dict[str, EvidenceId]],
+        research_text: str,
         missing: Sequence[str],
     ) -> PreparedContext:
         if selection.chunks:
@@ -435,7 +438,9 @@ class RoundContextPreparer:
                 web_entries.append((packet, chunks, eids[chunks[0].chunk_id]))
         web_text = render_web_results(web_entries).text if web_entries else ""
 
-        parts = [part for part in (header, material_text, web_text) if part]
+        parts = [
+            part for part in (header, material_text, web_text, research_text) if part
+        ]
         if missing:
             parts.append(
                 missing_line(

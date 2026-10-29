@@ -263,6 +263,8 @@ export interface RoundView {
   sim_inquiry?: SimInquiryView | null;
   /** 模拟评测产物（M11）：没跑过是 null/undefined。 */
   sim_review?: SimReviewView | null;
+  /** 挂到这一轮的来源卡（P3b-1）：只读快照，不进材料池、不发新号。 */
+  research_sources?: RoundResearchSourceView[];
 }
 
 export interface SimSliceView {
@@ -575,6 +577,10 @@ export interface LimitsView {
   /** 本轮最多执行几条联网申请（P3a；**生效值**，没配工具就是 0）。
    *  老后端为 undefined：界面不硬编码 3，拿不到就禁用批准并说明。 */
   max_web_executions?: number;
+  /** 研究主题字数上限（P3b-1）；老后端为 undefined → 界面不拦长度。 */
+  max_research_topic_chars?: number;
+  /** 一轮最多挂几张来源卡（P3b-1）；老后端为 undefined → 只靠后端 422。 */
+  max_research_sources?: number;
 }
 
 /** `GET /schema`：现行结构，不是文档内容。 */
@@ -772,6 +778,34 @@ export interface ThreadView {
 }
 
 /** 一趟探索运行（M8）：过目台与历史都读它。 */
+/** 挂在这一轮上的一张来源卡：**编号是唯一身份**（卡面在研究的 `ResearchView` 里）。 */
+export interface RoundResearchSourceView {
+  eid: string;
+}
+
+/** 研究的一条结论（P3b-1）：`refs` 是账本编号（E），可点回材料。 */
+export interface ResearchFindingView {
+  finding_id: string;
+  statement: string;
+  refs: string[];
+}
+
+/** 一张来源卡：界面与"挂到当前轮"用的五项（正文在材料库）。 */
+export interface ResearchSourceView {
+  eid: string;
+  title: string;
+  url: string;
+  excerpt: string;
+}
+
+/** 一趟研究的只读产物：结论 + 来源 + 开放问题 + 这一趟的实况。 */
+export interface ResearchView {
+  findings: ResearchFindingView[];
+  sources: ResearchSourceView[];
+  open_questions: string[];
+  notes: string[];
+}
+
 export interface ExplorationView {
   exploration_id: string;
   project_id: string;
@@ -786,4 +820,6 @@ export interface ExplorationView {
   /** 超上限被解析层截掉的候选条数（界面照实说）。 */
   overflow_count: number;
   candidates: CandidateView[];
+  /** 研究产物（P3b-1）；调研那一路是 null（不是空报告）。老后端为 undefined。 */
+  research?: ResearchView | null;
 }

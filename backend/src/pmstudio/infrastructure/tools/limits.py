@@ -60,6 +60,19 @@ WEB_VECTOR_CHARS = 16_000
 #: 与 `extract.chunk_text`（块内按句累积，主路径）。
 SENTENCE_ENDS = "。！？；!?;"
 
+#: 一次**研究工具**调用回灌给模型的正文上限（P3b-1）。
+#: 量级取 `MATERIAL_BUDGET`（4000）：来源全文已经入库，模型只需要够判断
+#: "这条来源讲的是不是这件事"。超了照实说，不静默截断。
+RESEARCH_TOOL_TEXT_CHARS = 4000
+
+#: 搜索结果每一条给模型看的摘要长度（标题 + 网址另有）。
+RESEARCH_SNIPPET_CHARS = 200
+
+#: 一次 `web_search` 最多向网关要几条结果。**不是来源上限**（那是
+#: `domain.exploration.research.MAX_RESEARCH_SOURCES=5`）：多要几条是给模型
+#: 挑来源的余地，收不收由 toolbox 按 5 条卡，卡掉的要照实说。
+MAX_RESULTS_PER_SEARCH = 10
+
 
 def part_label(index: int) -> str:
     """同一个逻辑片被切成多片时，第 `index` 片的尾标。

@@ -9,6 +9,7 @@ from pmstudio.domain.round.claim import Claim, Contradiction
 from pmstudio.domain.round.draft import Draft
 from pmstudio.domain.round.opinion import Opinion, SeatReview
 from pmstudio.domain.round.questionnaire import AnswerSet, ListItem, Question, Questionnaire
+from pmstudio.domain.round.research import RoundResearchSource
 from pmstudio.domain.round.retrieval import ManualChunk, RetrievalStage, RetrievalTrace
 from pmstudio.domain.round.skip import RoundSkip
 from pmstudio.domain.round.step import LEGAL_ADVANCES, MAX_SEAT_ROUNDS, Step, WaitingOn
@@ -35,6 +36,7 @@ from pmstudio.domain.shared.errors import (
 )
 from pmstudio.domain.shared.ids import EvidenceId, FeatureSlug, FormId, ProjectId, RoundId
 from pmstudio.domain.shared.memory import MemoryChange
+from pmstudio.domain.shared.research import MAX_RESEARCH_SOURCES
 from pmstudio.domain.shared.target import Target
 
 
@@ -285,6 +287,7 @@ class Round:
         sim_inquiry_chosen: tuple[str, ...] = (),
         sim_review: dict | None = None,
         sim_review_runs: int = 0,
+        research_sources: tuple[RoundResearchSource, ...] = (),
     ) -> None:
         self._round_id = round_id
         self._project_id = project_id
@@ -355,6 +358,9 @@ class Round:
         #: 同上，plain dict：校验住在应用层。`dig` 出新草案时随草案一起作废（每份草案 1 次）。
         self._sim_review = dict(sim_review) if sim_review is not None else None
         self._sim_review_runs = sim_review_runs
+        #: 挂到这一轮的来源卡**快照**（P3b-1）：不进材料池、不发新号，
+        #: 只让那张卡出现在这几步的提示词里。
+        self._research_sources = tuple(research_sources)
         #: 本轮**每一批**问卷（追加不覆盖）。`_questionnaire` 仍是"当前批"，
         #: 历史那一份给渲染与回查用——题号每批重排会让裸题号指向别的批（计划 §0.1）
         self._questionnaire_history = tuple(questionnaire_history)
@@ -1362,6 +1368,37 @@ class Round:
         known = {ref.chunk_id for ref in self._materials}
         fresh = [ref for ref in refs if ref.chunk_id not in known]
         self._materials = self._materials + tuple(fresh)
+
+    @property
+    def research_sources(self) -> tuple[RoundResearchSource, ...]:
+        """这一轮挂上的来源卡（只读快照）。"""
+
+        return self._research_sources
+
+    def attach_research_sources(
+        self, sources: tuple[RoundResearchSource, ...] | list[RoundResearchSource]
+    ) -> None:
+        """挂来源卡：按 `eid` 幂等，合计不超过 `MAX_RESEARCH_SOURCES`。
+
+        **不碰 `Round.materials`**：来源卡不是材料块，不进证据池、不参与选块。
+        上限与"一趟研究最多几条来源"是同一个数——挂的是同一批东西，
+        两个数不一致就会出现"研究出 5 张、只能挂 3 张"的怪事。
+        """
+
+        sources = tuple(sources)
+        if not sources:
+            raise ShapeError("来源卡不能为空")
+        known = {item.eid for item in self._research_sources}
+        fresh = tuple(item for item in sources if item.eid not in known)
+        if not fresh:
+            return
+        if len(known) + len(fresh) > MAX_RESEARCH_SOURCES:
+            raise ShapeError(
+                f"一轮最多挂 {MAX_RESEARCH_SOURCES} 张来源卡",
+                count=len(known) + len(fresh),
+                limit=MAX_RESEARCH_SOURCES,
+            )
+        self._research_sources = self._research_sources + fresh
 
     @property
     def sim_slices(self) -> tuple[dict, ...]:

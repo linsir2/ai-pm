@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -10,6 +11,7 @@ from pmstudio.domain.shared.ids import ProjectId, RoundId
 from pmstudio.harness.errors import ModelCallFailed
 from pmstudio.harness.events import Event
 from pmstudio.harness.model.contracts import ModelReply, ModelRequest
+from pmstudio.harness.tools.spec import ToolCall
 
 if TYPE_CHECKING:
     from pmstudio.application.dto import CallEntry, MaterialHit, ParsedMaterial
@@ -287,11 +289,19 @@ class RecordingMaterialRetriever:
     def __init__(self, *, returns: Sequence["MaterialHit"] = ()) -> None:
         self.calls: list[tuple[str, str, int]] = []
         self.returns = tuple(returns)
+        #: 每次调用带没带 `include_research_sources`（端口在 P3b-1 长了这个开关）
+        self.include_research_sources: list[bool] = []
 
     def search(
-        self, *, project_id: ProjectId, query: str, limit: int = 5
+        self,
+        *,
+        project_id: ProjectId,
+        query: str,
+        limit: int = 5,
+        include_research_sources: bool = False,
     ) -> tuple["MaterialHit", ...]:
         self.calls.append((str(project_id), query, limit))
+        self.include_research_sources.append(include_research_sources)
         return self.returns
 
 
@@ -362,3 +372,57 @@ class StaticWorkspaceIndex:
 
     def recent_opinions(self, project_id: ProjectId, *, limit_rounds: int = 10):  # type: ignore[no-untyped-def]
         return tuple(self._opinions.get(str(project_id), ()))
+
+
+# —— P3b-1：agentic 循环用的脚本化网关 ——
+
+
+@dataclass(frozen=True, slots=True)
+class ToolStep:
+    """循环的一步：要么要调工具，要么给最终文本（也可以两样都有）。"""
+
+    text: str = ""
+    calls: tuple[tuple[str, Mapping[str, object]], ...] = ()
+
+
+class LoopScriptedGateway:
+    """两用替身：带工具时按 `loop` 吐步骤，结构化调用时按 purpose 吐预置 JSON。
+
+    与 `ScriptedModelGateway` 同一条纪律：**没有对应脚本就抛**，
+    不返回空串（空回包会被下游当成"没有结论"）。
+    """
+
+    def __init__(
+        self,
+        *,
+        loop: Sequence[ToolStep],
+        structured: Mapping[str, str | Sequence[str]] = {},
+    ) -> None:
+        self._loop = list(loop)
+        self._structured = {key: _script(value) for key, value in structured.items()}
+        self.requests: list[ModelRequest] = []
+
+    @property
+    def purposes(self) -> list[str]:
+        return [request.purpose for request in self.requests]
+
+    async def complete(self, request: ModelRequest) -> ModelReply:
+        self.requests.append(request)
+        if request.tools:
+            step = self._loop.pop(0) if len(self._loop) > 1 else self._loop[0]
+            return ModelReply(
+                text=step.text,
+                model=SCRIPTED_MODEL,
+                tool_calls=tuple(
+                    ToolCall(
+                        call_id=f"call-{index}", name=name, arguments=dict(arguments)
+                    )
+                    for index, (name, arguments) in enumerate(step.calls)
+                ),
+            )
+        script = self._structured.get(request.purpose)
+        if script is None:
+            raise AssertionError(
+                f"这个用例没有为 purpose={request.purpose!r} 准备回复"
+            )
+        return ModelReply(text=_next(script), model=SCRIPTED_MODEL)

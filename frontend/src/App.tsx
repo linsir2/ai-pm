@@ -19,6 +19,7 @@ import type { ExplorationAnchor } from "./api/payload";
 import { discussionTopic } from "./state/discussions";
 import type { DiscussionAnchor } from "./state/discussions";
 import { loopBadgeCount, needsLoopAttention } from "./state/progress";
+import { inquiryRuns, researchRuns } from "./state/research";
 import { DocumentPane } from "./components/DocumentPane";
 import { TemplateLibraryScreen } from "./templates/TemplateLibraryScreen";
 import { EditScope } from "./components/EditContext";
@@ -576,9 +577,22 @@ function Workspace() {
             mode={readingHistory ? null : mode}
             pending={data.pending}
             drafts={drafts}
-            explorations={data.explorations}
+            explorations={inquiryRuns(data.explorations)}
             explorationsPending={data.explorationsPending}
             onStartResearch={() => setResearchAnchor({ kind: "document" })}
+            researches={researchRuns(data.explorations)}
+            researchesPending={data.pending === "research" || data.explorationsPending}
+            researchSourceLimit={data.schema?.limits.max_research_sources}
+            researchTopicLimit={data.schema?.limits.max_research_topic_chars}
+            onStartWebResearch={(topic) => void data.startWebResearch(topic)}
+            onRetryResearch={(explorationId) => void data.retryExploration(explorationId)}
+            onAbandonResearch={(explorationId) =>
+              void data.abandonExploration(explorationId)
+            }
+            onAttachResearchSources={(explorationId, eids) => {
+              if (shownRound === null) return;
+              void data.attachResearchSources(shownRound.round_id, explorationId, eids);
+            }}
             onRetryExploration={(explorationId) => void data.retryExploration(explorationId)}
             onAbandonExploration={(explorationId) =>
               void data.abandonExploration(explorationId)

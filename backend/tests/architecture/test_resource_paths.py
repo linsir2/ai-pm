@@ -74,6 +74,8 @@ def test_the_prompts_directory_is_not_empty():
         "integrator.md",
         "memory_curator.md",
         "opinion_dispositions.md",
+        "research_loop.md",
+        "research_synthesis.md",
         "seat_review.md",
         "sim_inquiry.md",
         "sim_review.md",

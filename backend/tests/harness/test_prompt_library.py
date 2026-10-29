@@ -27,6 +27,8 @@ EXPECTED_PROMPTS = (
     "integrator",
     "memory_curator",
     "opinion_dispositions",
+    "research_loop",
+    "research_synthesis",
     "seat_review",
     "sim_inquiry",
     "sim_review",

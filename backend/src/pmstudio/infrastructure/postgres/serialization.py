@@ -34,6 +34,11 @@ from pmstudio.domain.exploration.item import (
     Grounding,
     Hypothesis,
 )
+from pmstudio.domain.exploration.research import (
+    ResearchFinding,
+    ResearchReport,
+    ResearchSource,
+)
 from pmstudio.domain.memory.memory import MemoryEntry, MemoryRevision, ProjectMemory
 from pmstudio.domain.provenance.evidence import Evidence, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
@@ -50,6 +55,7 @@ from pmstudio.domain.round.questionnaire import (
     Questionnaire,
     QuestionType,
 )
+from pmstudio.domain.round.research import RoundResearchSource
 from pmstudio.domain.round.retrieval import (
     ManualChunk,
     RetrievalHit,
@@ -743,6 +749,16 @@ def round_to_payload(round_: Round) -> dict:
             }
             for ref in round_.materials
         ],
+        # 挂到这一轮的来源卡（老行没有这把键 → 空）。快照，不是对探索的实时引用。
+        "research_sources": [
+            {
+                "eid": str(item.eid),
+                "title": item.title,
+                "url": item.url,
+                "excerpt": item.excerpt,
+            }
+            for item in round_.research_sources
+        ],
         # 每一步检索的轨迹（老行没有这把键 → 空）。**不存 eid**：编号真相源是 materials+账本。
         "retrievals": [
             {
@@ -907,6 +923,16 @@ def round_from_payload(
                 eid=EvidenceId(item["eid"]),
             )
             for item in payload.get("materials") or ()
+        ),
+        # 老行没有这把键（来源卡是 P3b-1 后加的）：空——不编"它挂过"
+        research_sources=tuple(
+            RoundResearchSource(
+                eid=EvidenceId(str(item["eid"])),
+                title=str(item["title"]),
+                url=str(item["url"]),
+                excerpt=str(item["excerpt"]),
+            )
+            for item in payload.get("research_sources") or ()
         ),
         # 老行没有这把键（检索 trace 是 P0 后加的）：空——不编"它查过"
         retrievals=tuple(
@@ -1327,7 +1353,77 @@ def exploration_to_payload(exploration: Exploration) -> dict:
         ),
         "abandon_reason": exploration.abandon_reason,
         "overflow_count": exploration.overflow_count,
+        # 研究的产物（P3b-1）。调研那一路恒为 None——**不写一把空键当占位**，
+        # 老行缺这把键的读法就是 None，两者在读侧同一件事。
+        "research": _research_to_payload(exploration.research),
     }
+
+
+def _research_to_payload(research: ResearchReport | None) -> dict | None:
+    if research is None:
+        return None
+    return {
+        "findings": [
+            {
+                "finding_id": item.finding_id,
+                "statement": item.statement,
+                "refs": [str(ref) for ref in item.refs],
+            }
+            for item in research.findings
+        ],
+        "sources": [
+            {
+                "eid": str(item.eid),
+                "material_id": item.material_id,
+                "title": item.title,
+                "url": item.url,
+                "excerpt": item.excerpt,
+            }
+            for item in research.sources
+        ],
+        "open_questions": list(research.open_questions),
+        "notes": list(research.notes),
+    }
+
+
+def _research_from_payload(data: object) -> ResearchReport | None:
+    """`None` 只表示"这把键不存在"（老行）。**非 dict / 字段坏了不再当成 None**：
+    仓储的坏行口径是 `except (AttributeError, TypeError, KeyError, ValueError)`，
+    把坏数据翻成 `ValueError` 才能让那一行被跳过，而不是把整页列表打成 500。"""
+
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ValueError(f"research 不是对象：{type(data).__name__}")
+    try:
+        return _build_research(data)
+    except DomainError as error:
+        raise ValueError(str(error)) from error
+
+
+def _build_research(data: dict) -> ResearchReport:
+    return ResearchReport(
+        findings=tuple(
+            ResearchFinding(
+                finding_id=str(item.get("finding_id") or ""),
+                statement=str(item.get("statement") or ""),
+                refs=tuple(EvidenceId(str(ref)) for ref in item.get("refs") or ()),
+            )
+            for item in data.get("findings") or ()
+        ),
+        sources=tuple(
+            ResearchSource(
+                eid=EvidenceId(str(item["eid"])),
+                material_id=str(item.get("material_id") or ""),
+                title=str(item.get("title") or ""),
+                url=str(item.get("url") or ""),
+                excerpt=str(item.get("excerpt") or ""),
+            )
+            for item in data.get("sources") or ()
+        ),
+        open_questions=tuple(str(item) for item in data.get("open_questions") or ()),
+        notes=tuple(str(item) for item in data.get("notes") or ()),
+    )
 
 
 def exploration_from_payload(
@@ -1341,6 +1437,35 @@ def exploration_from_payload(
 ) -> Exploration:
     scope_data = payload.get("scope") or {}
     failure_data = payload.get("failure")
+    # 聚合守卫（kind⇔scope、done 的研究必须有报告）抛的是 `DomainError`，
+    # 而仓储的坏行网只接 `(AttributeError, TypeError, KeyError, ValueError)`
+    # ——不在这里翻一手，一行坏 payload 就会让整页列表 500 / 让 clear_stale 永远 422。
+    try:
+        return _exploration_from_parts(
+            payload,
+            exploration_id=exploration_id,
+            project_id=project_id,
+            kind=kind,
+            status=status,
+            created_at=created_at,
+            scope_data=scope_data,
+            failure_data=failure_data,
+        )
+    except DomainError as error:
+        raise ValueError(str(error)) from error
+
+
+def _exploration_from_parts(
+    payload: dict,
+    *,
+    exploration_id: ExplorationId,
+    project_id: ProjectId,
+    kind: ExplorationKind,
+    status: ExplorationStatus,
+    created_at: datetime,
+    scope_data: dict,
+    failure_data: dict | None,
+) -> Exploration:
     return Exploration(
         exploration_id=exploration_id,
         project_id=project_id,
@@ -1386,6 +1511,7 @@ def exploration_from_payload(
         ),
         abandon_reason=payload.get("abandon_reason"),
         overflow_count=int(payload.get("overflow_count") or 0),
+        research=_research_from_payload(payload.get("research")),
     )
 
 

@@ -43,8 +43,12 @@ HNSW_INDEX = "idx_material_chunks_embedding"
 def vector_char_budget(origin: str) -> int | None:
     """一份材料**最多索引多少字的正文**。`None` = 不限。
 
-    规则只有一条：**联网材料（`web_search`）限 `WEB_VECTOR_CHARS` 字**。
+    规则只有一条：**联网检索结果（`web_search`）限 `WEB_VECTOR_CHARS` 字**。
     上传（`upload`）与抓网页（`web_fetch`）不限——它们是用户精挑要精读的材料。
+
+    研究来源（`web_research`）不在这张表里：它们**不参与任何检索**（见
+    `materials._NON_SEARCHABLE`），所以既不写向量，也不进 `reembed_missing`——
+    给一份没人会查的材料算向量只是纯浪费。
 
     **为什么是「字」不是「块」**：块数是实现细节，块宽一改，"前 N 块"覆盖的**字数**
     就跟着腰斩（批 10：块宽 400 → 200，联网材料的语义覆盖从 41% 掉到 27%）。
@@ -203,7 +207,11 @@ class SqliteVectorIndex:
             return 0
         try:
             rows = self._connection.execute(
+                # 研究来源排除在外：它们不进检索池，补算等于白算
+                # （`materials._NON_SEARCHABLE` 是同一条口径的另一半）。
                 "SELECT c.material_id FROM material_chunks c"
+                " JOIN materials m ON m.material_id = c.material_id"
+                " WHERE m.origin <> 'web_research'"
                 " GROUP BY c.material_id"
                 " HAVING count(*) > 0 AND count(c.embedding) = 0"
                 " ORDER BY c.material_id LIMIT %s",

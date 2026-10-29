@@ -19,6 +19,10 @@ from pmstudio.domain.exploration.item import (
     CandidateState,
     Hypothesis,
 )
+from pmstudio.domain.exploration.research import (
+    MAX_RESEARCH_TOPIC_CHARS,
+    ResearchReport,
+)
 from pmstudio.domain.shared.errors import (
     CandidateNotReviewable,
     DuplicateCandidateId,
@@ -30,7 +34,11 @@ from pmstudio.domain.shared.ids import ExplorationId, ProjectId
 
 
 class ExplorationKind(StrEnum):
-    INQUIRY = "inquiry"  # M8 只有这一种；讨论/体检到 M9/M10 再加值，不预埋空壳
+    INQUIRY = "inquiry"  # M8 的调研：假设 + 盲区，产物要过人过一次目台
+    #: P3b-1 的项目级研究：`run_tool_loop` 自己搜、自己抓，产物是**只读**的结论 + 来源。
+    #: 与 INQUIRY 分开是两件事：入口（topic）、产物（报告）、过目方式（没有候选）都不同，
+    #: 合成一种会让 `candidates()` 对研究返回一个假的空过目台。
+    WEB_RESEARCH = "web_research"
 
 
 class ExplorationStatus(StrEnum):
@@ -43,11 +51,13 @@ class ExplorationStatus(StrEnum):
 class ScopeKind(StrEnum):
     ENTRY = "entry"
     DOCUMENT = "document"
+    #: 项目级研究只有一个主题，不锚定条目也不要求文档有内容（2026-10-29 P3b-1）。
+    TOPIC = "topic"
 
 
 @dataclass(frozen=True, slots=True)
 class ExplorationScope:
-    """调研范围。`entry` 必须带 entry_id；`text` 是可选的焦点说明（只给人看/给模型当一句补充）。"""
+    """调研范围。`entry` 必须带 entry_id；`topic` 必须有 topic 文本、不许带条目。"""
 
     kind: ScopeKind
     ref: str | None = None
@@ -56,6 +66,18 @@ class ExplorationScope:
     def __post_init__(self) -> None:
         if self.kind is ScopeKind.ENTRY and not (self.ref or "").strip():
             raise ShapeError("从条目发起调研必须带条目标识（entry_id）")
+        if self.kind is ScopeKind.TOPIC:
+            topic = (self.text or "").strip()
+            if (self.ref or "").strip():
+                raise ShapeError("主题型研究不锚定条目：`ref` 必须为空")
+            if not topic:
+                raise ShapeError("主题型研究必须写清研究什么（topic）")
+            if len(topic) > MAX_RESEARCH_TOPIC_CHARS:
+                raise ShapeError(
+                    f"研究主题最多 {MAX_RESEARCH_TOPIC_CHARS} 字，这条 {len(topic)} 字",
+                    chars=len(topic),
+                    limit=MAX_RESEARCH_TOPIC_CHARS,
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +107,7 @@ class Exploration:
         failure: ExplorationFailure | None = None,
         abandon_reason: str | None = None,
         overflow_count: int = 0,
+        research: ResearchReport | None = None,
     ) -> None:
         self._exploration_id = exploration_id
         self._project_id = project_id
@@ -101,6 +124,36 @@ class Exploration:
         self._abandon_reason = abandon_reason
         #: 报文超限被截断的条数——**不能默默丢**：界面要把这个数照实说出来
         self._overflow_count = overflow_count
+        #: 研究产物（结论 + 来源）。只有 `WEB_RESEARCH` 会有；调研那一路恒为 None。
+        self._research = research
+        self._check_kind_consistency()
+
+    def _check_kind_consistency(self) -> None:
+        """三条只有聚合知道的关系，读盘与新建一视同仁：
+
+        1. 研究只锚主题、调研不认主题（`ScopeKind` 与 `ExplorationKind` 双向绑定）；
+        2. 只有研究能带报告；
+        3. **跑完的研究必须有报告**——"done 但没有报告"是一份被读丢的数据，
+           不许它安静地出现在列表里。
+        """
+
+        is_research = self._kind is ExplorationKind.WEB_RESEARCH
+        is_topic = self._scope.kind is ScopeKind.TOPIC
+        if is_research != is_topic:
+            raise ShapeError(
+                "研究的范围必须是主题、调研的范围不能是主题",
+                kind=self._kind.value,
+                scope_kind=self._scope.kind.value,
+            )
+        if self._research is not None and not is_research:
+            raise ShapeError(
+                "只有研究才有报告", kind=self._kind.value
+            )
+        if is_research and self._status is ExplorationStatus.DONE and self._research is None:
+            raise ShapeError(
+                "这一趟研究已经是 done，但没有报告（payload 被读丢了？）",
+                exploration_id=str(self._exploration_id),
+            )
 
     @classmethod
     def start(
@@ -110,9 +163,14 @@ class Exploration:
         project_id: ProjectId,
         scope: ExplorationScope,
         now: datetime,
+        kind: ExplorationKind = ExplorationKind.INQUIRY,
     ) -> "Exploration":
         return cls(
-            exploration_id=exploration_id, project_id=project_id, scope=scope, created_at=now
+            exploration_id=exploration_id,
+            project_id=project_id,
+            scope=scope,
+            created_at=now,
+            kind=kind,
         )
 
     # —— 只读 ——
@@ -162,9 +220,20 @@ class Exploration:
 
         return self._overflow_count
 
-    def candidates(self) -> tuple[Candidate, ...]:
-        """过目台/详情看到的统一候选列表（假设在前、盲区在后，顺序稳定）。"""
+    @property
+    def research(self) -> ResearchReport | None:
+        """研究产物；调研那一路恒为 `None`（不是"空报告"，是没有这回事）。"""
 
+        return self._research
+
+    def candidates(self) -> tuple[Candidate, ...]:
+        """过目台/详情看到的统一候选列表（假设在前、盲区在后，顺序稳定）。
+
+        研究**没有候选**：它的产物是只读的结论与来源，过目台不该出现一个假入口。
+        """
+
+        if self._kind is ExplorationKind.WEB_RESEARCH:
+            return ()
         found: list[Candidate] = []
         for item in self._hypotheses:
             found.append(
@@ -205,6 +274,11 @@ class Exploration:
     ) -> None:
         """跑完：挂产物。上限与 id 唯一在这里拦（报文层截断后的第二道）。"""
 
+        if self._kind is not ExplorationKind.INQUIRY:
+            raise ShapeError(
+                f"这一趟不是调研（kind={self._kind.value}）：研究报告走 complete_research",
+                kind=self._kind.value,
+            )
         if self._status is not ExplorationStatus.RUNNING:
             raise IllegalExplorationTransition(
                 current=self._status, target=ExplorationStatus.DONE
@@ -225,6 +299,24 @@ class Exploration:
         self._hypotheses = tuple(hypotheses)
         self._blind_spots = tuple(blind_spots)
         self._overflow_count = overflow_count
+        self._status = ExplorationStatus.DONE
+
+    def complete_research(self, report: ResearchReport) -> None:
+        """研究跑完：挂报告。与 `complete` 的分派互斥（kind 决定走哪一条）。
+
+        上限与 refs 归属在 `ResearchReport.__post_init__` 里判——这里只判"该不该在这里完成"。
+        """
+
+        if self._kind is not ExplorationKind.WEB_RESEARCH:
+            raise ShapeError(
+                f"这一趟不是研究（kind={self._kind.value}）：调研产物走 complete",
+                kind=self._kind.value,
+            )
+        if self._status is not ExplorationStatus.RUNNING:
+            raise IllegalExplorationTransition(
+                current=self._status, target=ExplorationStatus.DONE
+            )
+        self._research = report
         self._status = ExplorationStatus.DONE
 
     def fail(self, reason: str) -> None:
@@ -270,6 +362,7 @@ class Exploration:
         因为材料已经先落库了才盖这个章）。
         """
 
+        self._require_inquiry_action(candidate_id, action="收下")
         self._require_done(candidate_id)
         self._known(candidate_id)
         if as_ not in ("seed", "material"):
@@ -295,6 +388,7 @@ class Exploration:
             self._kept_ref[candidate_id] = material_id
 
     def dismiss(self, candidate_id: str) -> None:
+        self._require_inquiry_action(candidate_id, action="删掉")
         self._require_done(candidate_id)
         self._known(candidate_id)
         state = self._states.get(candidate_id, CandidateState.NEW)
@@ -305,6 +399,16 @@ class Exploration:
         self._states[candidate_id] = CandidateState.DISMISSED
 
     # —— 内部 ——
+    def _require_inquiry_action(self, candidate_id: str, *, action: str) -> None:
+        """研究没有候选可过目：直接说清，别让它落到"未知候选"那种错里。"""
+
+        if self._kind is not ExplorationKind.INQUIRY:
+            raise ShapeError(
+                f"这一趟是研究，没有可过目的候选（不能{action}）",
+                candidate_id=candidate_id,
+                kind=self._kind.value,
+            )
+
     def _require_done(self, candidate_id: str) -> None:
         if self._status is not ExplorationStatus.DONE:
             raise CandidateNotReviewable(

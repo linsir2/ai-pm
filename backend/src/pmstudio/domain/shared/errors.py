@@ -372,9 +372,18 @@ class UnfalsifiableHypothesis(InvariantViolation):
 
 
 class TooManyInquiryItems(InvariantViolation):
-    def __init__(self, *, kind: str, count: int, limit: int) -> None:
+    """一趟探索的产物超上限。
+
+    `run_label` 只改措辞（"调研" / "研究"），不改判据——两边的上限理由不同
+    （调研是假设/盲区，研究是来源/结论/开放问题），所以常量各自一份、错误类共用一个：
+    X2 就是"一趟的产物有上限"这一条不变量。
+    """
+
+    def __init__(
+        self, *, kind: str, count: int, limit: int, run_label: str = "调研"
+    ) -> None:
         super().__init__(
-            f"一趟调研最多 {limit} 条{kind}，收到 {count} 条",
+            f"一趟{run_label}最多 {limit} 条{kind}，收到 {count} 条",
             invariant=XInvariant.X2,
             kind=kind,
             count=count,

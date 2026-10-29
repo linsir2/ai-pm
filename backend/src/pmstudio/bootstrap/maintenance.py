@@ -25,6 +25,7 @@ templates 是先例）——只读，写仍然按 owner 盖章。
 import asyncio
 import logging
 
+from pmstudio.application.material_refs import ORIGIN_WEB_RESEARCH
 from pmstudio.domain.shared.ids import UserId
 
 logger = logging.getLogger(__name__)
@@ -83,8 +84,10 @@ class MaterialMaintenance:
         referenced_by_project: dict[str, set[str]] = {}
         refreshed = 0
         for material_id, owner_id, project_id, origin in self._store.list_materials_for_reparse():
-            if origin == WEB_ORIGIN:
-                # 联网材料拿不回整页字节 → 重解析不了（保持旧样，由"再次搜到"时升级）
+            if origin in (WEB_ORIGIN, ORIGIN_WEB_RESEARCH):
+                # 联网材料拿不回整页字节 → 重解析不了（保持旧样，由"再次搜到"时升级）；
+                # 研究来源是**研究那一刻的快照**（`DeleteMaterial` 那边一律冻结），
+                # 解析器升档也不能在这里悄悄改掉它。
                 continue
             packet = self._store.get(material_id, owner=owner_id)
             if packet is None:

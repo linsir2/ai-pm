@@ -184,13 +184,23 @@ class MaterialFrozen(ApplicationError):
     所以被引用过的材料只能**留着**（要用新解析器读，走"另出一份"那条路）。
     """
 
-    def __init__(self, material_id: object, *, eids: tuple[str, ...], action: str) -> None:
+    def __init__(
+        self,
+        material_id: object,
+        *,
+        eids: tuple[str, ...],
+        action: str,
+        reason: str | None = None,
+    ) -> None:
         numbers = tuple(
             eid
             for eid in eids
             if len(eid) > 1 and eid.startswith("E") and eid[1:].isdigit()
         )
-        if numbers:
+        if reason is not None:
+            # 调用方知道得更具体（例：研究来源一律冻结，与"有没有被引用"无关）
+            message = f"这份材料不能{action}：{reason}"
+        elif numbers:
             message = (
                 f"这份材料已经发过编号 {'、'.join(numbers)}，不能{action}"
                 "——编号指向它里面的块，不能回收、也不能改指。"
@@ -207,6 +217,7 @@ class MaterialFrozen(ApplicationError):
             eids=list(numbers),
             references=list(eids),
             action=action,
+            **({"reason": reason} if reason is not None else {}),
         )
 
 

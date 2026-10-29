@@ -28,11 +28,17 @@ from pmstudio.domain.round.claim import Claim, SeatConflict
 from pmstudio.domain.round.draft import Proposal
 from pmstudio.domain.round.opinion import Opinion, OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import Question
+from pmstudio.domain.round.research import RoundResearchSource
 from pmstudio.domain.round.round import DropSource, Round
 from pmstudio.domain.shared.errors import BadTemplateDefinition
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
 from pmstudio.domain.shared.label import ClaimLabel
+from pmstudio.domain.shared.research import (
+    MAX_RESEARCH_SOURCES,
+    RESEARCH_SOURCE_CARD_CHARS,
+    source_card_text,
+)
 from pmstudio.domain.shared.sections import slot_block_id
 from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.domain.shared.writing import BlockKind
@@ -970,6 +976,18 @@ def _cap(text: str, limit: int) -> str:
 MATERIAL_BUDGET = 4000
 #: 检索结果合计的预算（字）。Tavily 实测单条 content ≈ 1.1k 字符，所以每条还要再截。
 WEB_BUDGET = 2000
+#: 编号行（`[E12345]` + 换行）的长度上限：预算里要给每张卡留出这一行，
+#: 否则 5 张满卡（5 × 800）加上编号与分隔符就会超，第 5 张会被无声丢掉。
+#: 按**5 位**编号算余量（与 `EID_RESERVE` 取上限同一条口径）：4 位时恰好打平，
+#: 再多一位就破——预算不该卡在等号上。
+RESEARCH_CARD_OVERHEAD = len("[E12345]\n")
+
+#: 研究来源那一段的预算：**派生**——来源上限 ×（整卡 + 编号行）+ 卡片间分隔符。
+#: 不另立旋钮：三个上限一改，这里自动跟着走（写死必然漂）。
+RESEARCH_BUDGET = (
+    MAX_RESEARCH_SOURCES * (RESEARCH_SOURCE_CARD_CHARS + RESEARCH_CARD_OVERHEAD)
+    + 2 * (MAX_RESEARCH_SOURCES - 1)
+)
 #: 每个块渲染时前面还有一行「[E12] 第 3 页」——算预算时把它算进去。
 #: 编号的长度在选块时**还定不下来**（发号在选块之后）→ 取一个**上限**：
 #: 「[E1234] 」+ 换行 = 9。
@@ -1509,6 +1527,8 @@ def render_materials(
 ORIGIN_TITLES: dict[str, str] = {
     "upload": "上传的材料",
     "web_search": "联网检索结果",
+    #: 研究来源（P3b-1）：一条结果一个号，与 `web_search` 同一条编号粒度。
+    "web_research": "研究来源",
     "web_fetch": "抓来的网页",
     #: 模拟调研（M10）：探索/讨论没加显示是旧账（回落原文）；模拟的第一天就必须写清，
     #: 否则"推演"与"外部事实"在提示词里长一个样——这是 D1 诚实口径的底线。
@@ -1579,6 +1599,48 @@ MAX_DECISIONS = 10
 DIGEST_LIMIT = 3
 MAX_OPEN_QUESTIONS = 10
 
+
+def render_research_sources(
+    sources: Sequence[RoundResearchSource],
+    *,
+    budget: int = RESEARCH_BUDGET,
+) -> str:
+    """挂到本轮的研究来源卡 → 提示词里那一段：**一张卡一段**，编号在卡前一行。
+
+    两条口径与材料/联网两节相同：
+
+    - **整卡进或整卡不进**：预算不够就跳过这一张并说"还有 N 条没进"，不截半张卡
+      （截一半的来源卡比不给更坏：模型会引用它没看到的半句话）；
+    - 编号必须真的出现在文本里：`known_eids` 是"看得见的 ∩ 账本"，
+      不渲染编号，来源 E 就成了模型不能引用的幽灵。
+
+    预算是**派生**的（见 `RESEARCH_BUDGET`），够 5 张满卡 + 编号行 + 分隔符；
+    正常情况下不会有卡被跳过——跳过那句是给"将来有人调小 budget"留的出口。
+
+    空列表返回空串（不留空节）——调用方只有挂了来源卡才需要这一段。
+    """
+
+    if not sources:
+        return ""
+
+    blocks: list[str] = []
+    used = 0
+    skipped = 0
+    for item in sources:
+        card = source_card_text(title=item.title, url=item.url, excerpt=item.excerpt)
+        block = f"[{item.eid}]\n{card}"
+        cost = len(block) + (2 if blocks else 0)  # 卡间两个换行
+        if used + cost > budget:
+            skipped += 1
+            continue
+        blocks.append(block)
+        used += cost
+    if skipped:
+        blocks.append(
+            f"（还有 {skipped} 条来源没进本步：预算只带得下 {len(blocks)} 张卡，"
+            "它们仍在材料库里）"
+        )
+    return "\n\n".join(blocks)
 
 def _section_entry_count(section) -> int:
     """一个章节里的条目总数（含子块）。"""

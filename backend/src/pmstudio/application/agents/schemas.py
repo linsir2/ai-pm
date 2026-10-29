@@ -24,6 +24,10 @@ from pmstudio.domain.exploration.item import (
     MAX_SIM_INQUIRY_SLICES,
     MAX_SIM_INQUIRY_UNKNOWNS,
 )
+from pmstudio.domain.exploration.research import (
+    MAX_RESEARCH_FINDINGS,
+    MAX_RESEARCH_OPEN_QUESTIONS,
+)
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import FeatureSlug, SectionId
 from pmstudio.domain.shared.target import Target
@@ -212,6 +216,30 @@ class InquiryPacket(BaseModel):
     )
     blind_spots: list[BlindSpotDraft] = Field(
         default_factory=list, max_length=MAX_INQUIRY_BLIND_SPOTS
+    )
+
+
+class ResearchFindingDraft(BaseModel):
+    #: 一条结论。`refs` 用**来源序号**（`S1..S5`，就是提示词里来源卡前面的那个号），
+    #: 不是 E 编号：E 在入库那一刻才发，模型这一趟还没见过它。
+    #: 装配层把 S 号映射成 E 之后才进领域——领域里不存 S（那是报文内的瞬态）。
+
+    text: str = Field(description="一句结论：根据下面点名的来源，我判断……")
+    refs: list[str] = Field(min_length=1, description="来源序号（S1、S2…），至少一个")
+
+
+class ResearchPacket(BaseModel):
+    #: 研究综合回包（P3b-1）：结论 + 开放问题。**结论可以空**（只搜到来源、没下判断是合法结果）；
+    #: 零来源不是报文能表达的事，由用例判失败。
+    #:
+    #: 没有 `basis`：结论自带的 `refs` 就是依据，"我读了哪几张卡"这句话没有消费者
+    #: （界面显示结论 + 引用，不显示一句总结），多一个必填字段只是多一种失败模式。
+
+    findings: list[ResearchFindingDraft] = Field(
+        default_factory=list, max_length=MAX_RESEARCH_FINDINGS
+    )
+    open_questions: list[str] = Field(
+        default_factory=list, max_length=MAX_RESEARCH_OPEN_QUESTIONS
     )
 
 

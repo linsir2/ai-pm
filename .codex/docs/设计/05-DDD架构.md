@@ -193,6 +193,7 @@ backend/src/pmstudio/
 │   ├── context_pool.py
 │   ├── round_context.py
 │   ├── web_research.py
+│   ├── project_research.py
 │   ├── sim_inquiry.py
 │   ├── sim_review.py
 │   └── agents/
@@ -236,25 +237,25 @@ tests/                architecture / contracts / domain / application / infrastr
 harness/model/        contracts.py envelope.py structured.py normalize.py failure.py jsonio.py prompt_log.py resilience.py agentic.py
 harness/agents/       agent.py
 harness/events/       schemas.py bus.py
-harness/prompts/      analyzer.md inquiry.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md discussion_say.md discussion_cards.md
+harness/prompts/      analyzer.md inquiry.md integrator.md memory_curator.md opinion_dispositions.md seat_review.md discussion_say.md discussion_cards.md research_loop.md research_synthesis.md
 harness/providers/    litellm.py
 harness/tools/        registry.py spec.py invoker.py recorder.py definitions/*.toml
 domain/authoring/     document.py blocks.py schema.py version.py instruction.py views.py diff.py readiness.py
 domain/provenance/    ledger.py evidence.py
-domain/round/         round.py step.py claim.py opinion.py questionnaire.py draft.py web.py web_query.py retrieval.py skip.py
-domain/exploration/   exploration.py item.py
+domain/round/         round.py step.py claim.py opinion.py questionnaire.py draft.py web.py web_query.py retrieval.py skip.py research.py
+domain/exploration/   exploration.py item.py research.py
 domain/discussion/    thread.py card.py
 domain/services/      traceability.py committer.py scope_guard.py assigner.py
 domain/memory/        memory.py context.py observations.py digest.py inspiration.py
 domain/               null_repos.py
-domain/shared/        ids.py errors.py invariants.py lease.py target.py label.py sections.py writing.py evidence_kind.py memory.py template.py template_adapter.py
-application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py discusser.py sim_inquirer.py persona_simulator.py definitions.py
+domain/shared/        ids.py errors.py invariants.py lease.py target.py label.py sections.py writing.py evidence_kind.py memory.py template.py template_adapter.py research.py
+application/agents/   analyzer.py inquirer.py integrator.py memory_curator.py seat.py schemas.py discusser.py sim_inquirer.py persona_simulator.py researcher.py definitions.py
 infrastructure/        security.py redis_limiter.py redis_bus.py
 infrastructure/templates/ loader.py standard.toml light.toml
 infrastructure/postgres/ database.py unit_of_work.py repositories.py leases.py serialization.py materials.py tokenize.py model_calls.py tool_calls.py call_log.py project_factory.py observations_repo.py digest_repo.py inspiration_repo.py users.py owner_scope.py usage.py embedding.py vector_index.py
 infrastructure/seats/ catalog.py definitions/*.toml
 infrastructure/personas/ catalog.py personas.toml
-infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py webclean.py webdedup.py
+infrastructure/tools/ extract.py fetch.py office.py tavily.py limits.py webclean.py webdedup.py research_tools.py
 infrastructure/mcp/    client.py projector.py manager.py
 infrastructure/graph/ graph.py exploration_runner.py
 infrastructure/discussion/ roles.py

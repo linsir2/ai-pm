@@ -22,7 +22,7 @@ def conn():
 
 
 def _put_material(conn, material_id="m-1", *, project_id="p1", title="手册",
-                  chunks=(("c1", "x"),)):
+                  chunks=(("c1", "x"),), origin="upload"):
     from tests.conftest import TEST_OWNER
 
     owner = str(TEST_OWNER)
@@ -30,9 +30,9 @@ def _put_material(conn, material_id="m-1", *, project_id="p1", title="手册",
         "INSERT INTO materials (material_id, project_id, owner_id, origin, title, source_ref,"
         " media_type, bytes_len, sha256, parser_id, parser_version, schema_version, truncated,"
         " warnings, content, created_at)"
-        " VALUES (%s, %s, %s, 'upload', %s, '退货说明.pdf', 'application/pdf', 0,"
+        " VALUES (%s, %s, %s, %s, %s, '退货说明.pdf', 'application/pdf', 0,"
         " %s, 'plain', '1', '1', false, '{}', %s, '2026-10-18T00:00:00+00:00')",
-        (material_id, str(project_id), owner, title, f"sha-{material_id}", b""),
+        (material_id, str(project_id), owner, origin, title, f"sha-{material_id}", b""),
     )
     for ordinal, (chunk_id, text) in enumerate(chunks):
         conn.execute(
@@ -631,3 +631,77 @@ def test_the_lexical_baseline_uses_the_same_material_dedup():
     assert [item.chunk_id for item in kept] == ["c1", "c2", "c4", "c5"], (
         "同一份材料最多 2 个槽"
     )
+
+
+def test_research_sources_are_never_returned_by_search(conn):
+    """研究来源**不进检索池**（P3b-1）：它只经"挂到当前轮"进上下文。
+
+    口径在 SQL 里（`_NON_SEARCHABLE`），词法 / 向量 / 子串兜底 / BM25 语料统计四处
+    一致。这里钉词法这一路：同样的正文，`origin=web_research` 的那份不出现。
+    """
+
+    from tests.support.builders import PROJECT
+
+    _put_material(
+        conn, "m-upload", project_id=PROJECT, title="上传的手册",
+        chunks=(("c-upload", "内网线走背板槽位"),),
+    )
+    _put_material(
+        conn, "m-research", project_id=PROJECT, title="研究来源",
+        chunks=(("c-research", "内网线走背板槽位"),), origin="web_research",
+    )
+
+    hits = SqliteFtsRetriever(conn).search(
+        project_id=PROJECT, query="背板槽位", limit=10
+    )
+
+    assert [hit.chunk_id for hit in hits] == ["c-upload"]
+
+
+def test_the_bm25_corpus_does_not_count_research_sources(conn):
+    """BM25 的 N / avgdl / df 只算**可检索**的块（P3b-1）。
+
+    这一处漏排不会让研究来源自己冒出来，而是把它的长度算进 avgdl——
+    悄悄改掉所有上传材料的分数，最难发现。
+    """
+
+    from pmstudio.infrastructure.postgres.materials import _corpus_tokens
+    from tests.conftest import TEST_OWNER
+    from tests.support.builders import PROJECT
+
+    _put_material(
+        conn, "m-upload", project_id=PROJECT, title="上传",
+        chunks=(("c-upload", "内网线走背板槽位"),),
+    )
+    _put_material(
+        conn, "m-research", project_id=PROJECT, title="研究",
+        chunks=(("c-research", "很长的研究正文" * 50),), origin="web_research",
+    )
+
+    corpus = _corpus_tokens(conn, str(PROJECT), str(TEST_OWNER))
+
+    assert "c-upload" in corpus
+    assert "c-research" not in corpus
+
+
+def test_global_search_can_include_research_sources_but_rag_cannot(conn):
+    """排不排除是**开关**：RAG 三条路排除研究来源，人用的全局搜索要看得到它。
+
+    否则用户在材料库里看见那份来源，顶栏却搜不到——观感就是丢数据。
+    """
+
+    from tests.support.builders import PROJECT
+
+    _put_material(
+        conn, "m-research", project_id=PROJECT, title="研究来源",
+        chunks=(("c-research", "内网线走背板槽位"),), origin="web_research",
+    )
+    retriever = SqliteFtsRetriever(conn)
+
+    rag = retriever.search(project_id=PROJECT, query="背板槽位", limit=10)
+    human = retriever.search(
+        project_id=PROJECT, query="背板槽位", limit=10, include_research_sources=True
+    )
+
+    assert [hit.chunk_id for hit in rag] == []
+    assert [hit.chunk_id for hit in human] == ["c-research"]

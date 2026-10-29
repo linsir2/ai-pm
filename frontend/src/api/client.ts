@@ -490,6 +490,23 @@ export const api = {
       { method: "POST" },
     ),
 
+  /** 项目级研究（P3b-1）：请求内跑完，返回最终投影（done / failed）。 */
+  startWebResearch: (projectId: string, topic: string) =>
+    request<ExplorationView>(`/projects/${projectId}/research`, {
+      method: "POST",
+      body: JSON.stringify({ topic }),
+    }),
+
+  /** 把研究来源挂到当前轮（1..5 张）：只读快照，不进材料池。 */
+  attachResearchSources: (roundId: string, explorationId: string, eids: string[]) =>
+    request<RoundView>(
+      `/rounds/${encodeURIComponent(roundId)}/research-sources`,
+      {
+        method: "POST",
+        body: JSON.stringify({ exploration_id: explorationId, eids }),
+      },
+    ),
+
   /** 收下一条候选：`seed` = 预填下一轮输入；`material` = 落成材料。 */
   keepCandidate: (explorationId: string, candidateId: string, as: "seed" | "material") =>
     request<ExplorationView>(

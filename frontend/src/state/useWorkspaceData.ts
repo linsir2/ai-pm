@@ -51,6 +51,8 @@ export type PendingAction =
   | "memory"
   /** 过目台上的动作（M8）：发起 / 重试 / 放弃 / 收下 / 删掉，串行不并发。 */
   | "exploration"
+  /** 研究来源挂当前轮（P3b-1）：轮内动作，与其它轮内动作一样串行。 */
+  | "research"
   /** 讨论区上的动作（M9）：开聊 / 说 / 总结 / 收卡 / 关掉，同样串行不并发。 */
   | "discussion"
   /** 模拟抽屉上的动作（M10）：跑一趟 / 收下勾选，同样串行不并发。 */
@@ -476,6 +478,31 @@ export function useWorkspaceData() {
         );
       }),
     [replaceExploration, run],
+  );
+
+  /** 项目级研究（P3b-1）：请求内跑完，返回最终投影（done / failed）。
+   *  与 M8 调研同一个 `explorations` 数据源，靠 `kind` 区分（研究没有候选）。 */
+  const startWebResearch = useCallback(
+    (topic: string) =>
+      run("exploration", async () => {
+        const projectId = selected.current;
+        if (projectId === null) return;
+        replaceExploration(await api.startWebResearch(projectId, topic));
+      }),
+    [replaceExploration, run],
+  );
+
+  /** 把研究来源挂到当前轮：只读快照，成功后整轮重读（来源卡要出现在右栏）。 */
+  const attachResearchSources = useCallback(
+    (roundId: string, explorationId: string, eids: string[]) =>
+      run("research", async () => {
+        dispatch({
+          type: "round",
+          round: await api.attachResearchSources(roundId, explorationId, eids),
+          expectRoundId: roundId,
+        });
+      }),
+    [run],
   );
 
   /** 拿去验证（M13）：拿一张灵感卡的原话起一趟聚焦调研（整份文档 + 补充说明），候选进灵感箱。 */
@@ -1010,6 +1037,8 @@ export function useWorkspaceData() {
     explorations,
     explorationsPending: pending === "exploration",
     research,
+    startWebResearch,
+    attachResearchSources,
     verifyCard,
     retryExploration,
     abandonExploration,

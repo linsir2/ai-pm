@@ -28,9 +28,11 @@ from pmstudio.application.lease import (
     set_lease_scope,
 )
 from pmstudio.application.ports import LeaseStore
+from pmstudio.application.project_research import StartWebResearch
 from pmstudio.application.use_cases import RetryExploration, RunInquiry
-from pmstudio.domain.exploration.exploration import ExplorationScope
+from pmstudio.domain.exploration.exploration import ExplorationKind, ExplorationScope
 from pmstudio.domain.ports import ExplorationReader
+from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import ExplorationId, ProjectId, UserId
 from pmstudio.domain.shared.lease import LeaseToken
 from pmstudio.infrastructure.postgres.owner_scope import require_owner
@@ -48,6 +50,7 @@ class ExplorationRunner:
         run_inquiry: RunInquiry,
         retry_exploration: RetryExploration,
         explorations: ExplorationReader,
+        start_web_research: StartWebResearch | None = None,
         leases: LeaseStore | None = None,
         lease_ttl_seconds: float = LEASE_TTL_SECONDS,
         lease_heartbeat_seconds: float = LEASE_HEARTBEAT_SECONDS,
@@ -55,6 +58,7 @@ class ExplorationRunner:
         self._run_inquiry = run_inquiry
         self._retry = retry_exploration
         self._explorations = explorations
+        self._start_web_research = start_web_research
         self._leases = leases
         self._lease_ttl_seconds = lease_ttl_seconds
         self._lease_heartbeat_seconds = lease_heartbeat_seconds
@@ -93,6 +97,46 @@ class ExplorationRunner:
         finally:
             self._running_projects.discard(key)
 
+    async def start_research(self, *, project_id: ProjectId, topic: str) -> ExplorationView:
+        """项目级研究（P3b-1）：与 `start` 同形（占位 → 清僵壳 → create → 带租约跑）。
+
+        与 M8 调研共用同一把"同项目只跑一趟"的锁（`_running_projects`）——它们都写
+        同一个 `explorations` 表，同时跑两趟只会让唯一索引替我们报错。
+        """
+
+        research = self._require_research()
+        key = str(project_id)
+        if key in self._running_projects:
+            raise ExplorationBusy(project_id)
+        self._running_projects.add(key)
+        try:
+            owner = self._owner()
+            await self._run_inquiry.clear_stale(project_id, owner=owner)
+            started = await research.create(
+                project_id=project_id, topic=topic, owner=owner
+            )
+            exploration_id = started.exploration_id
+            current = asyncio.current_task()
+            if current is not None:
+                self._tasks[str(exploration_id)] = current
+            try:
+                return await self._run_with_lease(
+                    exploration_id,
+                    started.token,
+                    lambda: research.execute(exploration_id),
+                )
+            finally:
+                self._tasks.pop(str(exploration_id), None)
+        finally:
+            self._running_projects.discard(key)
+
+    def _require_research(self) -> StartWebResearch:
+        if self._start_web_research is None:
+            raise ShapeError(
+                "研究用例没有接线（这一版只装了 M8 调研）", kind="web_research"
+            )
+        return self._start_web_research
+
     async def retry(self, *, exploration_id: str) -> ExplorationView:
         xid = ExplorationId(exploration_id)
         exploration = self._explorations.get(xid)
@@ -110,6 +154,13 @@ class ExplorationRunner:
             if current is not None:
                 self._tasks[str(xid)] = current
             try:
+                if exploration.kind is ExplorationKind.WEB_RESEARCH:
+                    # 研究重跑就是重跑整趟工具循环：`retry_hint` 是给"报文重装"用的，
+                    # 对"没搜到来源"帮不上忙，所以不传。
+                    research = self._require_research()
+                    return await self._run_with_lease(
+                        xid, resumed.token, lambda: research.execute(xid)
+                    )
                 return await self._run_with_lease(
                     xid,
                     resumed.token,

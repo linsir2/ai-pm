@@ -442,15 +442,31 @@ def _query_tokens(connection, query: str) -> list[str]:  # type: ignore[no-untyp
     return [str(token) for token in row["tokens"]]
 
 
-def _corpus_tokens(connection, project_id: str, owner: str) -> dict[str, tuple[str, ...]]:  # type: ignore[no-untyped-def]
+#: 不进**检索池**的材料 origin（P3b-1）：研究来源只经"挂到当前轮"进上下文，
+#: **不参与 RAG 召回**——它们已经有编号与来源卡，再被自动召回就是同一份内容两个入口。
+#: 词法路、向量路、子串兜底、以及 BM25 的语料统计（N/avgdl/df）四处口径必须一致：
+#: 少排一处，研究来源就会挤进候选、并把它的大小算进平均文档长度。
+#:
+#: **但它对"人用的全局搜索"是可见的**（`include_research_sources=True`）：用户在材料库里
+#: 看得见那份来源，顶栏搜不到就是丢数据。所以排除是**开关**，不是写死的 WHERE。
+_NON_SEARCHABLE = "m.origin <> 'web_research'"
+
+
+def _exclusion(include_research_sources: bool) -> str:
+    return "TRUE" if include_research_sources else _NON_SEARCHABLE
+
+
+def _corpus_tokens(  # type: ignore[no-untyped-def]
+    connection, project_id: str, owner: str, *, exclude: str = _NON_SEARCHABLE
+) -> dict[str, tuple[str, ...]]:
     """同 project/owner 的全部块 token：Robertson 的 N / avgdl / df 都在这里算。"""
 
     rows = connection.execute(
-        """
+        f"""
         SELECT c.chunk_id, c.search_tokens
         FROM material_chunks c
         JOIN materials m ON m.material_id = c.material_id
-        WHERE m.project_id = %s AND m.owner_id = %s
+        WHERE m.project_id = %s AND m.owner_id = %s AND {_NON_SEARCHABLE}
         """,
         (project_id, owner),
     ).fetchall()
@@ -527,6 +543,7 @@ class SqliteFtsRetriever:
         JOIN materials m ON m.material_id = c.material_id
         WHERE c.search_text ||| %s::text[]
           AND m.project_id = %s AND m.owner_id = %s
+          AND {exclude}
         ORDER BY pdb.score(c.chunk_id) DESC, c.chunk_id
         LIMIT %s
     """
@@ -543,6 +560,7 @@ class SqliteFtsRetriever:
         query: str,
         limit: int = 5,
         owner: UserId | None = None,
+        include_research_sources: bool = False,
     ) -> tuple[MaterialHit, ...]:
         resolved = require_owner(owner)
         if limit <= 0:
@@ -556,6 +574,7 @@ class SqliteFtsRetriever:
             tokens=tokens,
             limit=limit,
             resolved=resolved,
+            exclude=_exclusion(include_research_sources),
         )
 
     def _search_with_tokens(
@@ -566,18 +585,22 @@ class SqliteFtsRetriever:
         tokens: Sequence[str],
         limit: int,
         resolved: UserId,
+        exclude: str = _NON_SEARCHABLE,
     ) -> tuple[MaterialHit, ...]:
         """复用调用方已算好的 tokens；混合路不再为 FTS 分支二次 tokenize。"""
 
         rows = self._connection.execute(
-            self._SQL, (tokens, str(project_id), str(resolved), _FTS_CANDIDATE_LIMIT)
+            self._SQL.format(exclude=exclude),
+            (tokens, str(project_id), str(resolved), _FTS_CANDIDATE_LIMIT),
         ).fetchall()
         if not rows:
             return ()
         scores = _robertson_scores(
             rows,
             tokens,
-            _corpus_tokens(self._connection, str(project_id), str(resolved)),
+            _corpus_tokens(
+                self._connection, str(project_id), str(resolved), exclude=exclude
+            ),
         )
         ranked = sorted(
             rows,
@@ -721,23 +744,32 @@ class SqliteHybridRetriever:
         query: str,
         limit: int = 5,
         owner: UserId | None = None,
+        include_research_sources: bool = False,
     ) -> tuple[MaterialHit, ...]:
         resolved = require_owner(owner)
         tokens = _query_tokens(self._connection, query)
         if not tokens or limit <= 0:
             return ()
+        sql_exclude = _exclusion(include_research_sources)
         fts_hits = self._fts._search_with_tokens(
             project_id=project_id,
             query=query,
             tokens=tokens,
             limit=_FTS_CANDIDATES,
             resolved=resolved,
+            exclude=sql_exclude,
         )
-        vec_scores = self._knn_scores(str(project_id), str(resolved), query)
+        vec_scores = self._knn_scores(
+            str(project_id), str(resolved), query, sql_exclude=sql_exclude
+        )
         ordered = self._fuse_by_score(fts_hits, vec_scores, query)
         by_id = {hit.chunk_id: hit for hit in fts_hits}
         knn_only = [chunk_id for chunk_id in ordered if chunk_id not in by_id]
-        by_id.update(self._hits_for(knn_only, str(project_id), str(resolved), tokens))
+        by_id.update(
+            self._hits_for(
+                knn_only, str(project_id), str(resolved), tokens, sql_exclude=sql_exclude
+            )
+        )
         # **子串兜底**：词面与语义都没找满时，用「用户搜的连续字串」补空槽。
         # **只补空槽、绝不挤占已有结果**——那是兜底的底线（挤占等于把好结果换掉）。
         if len(ordered) < limit:
@@ -747,9 +779,18 @@ class SqliteHybridRetriever:
                 query=query,
                 limit=limit - len(ordered),
                 exclude=set(ordered),
+                sql_exclude=sql_exclude,
             )
             if filler:
-                by_id.update(self._hits_for(filler, str(project_id), str(resolved), tokens))
+                by_id.update(
+                    self._hits_for(
+                        filler,
+                        str(project_id),
+                        str(resolved),
+                        tokens,
+                        sql_exclude=sql_exclude,
+                    )
+                )
                 ordered = ordered + list(filler)
         # **一份材料最多两个槽**（2026-10-21 批 8 实测），理由见 `_MATERIAL_SLOTS`。
         seen_materials: dict[str, int] = {}
@@ -781,7 +822,14 @@ class SqliteHybridRetriever:
         )
 
     def _substring_candidates(
-        self, *, project_id: str, owner: str, query: str, limit: int, exclude: set[str]
+        self,
+        *,
+        project_id: str,
+        owner: str,
+        query: str,
+        limit: int,
+        exclude: set[str],
+        sql_exclude: str = _NON_SEARCHABLE,
     ) -> tuple[str, ...]:
         """按「用户搜的连续字串」找块 —— **只填空槽的兜底**。
 
@@ -796,6 +844,7 @@ class SqliteHybridRetriever:
             "SELECT c.chunk_id, c.material_id"
             " FROM material_chunks c JOIN materials m ON m.material_id = c.material_id"
             " WHERE m.project_id = %s AND c.owner_id = %s AND c.text ILIKE %s ESCAPE '\\'"
+            f" AND {sql_exclude}"
             " ORDER BY m.created_at DESC, c.material_id, c.ordinal",
             (project_id, owner, f"%{escaped}%"),
         ).fetchall()
@@ -842,7 +891,12 @@ class SqliteHybridRetriever:
         return sorted(candidates, key=lambda chunk_id: -scores[chunk_id])
 
     def _knn_scores(
-        self, project_id: str, owner: str, query: str
+        self,
+        project_id: str,
+        owner: str,
+        query: str,
+        *,
+        sql_exclude: str = _NON_SEARCHABLE,
     ) -> dict[str, float]:
         """KNN 分支：**块 id → 真余弦**（`1 - cosine distance`）。
 
@@ -875,14 +929,15 @@ class SqliteHybridRetriever:
             self._connection.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
             self._connection.execute(f"SET LOCAL hnsw.ef_search = {_KNN_SCAN_LIMIT}")
             rows = self._connection.execute(
-                """
+                f"""
                 SELECT c.chunk_id, c.embedding <=> %s AS distance
                 FROM material_chunks c
                 JOIN materials m ON m.material_id = c.material_id
                 WHERE m.project_id = %s AND c.owner_id = %s AND c.embedding IS NOT NULL
+                  AND {_NON_SEARCHABLE}
                 ORDER BY c.embedding <=> %s
                 LIMIT %s
-                """,
+                """.format(non_searchable=sql_exclude),
                 (
                     Vector(list(vector)),
                     project_id,
@@ -903,7 +958,15 @@ class SqliteHybridRetriever:
             str(row["chunk_id"]): 1.0 - float(row["distance"]) for row in rows
         }
 
-    def _hits_for(self, chunk_ids, project_id: str, owner: str, tokens: list[str]):
+    def _hits_for(
+        self,
+        chunk_ids,
+        project_id: str,
+        owner: str,
+        tokens: list[str],
+        *,
+        sql_exclude: str = _NON_SEARCHABLE,
+    ):
         """给"只在 KNN 里出现"的块造 `MaterialHit`（复用 `_excerpt` 的锚定规则）。"""
         if not chunk_ids:
             return {}
@@ -912,7 +975,7 @@ class SqliteHybridRetriever:
             " m.origin"
             " FROM material_chunks c JOIN materials m ON m.material_id = c.material_id"
             " WHERE c.chunk_id = ANY(%s)"
-            " AND m.project_id = %s AND c.owner_id = %s",
+            f" AND m.project_id = %s AND c.owner_id = %s AND {sql_exclude}",
             (list(chunk_ids), project_id, owner),
         ).fetchall()
         hits = {}

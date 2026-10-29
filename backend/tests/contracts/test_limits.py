@@ -291,6 +291,39 @@ def test_inquiry_budget_is_its_own_account_and_pinned():
     assert "假设 6 条 / 盲区 3 条" in text
 
 
+def test_research_limits_are_pinned_to_the_shared_vocabulary():
+    """P3b-1：研究的上限只有一份（`domain/shared/research.py`），两处消费方共用。
+
+    来源上限同时是"一轮最多挂几张来源卡"——两个数不一致就会出现
+    "研究出 5 张、只能挂 3 张"的怪事，所以这里一并钉住。
+    """
+
+    from pmstudio.application import context as context_module
+    from pmstudio.application import project_research as research_module
+    from pmstudio.application import use_cases as uc
+    from pmstudio.domain.shared import research as shared
+
+    assert shared.MAX_RESEARCH_SOURCES == 5
+    assert shared.MAX_RESEARCH_FINDINGS == 12
+    assert shared.MAX_RESEARCH_OPEN_QUESTIONS == 5
+    assert shared.MAX_RESEARCH_TOPIC_CHARS == 500
+    assert shared.RESEARCH_SOURCE_CARD_CHARS == 800
+    assert research_module.MAX_RESEARCH_ATTEMPTS == 2
+    assert research_module.RESEARCH_TIMEOUT_SECONDS == 600
+    # 预算派生：5 张满卡 + 每张的编号行 + 卡片间分隔符（不另立旋钮）
+    assert context_module.RESEARCH_BUDGET == (
+        shared.MAX_RESEARCH_SOURCES
+        * (shared.RESEARCH_SOURCE_CARD_CHARS + context_module.RESEARCH_CARD_OVERHEAD)
+        + 2 * (shared.MAX_RESEARCH_SOURCES - 1)
+    )
+    # 挂载上限与研究上限是同一个数
+    assert uc.MAX_RESEARCH_SOURCES is shared.MAX_RESEARCH_SOURCES
+
+    text = LIMITS_DOC.read_text(encoding="utf-8")
+    assert "研究另算第七本账" in text, "文档里研究那节口径不见了？"
+    assert "来源 5 / 结论 12 / 开放问题 5" in text
+
+
 def test_every_limit_in_this_file_is_a_positive_integer():
     """防"看起来在配、其实配了 0"——0 会让"超限"判断永远不成立。"""
 

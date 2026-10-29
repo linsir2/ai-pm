@@ -20,6 +20,7 @@ from pmstudio.application.use_cases import (
     AbandonExploration,
     AbandonRound,
     AssembleCards,
+    AttachResearchSources,
     CloseDiscussion,
     CreateProject,
     CreateTemplate,
@@ -108,6 +109,7 @@ class ApiServices:
     exploration_runner: ExplorationOrchestrator
     abandon_exploration: AbandonExploration
     keep_candidate: KeepCandidate
+    attach_research_sources: AttachResearchSources
     dismiss_candidate: DismissCandidate
     list_explorations: ListExplorations
     start_discussion: StartDiscussion

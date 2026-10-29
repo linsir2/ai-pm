@@ -16,6 +16,7 @@ import type { MaterialSummaryView } from "../api/types";
 const ORIGIN_TEXT: Record<string, string> = {
   upload: "上传",
   web_search: "联网检索",
+  web_research: "研究来源",
   web_fetch: "抓来的网页",
   simulation: "模拟调研（模型推演）",
 };

@@ -70,6 +70,13 @@ export const ORIGIN_TEXT: Record<string, string> = {
   system_default: "系统按规则补的",
 };
 
+/** 这条来源能不能从材料界面「带进本轮」/「挂载」。
+ *  一条结果一个号的材料（联网检索 `web_search`、研究来源 `web_research`）都不能：
+ *  它们有各自的渲染段与编号粒度，混进材料池会破"编号 == 进提示词的块"。 */
+export function isAttachableOrigin(origin: string): boolean {
+  return origin !== "web_search" && origin !== "web_research";
+}
+
 export const OP_TEXT: Record<string, string> = {
   add: "新增",
   replace: "改写",

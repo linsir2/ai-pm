@@ -186,9 +186,11 @@ async def run_tool_loop(
                     ModelMessage(role="tool", content=output, tool_call_id=call.call_id)
                 )
                 continue
+            # **先记后调**：失败的那次也是一次真实的外部请求（网络/子进程），
+            # 不算进额度就等于"失败可以无限重试"——最坏 6 轮 × N 次。
+            calls_used += 1
             try:
                 output = await invoker.invoke(spec, call)
-                calls_used += 1
             except ToolCallFailed as error:
                 reason = error.message
                 failures.append((position, call.name, reason))
