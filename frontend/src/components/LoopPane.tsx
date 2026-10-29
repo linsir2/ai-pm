@@ -219,6 +219,17 @@ export function LoopPane({
             </Node>
           )}
 
+          {/* 提交复述卡后的过渡条目（2026-10-29）：席位按编制接活，
+              每交回一个包 SSE 会推一张卡——这一条让"提交了"立刻可见，
+              不用等整段跑完（修复"提交后整卡卡住"）。 */}
+          {pending === "opening" && round.waiting_on === "opening_card" && (
+            <Node actor="你" title="复述卡已提交" meta={null}>
+              <p className="muted small">
+                正在按编制请席位——每交回一个包，这里就会亮一张。
+              </p>
+            </Node>
+          )}
+
           {round.seats.length > 0 && (
             <Node
               actor="席位轮"

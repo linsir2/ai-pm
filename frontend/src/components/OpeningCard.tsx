@@ -36,6 +36,7 @@ export function OpeningCard({
   onToggleWebRequest,
   onToggleAllowWeb,
   onSubmit,
+  onCollapse,
 }: {
   round: RoundView;
   doc: DocumentView | null;
@@ -52,6 +53,8 @@ export function OpeningCard({
   pending: boolean;
   /** 头部右端的跨轮入口（"这个项目走过 N 轮"）；不传就不出。 */
   historyNav?: ReactNode;
+  /** 收起浮层（2026-10-29 主闭环对话流）：流在后面继续，header 的 chip 随时重开。 */
+  onCollapse?: () => void;
   onChangeClaim: (claimId: string, edit: ClaimEdit) => void;
   onToggleSeat: (seatId: string) => void;
   onToggleWebQuery: (query: string) => void;
@@ -90,6 +93,16 @@ export function OpeningCard({
         <h2 className="drawer__title">复述 · 我读到的 {round.claims.length} 件事</h2>
         <span className="topbar__spacer" />
         {historyNav}
+        {onCollapse !== undefined && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={onCollapse}
+            aria-label="收起复述卡"
+          >
+            收起
+          </button>
+        )}
       </header>
 
       <div className="drawer__body">

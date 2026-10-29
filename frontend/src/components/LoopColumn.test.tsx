@@ -202,6 +202,65 @@ describe("LoopColumn 折叠态（rail，06 §2.4 §3）", () => {
   });
 });
 
+describe("LoopColumn · 对话流与决策卡浮层（2026-10-29）", () => {
+  it("opening 模式不再整栏独占：流和复述卡同时渲染", () => {
+    drawColumn({
+      round: openingRound(),
+      mode: "opening",
+      drafts: { ...openingDrafts } as never,
+    });
+
+    // 流还在（本轮输入的引文可见），卡以浮层弹出
+    expect(screen.getByText(/本轮输入/)).toBeTruthy();
+    expect(screen.getByText("想做个订单导出")).toBeTruthy();
+    expect(screen.getByText(/复述 · 我读到的/)).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "复述卡" })).toBeTruthy();
+    // 收起按钮来自 onCollapse
+    expect(screen.getByRole("button", { name: "收起复述卡" })).toBeTruthy();
+  });
+
+  it("收起复述卡后：卡消失，header 出现 chip，点 chip 重开", () => {
+    const setCollapsed = vi.fn();
+    drawColumn({
+      round: openingRound(),
+      mode: "opening",
+      drafts: { ...openingDrafts, collapsed: true, setCollapsed } as never,
+    });
+
+    expect(screen.queryByRole("dialog", { name: "复述卡" })).toBeNull();
+    const chip = screen.getByRole("button", { name: /复述卡 · 待你提交/ });
+    fireEvent.click(chip);
+    expect(setCollapsed).toHaveBeenCalledWith(false);
+  });
+
+  it("waiting_on 翻页（提交后）浮层自动收，chip 也消失", () => {
+    drawColumn({
+      round: openingRound({ waiting_on: "none", step: "seats_running" }),
+      mode: "loading",
+      drafts: { ...openingDrafts, collapsed: true } as never,
+    });
+
+    expect(screen.queryByRole("dialog", { name: "复述卡" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /复述卡 · 待你提交/ })).toBeNull();
+  });
+
+  it("opening 模式下 composer 仍可起草（输入不禁），提交按钮锁着", () => {
+    const composerOnChange = vi.fn();
+    drawColumn({
+      round: openingRound(),
+      mode: "opening",
+      composerOnChange,
+      composerValue: "",
+      drafts: { ...openingDrafts } as never,
+    });
+
+    const box = screen.getByLabelText("这一轮的想法") as HTMLTextAreaElement;
+    expect(box.disabled).toBe(false);
+    fireEvent.change(box, { target: { value: "下一轮想加权限" } });
+    expect(composerOnChange).toHaveBeenCalledWith("下一轮想加权限");
+  });
+});
+
 describe("LoopColumn · 联网授权与决策（P3a）", () => {
   it("开场卡：申请勾选与 allow_web 都接到 props 的动作上", () => {
     const onToggleWebRequest = vi.fn();

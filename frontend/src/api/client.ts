@@ -130,6 +130,10 @@ export interface DiscussionBody {
 
 /** 真模型一轮要跑几十秒；给一个宽上限，避免请求永远挂着没人管。 */
 const REQUEST_TIMEOUT_MS = 300_000;
+/** 跑模型的长命令（start / opening / answers / dig / retry / 模拟评测）：
+ *  一段服务端流程（N 席位 + 整合）可能远超 5 分钟——客户端先放弃只会得到一句
+ *  "请求超时"，而后端还在跑、SSE 的流也还在更新。给它们单独的上限（2026-10-29）。 */
+const RUN_TIMEOUT_MS = 900_000;
 
 export class ApiError extends Error {
   constructor(
@@ -174,7 +178,11 @@ export function apiErrorFrom(status: number, body: unknown, fallback: string): A
   );
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+type RequestOptions = RequestInit & { /** 逐调用超时（毫秒）；长命令给 `RUN_TIMEOUT_MS`。 */
+  timeoutMs?: number;
+};
+
+async function request<T>(path: string, init?: RequestOptions): Promise<T> {
   const controller = new AbortController();
   // 外部 signal（M18「停止这一轮」用）：调用方 abort 时把内部 controller 一起掐掉，
   // 并记下"是调用方停的"——好把它的报错译成"已停止"而不是"超时"。
@@ -188,7 +196,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (external.aborted) onExternalAbort();
     else external.addEventListener("abort", onExternalAbort);
   }
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  // `timeoutMs` 是**逐调用**可覆盖的（跑模型的长命令给 RUN_TIMEOUT_MS）；
+  // 其余维持 5 分钟：控制类请求超过它就该当故障看。
+  const timeoutMs = init?.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
     response = await fetch(`${BASE}${path}`, {
@@ -200,6 +211,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     clearTimeout(timer);
     if (error instanceof DOMException && error.name === "AbortError") {
       if (stoppedByCaller) throw new ApiError("aborted", "已停止这一轮。");
+      if (timeoutMs >= RUN_TIMEOUT_MS)
+        // 长命令到顶：后端多半还在跑（租约/心跳/事件都活着），
+        // SSE 的流会继续更新——这条**不是失败**，别把用户引去"刷新重来"。
+        throw new ApiError(
+          "timeout",
+          "等了 15 分钟还没返回——后端可能还在跑；上面的流会继续更新，这条不是失败。",
+        );
       throw new ApiError("timeout", "请求超时了，后端可能还在跑；刷新页面看看这一轮的进度。");
     }
     throw new ApiError("network_error", "连不上后端（先确认它起在 8000 端口）。");
@@ -456,6 +474,7 @@ export const api = {
     request<RoundView>(`/projects/${projectId}/rounds`, {
       method: "POST",
       body: JSON.stringify(body),
+      timeoutMs: RUN_TIMEOUT_MS,
     }),
 
   /** 搜索框「带进本轮」：pin 材料 + 记 manual chunk；E 号在投影时才发。 */
@@ -606,6 +625,7 @@ export const api = {
     request<RoundView>(`/rounds/${roundId}/opening`, {
       method: "POST",
       body: JSON.stringify(body),
+      timeoutMs: RUN_TIMEOUT_MS,
     }),
 
   /** 逐条决策联网申请（P3a）：批准即执行，返回最新的一轮投影。 */
@@ -634,6 +654,7 @@ export const api = {
     request<RoundView>(`/rounds/${roundId}/answers`, {
       method: "POST",
       body: JSON.stringify(body),
+      timeoutMs: RUN_TIMEOUT_MS,
     }),
 
   /** 确认写入：`acceptedMemory` 是草案卡上勾中的**记忆提议**（M6，默认不勾 → 空）。 */
@@ -652,11 +673,19 @@ export const api = {
     request<MemoryUsageView>(`/projects/${projectId}/memory/usage`),
 
   retry: (roundId: string) =>
-    request<RoundView>(`/rounds/${roundId}/retry`, { method: "POST", body: "{}" }),
+    request<RoundView>(`/rounds/${roundId}/retry`, {
+      method: "POST",
+      body: "{}",
+      timeoutMs: RUN_TIMEOUT_MS,
+    }),
 
   /** 草案卡上的"继续深挖"：回到提问，把刚才没问上的题问出来（C6）。 */
   dig: (roundId: string) =>
-    request<RoundView>(`/rounds/${roundId}/dig`, { method: "POST", body: "{}" }),
+    request<RoundView>(`/rounds/${roundId}/dig`, {
+      method: "POST",
+      body: "{}",
+      timeoutMs: RUN_TIMEOUT_MS,
+    }),
 
   /** 草案卡上的"去模拟调研"：轮内动作（不碰 step），跑完读回最新投影。 */
   runSimInquiry: (roundId: string) =>
@@ -674,6 +703,7 @@ export const api = {
     request<RoundView>(`/rounds/${roundId}/sim-review`, {
       method: "POST",
       body: JSON.stringify({ persona_ids: personaIds, feature_slugs: featureSlugs }),
+      timeoutMs: RUN_TIMEOUT_MS,
     }),
 
   /** 放弃这一轮：后端先记状态、再取消正在跑的模型调用。 */

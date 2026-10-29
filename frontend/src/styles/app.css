@@ -2827,6 +2827,55 @@ details.drawer__history[open] > summary::before {
   animation: none;
 }
 
+/* 决策卡浮层（2026-10-29 主闭环对话流）：盖住右栏底部，流在后面继续；
+   收起后 header 留 chip 随时重开；提交成功后 `waiting_on` 翻页自动收。
+   复述/问卷/草案共用这一个容器——之前问卷/草案"长在流里"（DOM 顺序即流顺序）、
+   复述更是整栏独占，长请求期间右栏看起来卡死，就是这套形态的病。 */
+.loop__pop {
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: var(--space-3);
+  z-index: 6;
+  max-height: min(72%, 640px);
+  overflow: auto;
+  background: var(--surface);
+  border: var(--hairline);
+  border-radius: 12px;
+  box-shadow: var(--shadow-drawer);
+  animation: slide-in var(--dur-mid) var(--ease-out) both;
+}
+
+.loop__pop > .drawer {
+  position: static;
+  inset: auto;
+  max-height: none;
+  border: 0;
+  box-shadow: none;
+  animation: none;
+}
+
+/* 收起之后 header 上的那枚 chip：点它重开（同一 waiting_on 不再强弹） */
+.loop__chiprow {
+  padding: var(--space-2) var(--space-4) 0;
+}
+
+.loop__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 12px;
+  border: var(--hairline);
+  border-radius: var(--radius-full);
+  background: var(--tint-primary);
+  color: var(--primary);
+  font-size: var(--step-1);
+}
+
+.loop__chip:hover {
+  border-color: var(--primary);
+}
+
 /* 右底 composer（旧 BottomStrip 整块搬入）：常驻 loop 底，只在 round 页签渲染 */
 .loop__composer {
   flex: none;

@@ -1,7 +1,8 @@
-/* 闭环栏（右栏）：上半是「本轮 / 灵感箱 / 讨论」三个页签。
-   本轮讨论流里，到了要你决定的时候，问卷/草案从右侧滑出盖住这一栏。
-   复述卡是特例——它不是抽屉，它就是这一轮的开场，所以占满整栏、且不显示页签
-   （显示会把复述卡藏到「过目台」后面）。 */
+/* 闭环栏（右栏）：上半是「本轮 / 灵感箱 / 讨论 / 研究」页签，中间是**永远在渲染**的
+   对话流（LoopPane），需要你决策时（复述 / 问卷 / 草案）以浮层弹出对应卡——
+   流在后面继续、可收起留 chip、提交后自动收并落一条记录。
+   2026-10-29 改：之前 `mode==="opening"` 会整栏独占、把流整个顶掉，
+   长请求期间右栏看起来"卡死"——现在流是主角，卡只是浮在它上面的决策点。 */
 
 import type { AwaitingMode } from "../api/payload";
 import type {
@@ -16,6 +17,7 @@ import type {
 } from "../api/types";
 import type { DiscussionAnchor, PanelStart } from "../state/discussions";
 import { discussionTurnLimit, roleOptions } from "../state/discussions";
+import { drawerChip, drawerFor, pendingDrawer } from "../state/drawer";
 import { inboxCount } from "../state/inbox";
 import { roundElapsed, roundOrdinal } from "../state/progress";
 import type { RoundDrafts } from "../state/useRoundDrafts";
@@ -247,9 +249,15 @@ export function LoopColumn({
   const onRound = !onTray && !onDiscussion && !onResearch;
   // 灵感箱的未处理数：新卡 + 待过目候选（0 条不渲染徽标）
   const inbox = inboxCount(discussions, explorations);
-  const drawerOpen =
-    history == null &&
-    !drafts.collapsed && (mode === "questionnaire" || mode === "draft") && round !== null;
+  // 决策卡弹出状态机（state/drawer.ts）：`waiting_on` 是唯一真相源。
+  // pendingKind = 现在等的是哪张卡（收起了也要出 chip）；drawerKind = 现在真的弹的。
+  const pendingKind = onRound && history === null ? pendingDrawer(round) : null;
+  const drawerKind = drawerFor(round, drafts.collapsed);
+  const drawerOpen = drawerKind === "questionnaire" || drawerKind === "draft";
+  const chip =
+    pendingKind !== null && drawerKind === null && round !== null
+      ? drawerChip(pendingKind, round)
+      : null;
   // 跨轮入口（"这个项目走过 N 轮"）：不进独立一行，进 LoopPane/OpeningCard 头部右端。
   const historyNav = (
     <RoundHistory
@@ -397,26 +405,7 @@ export function LoopColumn({
               </button>
             </div>
           )}
-          {mode === "opening" && round !== null ? (
-            <OpeningCard
-              round={round}
-              doc={doc}
-              edits={drafts.edits}
-              seats={drafts.seats}
-              webQueries={drafts.webQueries}
-              approvedRequestIds={approvedRequestIds}
-              allowWeb={allowWeb}
-              limit={schema?.limits.max_web_executions ?? null}
-              pending={pending === "opening"}
-              historyNav={historyNav}
-              onChangeClaim={drafts.changeClaim}
-              onToggleSeat={drafts.toggleSeat}
-              onToggleWebQuery={drafts.toggleWebQuery}
-              onToggleWebRequest={onToggleWebRequest}
-              onToggleAllowWeb={onToggleAllowWeb}
-              onSubmit={onSubmitOpening}
-            />
-          ) : round === null ? (
+          {round === null ? (
             <div className="loop__scroll">
               <div className="loop__head">
                 <h2 className="loop__title">还没有开过一轮</h2>
@@ -426,57 +415,98 @@ export function LoopColumn({
               </p>
             </div>
           ) : (
-            <LoopPane
-              round={round}
-              pending={pending}
-              limits={schema?.limits ?? null}
-              ordinal={roundOrdinal(rounds, round.round_id)}
-              elapsed={roundElapsed(rounds, round.round_id, Date.now())}
-              historyNav={historyNav}
-              historical={history !== null || mode === null}
-              pendingWebRequest={pendingWebRequest}
-              onRetry={onRetry}
-              onAbandon={onAbandon}
-              onSkipSeat={onSkipSeat}
-              onOpenQuestionnaire={() => drafts.setCollapsed(false)}
-              onOpenDraft={() => drafts.setCollapsed(false)}
-              onDecideWebRequest={onDecideWebRequest}
-              onRecoverWebRequest={onRecoverWebRequest}
-            />
+            <>
+              {chip !== null && (
+                <div className="loop__chiprow">
+                  <button
+                    type="button"
+                    className="loop__chip"
+                    onClick={() => drafts.setCollapsed(false)}
+                  >
+                    {chip.label} · {chip.detail} ↗
+                  </button>
+                </div>
+              )}
+              <LoopPane
+                round={round}
+                pending={pending}
+                limits={schema?.limits ?? null}
+                ordinal={roundOrdinal(rounds, round.round_id)}
+                elapsed={roundElapsed(rounds, round.round_id, Date.now())}
+                historyNav={historyNav}
+                historical={history !== null || mode === null}
+                pendingWebRequest={pendingWebRequest}
+                onRetry={onRetry}
+                onAbandon={onAbandon}
+                onSkipSeat={onSkipSeat}
+                onOpenQuestionnaire={() => drafts.setCollapsed(false)}
+                onOpenDraft={() => drafts.setCollapsed(false)}
+                onDecideWebRequest={onDecideWebRequest}
+                onRecoverWebRequest={onRecoverWebRequest}
+              />
+            </>
           )}
 
-          {drawerOpen && mode === "questionnaire" && round !== null && (
-            <QuestionnaireDrawer
-              round={round}
-              doc={doc}
-              drafts={drafts.answers}
-              pending={pending === "answers"}
-              onChange={drafts.changeAnswer}
-              onSubmit={onSubmitAnswers}
-              onSkipAll={onSkipAll}
-              onDiscuss={onDiscussQuestion}
-              onOpenTarget={onOpenTarget}
-              onCollapse={() => drafts.setCollapsed(true)}
-            />
+          {round !== null && drawerKind === "opening" && (
+            <div className="loop__pop" role="dialog" aria-label="复述卡">
+              <OpeningCard
+                round={round}
+                doc={doc}
+                edits={drafts.edits}
+                seats={drafts.seats}
+                webQueries={drafts.webQueries}
+                approvedRequestIds={approvedRequestIds}
+                allowWeb={allowWeb}
+                limit={schema?.limits.max_web_executions ?? null}
+                pending={pending === "opening"}
+                historyNav={historyNav}
+                onChangeClaim={drafts.changeClaim}
+                onToggleSeat={drafts.toggleSeat}
+                onToggleWebQuery={drafts.toggleWebQuery}
+                onToggleWebRequest={onToggleWebRequest}
+                onToggleAllowWeb={onToggleAllowWeb}
+                onSubmit={onSubmitOpening}
+                onCollapse={() => drafts.setCollapsed(true)}
+              />
+            </div>
           )}
 
-          {drawerOpen && mode === "draft" && round !== null && (
-            <DraftDrawer
-              round={round}
-              doc={doc}
-              accepted={drafts.accepted}
-              memoryAccepted={drafts.memoryAccepted}
-              pending={pending === "confirm"}
-              onToggle={drafts.toggleAccepted}
-              onToggleMemory={drafts.toggleMemory}
-              onSetAccepted={drafts.setAccepted}
-              onSubmit={onConfirm}
-              onDig={onDig}
-              onSimInquiry={onSimInquiry}
-              onSimReview={onSimReview}
-              onOpenTarget={onOpenTarget}
-              onCollapse={() => drafts.setCollapsed(true)}
-            />
+          {round !== null && drawerKind === "questionnaire" && (
+            <div className="loop__pop" role="dialog" aria-label="问卷">
+              <QuestionnaireDrawer
+                round={round}
+                doc={doc}
+                drafts={drafts.answers}
+                pending={pending === "answers"}
+                onChange={drafts.changeAnswer}
+                onSubmit={onSubmitAnswers}
+                onSkipAll={onSkipAll}
+                onDiscuss={onDiscussQuestion}
+                onOpenTarget={onOpenTarget}
+                onCollapse={() => drafts.setCollapsed(true)}
+              />
+            </div>
+          )}
+
+          {round !== null && drawerKind === "draft" && (
+            <div className="loop__pop" role="dialog" aria-label="草案卡">
+              <DraftDrawer
+                round={round}
+                doc={doc}
+                accepted={drafts.accepted}
+                memoryAccepted={drafts.memoryAccepted}
+                pending={pending === "confirm"}
+                onToggle={drafts.toggleAccepted}
+                onToggleMemory={drafts.toggleMemory}
+                onSetAccepted={drafts.setAccepted}
+                onSubmit={onConfirm}
+                onDig={onDig}
+                onSimInquiry={onSimInquiry}
+                onSimReview={onSimReview}
+                onOpenTarget={onOpenTarget}
+                onCollapse={() => drafts.setCollapsed(true)}
+              />
+            </div>
           )}
 
           {simOpen && round !== null && (
@@ -503,7 +533,7 @@ export function LoopColumn({
             />
           )}
 
-          {onRound && mode !== "opening" && (
+          {onRound && (
             <LoopComposer
               projectId={composerProjectId}
               composerMode={composerMode}

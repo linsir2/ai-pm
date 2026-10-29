@@ -49,6 +49,10 @@ export function LoopComposer({
     composerMode === "done" ||
     composerMode === "failed" ||
     composerMode === "abandoned";
+  // opening 模式（2026-10-29 对话流）：上一轮在等你确认复述，但**这里可以起草
+  // 下一轮**——输入不禁，只锁提交（一轮未完不能开下一轮是产品规矩）。
+  const typable = accepting || composerMode === "opening";
+  const busyOpening = composerMode === "opening";
   const canSubmit = accepting && pending === null && value.trim() !== "";
 
   const submit = () => {
@@ -65,12 +69,14 @@ export function LoopComposer({
         id="round-input"
         className="input__box"
         value={value}
-        readOnly={!accepting}
-        disabled={!accepting}
+        readOnly={!typable}
+        disabled={!typable}
         placeholder={
           accepting
             ? "把这一轮的想法倒进来：一个新功能、一句要求、一个约束，或者你刚想到的点。"
-            : "这一轮还没结束，先在上面把它走完。"
+            : busyOpening
+              ? "上一轮还在等复述确认——这里可以先把下一轮的想法起草好。"
+              : "这一轮还没结束，先在上面把它走完。"
         }
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
@@ -98,7 +104,9 @@ export function LoopComposer({
         <span className="input__hint">
           {accepting
             ? "⌘/Ctrl + Enter 提交"
-            : "一轮走完才能开下一轮。"}
+            : busyOpening
+              ? "上面的流会更新；提交确认后再开下一轮。"
+              : "一轮走完才能开下一轮。"}
         </span>
         <button className="btn btn--primary" type="button" disabled={!canSubmit} onClick={submit}>
           {pending === "start" ? "正在复述…" : "开始这一轮"}
