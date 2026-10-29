@@ -4,13 +4,14 @@
 `SqliteHybridRetriever`），不是另写一份检索逻辑：
 
 - 词法：`search_text ||| pmstudio_tokens(query)` 取 200 候选 → `pdb.score` 排序 →
-  全语料 Robertson BM25 重排（IDF 按生产钳到 0）→ 前 50 进融合；
+  全语料 Robertson BM25 重排（仅 `df>=N-1` 钳 0）→ 前 50 进融合；
 - 向量：生产 `FastEmbedEmbedder`（`BAAI/bge-small-zh-v1.5`），联网材料按
-  `WEB_VECTOR_CHARS=9600` 字预算只嵌前若干块；
+  `WEB_VECTOR_CHARS=16000` 字预算只嵌前若干块；
 - 融合：`α=.4` 凸组合、每材料 2 槽、`limit=5`。
 
 默认读仓库内冻结语料 `tests/fixtures/retrieval/`（15 份联网正文 + 45 词面查询 +
-14 改述 + 15 跨块 + 8 负样本）；`--corpus` 可指到别的目录或 `corpus.json`。
+14 改述 + 15 跨块 + 8 负样本 + 20 held-out synthetic）；`--corpus` 可指到别的目录或
+`corpus.json`。
 **跨块必须用冻结集**：缺文件、缺对应块宽或任一条映射失效都会直接失败，不静默
 缩小分母、也不自动重生成。脚本在临时 schema 里跑，退出时销毁；`--database-url`
 不给时按 `scripts/pg_scratch.py` 的同一套 `.env` / `.env.ops` 取 URL。
@@ -20,8 +21,10 @@
 用法：
 
     cd backend
-    uv run python scripts/retrieval_quality_bench.py --chunk-chars 300
-    uv run python scripts/retrieval_quality_bench.py --chunk-chars 400 --json /tmp/r400.json
+    uv run python scripts/retrieval_quality_bench.py --chunk-chars 400
+    uv run python scripts/retrieval_quality_bench.py --chunk-chars 300 --json /tmp/r300.json
+    # held-out synthetic 默认随 fixture 一起跑；可显式：
+    uv run python scripts/retrieval_quality_bench.py --heldout-queries tests/fixtures/retrieval/heldout_synthetic_queries.json
 """
 
 from __future__ import annotations
