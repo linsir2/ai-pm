@@ -62,7 +62,10 @@ export function SimInquiryDrawer({
     statement: string,
     meta: string[],
   ) => (
-    <div className="entry" key={id}>
+    /* 专用布局类（`.sim__row`），不借用 `.entry`：`.entry` 是两列 grid
+       （正文 + refs），5 个流内子元素被塞进两列后按钮/正文叠字、
+       meta 行掉进 0 宽列——真机实测叠字（2026-10-29）。 */
+    <div className="sim__row" key={id}>
       <button
         type="button"
         className="btn btn--sm btn--ghost"
@@ -73,13 +76,15 @@ export function SimInquiryDrawer({
         disabled={pending}
       >
         {checked.includes(id) ? "已勾" : "勾选"}
-      </button>{" "}
-      <span className="entry__text">{statement}</span>
-      {meta.map((line) => (
-        <p className="input__hint" key={line}>
-          {line}
-        </p>
-      ))}
+      </button>
+      <div className="sim__row__body">
+        <p className="sim__row__statement">{statement}</p>
+        {meta.map((line) => (
+          <p className="sim__row__meta" key={line}>
+            {line}
+          </p>
+        ))}
+      </div>
     </div>
   );
 

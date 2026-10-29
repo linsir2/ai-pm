@@ -2865,6 +2865,37 @@ details.drawer__history[open] > summary::before {
   inset: auto;
 }
 
+/* 模拟调研卡（M10）的假设行：专用布局，不借 `.entry`（那是个两列 grid，
+   5 个流内子元素被塞进去后按钮/正文叠字、meta 行掉进 0 宽列画出列外——
+   真机实测叠字，2026-10-29）。勾选按钮 + 一个缩进的正文/推导信息块。 */
+.sim__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.sim__row + .sim__row {
+  border-top: var(--hairline);
+}
+
+.sim__row__body {
+  min-width: 0;
+}
+
+.sim__row__statement {
+  margin: 0;
+  line-height: 1.75;
+}
+
+.sim__row__meta {
+  margin: var(--space-1) 0 0;
+  font-size: var(--step-1);
+  color: var(--open);
+  line-height: 1.5;
+}
+
 /* 收起之后 header 上的那枚 chip：点它重开（同一 waiting_on 不再强弹） */
 .loop__chiprow {
   padding: var(--space-2) var(--space-4) 0;
