@@ -163,6 +163,9 @@ class ProposalView:
     rationale: str | None
     kind: str | None
     warning: str | None = None
+    #: 机械判定快照（add 防线）原样透出："dup/total"——前端 `defaultAccepted` 用它
+    #: 判断默认不勾（`overlap == null` 才保留；先例与 simulation_based 同一处可选项）。
+    overlap: str | None = None
     #: 编号里有账本上的 SIMULATED（M11）：界面打「模拟评测依据」tag、eval 读它
     simulation_based: bool = False
 
@@ -1443,6 +1446,14 @@ PROPOSAL_IGNORE_ADVISORY = (
     "（席位出题与判断照旧）"
 )
 
+#: overlap 的机械判定快照编成的**人话**（add 防线 2026-10-29）：它挂在 `ProposalView.warning`
+#: 这一既有 ⚠ 通道上（`_draft_view` 传进来的 ScopeGuard 违例优先）；快照本身另经
+#: `ProposalView.overlap` 出处，前端 `defaultAccepted` 靠"有没有这只手表"判默认勾选。
+OVERLAP_WARNING = (
+    "与已有内容重叠：{overlap} 行与该字段既有条目原样相同；"
+    "这是对既有内容的重述——真正的改写应该用「替换」提案（replace）。看清再勾。"
+)
+
 
 def proposal_ignore_streak(outcomes: Sequence[RoundOutcomeView]) -> int:
     """最近**连续**几轮"给过它提议的、但一条都没被采用"（C4 的判据）。
@@ -2199,6 +2210,10 @@ def _proposal_view(
     warning: str | None,
     simulated_eids: frozenset[str] = frozenset(),
 ) -> ProposalView:
+    # ⚠ 合成规则（add 防线）：**ScopeGuard 违例优先**——越界与重叠同时发生时，
+    # 越界是硬拦截，先说它；没有违例、但行级重叠非空 → 用 overlap 的人话接管 warning。
+    if warning is None and proposal.overlap is not None:
+        warning = OVERLAP_WARNING.format(overlap=proposal.overlap)
     return ProposalView(
         proposal_id=str(proposal.proposal_id),
         entry_id=str(proposal.entry_id),
@@ -2210,6 +2225,7 @@ def _proposal_view(
         rationale=proposal.origin.rationale,
         kind=proposal.kind.value if proposal.kind is not None else None,
         warning=warning,
+        overlap=proposal.overlap,
         simulation_based=any(
             str(eid) in simulated_eids for eid in proposal.origin.refs
         ),

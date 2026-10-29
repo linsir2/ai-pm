@@ -89,8 +89,10 @@ export function answerBatchSummary(batch: AnswerBatchView): string {
 }
 
 export function defaultAccepted(draft: DraftView): string[] {
+  // overlap 有值（如 "3/4"）= 装配层判到与字段已有内容行级逐字重叠 → 默认不勾（看清再勾）；
+  // undefined（老轮次无键）与 null 都照旧保留：宽松相等 `== null` 把两者一并覆盖。
   return draft.proposals
-    .filter((proposal) => proposal.origin_type !== "proposed")
+    .filter((proposal) => proposal.origin_type !== "proposed" && proposal.overlap == null)
     .map((proposal) => proposal.proposal_id);
 }
 

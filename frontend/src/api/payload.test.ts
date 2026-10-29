@@ -115,6 +115,36 @@ describe("defaultAccepted", () => {
   });
 });
 
+// 2026-10-29「整块重述式 add」防线：装配层给每条 add 提案带行级逐字重叠快照
+// `overlap`（"dup/total"）。有值的默认不勾（看清再勾）；null/无键（老轮次）照旧保留。
+describe("defaultAccepted 的 overlap 防线", () => {
+  const withOverlapMark = {
+    draft: {
+      proposals: [
+        { proposal_id: "p10", origin_type: "user", overlap: "3/4" },
+        { proposal_id: "p11", origin_type: "derived", overlap: null },
+        // 老轮次的载荷压根没有 overlap 这个键（可选字段先例 simulation_based）
+        { proposal_id: "p12", origin_type: "system_default" },
+        { proposal_id: "p13", origin_type: "proposed", overlap: "1/4" },
+      ],
+    },
+  } as unknown as RoundView;
+
+  it('overlap 有值（"3/4"）的提案不进默认勾选——想勾得看清楚再自己点', () => {
+    expect(defaultAccepted(withOverlapMark.draft!)).toEqual(["p11", "p12"]);
+  });
+
+  it("overlap 为 null 或没有键的派生提案照旧默认勾上（老轮次不回退）", () => {
+    const accepted = defaultAccepted(withOverlapMark.draft!);
+    expect(accepted).toContain("p11");
+    expect(accepted).toContain("p12");
+  });
+
+  it("proposed 依旧默认不勾——overlap 规则不吃掉这条既有锚", () => {
+    expect(defaultAccepted(withOverlapMark.draft!)).not.toContain("p13");
+  });
+});
+
 describe("allProposalIds", () => {
   it("本批全接受：三组全覆盖，包含默认不勾的那一组", () => {
     expect(allProposalIds(round.draft!)).toEqual(["p01", "p02", "p03", "p04"]);

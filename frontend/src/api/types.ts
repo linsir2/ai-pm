@@ -125,6 +125,12 @@ export interface ProposalView {
   warning: string | null;
   /** 编号里有账本上的 SIMULATED（M11）：打「模拟评测依据」tag；老轮次为 undefined。 */
   simulation_based?: boolean;
+  /**
+   * 装配层的行级逐字重叠判定快照（"dup/total"，add 提案随草案落库）：
+   * 有值 = 与该字段已有内容重叠，默认勾选要剔除（用户看清再勾）；
+   * 老轮次无键 → undefined，照旧默认勾上。
+   */
+  overlap?: string | null;
 }
 
 export interface DraftView {

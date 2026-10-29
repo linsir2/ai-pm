@@ -145,6 +145,20 @@ describe("DraftDrawer", () => {
     expect(screen.getByText("模拟评测依据")).toBeTruthy();
   });
 
+  // 2026-10-29「整块重述式 add」防线：overlap 有值的提案，后端把机械判定合成人话进
+  // warning——⚠ 透传渲染已具备，这条钉住「与已有内容重叠」字样必须看得见。
+  it("overlap 有值 + warning 合成句：卡上出现『与已有内容重叠』字样", () => {
+    const overlapProposal: ProposalView = {
+      ...proposal,
+      proposal_id: "p99",
+      overlap: "3/4",
+      warning: "这条与已有内容重叠（4 行里 3 行逐字相同），已默认不勾，看清再勾",
+    };
+    draw({ round: roundWith([overlapProposal]) });
+
+    expect(screen.getByText(/与已有内容重叠/)).toBeTruthy();
+  });
+
   it("正在提交时按钮不可点", () => {
     draw({ pending: true });
 

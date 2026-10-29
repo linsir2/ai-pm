@@ -42,6 +42,11 @@ class Proposal:
     #: 模拟评测的"减"提案（M11）：用户勾选确认后允许改动被手改过的块（D5 例外，
     #: `02` §11.0.48）。它不是"手改"——确认落笔**不会**给块盖手改章，只放行这一次。
     allow_manual_override: bool = False
+    #: 这条提案的**机械判定快照**（add 防线 2026-10-29）："dup/total"——非空行里
+    #: 有几行与同去处既有条目的行逐字相同（`02` §11.0.2a 的行级手表）。
+    #: 它是**草案当时对着当时文档**的判定记录，随草案落库；旧轮没有这把键 → None，
+    #: 回放不漂（序列化先例：`allow_manual_override` 的可选键缺省）。
+    overlap: str | None = None
 
     def __post_init__(self) -> None:
         if not self.text.strip():

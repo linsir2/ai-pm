@@ -617,6 +617,9 @@ def proposal_to_json(proposal: Proposal) -> dict:
         "kind": None if proposal.kind is None else proposal.kind.value,
         # D5 例外位（M11）：老行没有这把键 → False（行为与今天一致）
         "allow_manual_override": proposal.allow_manual_override,
+        # add 防线（2026-10-29）：机械判定快照随草案落库；**无条件写**——
+        # 键存在而值是 None 与键不存在语义不同（后者是旧轮，没有这只手表）。
+        "overlap": proposal.overlap,
     }
 
 
@@ -635,6 +638,8 @@ def proposal_from_json(data: dict) -> Proposal:
         ),
         kind=None if data["kind"] is None else BlockKind(data["kind"]),
         allow_manual_override=bool(data.get("allow_manual_override", False)),
+        # 旧轮没有这把键 → None（先例：allow_manual_override 的可选键缺省）
+        overlap=data.get("overlap"),
     )
 
 

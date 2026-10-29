@@ -2956,6 +2956,13 @@ class IntegrateRound:
                 f"本轮有 {len(outcome.discarded)} 条内容因为报文形状不对没进卡片"
                 "（模型交回的那一条不是对象，可在下一轮继续提）",
             )
+        # add 防线（缺口行走**既有通道**，前端一个字不用改）：整块重述过的提案已默认不勾，
+        # 这里把条数报出来——用户在收起状态的卡片上也能看见"这一轮有重提的旧内容"。
+        overlapping = sum(1 for item in assembled.proposals if item.overlap is not None)
+        if overlapping:
+            gaps = gaps + (
+                f"本轮有 {overlapping} 条提案与字段已有内容重叠（已默认不勾，看清再勾）",
+            )
         # 骨架六章还空着就说一句（报告 F18）：走 `gaps` 这条既有通道，
         # 前端 `DraftDrawer` 已经在渲染它（"写入后仍然空着的必填项"），一个字都不用改。
         gaps = gaps + backbone_gap_lines(

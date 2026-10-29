@@ -5,7 +5,7 @@
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -198,6 +198,35 @@ def strip_process_notes(title: str) -> str:
     # "口径是什么？"连问号一起算身份）。
     stripped = " ".join(stripped.split()).strip("：:；;，,、 ")
     return stripped or title
+
+
+#: 编号进正文（L13 的同族先例：`_ENTRY_ADDRESS` 清的是条目**地址**，这里清的是
+#: **出处编号**）：模型把 `(E16 E5)` 这类纯 E 号括号抄进了提案正文——编号只该进
+#: `evidence_refs`，对读者零信息，对行级判重还是噪声。正则只认"括号内除 E 号 token
+#: 与分隔符外没有别的"：`（见 E12）`这类带非 E token 的括号一个字都不碰。
+#: 逐行处理保多行结构；剥完为空的行留着（"整条剩空"的判定是 `assemble` 的事）。
+_EID_CITATIONS = re.compile(r"[（(]\s*E\d+(?:\s*[、,，/ ]\s*E\d+)*\s*[)）]")
+
+
+def _strip_eid_citations(text: str) -> str:
+    """逐行剥掉正文里的**纯 E 号括号**（add 防线 2026-10-29）：`（E16 E5）` → 空。
+
+    与 `strip_process_notes` 同族不同号：那个剥台账话（s11 标题），这个剥出处编号
+    （add / replace 的正文）。`refs` 不经过它——编号进不进 refs 由贴条路口径管。
+    """
+
+    return "\n".join(_EID_CITATIONS.sub("", line) for line in text.splitlines())
+
+
+#: 行首的**列表记号**（`-` `•` `*` `·` 或 数字后跟 `.` / `、`）：只在行级比对时剥，
+#: 不改写原文；提案落库还是模型写的原话。
+_LIST_MARKER = re.compile(r"^(?:[-•*·]|\d+[.、])\s*")
+
+
+def _strip_list_marker(line: str) -> str:
+    """剥掉行首列表记号：`- 未完成点检` 与 `未完成点检` 在行级比对里是同一行。"""
+
+    return _LIST_MARKER.sub("", line)
 
 
 def question_key(question: Question) -> tuple[str, str]:
@@ -539,6 +568,8 @@ def assemble(
     )
     authorized = round_.authorized_new_features
     existing = _existing_content(document)
+    # 行级孪生（add 防线）：整段判重抓不住"4 行里 3 行逐字抄旧"，行级这个集合给它补手。
+    existing_lines = _existing_lines(document)
     # 这一份文档的模板视角（`02` §11.0.69）：去处校验、阻塞判据、去重键全走它。
     adapter = adapt(document.template)
 
@@ -568,9 +599,21 @@ def assemble(
         # 去重只对 `add` 生效：`replace` / `remove` 是在**改既有内容**，拿它们的文本去跟
         # 文档比"是不是已经有了"没有意义——踩到过的那种坏后果是：模型写一条 `remove`、
         # 文本正好照抄了被删那条，就被当成"重复"静默跳过，那条本该撤下的内容留在文档里。
+        #
+        # 判重键用**原始 draft.text**（评审 3.2 拍板）：清洗只影响判空与最终 text，
+        # 这里的既有语义不变——编号括号进不进判重，是"模型写没写同一件事"的一部分。
         if draft.op == WriteOp.ADD.value and (target.label(), normalize(draft.text)) in existing:
             continue
-        unusable = _proposal_unusable_reason(draft, document=document)
+        # 清洗（编号括号出正文）：`remove` 的文本是展示（撤哪一条看 entry_id），
+        # 不清洗；`add` / `replace` 用清洗后的文本判空与落笔。清洗后剩空 → 走下面
+        # 既有"丢这一条 + 留痕"分支——**绝不放它到 `_proposal`**：
+        # 那边 ShapeError → PacketParseError → 整包重装，一次笔误不该让全批白干。
+        usable = (
+            draft
+            if draft.op == WriteOp.REMOVE.value
+            else draft.model_copy(update={"text": _strip_eid_citations(draft.text)})
+        )
+        unusable = _proposal_unusable_reason(usable, document=document)
         if unusable is not None:
             # 这一条根本没法用（条目 id 写错 / 文本是空的）：丢**它** + 留痕，
             # 与"去处写错"同一条口径（`02` §11.0.2）——一次笔误不该让整批白干。
@@ -584,15 +627,22 @@ def assemble(
                 )
             )
             continue
-        text = draft.text
-        if draft.op == WriteOp.REMOVE.value and not text.strip():
+        text = usable.text
+        if usable.op == WriteOp.REMOVE.value and not text.strip():
             # `remove` 的文本可以留空（撤哪一条看 entry_id）：这里补上**被撤下那条的正文**，
             # 卡片上就是「删除｜<那句话>」而不是一行空白；也守住"每条写入指令都有文本"。
             # 从文档里引用，不是编内容（条目文本本身非空，`Entry.__post_init__` 保证）。
-            text = _entry_text(document, draft.entry_id or "") or ""
+            text = _entry_text(document, usable.entry_id or "") or ""
+        # 整块重述判据（add 防线）：只对 `add` 算——`replace` / `remove` 是在改既有内容，
+        # 长着旧条目的样子是它们的本分，"和已有内容重合"不是要拦的事。
+        overlap = (
+            _overlap_note(text, target=target, existing_lines=existing_lines)
+            if usable.op == WriteOp.ADD.value
+            else None
+        )
         proposals.append(
             _proposal(
-                draft,
+                usable,
                 adapter=adapter,
                 text=text,
                 target=target,
@@ -601,6 +651,7 @@ def assemble(
                 round_id=round_.round_id,
                 document=document,
                 ledger=ledger,
+                overlap=overlap,
             )
         )
 
@@ -1530,6 +1581,7 @@ def _proposal(
     round_id: RoundId,
     document: Document,
     ledger: EvidenceLedger,
+    overlap: str | None = None,
 ) -> Proposal:
     try:
         op = WriteOp(draft.op)
@@ -1556,6 +1608,8 @@ def _proposal(
                 rationale=draft.rationale,
             ),
             kind=_kind_for(target, draft.kind, adapter),
+            # 机械判定快照（add 防线）：随草案落库，前端据此默认不勾。
+            overlap=overlap,
         )
     except DomainError as error:
         raise PacketParseError(
@@ -1676,16 +1730,16 @@ def _entry_text(document: Document, entry_id: str) -> str | None:
     return None
 
 
-def _existing_content(document: Document) -> set[tuple[str, str]]:
-    """文档里已有内容的 (target.label(), 归一化文本)，用来机械去重。
+def _entries_by_label(document: Document) -> Iterator[tuple[str, str]]:
+    """文档每个条目的 (去处 label, 全文)——**label 公式在这里只写一处**：
 
+    `_existing_content`（整段判重）与 `_existing_lines`（行级判重）用的是同一份。
     键里的章前缀取**模板的功能锚点**（不是 s5）——否则自定义模板下键与 `Target.label()`
     对不上，重复内容会静默进文档。
     """
 
     home = str(adapt(document.template).feature_home)
     by_id = {block.block_id: block for block in document.blocks}
-    keys: set[tuple[str, str]] = set()
     for block in document.blocks:
         if block.field is not None:
             parent = by_id.get(block.parent_id) if block.parent_id is not None else None
@@ -1697,6 +1751,47 @@ def _existing_content(document: Document) -> set[tuple[str, str]]:
             label = str(block.parent_id)
         else:
             continue
-        keys.update((label, normalize(entry.text)) for entry in block.entries)
-    keys.update(("preference", normalize(entry.text)) for entry in document.preference_entries)
-    return keys
+        for entry in block.entries:
+            yield label, entry.text
+    for entry in document.preference_entries:
+        yield "preference", entry.text
+
+
+def _existing_content(document: Document) -> set[tuple[str, str]]:
+    """文档里已有内容的 (target.label(), 归一化文本)，用来机械去重。"""
+
+    return {(label, normalize(text)) for label, text in _entries_by_label(document)}
+
+
+def _existing_lines(document: Document) -> frozenset[tuple[str, str]]:
+    """`_existing_content` 的**行级孪生**：(label, 归一化行)，给 `_overlap_note` 用。
+
+    每个条目文本按行拆开、剥掉行首列表记号再归一——`- 未完成点检` 与
+    `未完成点检` 是同一行（模型复述清单时常换记号）。
+    """
+
+    lines: set[tuple[str, str]] = set()
+    for label, text in _entries_by_label(document):
+        for line in text.splitlines():
+            lines.add((label, normalize(_strip_list_marker(line))))
+    return frozenset(lines)
+
+
+def _overlap_note(
+    text: str, *, target: Target, existing_lines: frozenset[tuple[str, str]]
+) -> str | None:
+    """add 的**整块重述判据**（阈值 ≥1/2 行逐字相同，`02` §11.0.2a 行级）：
+
+    非空行（剥列表记号后归一）≥2 且 逐字重复的行 ×2 ≥ 总行数 → 返回 `"dup/total"`；
+    否则 `None`（≥2 的门槛是"单行本来就常撞"——撞行不是罪，**成段重述**才是）。
+    只对 `add` 算：`replace` / `remove` 是在改既有内容，重合是它们的本分。
+    """
+
+    lines = [normalize(_strip_list_marker(line)) for line in text.strip().splitlines()]
+    non_empty = [line for line in lines if line]
+    if len(non_empty) < 2:
+        return None
+    label = target.label()
+    existing = {line for claimed, line in existing_lines if claimed == label}
+    dup = sum(1 for line in non_empty if line in existing)
+    return f"{dup}/{len(non_empty)}" if dup * 2 >= len(non_empty) else None
