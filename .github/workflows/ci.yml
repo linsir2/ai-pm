@@ -60,15 +60,27 @@ jobs:
 
       # backup/restore 用真 PG18 `pg_dump -Fc`；Ubuntu 自带的 16 不兼容。
       - name: 装 PostgreSQL 18 客户端
+        id: pgclient
+        continue-on-error: true
         run: |
-          sudo install -d /usr/share/postgresql-common/pgdg
-          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-            | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
-          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] \
-            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-            | sudo tee /etc/apt/sources.list.d/pgdg.list
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client-18
+          set -o pipefail
+          {
+            sudo install -d /usr/share/postgresql-common/pgdg
+            curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+              | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+            echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] \
+              https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+              | sudo tee /etc/apt/sources.list.d/pgdg.list
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client-18
+          } 2>&1 | tee /tmp/pgclient-install.log
+
+      - name: 诊断 PG18 客户端安装失败
+        if: steps.pgclient.outcome == 'failure'
+        run: |
+          message="$(tail -c 3500 /tmp/pgclient-install.log | tr '\n' ' ')"
+          echo "::error title=PG18 apt failure::${message}"
+          exit 1
 
       - name: 建 pgvector + pg_search 扩展
         run: |
