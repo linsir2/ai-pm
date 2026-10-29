@@ -462,15 +462,21 @@ def _robertson_scores(  # type: ignore[no-untyped-def]
 ) -> dict[str, float]:
     """候选内按 Robertson BM25 重排；分数整体平移为正（最小 = 1e-6）。
 
-    - `idf = max(0, ln((N - df + .5)/(df + .5))) + 1e-9`；
+    - `idf = max(0, raw) + 1e-9` **仅当** `df >= N-1`；否则保留 raw（可为负），
+      其中 `raw = ln((N - df + .5)/(df + .5))`；
     - `k1=1.2`、`b=.75`；`tf` 取 `search_tokens` 中的次数，`dl` 是块 token 数；
     - `N` / `avgdl` / `df` 用**全 project/owner 语料**，不是候选集。
 
-    ## 为什么钳到 0（2026-10-28 评审）
+    ## 为什么只在 `df >= N-1` 钳到 0（2026-10-29 M2）
 
-    Robertson 原式在 `df >= N/2` 时为负；2 块小语料里查询词两边都有时，
-    "多命中一次"反而扣分、短块压过长块。钳到 0 再加 `1e-9`：罕见词保留高
-    IDF，共同词不变成负权重，tf/长度仍能排序。这是 Robertson 的小语料钳制，
+    Robertson 原式在 `df >= N/2` 时就为负。2026-10-28 曾把所有负值一律钳到 0，
+    结果常见词的 IDF 也被压成常数，词法分被压平、融合更依赖向量幅度
+    （R15：改述 top1/MRR 退化）。
+
+    现在只钳**高频/小语料**：`df >= N-1` 表示该词出现在所有块、或除一块之外的
+    所有块（N=2 时 `df=1` 也算）。这类词没有区分度，钳到 `0 + 1e-9` 后仍可按
+    tf/长度排序，且不会把"多命中一次"变成负分；其余词保留 Robertson raw
+    （包括负值），让常见词按原式降权。这是 Robertson 的小语料钳制，
     **不是换成 Lucene 的 BM25**（那条 IDF 公式不同）。
     """
 
@@ -484,10 +490,12 @@ def _robertson_scores(  # type: ignore[no-untyped-def]
     document_frequency = {
         token: sum(1 for doc in corpus.values() if token in doc) for token in unique
     }
-    idf = {
-        token: max(0.0, math.log((total - frequency + 0.5) / (frequency + 0.5))) + 1e-9
-        for token, frequency in document_frequency.items()
-    }
+    idf: dict[str, float] = {}
+    for token, frequency in document_frequency.items():
+        raw_idf = math.log((total - frequency + 0.5) / (frequency + 0.5))
+        idf[token] = (
+            max(0.0, raw_idf) + 1e-9 if frequency >= total - 1 else raw_idf
+        )
     raw: dict[str, float] = {}
     for row in candidates:
         chunk_id = str(row["chunk_id"])

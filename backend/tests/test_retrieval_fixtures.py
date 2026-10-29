@@ -1,10 +1,15 @@
 """冻结检索语料的形状守卫：脚本与验收文档引用的是同一份数据。"""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 from scripts.retrieval_quality_bench import Corpus, _cross_queries, _url_to_index
+
+from pmstudio.infrastructure.tools.extract import chunk_text
+from pmstudio.infrastructure.tools.limits import CHUNK_CHARS
+from pmstudio.infrastructure.tools.webclean import normalize_web_text
 
 FIXTURE = Path(__file__).parent / "fixtures" / "retrieval"
 
@@ -50,6 +55,37 @@ def test_frozen_retrieval_fixture_has_the_declared_shape():
         assert len(cross[width]) == 15
         assert all(item["material_index"] in range(15) for item in cross[width])
         assert all(item["chunks"] == [6, 10] for item in cross[width])
+
+
+def test_frozen_corpus_chunks_to_646_blocks_at_the_production_width():
+    """R：生产块宽 400 下，冻结语料应是 **15 份 / 646 块**，且标题标记与锚点不破。
+
+    300 宽是 791 块（M2 之前的当前口径）。646 是 400 宽复现旧口径的块数，也是
+    `cross_queries.json` 的 `"400"` 组能逐条映射的前提（目标块 #c06 / #c10 必须存在）。
+    """
+    assert CHUNK_CHARS == 400
+    corpus = _load("corpus.json")
+    per_material = [
+        chunk_text(
+            normalize_web_text(str(document["text"])),
+            parser_id="tavily",
+            max_chars=CHUNK_CHARS,
+        )
+        for document in corpus
+    ]
+    chunks = [chunk for material in per_material for chunk in material]
+
+    assert len(chunks) == 646
+    assert all(len(chunk.text) <= CHUNK_CHARS for chunk in chunks)
+    assert all(
+        [chunk.ordinal for chunk in material] == list(range(len(material)))
+        for material in per_material
+    )
+    # 锚点仍是「第 N 行 / 第 N–M 行」；标题标记仍进 heading_path。
+    assert all(re.fullmatch(r"第 \d+(?:–\d+)? 行", chunk.anchor) for chunk in chunks)
+    assert any(chunk.heading_path and chunk.heading_path[0].startswith("#") for chunk in chunks)
+    # 跨块冻结集的目标块必须真的存在。
+    assert all(len(material) > 10 for material in per_material)
 
 
 def test_frozen_cross_queries_map_to_the_synthetic_corpus():

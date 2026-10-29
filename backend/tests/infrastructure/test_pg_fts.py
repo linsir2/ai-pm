@@ -23,6 +23,7 @@ from pmstudio.infrastructure.postgres.materials import (
     SqliteFtsRetriever,
     SqliteHybridRetriever,
     SqliteMaterialStore,
+    _robertson_scores,
 )
 from pmstudio.infrastructure.postgres.owner_scope import (
     clear_owner_scope,
@@ -201,7 +202,7 @@ def test_special_characters_are_tokenized_not_parsed_as_query_operators(conn) ->
 
 def test_rank_is_positive_and_more_matches_rank_first(conn) -> None:
     mid = seed(conn, "异步队列 与 异步队列：两次都提了", "这里只提了一次 异步队列")
-    for index in range(3):  # 让查询词的 df < N/2，IDF 才为正（覆盖非钳制路径）
+    for index in range(3):  # 补无关文档让 df < N-1，走原始 Robertson（这里 IDF 为正）
         seed(conn, f"机柜布线规范 第 {index} 版")
     hits = SqliteFtsRetriever(conn).search(project_id=PROJECT, query="异步队列")
 
@@ -211,10 +212,11 @@ def test_rank_is_positive_and_more_matches_rank_first(conn) -> None:
 
 
 def test_more_matches_rank_first_without_decoys(conn) -> None:
-    """无 decoy 的 2 块小语料：共同词不许变成负权重。
+    """无 decoy 的 2 块小语料：共同词（`df >= N-1`）钳到 0 后仍按 tf 排序。
 
     Robertson 原始 IDF 在 `df == N` 时为负，会让"多命中一次"反而扣分、
-    短块压过长块。IDF 钳到 0 后，tf/长度仍能排出先后，且分数仍为正。
+    短块压过长块。这类**高频/小语料**词钳到 `0 + 1e-9` 后，tf/长度仍能排出先后，
+    且分数仍为正。
     """
 
     mid = seed(conn, "异步队列 与 异步队列：两次都提了", "这里只提了一次 异步队列")
@@ -238,6 +240,83 @@ def test_a_rare_term_beats_common_terms(conn) -> None:
 
     assert hits
     assert hits[0].material_id == rare
+
+
+def _idf_corpus(*, total: int, frequency: int) -> dict[str, tuple[str, ...]]:
+    """N=total、查询词 df=frequency 的语料：多命中块排第一是唯一区分点。
+
+    块长都为 3，避免长度归一掩盖 tf 差异。
+    """
+    corpus: dict[str, tuple[str, ...]] = {
+        "c-multi": ("共同", "共同", "填充"),
+        "c-single": ("共同", "填充", "填充"),
+    }
+    for index in range(frequency - 2):
+        corpus[f"c-common-{index}"] = ("共同", "填充", "填充")
+    for index in range(total - frequency):
+        corpus[f"c-filler-{index}"] = ("其他", "填充", "填充")
+    assert len(corpus) == total
+    return corpus
+
+
+@pytest.mark.parametrize(("total", "frequency"), [(2, 2), (3, 2), (17, 16), (17, 17)])
+def test_a_high_frequency_term_is_clamped_and_still_ranks_more_matches_first(
+    total: int, frequency: int
+) -> None:
+    """`df >= N-1` 的高频词钳到 `0 + 1e-9`，tf 仍能排出先后。
+
+    覆盖 N=2/3 的小语料与 N=17 的大语料；这几种情况下原始 Robertson IDF 为负，
+    不钳会把"多命中一次"变成扣分。
+    """
+    corpus = _idf_corpus(total=total, frequency=frequency)
+    scores = _robertson_scores(
+        [{"chunk_id": "c-multi"}, {"chunk_id": "c-single"}], ["共同"], corpus
+    )
+
+    assert scores["c-multi"] > scores["c-single"] > 0
+
+
+def test_a_normal_corpus_does_not_clamp_terms_below_n_minus_one() -> None:
+    """N=17、df=15 < N-1：保留 Robertson raw（负值），**不许误钳**。
+
+    钳到 0 的实现会把"多命中一次"排前；保留 raw 负值时，多命中一次反而扣分
+    （这是 Robertson 的原义，用于压低过于常见的词）。
+    """
+    corpus = {
+        "c-twice": ("常见", "常见", "填充"),
+        "c-once": ("常见", "填充", "填充"),
+    }
+    for index in range(13):
+        corpus[f"c-common-{index}"] = ("常见", "填充", "填充")
+    for index in range(2):
+        corpus[f"c-filler-{index}"] = ("其他", "填充", "填充")
+    assert len(corpus) == 17
+
+    scores = _robertson_scores(
+        [{"chunk_id": "c-twice"}, {"chunk_id": "c-once"}], ["常见"], corpus
+    )
+
+    assert scores["c-once"] > scores["c-twice"], (
+        "df=15 < N-1=16 被钳平了：多命中又变成加分（误钳）"
+    )
+
+
+def test_a_rare_term_still_beats_a_common_term_at_scale() -> None:
+    """N=17：罕见词（df=1）仍压过常见词（df=15，raw 为负）。"""
+    corpus: dict[str, tuple[str, ...]] = {
+        "c-rare": ("紫貂", "皮草", "记录"),
+        "c-common": ("出口", "关税", "流程"),
+    }
+    for index in range(14):
+        corpus[f"c-common-{index}"] = ("出口", "关税", "流程")
+    corpus["c-filler"] = ("无关", "内容", "归档")
+    assert len(corpus) == 17
+
+    scores = _robertson_scores(
+        [{"chunk_id": "c-rare"}, {"chunk_id": "c-common"}], ["紫貂", "出口"], corpus
+    )
+
+    assert scores["c-rare"] > scores["c-common"]
 
 
 def test_title_and_heading_path_are_searchable(conn) -> None:

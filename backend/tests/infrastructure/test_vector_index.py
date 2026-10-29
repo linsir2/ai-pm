@@ -136,15 +136,18 @@ def test_the_block_budget_is_measured_in_characters_not_blocks():
     """R：预算的量纲是**字**（`blocks_within_budget`），不是块数。"""
     from pmstudio.infrastructure.postgres.vector_index import blocks_within_budget
 
-    rows = [{"text": "字" * 400} for _ in range(30)]  # 共 12000 字
+    rows = [{"text": "字" * 400} for _ in range(50)]  # 共 20000 字
 
-    assert blocks_within_budget(rows, 9600) == 24, "9600 字 = 24 个 400 字的块"
+    assert blocks_within_budget(rows, 16_000) == 40, "16000 字 = 40 个 400 字的块"
     assert blocks_within_budget(rows, 400) == 1
-    assert blocks_within_budget(rows, None) == 30, "不限 = 全要"
-    smaller = [{"text": "字" * 200} for _ in range(60)]
-    assert blocks_within_budget(smaller, 9600) == 48
-    covered = sum(len(row["text"]) for row in smaller[: blocks_within_budget(smaller, 9600)])
-    assert covered == 9600
+    assert blocks_within_budget(rows, None) == 50, "不限 = 全要"
+    smaller = [{"text": "字" * 200} for _ in range(100)]
+    assert blocks_within_budget(smaller, 16_000) == 80
+    covered = sum(len(row["text"]) for row in smaller[: blocks_within_budget(smaller, 16_000)])
+    assert covered == 16_000
+    # 边界：第 40 块之后哪怕只多 1 字，也不把整块塞进预算。
+    edge = [{"text": "字" * 400} for _ in range(39)] + [{"text": "字" * 401}]
+    assert blocks_within_budget(edge, 16_000) == 39
 
 
 def test_reembed_missing_fills_all_null_materials_in_batches(conn):
@@ -163,18 +166,18 @@ def test_reembed_missing_fills_all_null_materials_in_batches(conn):
 def test_reembed_missing_does_not_chase_partial_web_budgets(conn):
     """R：联网材料尾部块是**预算内故意为空**，不能被当成缺向量反复重算。"""
     from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
-    from pmstudio.infrastructure.tools.limits import WEB_VECTOR_CHARS
+    from pmstudio.infrastructure.tools.limits import CHUNK_CHARS, WEB_VECTOR_CHARS
 
-    body = "字" * 400
+    body = "字" * CHUNK_CHARS
     _put_material(
         conn,
-        chunks=tuple((f"c{index}", body) for index in range(30)),
+        chunks=tuple((f"c{index}", body) for index in range(45)),
         origin="web_search",
     )
     index = SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512))
     index.write("m-1")
     embedded = _vector_count(conn)
-    assert embedded == WEB_VECTOR_CHARS // 400
+    assert embedded == WEB_VECTOR_CHARS // CHUNK_CHARS == 40
 
     assert index.reembed_missing() == 0
     assert _vector_count(conn) == embedded
@@ -183,19 +186,19 @@ def test_reembed_missing_does_not_chase_partial_web_budgets(conn):
 def test_a_web_material_only_gets_vectors_within_its_char_budget(conn):
     """R：联网材料只写**字数预算内**的块的向量（**FTS 仍覆盖全部块**）。"""
     from pmstudio.infrastructure.postgres.vector_index import SqliteVectorIndex
-    from pmstudio.infrastructure.tools.limits import WEB_VECTOR_CHARS
+    from pmstudio.infrastructure.tools.limits import CHUNK_CHARS, WEB_VECTOR_CHARS
 
-    body = "字" * 400
+    body = "字" * CHUNK_CHARS
     _put_material(
         conn,
-        chunks=tuple((f"c{index}", body) for index in range(30)),
+        chunks=tuple((f"c{index}", body) for index in range(45)),
         origin="web_search",
     )
 
     SqliteVectorIndex(conn, embedder=FakeEmbedder(dimensions=512)).write("m-1")
 
-    assert _vector_count(conn) == WEB_VECTOR_CHARS // 400
-    assert conn.execute("SELECT count(*) AS n FROM material_chunks").fetchone()["n"] == 30, (
+    assert _vector_count(conn) == WEB_VECTOR_CHARS // CHUNK_CHARS == 40
+    assert conn.execute("SELECT count(*) AS n FROM material_chunks").fetchone()["n"] == 45, (
         "块不该被删——FTS 还要覆盖全部块"
     )
 
