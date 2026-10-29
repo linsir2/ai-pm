@@ -2857,6 +2857,14 @@ details.drawer__history[open] > summary::before {
   animation: none;
 }
 
+/* 复述卡的 `.pane-card` 本是"整栏独占"时代的绝对定位铺满（inset:0）；
+   放进自动高度的 `.loop__pop` 里就成了无解的"用内容定高又自己铺满"→ 塌成 0 高
+   （真机实测：卡片在 DOM 里、a11y 树看得见、画出来只有 2px）。同为静态流内。 */
+.loop__pop > .pane-card {
+  position: static;
+  inset: auto;
+}
+
 /* 收起之后 header 上的那枚 chip：点它重开（同一 waiting_on 不再强弹） */
 .loop__chiprow {
   padding: var(--space-2) var(--space-4) 0;
