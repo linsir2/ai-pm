@@ -66,8 +66,10 @@ jobs:
           set -o pipefail
           {
             sudo install -d /usr/share/postgresql-common/pgdg
+            # 镜像里可能已存在同名 key 文件；不给 --batch --yes 时 gpg 会去读
+            # /dev/tty 问"是否覆盖"，CI 没有 tty → 直接失败，curl 跟着 EPIPE。
             curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-              | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+              | sudo gpg --batch --yes --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
             echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] \
               https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
               | sudo tee /etc/apt/sources.list.d/pgdg.list
