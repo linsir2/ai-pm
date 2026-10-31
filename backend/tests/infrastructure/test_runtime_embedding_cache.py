@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,8 @@ from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
 from tests.conftest import TEST_OWNER
 from tests.support.builders import NOW, PROJECT, make_material_packet
 from tests.support.postgres import open_direct
+
+BACKEND = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize("lazy_load", [True, False])
@@ -163,6 +166,9 @@ def test_production_runtime_cold_cache_fails_fast_and_retrieval_degrades(tmp_pat
         ("XDG_CACHE_HOME", "xdg"),
     ):
         env[name] = str(tmp_path / directory)
+    # 子进程从 `-c` 启动，不继承 pytest 的 `pythonpath` 配置：显式给 PYTHONPATH，
+    # 否则 CI（`uv run pytest`，环境里没有 PYTHONPATH）会 ImportError。
+    env["PYTHONPATH"] = os.pathsep.join((str(BACKEND / "src"), str(BACKEND)))
     env.update(HF_HUB_OFFLINE="0", TRANSFORMERS_OFFLINE="0", NO_PROXY="*", no_proxy="*")
     for name in (
         "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"
