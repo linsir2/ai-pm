@@ -162,6 +162,7 @@ export function useWorkspaceData() {
       selected.current = projectId;
       const url = new URL(window.location.href);
       url.searchParams.set(PROJECT_PARAM, projectId);
+      url.hash = "";
       window.history.replaceState(null, "", url);
       dispatch({ type: "reset" });
       clearProjectScoped();
@@ -173,7 +174,7 @@ export function useWorkspaceData() {
     [clearProjectScoped, loadWorkspace],
   );
 
-  // 启动：至少要有项目才有工作区；没有就停在"建一个项目"那一步。
+  // 启动只读项目列表；显式项目链接才恢复工作区。
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -192,7 +193,7 @@ export function useWorkspaceData() {
             /* 模型名是装饰性的：拿不到不报错、不打断启动 */
           });
         const wanted = new URLSearchParams(window.location.search).get(PROJECT_PARAM);
-        const target = list.find((item) => item.project_id === wanted) ?? list[0];
+        const target = list.find((item) => item.project_id === wanted);
         if (target !== undefined) {
           selected.current = target.project_id;
           await loadWorkspace(target.project_id);
@@ -400,6 +401,7 @@ export function useWorkspaceData() {
         selected.current = summary.project_id;
         const url = new URL(window.location.href);
         url.searchParams.set(PROJECT_PARAM, summary.project_id);
+        url.hash = "";
         window.history.replaceState(null, "", url);
         dispatch({ type: "reset" });
         clearProjectScoped(); // 新项目从干净状态开始（同一个 hook 实例）

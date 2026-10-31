@@ -63,7 +63,7 @@ function ws(): WorkspaceView {
 }
 beforeEach(() => {
   window.localStorage.clear();
-  window.history.replaceState(null, "", "/");
+  window.history.replaceState(null, "", "/?project=p1");
   current = round(); documentView = structuredClone(doc); posts = []; reads = []; conflict = false;
   TestEvents.sources = [];
   vi.stubGlobal("EventSource", TestEvents);

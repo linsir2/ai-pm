@@ -44,7 +44,7 @@ const ACTION_CLASS: Record<Exclude<AdminActionKind, "none">, string> = {
   ban: "btn btn--sm btn--ghost",
 };
 
-export function AdminView() {
+export function AdminView({ onHome }: { onHome?: () => void }) {
   const { user, ready } = useAuth();
 
   if (!ready) {
@@ -67,10 +67,10 @@ export function AdminView() {
       </main>
     );
   }
-  return <AdminPanel />;
+  return <AdminPanel onHome={onHome} />;
 }
 
-function AdminPanel() {
+function AdminPanel({ onHome }: { onHome?: () => void }) {
   const [rows, setRows] = useState<AdminStatsRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -113,6 +113,9 @@ function AdminPanel() {
     <main className="doc" aria-label="管理后台">
       <div className="doc__inner admin">
         <header className="adm__head">
+          {onHome !== undefined && (
+            <button type="button" className="home__back" onClick={onHome}>← 返回文档中心</button>
+          )}
           <h1 className="home__title">管理后台</h1>
           <p className="home__lede">
             这一屏只管两件事：有没有人在等你放行，以及现在谁在用、用得怎么样。

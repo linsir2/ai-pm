@@ -98,17 +98,17 @@ it("左导航当前段标 aria-current=location（页内锚点不用 TopBar 的 
     />,
   );
 
-  expect(screen.getByRole("link", { name: "新建项目" }).getAttribute("aria-current")).toBe(
-    "location",
-  );
-  expect(screen.getByRole("link", { name: "最近项目" }).getAttribute("aria-current")).toBeNull();
-
-  intersect("home-recent");
-
   expect(screen.getByRole("link", { name: "最近项目" }).getAttribute("aria-current")).toBe(
     "location",
   );
   expect(screen.getByRole("link", { name: "新建项目" }).getAttribute("aria-current")).toBeNull();
+
+  intersect("home-new");
+
+  expect(screen.getByRole("link", { name: "新建项目" }).getAttribute("aria-current")).toBe(
+    "location",
+  );
+  expect(screen.getByRole("link", { name: "最近项目" }).getAttribute("aria-current")).toBeNull();
 });
 
 it("模板库是跨视图按钮：从不标 aria-current（page 是 TopBar 那边的语义）", () => {

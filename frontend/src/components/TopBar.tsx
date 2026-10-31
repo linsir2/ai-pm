@@ -26,9 +26,9 @@ export function TopBar({
   connection,
   onSelectProject,
   onExport,
-  /** 左上角标识：点了回项目列表。没有项目时不传（顶栏就没有可回的
-      地方——那一屏本来就在 `Onboarding`）。 */
+  /** Logo 与「文档中心」共用返回入口。 */
   onHome,
+  homeActive = false,
   onTemplates,
   templatesActive = false,
   libraryCount = 0,
@@ -47,6 +47,7 @@ export function TopBar({
   connection: "idle" | "open" | "lost";
   onSelectProject: (projectId: string) => void;
   onHome?: () => void;
+  homeActive?: boolean;
   /** 模板库入口（`06` §2.3）：不传就不画（工作区里没有它，模板管理是列表页的事）。 */
   onTemplates?: () => void;
   /** 模板库视图里标出当前位置（`06` §2.4 §1）：跨视图按钮按 ARIA 取 `"page"`。
@@ -101,6 +102,17 @@ export function TopBar({
           <Logo />
           <span className="wordmark__name">PM Studio</span>
         </span>
+      )}
+
+      {onHome !== undefined && (
+        <button
+          type="button"
+          className={homeActive ? "topbar__action topbar__action--active" : "topbar__action"}
+          aria-current={homeActive ? "page" : undefined}
+          onClick={onHome}
+        >
+          文档中心
+        </button>
       )}
 
       {project !== null && (

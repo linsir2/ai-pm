@@ -93,6 +93,9 @@ export function TemplateLibraryScreen({
       <div className="doc__inner home home--split">
         <HomeNav active="templates" plain onNavigate={onNavigate} onTemplates={onTemplates} />
         <div className="home__main">
+          {onNavigate !== undefined && (
+            <button type="button" className="home__back" onClick={() => onNavigate("recent")}>← 返回文档中心</button>
+          )}
           <TemplateListView
             templates={library.items}
             onUse={onUse}

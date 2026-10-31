@@ -1,7 +1,7 @@
 """交付用 Markdown：纯函数、可判据、确定性。
 
 四条硬规矩（`01-规格.md` §7.3）：空章显式；s13 由版本生成；偏好区不进正文；
-附录只带编号与摘要（`04` D5 的原话留在系统内）。
+附录只带紧凑来源索引（原话与逐条摘要留在系统内）。
 """
 
 import re
@@ -10,7 +10,7 @@ from datetime import datetime
 from pmstudio.application.deliverable import render_markdown
 from pmstudio.domain.authoring.document import Document
 from pmstudio.domain.authoring.instruction import WriteInstruction
-from pmstudio.domain.authoring.readiness import ReadinessChecker, Severity
+from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.ids import (
@@ -117,6 +117,21 @@ def appendix_a_of(text: str) -> str:
     return appendix
 
 
+def indexed_tokens(text: str) -> set[str]:
+    """读取索引最后一列并展开区间；不调用生产的区间生成器。"""
+    appendix = appendix_a_of(text) if "## 附录 A" in text else text
+    found: set[str] = set()
+    for line in appendix.splitlines():
+        if not line.startswith("|"):
+            continue
+        column = line.rsplit("|", 2)[1]
+        for start, end in re.findall(r"(E\d+)(?:–(E\d+))?", column):
+            found.update(
+                f"E{number}" for number in range(int(start[1:]), int((end or start)[1:]) + 1)
+            )
+    return found
+
+
 def test_header_carries_title_version_time_and_readiness_stamp():
     document = make_document()
     text = export(
@@ -201,8 +216,8 @@ def test_appendix_has_no_raw_span():
     # 附录只列"本文引用过"的编号（P31），所以这条得用一份真的引用了 E1 的文档做夹具
     text = export(document_with_feature(), ledger_with_two_entries())
 
-    assert "- E1 ·" in text
-    assert "要做一个订单导出功能" in text  # 摘要可以给
+    assert indexed_tokens(text) == {"E1"}
+    assert "要做一个订单导出功能" not in text  # 逐条摘要留在系统内
     assert RAW_SPAN not in text  # 原话（raw_span）留在系统内（D5）
 
 
@@ -211,7 +226,7 @@ def test_appendix_lists_only_evidence_the_document_cites():
     # 读者在正文里找不到落点，进交付物只会稀释真正的出处（P31）
     text = export(document_with_feature(), ledger_with_two_entries())
 
-    assert "- E1 · 用户输入 · 要做一个订单导出功能" in text
+    assert "| 用户输入 | — | E1 |" in text
     assert "E2" not in text
     assert "单次导出应在 60 秒内完成" not in text
 
@@ -241,7 +256,7 @@ def test_appendix_counts_the_preference_area_as_cited():
     text = export(document, ledger_with_two_entries())
 
     # 偏好区会带自己的〔E1〕（附录 B），所以它引用的编号同样要能查到
-    assert "- E1 · 用户输入 · 要做一个订单导出功能" in text
+    assert "| 用户输入 | — | E1 |" in text
     assert "另有 1 条出处没有被本文引用" in text
 
 
@@ -249,8 +264,7 @@ def test_appendix_says_so_when_the_document_cites_nothing():
     text = export(make_document(), ledger_with_two_entries())
 
     assert "（本文没有引用任何出处）" in text
-    assert "- E1 ·" not in text
-    assert "- E2 ·" not in text
+    assert not indexed_tokens(text)
 
 
 def test_appendix_of_an_empty_ledger_still_says_there_is_none():
@@ -260,7 +274,7 @@ def test_appendix_of_an_empty_ledger_still_says_there_is_none():
     assert "没有被本文引用" not in text
 
 
-def test_feature_name_carries_its_evidence_into_the_heading():
+def test_feature_name_carries_its_evidence_in_adjacent_metadata():
     # 名称也是正文内容：界面在功能名旁边挂了出处胶囊（`FeatureBlock.tsx`），
     # 导出也得挂——否则附录里会出现一个正文根本看不见的编号
     # （P31 真跑对账抓到：L3 `p41 · s5/…name · 依据 E28`、L2 的 E170 都是这一条）
@@ -285,7 +299,8 @@ def test_feature_name_carries_its_evidence_into_the_heading():
     )
     text = export(document, ledger_with_two_entries())
 
-    assert "### 5.1 订单导出（order-export）〔E1〕" in text
+    assert "### 5.1 订单导出\n" in text
+    assert "> 标识：`order-export` · 依据：〔E1〕" in text
 
 
 def test_every_listed_evidence_is_visible_elsewhere_in_the_export():
@@ -295,7 +310,7 @@ def test_every_listed_evidence_is_visible_elsewhere_in_the_export():
     text = export(document_with_feature(), ledger_with_two_entries())
     head, rest = text.split("## 附录 A", 1)
     appendix_a, _, tail = rest.partition("## 附录")
-    listed = re.findall(r"^- (\S+) · ", appendix_a, re.M)
+    listed = indexed_tokens(appendix_a)
 
     assert listed, "夹具得真的引用过编号"
     assert set(listed) <= visible_tokens(head + tail)
@@ -309,8 +324,7 @@ def test_appendix_skips_evidence_only_the_open_question_list_cites():
     text = export(document, ledger_with_three_entries())
     appendix_a = appendix_a_of(text)
 
-    assert "- E1 · 用户输入 · 要做一个订单导出功能" in appendix_a
-    assert "- E2 ·" not in appendix_a
+    assert indexed_tokens(appendix_a) == {"E1"}
     assert "单次导出应在 60 秒内完成" not in appendix_a
 
 
@@ -340,8 +354,8 @@ def test_appendix_keeps_evidence_that_real_content_also_cites():
     text = export(document, ledger_with_three_entries())
     appendix_a = appendix_a_of(text)
 
-    assert "- E1 · 用户输入 · 要做一个订单导出功能" in appendix_a
-    assert "- E2 · 席位判断 · 单次导出应在 60 秒内完成" in appendix_a
+    assert indexed_tokens(appendix_a) == {"E1", "E2"}
+    assert "| 席位判断 | — | E2 |" in appendix_a
     assert "只被第 11 章未决清单引用" not in text
 
 
@@ -361,7 +375,7 @@ def test_appendix_still_lists_everything_when_there_is_no_open_question():
     text = export(document_with_feature(), ledger_with_three_entries())
     appendix_a = appendix_a_of(text)
 
-    assert "- E1 · 用户输入 · 要做一个订单导出功能" in appendix_a
+    assert indexed_tokens(appendix_a) == {"E1"}
     assert "只被第 11 章未决清单引用" not in text
     assert "另有 2 条出处没有被本文引用" in text
 
@@ -453,17 +467,17 @@ def test_filename_carries_title_and_version():
     assert result.version_no == 1
 
 
-def test_readiness_appendix_lists_unfinished_items():
+def test_readiness_gap_is_shown_in_its_chapter():
     document = make_document()
     items = (
         ReadinessChecker().check(document.view(), adapter=STD)[0],
     )
     text = export(document, ledger_with_two_entries(), items)
 
-    assert "未完成项" in text
-    assert f"{items[0].section_id}" in text
-    assert items[0].title in text
-    assert items[0].severity is Severity.BLOCKER
+    chapter = text.split("## 1 背景与问题", 1)[1].split("## 2 ", 1)[0]
+    assert items[0].detail in chapter
+    assert "阻塞 1 项" in text
+    assert "附录 C" not in text
 
 
 # ── M11：模拟推演的诚实标注（同时补 M10 欠账） ───────────────────────────────
@@ -626,7 +640,8 @@ def test_light_export_numbers_features_under_their_own_chapter():
 
     text = _render(document, adapter=adapt(template))
 
-    assert "### 4.1 订单导出（order-export）〔E1〕" in text
+    assert "### 4.1 订单导出\n" in text
+    assert "> 标识：`order-export` · 依据：〔E1〕" in text
 
 
 def test_version_chapter_renders_versions_by_role_not_by_id():
@@ -697,7 +712,7 @@ def test_open_questions_chapter_is_skipped_in_the_citation_appendix():
 
     # 它的口径是"不列入清单、但仍可按编号查"：编号不进正文，也不出现在附录清单里
     assert "只被第 5 章未决清单引用" in text
-    assert f"- {eid} ·" not in text
+    assert str(eid) not in indexed_tokens(text)
 
 
 def with_list_like_entry(document: Document) -> Document:
