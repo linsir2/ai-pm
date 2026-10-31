@@ -4,6 +4,7 @@
    round 对象的引用。这里把两条都钉住。 */
 
 import { act, renderHook } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { describe, expect, it } from "vitest";
 
 import type { AwaitingMode } from "../api/payload";
@@ -42,6 +43,45 @@ function render(initialRound: RoundView, initialMode: AwaitingMode) {
 }
 
 describe("useRoundDrafts", () => {
+  const onDraft = (draftId: string) => round({
+    step: "awaiting_confirm", waiting_on: "draft_card",
+    draft: { draft_id: draftId, groups: [], gaps: [], proposals: [
+      { proposal_id: "p01", entry_id: "r1#01", op: "add", target_label: "s1", text: draftId,
+        origin_type: "proposed", overlap: null, eids: ["E1"], rationale: null, kind: "text", warning: null },
+    ] },
+    memory_proposals: [{ proposal_id: "mem#1", text: draftId, op: "add", kind: "decision",
+      refs: ["E1"], reason: "用户已定", target_id: null }],
+  });
+
+  it("同Round dig复用p01/mem#1：文档与记忆选择一起换身份、一起清空", () => {
+    const { result, rerender } = render(onDraft("d-old"), "draft");
+    act(() => { result.current.toggleAccepted("p01"); result.current.toggleMemory("mem#1"); });
+    expect(result.current.accepted).toEqual(["p01"]);
+    expect(result.current.memoryAccepted).toEqual(["mem#1"]);
+    rerender({ value: onDraft("d-new"), mode: "draft" });
+    expect(result.current.accepted).toEqual([]);
+    expect(result.current.memoryAccepted).toEqual([]);
+    expect(result.current.selection.draft_id).toBe("d-new");
+  });
+
+  it("效果重置前的layout窗口不能给旧选择盖新draft身份，旧回调也不能污染新记忆", () => {
+    const seen: ReturnType<typeof useRoundDrafts>[] = [];
+    const { result, rerender } = renderHook(({ value }) => {
+      const drafts = useRoundDrafts(value, "draft");
+      useLayoutEffect(() => { seen.push(drafts); }, [value]);
+      return drafts;
+    }, { initialProps: { value: onDraft("d-old") } });
+    act(() => result.current.toggleMemory("mem#1"));
+    const oldToggle = result.current.toggleMemory;
+    rerender({ value: onDraft("d-new") });
+    const window = seen[seen.length - 1]!;
+    expect(window.selection.draft_id).toBe("d-old");
+    expect(window.selectionMatches).toBe(false);
+    act(() => oldToggle("mem#1"));
+    expect(result.current.selection.draft_id).toBe("d-new");
+    expect(result.current.memoryAccepted).toEqual([]);
+  });
+
   it("同一轮里数据刷新（新的 round 对象）不清空已经答的内容", () => {
     const { result, rerender } = render(round(), "questionnaire");
 

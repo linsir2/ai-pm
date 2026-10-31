@@ -658,10 +658,10 @@ export const api = {
     }),
 
   /** 确认写入：`acceptedMemory` 是草案卡上勾中的**记忆提议**（M6，默认不勾 → 空）。 */
-  confirm: (roundId: string, accepted: string[], acceptedMemory: string[] = []) =>
+  confirm: (roundId: string, draftId: string, accepted: string[], acceptedMemory: string[] = []) =>
     request<ConfirmResponse>(`/rounds/${roundId}/confirm`, {
       method: "POST",
-      body: JSON.stringify({ accepted, accepted_memory: acceptedMemory }),
+      body: JSON.stringify({ draft_id: draftId, accepted, accepted_memory: acceptedMemory }),
     }),
 
   /** 忘掉一条记忆（M6）：记忆抽屉上的按钮，删了以后下一轮提示词立刻不带它。 */

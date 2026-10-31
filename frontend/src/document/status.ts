@@ -18,9 +18,11 @@ export interface SectionSlice {
 /** 判"有内容"看的是**非空条目**：s8 的六个空槽是骨架，不算内容。 */
 export interface BlockSlice {
   entries: readonly unknown[];
+  children?: readonly BlockSlice[];
 }
 
 export interface RoundSlice {
+  waiting_on?: string;
   questions?: readonly { kind: string; target_label: string }[];
   draft?: { proposals: readonly { target_label: string }[] } | null;
 }
@@ -57,7 +59,7 @@ export function sectionStatus(
   round: RoundSlice | null,
 ): SectionStatus {
   const id = section.section_id;
-  const questions = round?.questions ?? [];
+  const questions = round?.waiting_on === "questionnaire" ? round.questions ?? [] : [];
   const inSection = (target: string) => sectionIdOf(target) === id;
 
   if (
@@ -72,9 +74,11 @@ export function sectionStatus(
   if (questions.some((question) => inSection(question.target_label) && question.kind === "gap")) {
     return "open";
   }
-  const proposals = round?.draft?.proposals ?? [];
+  const proposals = round?.waiting_on === "draft_card" ? round.draft?.proposals ?? [] : [];
   if (proposals.some((proposal) => inSection(proposal.target_label))) return "gap";
-  if (section.blocks.some((block) => block.entries.length > 0)) return "filled";
+  const filled = (block: BlockSlice): boolean => block.entries.length > 0
+    || (block.children ?? []).some(filled);
+  if (section.blocks.some(filled)) return "filled";
   return "empty";
 }
 

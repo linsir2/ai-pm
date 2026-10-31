@@ -131,6 +131,9 @@ export interface ProposalView {
    * 老轮次无键 → undefined，照旧默认勾上。
    */
   overlap?: string | null;
+  base_version_no?: number | null;
+  before?: EntrySnapshotView | null;
+  requires_review?: boolean;
 }
 
 export interface DraftView {

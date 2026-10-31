@@ -854,12 +854,32 @@ export function useWorkspaceData() {
   );
 
   const confirm = useCallback(
-    (roundId: string, accepted: string[], acceptedMemory: string[] = []) =>
+    (roundId: string, draftId: string, accepted: string[], acceptedMemory: string[] = []) =>
       run("confirm", async () => {
-        const result = await api.confirm(roundId, accepted, acceptedMemory);
-        setHistoryRound(null);
-        dispatch({ type: "round", round: result.round });
         const projectId = selected.current;
+        let result;
+        try {
+          result = await api.confirm(roundId, draftId, accepted, acceptedMemory);
+        } catch (error) {
+          if (selected.current !== projectId) return;
+          // 冲突后重读真相；run仍显示原错误，选择由所见draft身份决定是否重置。
+          try {
+            const fresh = await api.getRound(roundId);
+            if (selected.current === projectId) {
+              dispatch({ type: "round", round: fresh, expectRoundId: roundId });
+            }
+            if (projectId !== null) {
+              const document = await api.document(projectId);
+              if (selected.current === projectId) dispatch({ type: "document", document });
+            }
+          } catch {
+            // 重读失败不覆盖确认的原始错误。
+          }
+          throw error;
+        }
+        if (selected.current !== projectId) return;
+        setHistoryRound(null);
+        dispatch({ type: "round", round: result.round, expectRoundId: roundId });
         if (projectId !== null) await refreshDocument(projectId);
         setProjects((list) =>
           list.map((item) =>

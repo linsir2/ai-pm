@@ -37,6 +37,7 @@ describe("sectionStatus", () => {
 
   it("本轮草案里有落在这章的提案 → gap（还要你再确认一次）", () => {
     const round = {
+      waiting_on: "draft_card",
       draft: { proposals: [{ proposal_id: "p1", target_label: "s9", warning: null }] },
     } as never;
     expect(sectionStatus(empty, round)).toBe("gap");
@@ -44,6 +45,7 @@ describe("sectionStatus", () => {
 
   it("本轮有落在这一章的开放问题 → open", () => {
     const round = {
+      waiting_on: "questionnaire",
       questions: [{ question_id: "q1", target_label: "s9", kind: "gap" }],
     } as never;
     expect(sectionStatus(empty, round)).toBe("open");
@@ -51,6 +53,7 @@ describe("sectionStatus", () => {
 
   it("矛盾题优先于缺口题", () => {
     const round = {
+      waiting_on: "questionnaire",
       questions: [
         { question_id: "q1", target_label: "s4", kind: "gap" },
         { question_id: "q2", target_label: "s4", kind: "conflict" },
@@ -61,6 +64,7 @@ describe("sectionStatus", () => {
 
   it("功能字段上的提案也算落在这章（s5/feat.acceptance → s5）", () => {
     const round = {
+      waiting_on: "draft_card",
       draft: { proposals: [{ proposal_id: "p1", target_label: "s5/订单导出.acceptance" }] },
     } as never;
     const s5 = { section_id: "s5", title: "功能需求", blocks: [] };
@@ -69,6 +73,7 @@ describe("sectionStatus", () => {
 
   it("偏好区不落到任何一章", () => {
     const round = {
+      waiting_on: "draft_card",
       draft: { proposals: [{ proposal_id: "p1", target_label: "preference" }] },
     } as never;
     expect(sectionStatus(empty, round)).toBe("empty");
@@ -76,6 +81,7 @@ describe("sectionStatus", () => {
 
   it("有内容但本轮还有提案 → gap 盖过 filled（要你再确认）", () => {
     const round = {
+      waiting_on: "draft_card",
       draft: { proposals: [{ proposal_id: "p1", target_label: "s1" }] },
     } as never;
     expect(sectionStatus(filled, round)).toBe("gap");

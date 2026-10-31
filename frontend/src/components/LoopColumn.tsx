@@ -23,6 +23,7 @@ import { roundElapsed, roundOrdinal } from "../state/progress";
 import type { RoundDrafts } from "../state/useRoundDrafts";
 import { DiscussionTray } from "./DiscussionTray";
 import { DraftDrawer } from "./DraftDrawer";
+import { canConfirmDraft } from "../api/payload";
 import { InboxTray } from "./InboxTray";
 import { ResearchTray } from "./ResearchTray";
 import { LoopComposer } from "./LoopComposer";
@@ -165,7 +166,7 @@ export function LoopColumn({
   onSubmitOpening: () => void;
   onSubmitAnswers: () => void;
   onSkipAll: () => void;
-  onConfirm: () => void;
+  onConfirm: (roundId: string, draftId: string) => void;
   onDig: () => void;
   /** 草案卡上的"去模拟调研"（M10）：调用方跑完打开模拟抽屉。 */
   onSimInquiry: () => void;
@@ -227,7 +228,7 @@ export function LoopColumn({
   /** 问卷题行上的「聊聊」：只把锚点交上去（不直接发请求）。 */
   onDiscussQuestion: (anchor: DiscussionAnchor) => void;
   /** 问卷/草案里去处的跳转（到文档那一条）：不传就不出可点去处。 */
-  onOpenTarget?: (label: string) => void;
+  onOpenTarget?: (label: string, entryId?: string) => void;
   /** 右底 composer（旧 BottomStrip 整块搬入）：与旧 foot 收到的 mode 同一个值。 */
   composerProjectId: string;
   composerMode: AwaitingMode;
@@ -493,9 +494,11 @@ export function LoopColumn({
               <DraftDrawer
                 round={round}
                 doc={doc}
-                accepted={drafts.accepted}
-                memoryAccepted={drafts.memoryAccepted}
+                accepted={history === null ? drafts.accepted : []}
+                memoryAccepted={history === null ? drafts.memoryAccepted : []}
                 pending={pending === "confirm"}
+                selectionMatches={drafts.selectionMatches && canConfirmDraft(round, drafts.selection)}
+                readOnly={history !== null}
                 onToggle={drafts.toggleAccepted}
                 onToggleMemory={drafts.toggleMemory}
                 onSetAccepted={drafts.setAccepted}

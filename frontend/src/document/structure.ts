@@ -125,18 +125,18 @@ function firstText(entries: Entry[]): string | null {
     只做"换个摆法"：顺着投影走一遍，不做判断、不猜。 */
 export function sectionOfEntry(doc: DocumentView | null, entryId: string): string | null {
   if (doc === null) return null;
-  if (doc.preference_entries.some((entry) => entry.entry_id === entryId)) {
-    return "preference";
-  }
-  const walk = (blocks: BlockView[]): boolean =>
-    blocks.some(
-      (block) =>
-        block.entries.some((entry) => entry.entry_id === entryId) || walk(block.children),
-    );
+  const hits: string[] = doc.preference_entries
+    .filter((entry) => entry.entry_id === entryId).map(() => "preference");
+  const walk = (blocks: BlockView[], sectionId: string): void => {
+    for (const block of blocks) {
+      for (const entry of block.entries) if (entry.entry_id === entryId) hits.push(sectionId);
+      walk(block.children, sectionId);
+    }
+  };
   for (const section of doc.sections) {
-    if (walk(section.blocks)) return section.section_id;
+    walk(section.blocks, section.section_id);
   }
-  return null;
+  return hits.length === 1 ? hits[0]! : null;
 }
 
 /** 去处 → 文档落点（点去处跳转的唯一解析）。

@@ -261,6 +261,57 @@ describe("LoopColumn · 对话流与决策卡浮层（2026-10-29）", () => {
   });
 });
 
+describe("LoopColumn · 历史只读卡", () => {
+  it("不把当前轮 accepted/memoryAccepted 当作历史卡的显示勾选，提交仍禁", () => {
+    const proposal = {
+      proposal_id: "p01",
+      entry_id: "r1#01",
+      op: "add",
+      target_label: "s5",
+      text: "历史候选",
+      origin_type: "proposed",
+      eids: ["E1"],
+      rationale: null,
+      kind: "text",
+      warning: null,
+    };
+    drawColumn({
+      round: openingRound({
+        step: "awaiting_confirm",
+        waiting_on: "draft_card",
+        draft: {
+          draft_id: "d-old",
+          groups: [["它提议的", [proposal]]],
+          proposals: [proposal],
+          gaps: [],
+        },
+        memory_proposals: [
+          {
+            proposal_id: "mem#1",
+            op: "add",
+            kind: "decision",
+            text: "历史记忆",
+            refs: ["E1"],
+            reason: "",
+            target_id: null,
+          },
+        ],
+      }),
+      mode: null,
+      history: { roundId: "r-old", onBack: vi.fn() },
+      drafts: { ...openingDrafts, accepted: ["p01"], memoryAccepted: ["mem#1"] } as never,
+    });
+
+    expect(screen.getByText("不要")).toBeTruthy();
+    expect(screen.queryByText("要")).toBeNull();
+    expect(screen.getByText("不记")).toBeTruthy();
+    expect(screen.queryByText("记")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /确认写入 0 条/ }).hasAttribute("disabled"),
+    ).toBe(true);
+  });
+});
+
 describe("LoopColumn · 联网授权与决策（P3a）", () => {
   it("开场卡：申请勾选与 allow_web 都接到 props 的动作上", () => {
     const onToggleWebRequest = vi.fn();
