@@ -5,6 +5,7 @@
 
 import re
 from collections.abc import Mapping, Sequence
+from copy import copy
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -21,15 +22,16 @@ from pmstudio.application.sim_review import (
     MAX_SIM_REVIEWS_PER_DRAFT,
 )
 from pmstudio.domain.authoring.diff import diff_snapshots
+from pmstudio.domain.authoring.document import Document, _add_destination
 from pmstudio.domain.authoring.readiness import ReadinessItem
-from pmstudio.domain.authoring.schema import FEATURE_FIELDS
+from pmstudio.domain.authoring.schema import FEATURE_FIELDS, field_spec
 from pmstudio.domain.authoring.version import Version
 from pmstudio.domain.authoring.views import BlockView, DocumentView
 from pmstudio.domain.discussion.thread import MAX_DISCUSSION_TURNS, Discussion
 from pmstudio.domain.exploration.exploration import Exploration
 from pmstudio.domain.memory.memory import MemoryEntry
 from pmstudio.domain.provenance.ledger import EvidenceLedger
-from pmstudio.domain.round.draft import Draft, Proposal
+from pmstudio.domain.round.draft import Draft, OriginType, Proposal
 from pmstudio.domain.round.opinion import OpinionForm, SeatReview
 from pmstudio.domain.round.questionnaire import (
     MAX_OPEN_ITEMS_PER_BATCH,
@@ -38,20 +40,24 @@ from pmstudio.domain.round.questionnaire import (
     Question,
 )
 from pmstudio.domain.round.round import DropSource, Round
-from pmstudio.domain.round.step import MAX_SEAT_ROUNDS
+from pmstudio.domain.round.step import MAX_SEAT_ROUNDS, WaitingOn
+from pmstudio.domain.services.committer import to_write_instruction
 from pmstudio.domain.services.scope_guard import ScopeGuard
+from pmstudio.domain.shared.errors import DomainError
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import EvidenceId, RoundId
+from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.research import MAX_RESEARCH_SOURCES, MAX_RESEARCH_TOPIC_CHARS
 from pmstudio.domain.shared.sections import SECTION_SLOTS, SECTIONS
+from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template import (
     ANCHOR_ROLES,
     DocumentTemplate,
     MinEntries,
     TemplateRole,
 )
-from pmstudio.domain.shared.template_adapter import TemplateAdapter
-from pmstudio.domain.shared.writing import BlockKind
+from pmstudio.domain.shared.template_adapter import TemplateAdapter, adapt
+from pmstudio.domain.shared.writing import BlockKind, WriteOp, normalize
 
 SEAT_COMPLETED = "completed"
 SEAT_PENDING = "pending"
@@ -168,6 +174,9 @@ class ProposalView:
     overlap: str | None = None
     #: 编号里有账本上的 SIMULATED（M11）：界面打「模拟评测依据」tag、eval 读它
     simulation_based: bool = False
+    base_version_no: int | None = None
+    before: "EntrySnapshotView | None" = None
+    requires_review: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1447,11 +1456,17 @@ PROPOSAL_IGNORE_ADVISORY = (
 )
 
 #: overlap 的机械判定快照编成的**人话**（add 防线 2026-10-29）：它挂在 `ProposalView.warning`
-#: 这一既有 ⚠ 通道上（`_draft_view` 传进来的 ScopeGuard 违例优先）；快照本身另经
+#: 这一既有 ⚠ 通道上（与 scope / 机械原因一起显示）；快照本身另经
 #: `ProposalView.overlap` 出处，前端 `defaultAccepted` 靠"有没有这只手表"判默认勾选。
 OVERLAP_WARNING = (
     "与已有内容重叠：{overlap} 行与该字段既有条目原样相同；"
     "这是对既有内容的重述——真正的改写应该用「替换」提案（replace）。看清再勾。"
+)
+
+#: 同一真实去处里整段归一后相同的新增（批内重复，2026-10-31）：
+#: 单条预览各自合法，全选确认才由 `assert_no_added_duplicates` 原子拒绝。
+BATCH_ADD_DUPLICATE_WARNING = (
+    "本批有 {n} 条几乎相同的新增（{ids}），全选会冲突；保留一条即可。"
 )
 
 
@@ -1518,6 +1533,7 @@ def round_view(
     seat_titles: Mapping[str, str] = {},
     catalog: SeatCatalog | None = None,
     ledger: EvidenceLedger | None = None,
+    document: Document | None = None,
     materials: Sequence[MaterialPacket] = (),
     web_search_available: bool = False,
     web_search_network_access: bool = False,
@@ -1538,6 +1554,11 @@ def round_view(
     if round_.draft is not None:
         violations = ScopeGuard().check(round_.draft.proposals, write_scope=round_.write_scope)
         warnings = {str(item.proposal_id): item.message for item in violations}
+        scope_review_ids = (
+            frozenset(str(item.proposal_id) for item in violations)
+            if round_.waiting_on is WaitingOn.DRAFT
+            else frozenset()
+        )
         # 置顶告警（报告 F1）："点到了功能、却一条功能内容都没有"比"哪条越界"更要紧
         coverage = feature_coverage_advisory(round_)
         streak = round_.proposal_ignore_streak
@@ -1552,7 +1573,8 @@ def round_view(
             + tuple(f"{item.target.label()}：{item.message}" for item in violations)
         )
         draft_view = _draft_view(
-            round_.draft, warnings=warnings, simulated_eids=simulated_eids
+            round_.draft, warnings=warnings, simulated_eids=simulated_eids,
+            document=document, round_=round_, scope_review_ids=scope_review_ids,
         )
     questionnaire = round_.questionnaire
     nominated = _suggestions(round_, catalog=catalog, seat_titles=seat_titles)
@@ -1845,6 +1867,7 @@ def workspace_view(
     *,
     project: ProjectSummaryView,
     document: DocumentView,
+    source_document: Document | None = None,
     round_: Round | None,
     seat_titles: Mapping[str, str] = {},
     catalog: SeatCatalog | None = None,
@@ -1863,6 +1886,7 @@ def workspace_view(
             if round_ is None
             else round_view(
                 round_,
+                document=source_document,
                 seat_titles=seat_titles,
                 catalog=catalog,
                 ledger=ledger,
@@ -2209,11 +2233,24 @@ def _proposal_view(
     *,
     warning: str | None,
     simulated_eids: frozenset[str] = frozenset(),
+    document: Document | None = None,
+    review_reasons: Sequence[str] = (),
+    scope_review: bool = False,
 ) -> ProposalView:
-    # ⚠ 合成规则（add 防线）：**ScopeGuard 违例优先**——越界与重叠同时发生时，
-    # 越界是硬拦截，先说它；没有违例、但行级重叠非空 → 用 overlap 的人话接管 warning。
-    if warning is None and proposal.overlap is not None:
-        warning = OVERLAP_WARNING.format(overlap=proposal.overlap)
+    reasons = [warning] if warning else []
+    if proposal.overlap is not None:
+        reasons.append(OVERLAP_WARNING.format(overlap=proposal.overlap))
+    reasons.extend(review_reasons)
+    before = None
+    if (document is not None and proposal.op is not WriteOp.ADD
+            and proposal.base_version_no is not None):
+        try:
+            before = _entry_snapshot_view(document.locate_entry(
+                proposal.entry_id, version_no=proposal.base_version_no,
+            ).entry)
+        except DomainError:
+            # 历史不可得就未知，绝不回退当前头。
+            pass
     return ProposalView(
         proposal_id=str(proposal.proposal_id),
         entry_id=str(proposal.entry_id),
@@ -2224,11 +2261,14 @@ def _proposal_view(
         eids=tuple(str(eid) for eid in proposal.origin.refs),
         rationale=proposal.origin.rationale,
         kind=proposal.kind.value if proposal.kind is not None else None,
-        warning=warning,
+        warning="；".join(reasons) or None,
         overlap=proposal.overlap,
         simulation_based=any(
             str(eid) in simulated_eids for eid in proposal.origin.refs
         ),
+        base_version_no=proposal.base_version_no,
+        before=before,
+        requires_review=bool(review_reasons) or scope_review,
     )
 
 
@@ -2496,12 +2536,22 @@ def _draft_view(
     *,
     warnings: Mapping[str, str],
     simulated_eids: frozenset[str] = frozenset(),
+    document: Document | None = None,
+    round_: Round | None = None,
+    scope_review_ids: frozenset[str] = frozenset(),
 ) -> DraftView:
+    reviews = (
+        _draft_review_reasons(draft, document=document, round_=round_)
+        if round_ is not None and round_.waiting_on is WaitingOn.DRAFT else {}
+    )
     proposals = tuple(
         _proposal_view(
             proposal,
             warning=warnings.get(str(proposal.proposal_id)),
             simulated_eids=simulated_eids,
+            document=document,
+            review_reasons=reviews.get(str(proposal.proposal_id), ()),
+            scope_review=str(proposal.proposal_id) in scope_review_ids,
         )
         for proposal in draft.proposals
     )
@@ -2516,3 +2566,200 @@ def _draft_view(
         proposals=proposals,
         gaps=tuple(draft.gaps),
     )
+
+
+def _draft_review_reasons(
+    draft: Draft, *, document: Document | None, round_: Round,
+) -> dict[str, list[str]]:
+    """只投影领域核验结果；候选在内存上单条试写，不签名、不保存。"""
+    reasons: dict[str, list[str]] = {str(p.proposal_id): [] for p in draft.proposals}
+    entries: dict[str, list[Proposal]] = {}
+    adds: dict[str, list[Proposal]] = {}
+    for p in draft.proposals:
+        if p.op is not WriteOp.ADD:
+            entries.setdefault(str(p.entry_id), []).append(p)
+        else:
+            adds.setdefault(p.target.label(), []).append(p)
+        if document is None:
+            reasons[str(p.proposal_id)].append("基线文档未知，请重新整合（baseline_missing）")
+            continue
+        instructions = (to_write_instruction(p),)
+        try:
+            document.assert_write_preconditions(
+                instructions, authorized_new_features=round_.authorized_new_features,
+            )
+            candidate = copy(document)
+            candidate.apply(instructions, now=round_.created_at, summary="只读单提案检查",
+                            authorized_new_features=round_.authorized_new_features)
+            candidate.assert_no_added_duplicates(instructions)
+        except DomainError as error:
+            reasons[str(p.proposal_id)].append(f"{error}（{error.code}）")
+
+    def competing(items: Sequence[Proposal], reason: str) -> None:
+        order = " → ".join(str(p.proposal_id) for p in items)
+        message = f"{reason}；同选按草案顺序 {order} 执行，请看清后选择"
+        for p in items:
+            reasons[str(p.proposal_id)].append(message)
+
+    for items in entries.values():
+        if len(items) > 1:
+            competing(items, "同一条目有竞争动作")
+    if document is not None:
+        for items in adds.values():
+            # 单项诊断已有原因的先保留自己的主诊断；竞争只在仍可单独通过的候选之间判，
+            # 否则组内首个失败项会让批次守卫提前抛出，后面真正的竞争被吞掉。
+            valid = [p for p in items if not reasons[str(p.proposal_id)]]
+            if len(valid) < 2:
+                continue
+            # single 是否为空、是否合法全由同一个领域批次守卫判，投影不抄 FieldSpec。
+            try:
+                document.assert_write_preconditions(
+                    tuple(to_write_instruction(p) for p in valid),
+                    authorized_new_features=round_.authorized_new_features,
+                )
+            except DomainError as error:
+                if error.details.get("reason") == "single_add_competition":
+                    competing(valid, "同一空单值字段有竞争新增（single_add_competition）")
+    batch_adds: dict[tuple[str, str], list[Proposal]] = {}
+    for proposal in draft.proposals:
+        if proposal.op is WriteOp.ADD:
+            batch_adds.setdefault(
+                (proposal.target.label(), normalize(proposal.text)), []
+            ).append(proposal)
+    for items in batch_adds.values():
+        if len(items) < 2:
+            continue
+        message = BATCH_ADD_DUPLICATE_WARNING.format(
+            n=len(items), ids="、".join(str(p.proposal_id) for p in items),
+        )
+        for proposal in items:
+            reasons[str(proposal.proposal_id)].append(message)
+    if document is not None:
+        for proposal in draft.proposals:
+            reason = _unmentioned_target_reason(
+                proposal, document=document, user_input=round_.user_input,
+            )
+            if reason is not None:
+                reasons[str(proposal.proposal_id)].append(reason)
+    return reasons
+
+
+#: 否定语境关键词：纯字符串，不做分词/语义（2026-10-31 要求）。
+_NEGATIVE_CONTEXT = (
+    "不要", "别改", "别动", "别碰", "别替", "无需", "不用", "不必",
+    "不得", "禁止", "保持不变", "其余", "不许",
+)
+_CLAUSE_DELIMITERS = "，。；、！？!?\n"
+
+
+def _mentioned_positively(text: str, term: str | None) -> bool:
+    """这个词出现过，且至少有一次不在否定小句里。"""
+
+    if not term:
+        return False
+    for match in re.finditer(re.escape(term), text):
+        start = 0
+        end = len(text)
+        for delimiter in _CLAUSE_DELIMITERS:
+            left = text.rfind(delimiter, 0, match.start())
+            if left >= 0:
+                start = max(start, left + 1)
+            right = text.find(delimiter, match.end())
+            if right >= 0:
+                end = min(end, right)
+        clause = text[start:end]
+        if not any(word in clause for word in _NEGATIVE_CONTEXT):
+            return True
+    return False
+
+
+_TITLE_FRAGMENT_SEPARATORS = re.compile(r"[、，,／/与和及]")
+
+
+def _title_match_terms(title: str, field: str | None) -> tuple[str, ...]:
+    """标题整串 + 按分隔符切出的片段（去空白、长度 >= 2）+ 字段名。"""
+
+    terms: list[str] = [title]
+    for part in _TITLE_FRAGMENT_SEPARATORS.split(title):
+        fragment = part.strip()
+        if len(fragment) >= 2:
+            terms.append(fragment)
+    if field is not None:
+        terms.append(field)
+    return tuple(dict.fromkeys(term for term in terms if term))
+
+
+def _unmentioned_target_reason(
+    proposal: Proposal, *, document: Document, user_input: str,
+) -> str | None:
+    """改/删/新增到已有内容的机械过目：本轮输入没提真实去处标题就标记。
+
+    纯字符串包含，不分词、不做语义；标题或字段名任一出现即豁免。
+    真实去处从基线条目反查（replace/remove）或 ADD 的实际承载块反查，不信提案
+    自己写的 target。ADD 只在承载块已有内容时判；空字段（首轮/新字段）不标记。
+    SYSTEM_DEFAULT（s11 未决项、降级题等系统生成项）不参与。
+    """
+
+    if proposal.origin.type is OriginType.SYSTEM_DEFAULT:
+        return None
+    if proposal.op is WriteOp.ADD:
+        if proposal.target.zone is Zone.PREFERENCE:
+            has_content = bool(document.preference_entries)
+            target = proposal.target
+        else:
+            try:
+                block, _ = _add_destination(
+                    document.blocks, proposal.target, proposal.kind
+                )
+            except DomainError:
+                return None
+            has_content = block is not None and bool(block.entries)
+            target = proposal.target
+        if not has_content:
+            return None
+    else:
+        try:
+            target = document.locate_entry(
+                proposal.entry_id, version_no=proposal.base_version_no,
+            ).target
+        except DomainError:
+            return None
+    title, field = _target_title(document, target)
+    if title is None:
+        return None
+    if any(
+        _mentioned_positively(user_input, term)
+        for term in _title_match_terms(title, field)
+    ):
+        return None
+    if proposal.op is WriteOp.ADD:
+        return (
+            f"这轮输入没有提到「{title}」，但这条新增到了已有内容里（{proposal.entry_id}）。"
+            "确认前看一眼。"
+        )
+    return (
+        f"这轮输入没有提到「{title}」，但这条改/删了它（{proposal.entry_id}）。"
+        "确认前看一眼。"
+    )
+
+
+def _target_title(document: Document, target: Target) -> tuple[str | None, str | None]:
+    """去处的人话标题与字段名；标题取既有字段表/槽表/章节标题，不另造映射。"""
+
+    if target.zone is Zone.PREFERENCE:
+        return "偏好", None
+    adapter = adapt(document.template)
+    if target.field is not None:
+        if target.feature_slug is not None:
+            try:
+                return field_spec(target.field).title, target.field
+            except DomainError:
+                return None, None
+        slot = adapter.slot(target.section_id, target.field)
+        if slot is None:
+            return None, None
+        return slot.title, target.field
+    try:
+        return adapter.title_of(target.section_id), None
+    except DomainError:
+        return None, None

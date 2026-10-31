@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 
 import pytest
@@ -81,6 +82,7 @@ def proposal_draft(
 ) -> dict:
     return {
         "op": "add",
+        "entry_id": None,
         "target": {
             "zone": "body",
             "section_id": "s5",
@@ -123,6 +125,7 @@ def test_a_section_level_proposal_for_s6_lands_as_steps_whatever_the_model_wrote
     def s6_draft(kind: str | None) -> dict:
         draft: dict = {
             "op": "add",
+            "entry_id": None,
             "target": {"zone": "body", "section_id": "s6"},
             "text": "1. 点检员点检；2. 不合格转报修；3. 主管派单。",
             "origin_type": "derived",
@@ -147,6 +150,7 @@ def test_a_section_level_proposal_for_s6_lands_as_steps_whatever_the_model_wrote
             proposals=[
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s1"},
                     "text": "现状是纸单子。",
                     "origin_type": "derived",
@@ -770,12 +774,11 @@ def test_a_replace_without_an_entry_id_is_still_a_packet_error():
 
     bad = proposal_draft()
     bad["op"] = "replace"
+    del bad["entry_id"]
     with pytest.raises(PacketParseError):
-        assembly.assemble(
-            packet(proposals=[bad]),
-            round_=make_round(),
-            document=document_with_feature(),
-            ledger=ledger_with_two_entries(),
+        schemas.parse_packet_lenient(
+            json.dumps({"proposals": [bad]}), schemas.IntegrationPacket,
+            purpose="integration",
         )
 
 
@@ -803,7 +806,7 @@ def test_a_remove_with_empty_text_fills_in_what_it_deletes():
     卡片上是「删除｜<那句话>」而不是一行空白，也守住"每条写入指令都有文本"的不变量。
     """
 
-    remove = proposal_draft()
+    remove = proposal_draft(field="one_liner")
     remove["op"] = "remove"
     remove["entry_id"] = "en-bootstrap"
     remove["text"] = ""
@@ -825,7 +828,7 @@ def test_a_remove_is_not_skipped_as_a_duplicate():
     跳过的后果与上面相反——本该撤下的内容悄悄留在文档里。
     """
 
-    remove = proposal_draft(text="把订单导出成表格")  # 与被删那条一字不差
+    remove = proposal_draft(field="one_liner", text="把订单导出成表格")
     remove["op"] = "remove"
     remove["entry_id"] = "en-bootstrap"
     result = assembly.assemble(
@@ -839,7 +842,7 @@ def test_a_remove_is_not_skipped_as_a_duplicate():
 
 
 def test_assemble_replace_accepts_real_entry_id():
-    ok = proposal_draft(text="把订单导出成表格（可筛选）")
+    ok = proposal_draft(field="one_liner", text="把订单导出成表格（可筛选）")
     ok["op"] = "replace"
     ok["entry_id"] = "en-bootstrap"
     result = assembly.assemble(
@@ -1120,6 +1123,7 @@ def test_section_slot_target_is_accepted():
             proposals=[
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s8", "field": "compatibility"},
                     "text": "只支持 Chrome 与 Safari 最近两个大版本",
                     "origin_type": "derived",
@@ -1146,6 +1150,7 @@ def test_section_slot_with_unknown_name_is_rejected():
             proposals=[
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s8", "field": "不存在的槽"},
                     "text": "随便写点什么",
                     "origin_type": "derived",
@@ -1153,6 +1158,7 @@ def test_section_slot_with_unknown_name_is_rejected():
                 },
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s8", "field": "performance"},
                     "text": "5 万条 60 秒内可下载",
                     "origin_type": "derived",
@@ -1230,6 +1236,7 @@ def test_bad_evidence_ref_is_still_fatal():
                 proposals=[
                     {
                         "op": "add",
+                        "entry_id": None,
                         "target": {"zone": "body", "section_id": "s2"},
                         "text": "引用了不存在的编号",
                         "origin_type": "derived",
@@ -1274,6 +1281,7 @@ def slot_proposal(*, refs: list[str], origin_type: str = "derived") -> dict:
 
     return {
         "op": "add",
+        "entry_id": None,
         "target": {"zone": "body", "section_id": "s8", "field": "performance"},
         "text": "5 万条 60 秒内可下载",
         "origin_type": origin_type,

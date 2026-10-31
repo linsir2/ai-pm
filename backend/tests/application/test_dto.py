@@ -243,8 +243,12 @@ def test_round_view_groups_draft_proposals_in_three_groups():
 
 def test_round_view_marks_out_of_scope_proposals_and_top_advisories():
     round_ = make_round()
-    round_.integrate(draft=make_draft(out_of_scope=True))
-    view = dto.round_view(round_)
+    document = make_document()
+    draft = make_draft(out_of_scope=True)
+    round_.integrate(draft=dataclasses.replace(draft, proposals=tuple(
+        dataclasses.replace(p, base_version_no=1) for p in draft.proposals
+    )))
+    view = dto.round_view(round_, document=document)
 
     assert view.advisories  # 顶部提示
     assert "s8" in view.advisories[0]

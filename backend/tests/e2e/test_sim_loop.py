@@ -55,6 +55,7 @@ DRAFT_REPLY = json.dumps(
         "proposals": [
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {
                     "zone": "body",
                     "section_id": "s5",

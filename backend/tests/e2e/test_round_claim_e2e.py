@@ -49,6 +49,7 @@ class BlockingSeatGateway(ScriptedModelGateway):
                   "proposals": [
                     {
                       "op": "add",
+                      "entry_id": null,
                       "target": {
                         "zone": "body",
                         "section_id": "s5",

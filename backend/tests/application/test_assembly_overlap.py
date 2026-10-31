@@ -2,7 +2,7 @@
 
 `docs/plans/2026-10-29-整块重述-add-防线.md` §3 的用例 1–8。口径：
 
-- 判重（`assemble` 的整段键）照旧用**原始** draft.text——清洗只影响判空与最终 text；
+- 判重（`assemble` 的整段键）用清洗后的实际待写文本（多轮精确写入 §3.2）；
 - 行级重叠是**机械判定快照**（"dup/total"）随草案落库，界面靠它默认不勾；
 - 清洗后剩空的 add/replace 走既有"丢这一条 + 留痕"分支，**绝不**到 `Proposal`
   （那边 ShapeError → PacketParseError → 整包重装，计划明令禁止）。
@@ -12,6 +12,7 @@ from pmstudio.application import assembly
 from pmstudio.application.agents import schemas
 from pmstudio.application.dto import _proposal_view
 from pmstudio.application.use_cases import IntegrateRound, IntegrationOutcome
+from pmstudio.domain.authoring.instruction import WriteInstruction
 from pmstudio.domain.provenance.evidence import EvidenceId, EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.draft import Origin, OriginType, Proposal
@@ -64,13 +65,14 @@ def packet(**overrides: object) -> schemas.IntegrationPacket:
 def draft(
     *,
     op: str = "add",
-    field: str = "one_liner",
+    field: str = "main_flow",
     text: str,
     entry_id: str | None = None,
     refs: tuple[str, ...] = ("E1", "E2"),
 ) -> dict:
     spec: dict[str, object] = {
         "op": op,
+        "entry_id": entry_id,
         "target": {
             "zone": "body",
             "section_id": "s5",
@@ -81,16 +83,25 @@ def draft(
         "origin_type": "derived",
         "evidence_refs": list(refs),
     }
-    if entry_id is not None:
-        spec["entry_id"] = entry_id
     return spec
+
+
+def document_with_flow():
+    document = document_with_feature()
+    document.apply(
+        [WriteInstruction("flow", EntryId("flow1"), WriteOp.ADD,
+                          Target.body("s5", feature_slug="order-export", field="main_flow"),
+                          WHOLE_LINE, (EvidenceId("E1"),))],
+        now=NOW, summary="既有多值流程",
+    )
+    return document
 
 
 def assemble(*proposals: dict):
     return assembly.assemble(
         packet(proposals=list(proposals)),
         round_=make_round(),
-        document=document_with_feature(),
+        document=document_with_flow(),
         ledger=ledger_with_two_entries(),
     )
 
@@ -154,7 +165,7 @@ def test_the_marked_proposal_reports_itself_in_the_gaps_line():
         )
         _, gaps = runner._assemble_and_gaps(
             round_=make_round(),
-            document=document_with_feature(),
+            document=document_with_flow(),
             ledger=ledger_with_two_entries(),
             outcome=outcome,
             carried=(),
@@ -224,18 +235,19 @@ def test_replace_and_remove_get_no_overlap_and_dedup_stays_loose_for_them():
         ("replace", WHOLE_LINE, "en-bootstrap"),  # 照抄既有正文——判重本来就不拦 replace
         ("remove", "", "en-bootstrap"),
     ):
-        result = assemble(draft(op=op, text=text, entry_id=entry_id))
+        result = assemble(draft(op=op, field="one_liner", text=text, entry_id=entry_id))
 
         assert len(result.proposals) == 1, f"op={op} 该照常出提案"
         assert result.proposals[0].overlap is None
 
 
-def test_remove_text_is_not_cleaned():
-    """remove 的文本是展示（撤哪一条看 entry_id），清洗路径碰它一个字都不该。"""
+def test_remove_text_is_the_real_old_entry_not_the_models_citation_or_reason():
+    """批准契约：remove 卡显示真实旧文，任意展示文案不能掩盖删除对象。"""
 
-    result = assemble(draft(op="remove", text="（E16）撤下这条", entry_id="en-bootstrap"))
+    result = assemble(draft(op="remove", field="one_liner", text="（E16）撤下这条",
+                            entry_id="en-bootstrap"))
 
-    assert result.proposals[0].text == "（E16）撤下这条"
+    assert result.proposals[0].text == WHOLE_LINE
 
 
 def test_cleaning_touched_only_the_text_refs_survive_intact():
@@ -323,10 +335,12 @@ def test_overlap_assembles_a_human_warning_when_no_scope_violation():
     assert "replace" in view.warning
 
 
-def test_scope_guard_violation_wins_but_overlap_still_shown():
+def test_scope_guard_and_overlap_warnings_are_both_shown():
     view = _proposal_view(base_proposal(overlap="3/4"), warning="这条越出写权限了")
 
-    assert view.warning == "这条越出写权限了"  # 违例优先
+    assert view.warning.startswith("这条越出写权限了")
+    assert "与已有内容重叠" in view.warning
+    assert "3/4" in view.warning
     assert view.overlap == "3/4"  # 字段照旧透出（判默认勾选用）
 
 

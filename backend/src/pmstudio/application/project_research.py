@@ -368,7 +368,10 @@ class StartWebResearch:
         try:
             with self._uow:
                 stored = self._explorations.get(exploration_id)
-                ledger = self._evidence.get(stored.project_id)
+                # 现有 fencing UPDATE 先取得自己的控制行锁，再拿 Ledger 锁；
+                # 与末尾报告写共用事务，失败时这次未改负载的保存也一起回滚。
+                self._exploration_writer.save(stored)
+                ledger = self._evidence.get_for_update(stored.project_id)
                 sources = tuple(
                     self._record_source(stored.project_id, ledger, hit) for hit in hits
                 )

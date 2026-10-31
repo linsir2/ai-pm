@@ -142,7 +142,8 @@ async def test_user_b_cannot_touch_user_a_project(make_app):
             )
         ).status_code == 404
         assert (
-            await client.post(f"/api/rounds/{round_id}/confirm", json={"accepted": []})
+            await client.post(f"/api/rounds/{round_id}/confirm",
+                              json={"draft_id": "unseen", "accepted": []})
         ).status_code == 404
 
         # A 看自己的照常（隔离不能误伤本人）

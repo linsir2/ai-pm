@@ -110,6 +110,7 @@ class Fixture:
                     text="导出要有权限控制",
                     origin=Origin(OriginType.DERIVED, (EvidenceId("E3"),), "没有用户依据"),
                     kind=BlockKind.BULLET_LIST,
+                    base_version_no=1,
                 ),
             )
         items = [
@@ -121,6 +122,7 @@ class Fixture:
                 text="验收标准：5 万条内 60 秒可下载",
                 origin=Origin(OriginType.DERIVED, (EvidenceId("E2"),), "量级在 1 万级"),
                 kind=BlockKind.ACCEPTANCE,
+                base_version_no=1,
             )
         ]
         if with_out_of_scope:
@@ -133,6 +135,7 @@ class Fixture:
                     text="单次导出 60 秒内完成",
                     origin=Origin(OriginType.PROPOSED, (EvidenceId("E3"),)),
                     kind=BlockKind.NFR,
+                    base_version_no=1,
                 )
             )
         return tuple(items)
@@ -168,7 +171,8 @@ def _commit_one_entry(fixture: "Fixture") -> None:
     """先真的往文档里加一条（后面才好删它）。"""
 
     fixture.add_draft()
-    fixture.committer().commit(round_id=ROUND_ID, accepted=(ProposalId("p1"),), now=NOW)
+    fixture.committer().commit(round_id=ROUND_ID, draft_id=DraftId("d1"),
+                               accepted=(ProposalId("p1"),), now=NOW)
 
 
 def _round_with_proposals(fixture: "Fixture", round_id: str, proposals) -> None:
@@ -211,6 +215,7 @@ def _remove(proposal_id: str, *, text: str = "撤下这条未决项", origin=Ori
         target=Target.body("s5"),
         text=text,
         origin=Origin(origin, (EvidenceId("E2"),), None),
+        base_version_no=2,
     )
 
 
@@ -233,6 +238,7 @@ def test_two_removes_on_the_same_entry_commit_once():
 
     result = fixture.committer().commit(
         round_id=RoundId("r2"),
+        draft_id=DraftId("d-r2"),
         accepted=(ProposalId("p1"), ProposalId("p2")),
         now=NOW,
     )
@@ -258,7 +264,7 @@ def test_the_merged_remove_can_also_be_accepted_alone():
     )
 
     result = fixture.committer().commit(
-        round_id=RoundId("r2"), accepted=(ProposalId("p2"),), now=NOW
+        round_id=RoundId("r2"), draft_id=DraftId("d-r2"), accepted=(ProposalId("p2"),), now=NOW
     )
 
     assert result.version.version_no == 3
@@ -285,6 +291,7 @@ def test_proposed_accepted_does_not_undercount_when_a_remove_is_merged():
 
     fixture.committer().commit(
         round_id=RoundId("r2"),
+        draft_id=DraftId("d-r2"),
         accepted=(ProposalId("p1"), ProposalId("p2")),
         now=NOW,
     )
@@ -297,7 +304,8 @@ def test_proposed_accepted_does_not_undercount_when_a_remove_is_merged():
 def test_commit_writes_entries_and_version_in_one_transaction():
     fixture = Fixture()
     fixture.add_draft()
-    result = fixture.committer().commit(round_id=ROUND_ID, accepted=(ProposalId("p1"),), now=NOW)
+    result = fixture.committer().commit(round_id=ROUND_ID, draft_id=DraftId("d1"),
+                                        accepted=(ProposalId("p1"),), now=NOW)
     assert result.version.version_no == 2
     assert fixture.transaction.commits == 1
     assert fixture.transaction.rollbacks == 0
@@ -314,7 +322,8 @@ def test_commit_reports_out_of_scope_as_advisory():
     fixture = Fixture()
     fixture.add_draft(with_out_of_scope=True)
     result = fixture.committer().commit(
-        round_id=ROUND_ID, accepted=(ProposalId("p1"), ProposalId("p2")), now=NOW
+        round_id=ROUND_ID, draft_id=DraftId("d1"),
+        accepted=(ProposalId("p1"), ProposalId("p2")), now=NOW
     )
     assert [item.code for item in result.advisories] == [OUTSIDE_ROUND_SCOPE]
     assert result.advisories[0].target == Target.body("s8")
@@ -326,7 +335,7 @@ def test_commit_bad_unknown_proposal():
     fixture.add_draft()
     with pytest.raises(UnknownProposal):
         fixture.committer().commit(
-            round_id=ROUND_ID, accepted=(ProposalId("p-forged"),), now=NOW
+            round_id=ROUND_ID, draft_id=DraftId("d1"), accepted=(ProposalId("p-forged"),), now=NOW
         )
     assert fixture.documents.saves == 0
     assert fixture.transaction.rollbacks == 1
@@ -336,7 +345,7 @@ def test_commit_bad_nothing_accepted():
     fixture = Fixture()
     fixture.add_draft()
     with pytest.raises(NothingToCommit):
-        fixture.committer().commit(round_id=ROUND_ID, accepted=(), now=NOW)
+        fixture.committer().commit(round_id=ROUND_ID, draft_id=DraftId("d1"), accepted=(), now=NOW)
     assert fixture.documents.get(PROJECT).current_version.version_no == 1
 
 
@@ -344,7 +353,8 @@ def test_commit_bad_untraceable_derived_proposal_writes_nothing():
     fixture = Fixture()
     fixture.add_draft(untraceable=True)
     with pytest.raises(UntraceableContent) as exc:
-        fixture.committer().commit(round_id=ROUND_ID, accepted=(ProposalId("p9"),), now=NOW)
+        fixture.committer().commit(round_id=ROUND_ID, draft_id=DraftId("d1"),
+                                   accepted=(ProposalId("p9"),), now=NOW)
     assert exc.value.invariant == EInvariant.E4
     assert fixture.documents.saves == 0
     assert fixture.documents.get(PROJECT).current_version.version_no == 1
@@ -353,7 +363,8 @@ def test_commit_bad_untraceable_derived_proposal_writes_nothing():
 def test_commit_ok_proposed_without_traceability_is_allowed():
     fixture = Fixture()
     fixture.add_draft(with_out_of_scope=True)
-    result = fixture.committer().commit(round_id=ROUND_ID, accepted=(ProposalId("p2"),), now=NOW)
+    result = fixture.committer().commit(round_id=ROUND_ID, draft_id=DraftId("d1"),
+                                        accepted=(ProposalId("p2"),), now=NOW)
     assert result.version.version_no == 2
 
 
@@ -372,6 +383,7 @@ def draft_with_one_derived_and_one_proposed() -> Draft:
                 text="验收标准：5 万条内 60 秒可下载",
                 origin=Origin(OriginType.DERIVED, (EvidenceId("E2"),), "量级在 1 万级"),
                 kind=BlockKind.ACCEPTANCE,
+                base_version_no=1,
             ),
             Proposal(
                 proposal_id=ProposalId("p3"),
@@ -381,6 +393,7 @@ def draft_with_one_derived_and_one_proposed() -> Draft:
                 text="导出记录保留 30 天",
                 origin=Origin(OriginType.PROPOSED, (EvidenceId("E3"),), "纯专业判断"),
                 kind=BlockKind.BULLET_LIST,
+                base_version_no=1,
             ),
         ),
     )
@@ -393,7 +406,8 @@ def test_commit_records_zero_when_the_user_takes_no_proposed_content():
     fixture.round.integrate(draft=draft_with_one_derived_and_one_proposed())
     fixture.rounds.seed(fixture.round)
 
-    fixture.committer().commit(round_id=ROUND_ID, accepted=(ProposalId("p1"),), now=NOW)
+    fixture.committer().commit(round_id=ROUND_ID, draft_id=DraftId("d1"),
+                               accepted=(ProposalId("p1"),), now=NOW)
 
     round_ = fixture.rounds.get(ROUND_ID)
     assert round_.proposed_offered == 1
@@ -406,7 +420,8 @@ def test_commit_records_one_when_the_user_takes_the_proposed_content():
     fixture.rounds.seed(fixture.round)
 
     fixture.committer().commit(
-        round_id=ROUND_ID, accepted=(ProposalId("p1"), ProposalId("p3")), now=NOW
+        round_id=ROUND_ID, draft_id=DraftId("d1"),
+        accepted=(ProposalId("p1"), ProposalId("p3")), now=NOW
     )
 
     round_ = fixture.rounds.get(ROUND_ID)
@@ -419,7 +434,8 @@ def test_commit_bad_round_write_failure_rolls_back_document():
     fixture.add_draft()
     committer = fixture.committer(round_writer=FailingRoundWriter())
     with pytest.raises(RuntimeError):
-        committer.commit(round_id=ROUND_ID, accepted=(ProposalId("p1"),), now=NOW)
+        committer.commit(round_id=ROUND_ID, draft_id=DraftId("d1"),
+                         accepted=(ProposalId("p1"),), now=NOW)
     assert fixture.transaction.rollbacks == 1
     assert fixture.transaction.commits == 0
     assert fixture.documents.get(PROJECT).current_version.version_no == 1
@@ -445,7 +461,8 @@ def test_commit_bad_round_is_not_awaiting_confirm():
     )
     fixture.rounds.seed(stuck)
     with pytest.raises(IllegalStepTransition):
-        fixture.committer().commit(round_id=ROUND_ID, accepted=(ProposalId("p1"),), now=NOW)
+        fixture.committer().commit(round_id=ROUND_ID, draft_id=DraftId("d1"),
+                                   accepted=(ProposalId("p1"),), now=NOW)
     assert fixture.documents.get(PROJECT).current_version.version_no == 1
     assert fixture.transaction.rollbacks == 1
 

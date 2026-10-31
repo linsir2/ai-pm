@@ -30,6 +30,7 @@ def test_round_command_holds_no_business_state():
         "skipped",
         "form_id",
         "accepted",
+        "draft_id",
         # 草案卡上勾中的记忆提议 id（M6）：与 accepted 同类——"本次动作的参数"
         "accepted_memory",
         # 模拟评测（M11）选中的 persona 与功能：同样是"本次动作的参数"

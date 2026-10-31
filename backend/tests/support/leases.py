@@ -38,6 +38,16 @@ def _owner(owner: UserId | None) -> UserId:
     return resolved
 
 
+def prepare_lease_scope(
+    *, owner: UserId | None = None, holder: str = HOLDER
+) -> LeaseScope:
+    """建新控制行前准备持有者；INSERT 后的 acquire/bind 由真实用例执行。"""
+
+    scope = LeaseScope(owner=_owner(owner), holder=holder)
+    set_lease_scope(scope)
+    return scope
+
+
 def bind_round_lease(
     connection: Connection,
     round_id: object,

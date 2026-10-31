@@ -49,10 +49,17 @@ class Embedder(Protocol):
 
 
 class FastEmbedEmbedder:
-    def __init__(self, model_name: str = MODEL_NAME, *, lazy_load: bool = True) -> None:
+    def __init__(
+        self,
+        model_name: str = MODEL_NAME,
+        *,
+        lazy_load: bool = True,
+        local_files_only: bool = False,
+    ) -> None:
         self.dimensions = DIMENSIONS
         self._model = None
         self._model_name, self._lazy = model_name, lazy_load
+        self._local_files_only = local_files_only
         #: 本批里被裁掉的 token 数与条数（**按批聚合后告警一次**，不逐条刷屏）
         self._dropped_tokens = 0
         self._dropped_count = 0
@@ -64,7 +71,8 @@ class FastEmbedEmbedder:
             # 延迟 import：不碰检索就不付 onnxruntime 的启动成本
             from fastembed import TextEmbedding
 
-            self._model = TextEmbedding(model_name=self._model_name)
+            options = {"local_files_only": True} if self._local_files_only else {}
+            self._model = TextEmbedding(model_name=self._model_name, **options)
         return self._model
 
     def embed_many(self, texts):

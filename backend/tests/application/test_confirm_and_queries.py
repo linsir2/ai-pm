@@ -54,6 +54,7 @@ DRAFT_REPLY = json.dumps(
         "proposals": [
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {
                     "zone": "body",
                     "section_id": "s5",
@@ -93,7 +94,10 @@ async def test_confirm_draft_writes_document_and_bumps_version():
     harness = confirmable_harness()
     round_id = await round_awaiting_confirm(harness)
 
-    result = await harness.confirm_draft()(round_id=round_id, accepted=("p01",))
+    result = await harness.confirm_draft()(
+        round_id=round_id, draft_id=str(harness.rounds.get(round_id).draft.draft_id),
+        accepted=("p01",),
+    )
 
     assert result.version.version_no == 2  # v1 是建项目时的空骨架
     round_ = harness.rounds.get(round_id)
@@ -109,11 +113,12 @@ async def test_confirm_draft_writes_document_and_bumps_version():
 async def test_confirm_draft_bad_second_confirm_is_rejected_and_writes_nothing():
     harness = confirmable_harness()
     round_id = await round_awaiting_confirm(harness)
-    await harness.confirm_draft()(round_id=round_id, accepted=("p01",))
+    draft_id = str(harness.rounds.get(round_id).draft.draft_id)
+    await harness.confirm_draft()(round_id=round_id, draft_id=draft_id, accepted=("p01",))
     versions_before = len(harness.documents.get(PROJECT).versions)
 
     with pytest.raises(IllegalStepTransition):
-        await harness.confirm_draft()(round_id=round_id, accepted=("p01",))
+        await harness.confirm_draft()(round_id=round_id, draft_id=draft_id, accepted=("p01",))
 
     assert len(harness.documents.get(PROJECT).versions) == versions_before
 

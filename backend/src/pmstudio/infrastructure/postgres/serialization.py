@@ -620,6 +620,7 @@ def proposal_to_json(proposal: Proposal) -> dict:
         # add 防线（2026-10-29）：机械判定快照随草案落库；**无条件写**——
         # 键存在而值是 None 与键不存在语义不同（后者是旧轮，没有这只手表）。
         "overlap": proposal.overlap,
+        "base_version_no": proposal.base_version_no,
     }
 
 
@@ -640,6 +641,7 @@ def proposal_from_json(data: dict) -> Proposal:
         allow_manual_override=bool(data.get("allow_manual_override", False)),
         # 旧轮没有这把键 → None（先例：allow_manual_override 的可选键缺省）
         overlap=data.get("overlap"),
+        base_version_no=data.get("base_version_no"),
     )
 
 

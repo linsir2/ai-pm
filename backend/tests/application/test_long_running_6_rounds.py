@@ -1,5 +1,5 @@
-"""真跑验证：6 轮完整主闭环，覆盖 6 个不同领域。
-用 Harness（真实容器 + 脚本化模型），跑 6 轮完整迭代后逐项断言。"""
+"""脚本化模型集成：6 轮完整主闭环，覆盖 6 个不同领域。
+用 Harness（真领域与用例 + 测试端口），跑 6 轮完整迭代后逐项断言。"""
 import json
 
 import pytest
@@ -49,14 +49,14 @@ ALL_SEATS = [
 
 
 def _make_claims(raw_spans_texts, slug, seat_ids, section_id="s5"):
-    """构造 claims reply。raw_spans_texts: [(raw_span, text, label), ...]"""
+    """构造 claims reply。raw_spans_texts: [(raw_span, text, label, field), ...]"""
     claims = []
-    for raw_span, text, label in raw_spans_texts:
+    for raw_span, text, label, field in raw_spans_texts:
         c = {"text": text, "raw_span": raw_span, "label": label,
              "zone": "body", "section_id": section_id}
         if slug:
             c["feature_slug"] = slug
-            c["field"] = "one_liner"
+            c["field"] = field
         claims.append(c)
     return json.dumps({
         "basis": "读了全文",
@@ -82,7 +82,7 @@ def _make_integration(slug, proposals):
     return json.dumps({
         "basis": "综合意见",
         "proposals": [
-            {"op": "add",
+            {"op": "add", "entry_id": None,
              "target": {"zone": "body", "section_id": "s5",
                          "feature_slug": slug, "field": field},
              "text": text, "evidence_refs": evidence_refs,
@@ -100,9 +100,9 @@ def harness():
     """构造带 10 个席位的 Harness，每轮用不同的脚本化回复。"""
     # ── R1: 社区团购 ──
     r1_claims = _make_claims(
-        [("社区团购平台", "社区团购平台", "fact"),
-         ("团长负责收单和配送", "团长负责收单", "fact"),
-         ("用户每天拼单下单", "用户每天拼单下单", "need")],
+        [("社区团购平台", "社区团购平台", "fact", "one_liner"),
+         ("团长负责收单和配送", "团长负责收单", "fact", "rules"),
+         ("用户每天拼单下单", "用户每天拼单下单", "need", "rules")],
         "group-buying", ["seat.data_scale", "seat.business_rules"])
     r1_seat_ds = _make_seat_reply([
         ("O1", "judgment", "SKU数量", "初期200-500个SKU", "过多增加损耗"),
@@ -114,15 +114,15 @@ def harness():
     ])
     r1_integration = _make_integration("group-buying", [
         ("one_liner", "社区团购平台", ["E1"]),
-        ("audience", "团长", ["E3"]),
-        ("main_flow", "1. 用户拼单下单；2. 团长收单；3. 团长配送", ["E4"]),
-        ("acceptance", "拼单成功后24小时内完成配送", ["E3"]),
+        ("audience", "团长", ["E2"]),
+        ("main_flow", "1. 用户拼单下单；2. 团长收单；3. 团长配送", ["E2", "E3"]),
+        ("acceptance", "拼单成功后24小时内完成配送", ["E2", "E3"]),
     ])
 
     # ── R2: 导出Excel ──
     r2_claims = _make_claims(
-        [("订单列表要支持导出Excel报表", "订单列表导出Excel", "need"),
-         ("按时间筛选导出范围", "按时间筛选导出", "need")],
+        [("订单列表要支持导出Excel报表", "订单列表导出Excel", "need", "one_liner"),
+         ("按时间筛选导出范围", "按时间筛选导出", "need", "rules")],
         "order-export", ["seat.export_import", "seat.data_scale"])
     r2_seat_ei = _make_seat_reply([
         ("O1", "judgment", "导出格式", "支持xlsx格式", "Excel兼容性好"),
@@ -133,16 +133,16 @@ def harness():
         ("O2", "question", "并发导出", "同时几个用户导出可以？", "影响系统负载"),
     ])
     r2_integration = _make_integration("order-export", [
-        ("one_liner", "订单列表导出Excel报表", ["E6"]),
-        ("rules", "支持按时间范围筛选导出", ["E7"]),
-        ("acceptance", "导出文件在5分钟内生成", ["E6"]),
+        ("one_liner", "订单列表导出Excel报表", ["E7"]),
+        ("rules", "支持按时间范围筛选导出", ["E8"]),
+        ("acceptance", "导出文件在5分钟内生成", ["E7"]),
     ])
 
     # ── R3: 审批流转 ──
     r3_claims = _make_claims(
-        [("订单要走审批流程", "订单走审批流程", "need"),
-         ("主管审批通过才能发货", "主管审批通过才能发货", "need"),
-         ("驳回要能修改重提", "驳回修改重提", "need")],
+        [("订单要走审批流程", "订单走审批流程", "need", "one_liner"),
+         ("主管审批通过才能发货", "主管审批通过才能发货", "need", "rules"),
+         ("驳回要能修改重提", "驳回修改重提", "need", "exceptions")],
         "order-approval", ["seat.state_machine", "seat.business_rules"])
     r3_seat_sm = _make_seat_reply([
         (
@@ -159,16 +159,16 @@ def harness():
         ("O2", "judgment", "重提次数", "驳回后最多重提3次", "避免无限循环"),
     ])
     r3_integration = _make_integration("order-approval", [
-        ("one_liner", "订单审批流程", ["E9"]),
-        ("rules", "主管审批通过后方可发货", ["E10"]),
-        ("exceptions", "驳回后可修改重提，最多3次", ["E11"]),
-        ("main_flow", "1. 提交订单；2. 主管审批；3. 通过发货/驳回重提", ["E9", "E10", "E11"]),
+        ("one_liner", "订单审批流程", ["E12"]),
+        ("rules", "主管审批通过后方可发货", ["E13"]),
+        ("exceptions", "驳回后可修改重提，最多3次", ["E14"]),
+        ("main_flow", "1. 提交订单；2. 主管审批；3. 通过发货/驳回重提", ["E12", "E13", "E14"]),
     ])
 
     # ── R4: 第三方对接 ──
     r4_claims = _make_claims(
-        [("需要对接第三方ERP系统", "对接第三方ERP系统", "need"),
-         ("通过API同步库存和订单数据", "API同步库存和订单", "need")],
+        [("需要对接第三方ERP系统", "对接第三方ERP系统", "need", "one_liner"),
+         ("通过API同步库存和订单数据", "API同步库存和订单", "need", "io")],
         "erp-sync", ["seat.integration", "seat.tech_approach"])
     r4_seat_int = _make_seat_reply([
         ("O1", "judgment", "对接方式", "采用REST API双向同步", "标准化、易维护"),
@@ -179,9 +179,9 @@ def harness():
         ("O2", "question", "对端降级", "ERP不可用时如何降级？", "影响业务连续性"),
     ])
     r4_integration = _make_integration("erp-sync", [
-        ("one_liner", "对接第三方ERP系统", ["E13"]),
-        ("io", "通过API同步库存和订单数据", ["E14"]),
-        ("dependencies", "依赖第三方ERP提供的API文档与测试环境", ["E13"]),
+        ("one_liner", "对接第三方ERP系统", ["E19"]),
+        ("io", "通过API同步库存和订单数据", ["E20"]),
+        ("dependencies", "依赖第三方ERP提供的API文档与测试环境", ["E19"]),
     ])
 
     # ── R5: 数据安全 ──
@@ -212,25 +212,25 @@ def harness():
     r5_integration = json.dumps({
         "basis": "综合意见",
         "proposals": [
-            {"op": "add",
+            {"op": "add", "entry_id": None,
              "target": {"zone": "body", "section_id": "s8", "field": "security"},
              "text": "手机号、身份证号、银行卡号脱敏存储",
-             "evidence_refs": ["E16"], "rationale": "合规要求"},
-            {"op": "add",
+             "evidence_refs": ["E24"], "rationale": "合规要求"},
+            {"op": "add", "entry_id": None,
              "target": {"zone": "body", "section_id": "s5",
                          "feature_slug": "audit-log", "field": "one_liner"},
              "text": "敏感操作审计日志",
-             "evidence_refs": ["E17"], "rationale": "审计需求"},
-            {"op": "add",
+             "evidence_refs": ["E25"], "rationale": "审计需求"},
+            {"op": "add", "entry_id": None,
              "target": {"zone": "body", "section_id": "s5",
                          "feature_slug": "audit-log", "field": "main_flow"},
              "text": "1. 敏感操作触发；2. 记录操作人、时间、内容；3. 写入审计日志",
-             "evidence_refs": ["E17"], "rationale": "审计流程"},
-            {"op": "add",
+             "evidence_refs": ["E25"], "rationale": "审计流程"},
+            {"op": "add", "entry_id": None,
              "target": {"zone": "body", "section_id": "s5",
                          "feature_slug": "audit-log", "field": "acceptance"},
              "text": "审计日志不可篡改，留存6个月以上",
-             "evidence_refs": ["E18"], "rationale": "等保要求"},
+             "evidence_refs": ["E26"], "rationale": "等保要求"},
         ],
         "questions": [],
         "list_items": [],
@@ -239,8 +239,8 @@ def harness():
 
     # ── R6: 消息推送 ──
     r6_claims = _make_claims(
-        [("订单状态变更时要推送消息通知用户", "订单状态变更推送通知", "need"),
-         ("支持短信和站内信两种渠道", "支持短信和站内信", "need")],
+        [("订单状态变更时要推送消息通知用户", "订单状态变更推送通知", "need", "one_liner"),
+         ("支持短信和站内信两种渠道", "支持短信和站内信", "need", "io")],
         "notification", ["seat.notification", "seat.frontend_interaction"])
     r6_seat_not = _make_seat_reply([
         (
@@ -257,10 +257,10 @@ def harness():
         ("O2", "question", "批量已读", "通知是否支持一键已读？", "影响用户体验"),
     ])
     r6_integration = _make_integration("notification", [
-        ("one_liner", "订单状态变更消息推送", ["E20"]),
-        ("rules", "支持短信和站内信两种渠道", ["E21"]),
-        ("main_flow", "1. 状态变更触发；2. 按规则选渠道；3. 发送并记录", ["E20", "E21"]),
-        ("acceptance", "通知发送成功率不低于99.5%", ["E20"]),
+        ("one_liner", "订单状态变更消息推送", ["E31"]),
+        ("rules", "支持短信和站内信两种渠道", ["E32"]),
+        ("main_flow", "1. 状态变更触发；2. 按规则选渠道；3. 发送并记录", ["E31", "E32"]),
+        ("acceptance", "通知发送成功率不低于99.5%", ["E31"]),
     ])
 
     # ── 汇总 ──
@@ -319,6 +319,7 @@ async def _run_full_round(harness, project_id, user_input, seats_for_round):
     if round_view.draft:
         await harness.confirm_draft()(
             round_id=round_id,
+            draft_id=round_view.draft.draft_id,
             accepted=tuple(p.proposal_id for p in round_view.draft.proposals),
         )
     return round_id
@@ -365,6 +366,11 @@ async def test_6_rounds_full_pipeline(harness):
         assert len(round_obj.nominated_seats) > 0, f"R{i+1}: 席位应被提名"
         assert round_obj.seat_reviews, f"R{i+1}: 席位轮应完成"
         assert round_obj.draft is not None, f"R{i+1}: 草案应生成"
+        document = harness.documents.get(pid)
+        written_refs = {ref for block in document.blocks for entry in block.entries
+                        for ref in entry.refs}
+        assert all(claim.eid in written_refs for claim in round_obj.claims), \
+            f"R{i+1}: 每条原输入的真实出处都必须被确认写入的内容消费"
 
         # 确认后文档应多一版
         versions = await harness.get_versions()(project_id=pid)

@@ -187,6 +187,7 @@ def test_a_proposal_backed_only_by_material_is_downgraded_to_proposed():
                 "proposals": [
                     {
                         "op": "add",
+                        "entry_id": None,
                         "target": {
                             "zone": "body",
                             "section_id": "s5",

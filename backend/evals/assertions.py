@@ -240,7 +240,8 @@ def check(assertion: dict, view: RoundView) -> str | None:
         # 单测在 `tests/application/test_assembly.py` 的
         # `test_assemble_creates_feature_subtree_only_when_authorized`。
         proposals = view.draft.proposals if view.draft else ()
-        labeled = [proposal for proposal in proposals if proposal.warning]
+        # warning也承载机械过目；卡片与顶部沿用同一个scope标注识别，不重新判范围。
+        labeled = [p for p in proposals if "不在本轮去处里" in (p.warning or "")]
         outside = [text for text in view.advisories if "不在本轮去处里" in text]
         others = [text for text in view.advisories if "不在本轮去处里" not in text]
         unknown = [text for text in others if not text.startswith("⚠")]

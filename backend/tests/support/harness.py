@@ -926,6 +926,7 @@ class Harness:
 
         return GetRound(
             rounds=self.rounds,
+            documents=self.documents,
             evidence=self.evidences,
             catalog=self.seats,
             tools=self.tools,
@@ -1103,6 +1104,7 @@ class Harness:
                 recover_web_request=self.recover_web_request(),
                 get_round=GetRound(
                     rounds=self.rounds,
+                    documents=self.documents,
                     evidence=self.evidences,
                     catalog=self.seats,
                     tools=self.tools,
@@ -1117,6 +1119,7 @@ class Harness:
 
         return AbandonRound(
             rounds=self.rounds,
+            documents=self.documents,
             round_writer=self.rounds,
             uow=self.uow,
             clock=self.clock,
@@ -1141,6 +1144,7 @@ class Harness:
 
         return AttachResearchSources(
             rounds=self.rounds,
+            documents=self.documents,
             round_writer=self.rounds,
             explorations=self.explorations,
             uow=self.uow,

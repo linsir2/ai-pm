@@ -134,6 +134,7 @@ INTEGRATION_REPLY = json.dumps(
         "proposals": [
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {
                     "zone": "body",
                     "section_id": "s5",
@@ -212,6 +213,7 @@ async def test_integrator_bad_missing_proposal_refs_is_a_packet_error():
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s5"},
                     "text": "x",
                     "origin_type": "derived",
@@ -244,6 +246,7 @@ def over_cap_reply(count: int) -> str:
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s1"},
                     "text": f"第 {index} 条",
                     "origin_type": "derived",
@@ -287,6 +290,7 @@ async def test_integrator_reports_a_non_object_item_instead_of_raising():
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s1"},
                     "text": "正常的一条",
                     "origin_type": "derived",

@@ -3,6 +3,12 @@
 from enum import StrEnum
 
 
+def normalize(text: str) -> str:
+    """同逻辑去处的整段精确判重尺子，保留既有空白与大小写归一。"""
+
+    return " ".join(text.split()).casefold()
+
+
 class BlockKind(StrEnum):
     SECTION = "section"
     FEATURE = "feature"

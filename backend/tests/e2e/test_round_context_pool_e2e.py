@@ -27,6 +27,7 @@ from pmstudio.domain.round.retrieval import RetrievalStage
 from pmstudio.domain.round.round import Round
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.template import standard_template
+from pmstudio.infrastructure.postgres.leases import PgLeaseStore
 from pmstudio.infrastructure.postgres.materials import (
     SqliteFtsRetriever,
     SqliteMaterialStore,
@@ -45,7 +46,7 @@ from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from tests.support.builders import NOW, PROJECT, ROUND_ID, SEAT, make_seat
 from tests.support.doubles import FixedClock, RecordingPublisher
 from tests.support.harness import Harness
-from tests.support.leases import bind_round_lease
+from tests.support.leases import TTL_MS, bind_round_lease, prepare_lease_scope
 from tests.support.postgres import open_direct
 
 INPUT = "导出权限怎么定"
@@ -118,6 +119,7 @@ INTEGRATION_DRAFT_REPLY = json.dumps(
         "proposals": [
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {"zone": "body", "section_id": "s1"},
                 "text": "订单导出用于把订单批量导出成表格。",
                 "origin_type": "derived",
@@ -174,6 +176,7 @@ async def test_the_whole_context_chain_is_real_and_idempotent(tmp_path):
     memory = SqliteMemoryRepository(connection)
     index = SqliteWorkspaceIndex(connection)
     uow = PgUnitOfWork(connection)
+    leases = PgLeaseStore(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT, title="检索投影 e2e", now=NOW, template=standard_template()
     )
@@ -214,11 +217,16 @@ async def test_the_whole_context_chain_is_real_and_idempotent(tmp_path):
         explorations=SqliteExplorationRepository(connection),
         discussions=SqliteDiscussionRepository(connection),
         retriever=SqliteFtsRetriever(connection),
+        leases=leases,
+        lease_ttl_ms=TTL_MS,
     )
+    scope = prepare_lease_scope()
     round_id = await start.create(
         project_id=PROJECT, user_input=INPUT, material_ids=[pinned.material_id]
     )
-    bind_round_lease(connection, round_id)
+    token = scope.ensure_held()
+    assert token.target_id == str(round_id)
+    assert leases.holds(token)
     await start.analyze(round_id=round_id)
 
     opening = SubmitOpening(
@@ -429,6 +437,7 @@ async def test_a_seat_retrieval_issues_a_new_eid_that_reaches_the_prompt(tmp_pat
     memory = SqliteMemoryRepository(connection)
     index = SqliteWorkspaceIndex(connection)
     uow = PgUnitOfWork(connection)
+    leases = PgLeaseStore(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT, title="新号可见 e2e", now=NOW, template=standard_template()
     )
@@ -467,11 +476,16 @@ async def test_a_seat_retrieval_issues_a_new_eid_that_reaches_the_prompt(tmp_pat
         explorations=SqliteExplorationRepository(connection),
         discussions=SqliteDiscussionRepository(connection),
         retriever=SqliteFtsRetriever(connection),
+        leases=leases,
+        lease_ttl_ms=TTL_MS,
     )
+    scope = prepare_lease_scope()
     round_id = await start.create(
         project_id=PROJECT, user_input=INPUT, material_ids=[pinned.material_id]
     )
-    bind_round_lease(connection, round_id)
+    token = scope.ensure_held()
+    assert token.target_id == str(round_id)
+    assert leases.holds(token)
     await start.analyze(round_id=round_id)
 
     before = rounds.get(round_id)

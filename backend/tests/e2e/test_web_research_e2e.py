@@ -28,6 +28,7 @@ from pmstudio.domain.shared.template import standard_template
 from pmstudio.harness.tools.registry import DEFINITIONS_DIR, TomlToolCatalog
 from pmstudio.infrastructure.postgres.digest_repo import SqliteDigestRepository
 from pmstudio.infrastructure.postgres.inspiration_repo import SqliteInspirationRepository
+from pmstudio.infrastructure.postgres.leases import PgLeaseStore
 from pmstudio.infrastructure.postgres.materials import SqliteMaterialStore
 from pmstudio.infrastructure.postgres.observations_repo import SqliteObservationRepository
 from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
@@ -51,7 +52,7 @@ from tests.support.doubles import (
     StaticSeatCatalog,
 )
 from tests.support.harness import Harness
-from tests.support.leases import bind_round_lease
+from tests.support.leases import TTL_MS, prepare_lease_scope
 from tests.support.postgres import open_direct
 
 QUERY_A = "RBAC 权限模型的主流做法"
@@ -92,6 +93,7 @@ INTEGRATION_REPLY = json.dumps(
         "proposals": [
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {"zone": "body", "section_id": "s1"},
                 "text": "订单导出用于把订单批量导出成表格。",
                 "origin_type": "derived",
@@ -117,6 +119,7 @@ async def test_real_pg_executes_across_steps_and_reuses_the_shared_result_number
     memory = SqliteMemoryRepository(connection)
     index = SqliteWorkspaceIndex(connection)
     uow = PgUnitOfWork(connection)
+    leases = PgLeaseStore(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT, title="联网执行 e2e", now=NOW, template=standard_template()
     )
@@ -165,11 +168,16 @@ async def test_real_pg_executes_across_steps_and_reuses_the_shared_result_number
         materials=store,
         explorations=SqliteExplorationRepository(connection),
         discussions=SqliteDiscussionRepository(connection),
+        leases=leases,
+        lease_ttl_ms=TTL_MS,
     )
+    scope = prepare_lease_scope()
     round_id = await start.create(
         project_id=PROJECT, user_input="想做个订单导出的功能"
     )
-    bind_round_lease(connection, round_id)
+    token = scope.ensure_held()
+    assert token.target_id == str(round_id)
+    assert leases.holds(token)
     await start.analyze(round_id=round_id)
     opening_request = rounds.get(round_id).web_requests[0]
 
@@ -317,6 +325,7 @@ async def _prepare_over_limit_round(*, web_search):
     evidences = SqliteEvidenceRepository(connection)
     index = SqliteWorkspaceIndex(connection)
     uow = PgUnitOfWork(connection)
+    leases = PgLeaseStore(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT, title="恢复 e2e", now=NOW, template=standard_template()
     )
@@ -358,11 +367,16 @@ async def _prepare_over_limit_round(*, web_search):
         materials=store,
         explorations=SqliteExplorationRepository(connection),
         discussions=SqliteDiscussionRepository(connection),
+        leases=leases,
+        lease_ttl_ms=TTL_MS,
     )
+    scope = prepare_lease_scope()
     round_id = await start.create(
         project_id=PROJECT, user_input="想做个订单导出的功能"
     )
-    bind_round_lease(connection, round_id)
+    token = scope.ensure_held()
+    assert token.target_id == str(round_id)
+    assert leases.holds(token)
     await start.analyze(round_id=round_id)
     over_id = _seed_over_limit(rounds, round_id)
     opening = SubmitOpening(

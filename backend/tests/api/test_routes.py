@@ -687,7 +687,7 @@ async def test_confirm_response_shape():
             )
         ).json()["round_id"]
         response = await client.post(
-            f"/api/rounds/{round_id}/confirm", json={"accepted": ["p01"]}
+            f"/api/rounds/{round_id}/confirm", json={"draft_id": "d-seen", "accepted": ["p01"]}
         )
 
     assert response.status_code == 409
