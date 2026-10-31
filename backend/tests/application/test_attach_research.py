@@ -11,6 +11,7 @@ import pytest
 from pmstudio.application.context import render_research_sources
 from pmstudio.application.document_window import visible_eids
 from pmstudio.application.errors import RoundNotAttachable, UnknownExploration
+from pmstudio.application.ports import FetchedPage
 from pmstudio.application.use_cases import AttachResearchSources, external_material_text
 from pmstudio.domain.round.research import RoundResearchSource
 from pmstudio.domain.round.round import Round
@@ -22,7 +23,12 @@ from pmstudio.domain.shared.research import (
     RESEARCH_SOURCE_CARD_CHARS,
 )
 from tests.support.builders import NOW, PROJECT, document_with_feature
-from tests.support.doubles import LoopScriptedGateway, RecordingWebSearch, ToolStep
+from tests.support.doubles import (
+    LoopScriptedGateway,
+    RecordingWebFetch,
+    RecordingWebSearch,
+    ToolStep,
+)
 from tests.support.harness import Harness
 
 
@@ -52,7 +58,8 @@ def _page(url: str, text: str):
 def _synthesis(count: int) -> str:
     return json.dumps(
         {
-            "basis": "依据来源",
+            "answer": "这几份来源共同说明了导出上限的现状与边界。",
+            "answer_refs": [f"S{index}" for index in range(1, count + 1)],
             "findings": [
                 {"text": f"结论 {index}", "refs": [f"S{index}"]}
                 for index in range(1, count + 1)
@@ -87,6 +94,17 @@ def _harness(count: int = 2) -> Harness:
         web_search=RecordingWebSearch(
             returns=tuple(
                 _page(f"https://example.com/{index}", f"第 {index} 份正文")
+                for index in range(1, count + 1)
+            )
+        ),
+        fetcher=RecordingWebFetch(
+            returns=tuple(
+                FetchedPage(
+                    content=f"<html><body><p>第 {index} 份正文</p></body></html>".encode(),
+                    media_type="text/html",
+                    final_url=f"https://example.com/{index}",
+                    title=f"网页 https://example.com/{index}",
+                )
                 for index in range(1, count + 1)
             )
         ),
@@ -192,6 +210,8 @@ async def test_a_research_from_another_project_is_404() -> None:
     )
     other.complete_research(
         ResearchReport(
+            answer="别的项目的来源给出的结论。",
+            answer_refs=(EvidenceId("E9"),),
             findings=(
                 ResearchFinding(
                     finding_id="F1", statement="结论", refs=(EvidenceId("E9"),)

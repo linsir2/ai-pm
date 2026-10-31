@@ -6,9 +6,15 @@
 import json
 
 from pmstudio.api.app import create_app
+from pmstudio.application.ports import FetchedPage
 from tests.support.api_client import async_client
 from tests.support.builders import PROJECT
-from tests.support.doubles import LoopScriptedGateway, RecordingWebSearch, ToolStep
+from tests.support.doubles import (
+    LoopScriptedGateway,
+    RecordingWebFetch,
+    RecordingWebSearch,
+    ToolStep,
+)
 from tests.support.harness import Harness
 
 
@@ -63,7 +69,8 @@ def _app(*, synthesis: str | None = None, returns=None):  # type: ignore[no-unty
             "research": synthesis
             or json.dumps(
                 {
-                    "basis": "依据 S1",
+                    "answer": "同类产品多把批量导出上限设在 60 秒；超大文件需要分片。",
+                    "answer_refs": ["S1"],
                     "findings": [
                         {"text": "主流产品 60 秒上限", "refs": ["S1"]}
                     ],
@@ -79,6 +86,18 @@ def _app(*, synthesis: str | None = None, returns=None):  # type: ignore[no-unty
         gateway=gateway,
         web_search=RecordingWebSearch(
             returns=returns if returns is not None else (_page(),)
+        ),
+        fetcher=RecordingWebFetch(
+            returns=(
+                FetchedPage(
+                    content=(
+                        "<html><body><p>同类产品默认 60 秒上限。</p></body></html>"
+                    ).encode(),
+                    media_type="text/html",
+                    final_url="https://example.com/a",
+                    title="导出上限白皮书",
+                ),
+            )
         ),
     )
     harness.seed_project()
@@ -100,6 +119,8 @@ async def test_research_returns_the_final_run_with_sources_and_findings() -> Non
         assert body["candidates"] == []
         assert body["research"]["sources"][0]["url"] == "https://example.com/a"
         assert body["research"]["sources"][0]["eid"] == "E1"
+        assert body["research"]["answer"].startswith("同类产品多把批量导出上限")
+        assert body["research"]["answer_refs"] == ["E1"]
         assert body["research"]["findings"][0]["refs"] == ["E1"]
         assert body["research"]["open_questions"] == ["要不要断点续传？"]
 

@@ -10,6 +10,7 @@ from pmstudio.application.agents.inquirer import Inquirer
 from pmstudio.application.agents.integrator import Integrator
 from pmstudio.application.agents.memory_curator import MemoryCurator
 from pmstudio.application.agents.persona_simulator import PersonaSimulatorAgent
+from pmstudio.application.agents.researcher import ResearchSynthesizer
 from pmstudio.application.agents.seat import SeatReviewer
 from pmstudio.application.agents.sim_inquirer import SimInquiryAgent
 from pmstudio.harness.errors import ModelCallFailed
@@ -132,6 +133,7 @@ def test_every_prompt_placeholder_is_declared_by_its_agent():
         "memory_curator": MemoryCurator.definition.slots,
         "discussion_say": Discusser.definition.slots,
         "discussion_cards": Discusser.cards_definition.slots,
+        "research_synthesis": ResearchSynthesizer.definition.slots,
     }
     for name, slots in expected.items():
         text = (PROMPTS / f"{name}.md").read_text(encoding="utf-8")

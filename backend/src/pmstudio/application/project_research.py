@@ -54,6 +54,7 @@ from pmstudio.domain.exploration.exploration import (
     ScopeKind,
 )
 from pmstudio.domain.exploration.research import (
+    MAX_RESEARCH_ANSWER_CHARS,
     MAX_RESEARCH_SOURCES,
     ResearchFinding,
     ResearchReport,
@@ -72,8 +73,9 @@ from pmstudio.domain.provenance.evidence import EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.shared.errors import DomainError, ShapeError
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
-from pmstudio.domain.shared.ids import ExplorationId, ProjectId, UserId
-from pmstudio.harness.errors import ModelCallFailed, PacketParseError
+from pmstudio.domain.shared.ids import EvidenceId, ExplorationId, ProjectId, UserId
+from pmstudio.domain.shared.writing import normalize
+from pmstudio.harness.errors import ModelCallFailed, PacketParseError, ToolCallFailed
 from pmstudio.harness.events import EventPublisher
 from pmstudio.harness.model.agentic import (
     AGENTIC_MAX_TURNS,
@@ -81,6 +83,7 @@ from pmstudio.harness.model.agentic import (
     run_tool_loop,
 )
 from pmstudio.harness.model.contracts import ModelGateway, ModelMessage, PromptLibrary
+from pmstudio.harness.tools.spec import ToolCall
 
 #: 一趟研究的**总时限**（秒）。单次模型超时是 150s，最坏 8 次 = 20 分钟——
 #: 没有总闸时一个卡住的供应商会把 worker 占满，且失败原因只会是"进程可能重启过"
@@ -90,6 +93,15 @@ RESEARCH_TIMEOUT_SECONDS = 600
 #: 综合最多两次（与 `MAX_INQUIRY_ATTEMPTS` / `MAX_INTEGRATION_ATTEMPTS` 同一个口径：
 #: 第一次严格、第二次带上"上一次错在哪"重装，两次都不过就判这一趟失败）。
 MAX_RESEARCH_ATTEMPTS = 2
+
+#: 模型整趟只搜不读时，代码按来源顺序补读几个（失败就换下一个）。
+MAX_FALLBACK_READS = 3
+
+#: 循环最后那段自然语言 brief 进综合时的字数上限（它是现场记录，不是报告）。
+MAX_RESEARCH_BRIEF_CHARS = 2000
+
+#: 工具名由 `research_loop.md` 与 `ResearchToolbox.specs()` 冻结。
+_FETCH_TOOL = "fetch_url"
 
 #: 结论里引用来源的写法：`S1` / `s1` / 全角。**只认这一个形状**——与 `evidence_refs.EID`
 #: 同一套归一化思路（那边认 E，这边认 S），不新增第三种编号。
@@ -120,7 +132,7 @@ def research_material_key(url: str, content: bytes) -> str:
 
 
 def resolve_source_refs(
-    refs: Sequence[str], *, count: int, lenient: bool
+    refs: Sequence[str], *, count: int, lenient: bool, what: str = "结论"
 ) -> tuple[int, ...]:
     """把 `S1..S5` 归一成 1 起的序号（去重、保序）。
 
@@ -142,7 +154,7 @@ def resolve_source_refs(
             resolved.append(index)
     if unknown:
         raise ShapeError(
-            "结论引用了没有给出的来源：" + "、".join(unknown),
+            f"{what}引用了没有给出的来源：" + "、".join(unknown),
             refs=list(unknown),
             count=count,
         )
@@ -241,7 +253,7 @@ class StartWebResearch:
         return StartedExploration(exploration_id=exploration_id, token=token)
 
     async def execute(self, exploration_id: ExplorationId) -> ExplorationView:
-        """跑完一趟：工具循环（UoW 外）→ 综合（UoW 外）→ 一个 UoW 落库。"""
+        """跑完一趟：工具循环 → 兜底补读 → 综合（全在一个总 deadline 内）→ 一个 UoW 落库。"""
 
         exploration = self._explorations.get(exploration_id)
         if exploration.status is not ExplorationStatus.RUNNING:
@@ -254,7 +266,10 @@ class StartWebResearch:
         first_message = self._prompts.render(
             "research_loop", topic=topic, source_cap=str(MAX_RESEARCH_SOURCES)
         )
+        notes: list[str] = []
         try:
+            # **一个** deadline 包住循环 + 兜底补读 + 综合：三段共享同一份 600 秒，
+            # 而不是每段各拿一份（那会让最坏耗时变成两倍以上）。
             async with asyncio.timeout(RESEARCH_TIMEOUT_SECONDS):
                 loop = await run_tool_loop(
                     gateway=self._gateway,
@@ -264,35 +279,42 @@ class StartWebResearch:
                     purpose="research_loop",
                     metadata={"exploration_id": str(exploration_id)},
                 )
-        except TimeoutError:
-            return self._fail(
-                exploration_id,
-                f"研究超过总时限（{RESEARCH_TIMEOUT_SECONDS} 秒）",
-            )
-        except ModelCallFailed as error:
-            return self._fail(exploration_id, f"模型调用失败：{error.message}")
-
-        hits = toolbox.sources
-        if not hits:
-            return self._fail(
-                exploration_id, "这一趟没有取到任何来源（搜索无结果或全部抓取失败）"
-            )
-        notes = [f"工具调用 {toolbox.attempts} 次"]
-        if loop.hit_turn_limit:
-            notes.append(
-                f"工具循环到了上限（{MAX_TOOL_CALLS_PER_LOOP} 次 / {AGENTIC_MAX_TURNS} 轮），"
-                "后面几轮没跑"
-            )
-        if toolbox.overflowed:
-            notes.append(
-                f"另有 {toolbox.overflowed} 条搜索结果未收"
-                f"（已达来源上限 {MAX_RESEARCH_SOURCES} 条）"
-            )
-
-        try:
-            async with asyncio.timeout(RESEARCH_TIMEOUT_SECONDS):
+                notes = []
+                if loop.hit_turn_limit:
+                    notes.append(
+                        f"工具循环到了上限（{MAX_TOOL_CALLS_PER_LOOP} 次 / "
+                        f"{AGENTIC_MAX_TURNS} 轮），后面几轮没跑"
+                    )
+                if toolbox.overflowed:
+                    notes.append(
+                        f"另有 {toolbox.overflowed} 条搜索结果未收"
+                        f"（已达来源上限 {MAX_RESEARCH_SOURCES} 条）"
+                    )
+                fallback = (0, 0, 0)
+                if toolbox.read_count == 0 and toolbox.sources:
+                    fallback = await self._read_sources(toolbox, notes)
+                # 放在补读之后：兜底抓取也是真的工具调用，不能漏记（照实说）。
+                notes.insert(0, f"工具调用 {toolbox.attempts} 次")
+                if toolbox.read_count == 0:
+                    if not toolbox.sources:
+                        return self._fail(
+                            exploration_id,
+                            "这一趟没有取到任何来源（搜索无结果或全部抓取失败）",
+                        )
+                    success, failed, untried = fallback
+                    return self._fail(
+                        exploration_id,
+                        f"这一趟没有读到任何来源的正文（搜索到 {len(toolbox.sources)} 条；"
+                        f"系统补读成功 {success} 篇 / 失败 {failed} 篇 / "
+                        f"剩余未试 {untried} 篇）",
+                    )
+                hits = toolbox.read_sources or toolbox.sources
                 outcome = await self._synthesize(
-                    exploration_id, topic=topic, hits=hits, notes=notes
+                    exploration_id,
+                    topic=topic,
+                    hits=hits,
+                    brief=loop.text[:MAX_RESEARCH_BRIEF_CHARS],
+                    notes=notes,
                 )
         except TimeoutError:
             return self._fail(
@@ -310,6 +332,61 @@ class StartWebResearch:
         self._record(exploration_id, hits=hits, outcome=outcome, notes=notes)
         return exploration_view(self._explorations.get(exploration_id))
 
+    async def _read_sources(
+        self, toolbox: ResearchToolbox, notes: list[str]
+    ) -> tuple[int, int, int]:
+        """模型整趟没读正文时，按来源顺序确定性补读。
+
+        **持续尝试到成功读到 `MAX_FALLBACK_READS` 篇或候选耗尽**——不是只试前 3 个：
+        前 3 个抓取失败、第 4 个可读时，第 4 个必须继续试。
+        每一条失败都留下 URL 与原因；返回 `(成功, 失败, 剩余未试)`。
+        """
+
+        read_urls = {hit.url for hit in toolbox.read_sources}
+        candidates = [
+            hit.url for hit in toolbox.sources if hit.url and hit.url not in read_urls
+        ]
+        if not candidates:
+            return (0, 0, 0)
+        spec = next(
+            (item for item in toolbox.specs() if item.name == _FETCH_TOOL), None
+        )
+        if spec is None:
+            return (0, 0, len(candidates))
+        success = 0
+        failed = 0
+        attempted = 0
+        failures: list[str] = []
+        for position, url in enumerate(candidates, start=1):
+            if success >= MAX_FALLBACK_READS:
+                break
+            attempted += 1
+            before = toolbox.read_count
+            try:
+                await toolbox.invoke(
+                    spec,
+                    ToolCall(
+                        call_id=f"fallback-{position}",
+                        name=spec.name,
+                        arguments={"url": url},
+                    ),
+                )
+            except ToolCallFailed as error:
+                failed += 1
+                # 工具失败文案本身带 URL 与原因（`抓取失败：url（...）`），照原样留。
+                failures.append(error.message)
+                continue
+            if toolbox.read_count > before:
+                success += 1
+        untried = len(candidates) - attempted
+        notes.append(
+            f"模型未抓取、系统补读：成功 {success} 篇 / 失败 {failed} 篇 / "
+            f"剩余未试 {untried} 篇"
+        )
+        for failure in failures:
+            notes.append(f"补读失败：{failure}")
+        return (success, failed, untried)
+
     # —— 综合 ——
 
     async def _synthesize(
@@ -318,6 +395,7 @@ class StartWebResearch:
         *,
         topic: str,
         hits: Sequence[ResearchHit],
+        brief: str,
         notes: list[str],
     ) -> schemas.ResearchPacket | None:
         """两次机会：第一次严格、第二次带上次的错重装。仍不过返回 None。
@@ -335,10 +413,31 @@ class StartWebResearch:
                     topic=topic,
                     sources=sources_for_prompt(hits),
                     tool_notes="；".join(notes),
+                    brief=brief,
                     exploration_id=str(exploration_id),
                     validation_error=repair,
                     packet_slot=f"a{attempt}",
                 )
+                if not outcome.answer.strip():
+                    raise ShapeError("answer 不能为空", field="answer")
+                if len(outcome.answer) > MAX_RESEARCH_ANSWER_CHARS:
+                    raise ShapeError(
+                        f"answer 最多 {MAX_RESEARCH_ANSWER_CHARS} 字",
+                        field="answer",
+                        limit=MAX_RESEARCH_ANSWER_CHARS,
+                    )
+                if normalize(outcome.answer) == normalize(topic):
+                    raise ShapeError("answer 不要复述主题", field="answer")
+                resolve_source_refs(
+                    outcome.answer_refs, count=len(hits), lenient=False, what="答案"
+                )
+                for index, question in enumerate(outcome.open_questions, start=1):
+                    if normalize(question) == normalize(topic):
+                        raise ShapeError(
+                            f"open_questions 第 {index} 条不要复述主题",
+                            field="open_questions",
+                            index=index,
+                        )
                 for finding in outcome.findings:
                     if not finding.text.strip():
                         raise ShapeError("结论必须写清内容", finding_id=finding.text)
@@ -381,6 +480,8 @@ class StartWebResearch:
                 report = ResearchReport(
                     findings=findings,
                     sources=sources,
+                    answer=outcome.answer,
+                    answer_refs=_map_refs(outcome.answer_refs, sources=sources),
                     open_questions=tuple(outcome.open_questions),
                     notes=tuple(notes),
                 )
@@ -442,6 +543,18 @@ class StartWebResearch:
             self._exploration_writer.save(stored)
         publish_exploration(self._events, self._clock, stored)
         return exploration_view(stored)
+
+
+def _map_refs(
+    refs: Sequence[str], *, sources: tuple[ResearchSource, ...]
+) -> tuple[EvidenceId, ...]:
+    """`S` 号 → 账本编号（答案的依据）。严格档：对不上号就是形状错。"""
+
+    indexes = resolve_source_refs(
+        refs, count=len(sources), lenient=False, what="答案"
+    )
+    by_index = {index: source for index, source in enumerate(sources, start=1)}
+    return tuple(by_index[index].eid for index in indexes)
 
 
 def _map_findings(

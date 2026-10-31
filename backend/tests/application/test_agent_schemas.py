@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from pmstudio.application.agents import schemas
+from pmstudio.domain.shared.research import MAX_RESEARCH_ANSWER_CHARS
 from pmstudio.harness.errors import PacketParseError
 
 
@@ -53,6 +54,55 @@ def test_inquiry_packet_shape_caps_and_falsifiability_fields():
     )
     assert "invented" in hypothesis["properties"]["grounding"]["enum"]
     assert "next_step" in schema["$defs"]["BlindSpotDraft"]["required"]
+
+
+def test_research_packet_requires_an_answer_and_answer_refs():
+    """S4：研究综合必须交回答案与来源序号；缺一个就整包重装。"""
+
+    schema = schemas.ResearchPacket.model_json_schema()
+    assert set(schema["required"]) == {"answer", "answer_refs"}
+    assert schema["properties"]["answer"]["minLength"] == 1
+    assert schema["properties"]["answer_refs"]["minItems"] == 1
+
+    for payload in (
+        {"findings": [], "open_questions": []},
+        {"answer": "", "answer_refs": ["S1"], "findings": [], "open_questions": []},
+        {"answer": "有答案", "answer_refs": [], "findings": [], "open_questions": []},
+    ):
+        with pytest.raises(PacketParseError):
+            schemas.parse_packet_lenient(
+                json.dumps(payload, ensure_ascii=False),
+                schemas.ResearchPacket,
+                purpose="research",
+            )
+
+
+def test_research_packet_answer_is_capped_to_the_shared_limit() -> None:
+    """S4/B2：1200 上限要写进 schema，模型才看得见；报错也不许回显答案原句。"""
+
+    schema = schemas.ResearchPacket.model_json_schema()
+    assert schema["properties"]["answer"]["maxLength"] == MAX_RESEARCH_ANSWER_CHARS
+
+    too_long = "字" * (MAX_RESEARCH_ANSWER_CHARS + 1)
+    with pytest.raises(PacketParseError) as caught:
+        schemas.parse_packet_lenient(
+            json.dumps(
+                {
+                    "answer": too_long,
+                    "answer_refs": ["S1"],
+                    "findings": [],
+                    "open_questions": [],
+                },
+                ensure_ascii=False,
+            ),
+            schemas.ResearchPacket,
+            purpose="research",
+        )
+
+    assert caught.value.details["errors"][0]["loc"] == ("answer",)
+    assert too_long not in json.dumps(
+        caught.value.details, ensure_ascii=False, default=str
+    )
 
 
 def test_parse_packet_returns_model_instance():

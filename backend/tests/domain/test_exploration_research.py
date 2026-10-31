@@ -17,6 +17,7 @@ from pmstudio.domain.exploration.exploration import (
 )
 from pmstudio.domain.exploration.item import Grounding, Hypothesis
 from pmstudio.domain.exploration.research import (
+    MAX_RESEARCH_ANSWER_CHARS,
     MAX_RESEARCH_FINDINGS,
     MAX_RESEARCH_OPEN_QUESTIONS,
     MAX_RESEARCH_SOURCES,
@@ -63,6 +64,8 @@ def finding(**over: object) -> ResearchFinding:
 
 def report(**over: object) -> ResearchReport:
     fields: dict[str, object] = {
+        "answer": "同类产品多把批量导出上限设在 60 秒；超大文件需要分片。",
+        "answer_refs": (EvidenceId("E7"),),
         "findings": (finding(),),
         "sources": (source(),),
         "open_questions": ("是否支持断点续传？",),
@@ -129,6 +132,22 @@ def test_empty_findings_are_legal() -> None:
     """搜到来源但没结论，是合法结果（不是失败）；零来源才由用例判失败。"""
 
     assert report(findings=()).findings == ()
+
+
+def test_report_requires_a_nonempty_capped_answer() -> None:
+    with pytest.raises(ShapeError):
+        report(answer="   ")
+    with pytest.raises(ShapeError):
+        report(answer="字" * (MAX_RESEARCH_ANSWER_CHARS + 1))
+    assert report(answer="字" * MAX_RESEARCH_ANSWER_CHARS).answer
+
+
+def test_report_requires_answer_refs_that_exist_in_sources() -> None:
+    with pytest.raises(ShapeError):
+        report(answer_refs=())
+    with pytest.raises(ShapeError):
+        report(answer_refs=(EvidenceId("E99"),))
+    assert report(answer_refs=(EvidenceId("E7"),)).answer_refs == (EvidenceId("E7"),)
 
 
 def test_report_rejects_unknown_refs_and_duplicates() -> None:
@@ -293,6 +312,8 @@ def test_payload_round_trips_research() -> None:
 
     payload = ser.exploration_to_payload(exploration)
     assert payload["research"]["sources"][0]["url"] == "https://example.com/export"
+    assert payload["research"]["answer"].startswith("同类产品多把批量导出上限")
+    assert payload["research"]["answer_refs"] == ["E7"]
 
     back = ser.exploration_from_payload(
         payload,
@@ -304,8 +325,98 @@ def test_payload_round_trips_research() -> None:
     )
     assert back.scope.kind is ScopeKind.TOPIC
     assert back.research is not None
+    assert back.research.answer.startswith("同类产品多把批量导出上限")
+    assert str(back.research.answer_refs[0]) == "E7"
     assert str(back.research.findings[0].refs[0]) == "E7"
     assert back.research.sources[0].excerpt == "同类产品默认 60 秒上限。"
+
+
+def test_legacy_payload_without_answer_is_rebuilt_from_the_first_finding() -> None:
+    """S4 之前落库的报告没有 answer：读回时按第一条 finding 重建，不丢旧报告。"""
+
+    exploration = research_exploration()
+    exploration.complete_research(report())
+    payload = ser.exploration_to_payload(exploration)
+    payload["research"].pop("answer")
+    payload["research"].pop("answer_refs")
+
+    back = ser.exploration_from_payload(
+        payload,
+        exploration_id=XID,
+        project_id=PID,
+        kind=ExplorationKind.WEB_RESEARCH,
+        status=ExplorationStatus.DONE,
+        created_at=NOW,
+    )
+
+    assert back.research is not None
+    assert back.research.answer == "主流同类产品的导出上限是 60 秒"
+    assert back.research.answer_refs == (EvidenceId("E7"),)
+
+
+def test_legacy_payload_without_findings_is_rebuilt_from_the_first_source() -> None:
+    exploration = research_exploration()
+    exploration.complete_research(report())
+    payload = ser.exploration_to_payload(exploration)
+    payload["research"].pop("answer")
+    payload["research"].pop("answer_refs")
+    payload["research"]["findings"] = []
+
+    back = ser.exploration_from_payload(
+        payload,
+        exploration_id=XID,
+        project_id=PID,
+        kind=ExplorationKind.WEB_RESEARCH,
+        status=ExplorationStatus.DONE,
+        created_at=NOW,
+    )
+
+    assert back.research is not None
+    assert back.research.answer == "同类产品默认 60 秒上限。"
+    assert back.research.answer_refs == (EvidenceId("E7"),)
+
+
+def test_legacy_payload_without_answer_findings_or_sources_reads_as_no_report() -> None:
+    """三样都没有时无法重建答案，只能按"没有报告"读回（不是编一段）。"""
+
+    exploration = research_exploration()
+    payload = ser.exploration_to_payload(exploration)
+    payload["research"] = {
+        "findings": [],
+        "sources": [],
+        "open_questions": [],
+        "notes": [],
+    }
+
+    back = ser.exploration_from_payload(
+        payload,
+        exploration_id=XID,
+        project_id=PID,
+        kind=ExplorationKind.WEB_RESEARCH,
+        status=ExplorationStatus.RUNNING,
+        created_at=NOW,
+    )
+
+    assert back.research is None
+
+
+def test_explicit_empty_answer_is_still_a_bad_row() -> None:
+    """回读兼容只在**键缺失**时生效：新写入的空答案仍然算坏数据。"""
+
+    exploration = research_exploration()
+    exploration.complete_research(report())
+    payload = ser.exploration_to_payload(exploration)
+    payload["research"]["answer"] = ""
+
+    with pytest.raises(ValueError):
+        ser.exploration_from_payload(
+            payload,
+            exploration_id=XID,
+            project_id=PID,
+            kind=ExplorationKind.WEB_RESEARCH,
+            status=ExplorationStatus.DONE,
+            created_at=NOW,
+        )
 
 
 def test_corrupt_research_payload_raises_value_error_for_the_bad_row_net() -> None:

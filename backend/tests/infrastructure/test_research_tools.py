@@ -181,16 +181,73 @@ async def test_source_cap_is_reported_not_silently_truncated() -> None:
     assert "另有" in text and "未收" in text
 
 
-async def test_fetch_after_cap_fails_and_says_why() -> None:
+async def test_fetch_after_cap_evicts_the_oldest_unread_search_hit() -> None:
     results = tuple(
         draft(f"https://example.com/{index}", title=f"T{index}") for index in range(5)
     )
-    box = toolbox(search=RecordingWebSearch(returns=results))
+    extra = "https://example.com/extra"
+    box = toolbox(
+        search=RecordingWebSearch(returns=results),
+        fetcher=RecordingWebFetch(returns=(page(extra),)),
+    )
     await dispatch(box, "web_search", query="导出上限")
 
+    await dispatch(box, "fetch_url", url=extra)
+
+    assert len(box.sources) == MAX_RESEARCH_SOURCES
+    assert [hit.url for hit in box.sources] == [
+        "https://example.com/1",
+        "https://example.com/2",
+        "https://example.com/3",
+        "https://example.com/4",
+        extra,
+    ]
+    assert box.read_count == 1
+    assert [hit.url for hit in box.read_sources] == [extra]
+
+
+async def test_fetch_when_every_source_is_already_read_says_so() -> None:
+    urls = tuple(f"https://example.com/{index}" for index in range(MAX_RESEARCH_SOURCES))
+    box = toolbox(
+        fetcher=RecordingWebFetch(returns=tuple(page(url) for url in urls)),
+    )
+    for url in urls:
+        await dispatch(box, "fetch_url", url=url)
+
+    assert box.read_count == MAX_RESEARCH_SOURCES
     with pytest.raises(ToolCallFailed) as caught:
         await dispatch(box, "fetch_url", url="https://example.com/extra")
-    assert str(MAX_RESEARCH_SOURCES) in caught.value.message
+    assert "都已读" in caught.value.message
+
+
+async def test_a_redirect_to_an_already_read_url_does_not_add_a_second_card() -> None:
+    final = "https://example.com/final"
+    start = "https://example.com/start"
+    box = toolbox(
+        fetcher=RecordingWebFetch(returns=(page(final), page(final))),
+    )
+
+    await dispatch(box, "fetch_url", url=final)
+    again = await dispatch(box, "fetch_url", url=start)
+
+    assert len(box.sources) == 1
+    assert box.read_count == 1
+    assert box.sources[0].url == final
+    assert "已经收过" in again
+
+
+async def test_read_sources_follow_fetch_order() -> None:
+    first = "https://example.com/first"
+    second = "https://example.com/second"
+    box = toolbox(
+        fetcher=RecordingWebFetch(returns=(page(second), page(first))),
+    )
+
+    await dispatch(box, "fetch_url", url=second)
+    await dispatch(box, "fetch_url", url=first)
+
+    assert [hit.url for hit in box.read_sources] == [second, first]
+    assert box.read_count == 2
 
 
 async def test_fetching_the_same_url_twice_does_not_duplicate() -> None:

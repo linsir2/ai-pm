@@ -2315,6 +2315,8 @@ class ResearchSourceView:
 
 @dataclass(frozen=True, slots=True)
 class ResearchView:
+    answer: str
+    answer_refs: tuple[str, ...]
     findings: tuple[ResearchFindingView, ...]
     sources: tuple[ResearchSourceView, ...]
     open_questions: tuple[str, ...]
@@ -2376,6 +2378,10 @@ def exploration_view(exploration: Exploration) -> ExplorationView:
             None
             if exploration.research is None
             else ResearchView(
+                answer=exploration.research.answer,
+                answer_refs=tuple(
+                    str(ref) for ref in exploration.research.answer_refs
+                ),
                 findings=tuple(
                     ResearchFindingView(
                         finding_id=item.finding_id,

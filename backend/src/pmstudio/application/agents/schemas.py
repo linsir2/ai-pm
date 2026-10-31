@@ -30,6 +30,7 @@ from pmstudio.domain.exploration.research import (
 )
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import FeatureSlug, SectionId
+from pmstudio.domain.shared.research import MAX_RESEARCH_ANSWER_CHARS
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.harness.model.normalize import (
@@ -229,12 +230,27 @@ class ResearchFindingDraft(BaseModel):
 
 
 class ResearchPacket(BaseModel):
-    #: 研究综合回包（P3b-1）：结论 + 开放问题。**结论可以空**（只搜到来源、没下判断是合法结果）；
+    #: 研究综合回包（P3b-1 / S4）：**答案 + 依据 + 结论 + 开放问题**。
+    #:
+    #: `answer` 是这一趟必须交回的东西：只搜到来源、下不了判断也必须说明"为什么下不了"，
+    #: 而不是交一份空报告。`findings` 仍可为空（证据点可以不拆）。
     #: 零来源不是报文能表达的事，由用例判失败。
     #:
-    #: 没有 `basis`：结论自带的 `refs` 就是依据，"我读了哪几张卡"这句话没有消费者
-    #: （界面显示结论 + 引用，不显示一句总结），多一个必填字段只是多一种失败模式。
+    #: 没有 `basis`：`answer_refs` 与 conclusion 的 `refs` 就是依据，
+    #: "我读了哪几张卡"这句话没有消费者，多一个必填字段只是多一种失败模式。
 
+    answer: str = Field(
+        min_length=1,
+        max_length=MAX_RESEARCH_ANSWER_CHARS,
+        description=(
+            "这一趟的结论（一段话）：给出取舍、边界与依据；"
+            "不许把研究主题再问一遍，也不许只罗列来源摘要"
+        ),
+    )
+    answer_refs: list[str] = Field(
+        min_length=1,
+        description="结论依据的来源序号（S1、S2…），至少一个；只写卡前面的 S 号",
+    )
     findings: list[ResearchFindingDraft] = Field(
         default_factory=list, max_length=MAX_RESEARCH_FINDINGS
     )

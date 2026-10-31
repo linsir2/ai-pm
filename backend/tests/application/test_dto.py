@@ -1515,6 +1515,8 @@ def test_exploration_view_projects_the_research_report():
     )
     research.complete_research(
         ResearchReport(
+            answer="同类产品多把批量导出上限设在 60 秒；超大文件需要分片。",
+            answer_refs=(EvidenceId("E7"),),
             findings=(
                 ResearchFinding(
                     finding_id="F1",
@@ -1538,6 +1540,8 @@ def test_exploration_view_projects_the_research_report():
     view = dto.exploration_view(research)
     assert view.candidates == ()
     assert view.research is not None
+    assert view.research.answer.startswith("同类产品多把批量导出上限")
+    assert view.research.answer_refs == ("E7",)
     assert view.research.sources[0].eid == "E7"
     assert view.research.sources[0].url == "https://example.com/a"
     assert view.research.findings[0].refs == ("E7",)

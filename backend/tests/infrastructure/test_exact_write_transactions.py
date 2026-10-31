@@ -594,7 +594,12 @@ def test_project_research_locks_control_before_ledger_without_document_lock(db, 
             clock=FixedClock(NOW), ids=SeqIds(), events=RecordingPublisher(),
             gateway=None, prompts=None, synthesizer=None, toolbox=None,
         )
-        return use_case._record(eid, hits=(hit,), outcome=ResearchPacket(), notes=[])
+        return use_case._record(
+            eid,
+            hits=(hit,),
+            outcome=ResearchPacket(answer="测试结论", answer_refs=["S1"]),
+            notes=[],
+        )
 
     b = workers(record, table="evidence_ledgers")
     assert leased.wait(WAIT)
