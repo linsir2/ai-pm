@@ -91,7 +91,8 @@ async def test_resume_after_process_restart_without_redoing_finished_seats(tmp_p
             if proposal["origin_type"] != "proposed"
         ]
         confirmed = await client.post(
-            f"/api/rounds/{round_id}/confirm", json={"accepted": accepted}
+            f"/api/rounds/{round_id}/confirm",
+            json={"draft_id": body["draft"]["draft_id"], "accepted": accepted}
         )
         assert confirmed.status_code == 200, confirmed.text
         assert confirmed.json()["version_no"] == 2

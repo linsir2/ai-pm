@@ -7,7 +7,7 @@
 import re
 
 from pmstudio.application.dto import RoundView
-from pmstudio.application.sim_inquiry import SIM_NUMERIC
+from pmstudio.domain.shared.numeric_assertion import find_numeric_assertion
 
 EID = re.compile(r"^E\d+$")
 
@@ -240,7 +240,8 @@ def check(assertion: dict, view: RoundView) -> str | None:
         # 单测在 `tests/application/test_assembly.py` 的
         # `test_assemble_creates_feature_subtree_only_when_authorized`。
         proposals = view.draft.proposals if view.draft else ()
-        labeled = [proposal for proposal in proposals if proposal.warning]
+        # warning也承载机械过目；卡片与顶部沿用同一个scope标注识别，不重新判范围。
+        labeled = [p for p in proposals if "不在本轮去处里" in (p.warning or "")]
         outside = [text for text in view.advisories if "不在本轮去处里" in text]
         others = [text for text in view.advisories if "不在本轮去处里" not in text]
         unknown = [text for text in others if not text.startswith("⚠")]
@@ -297,8 +298,8 @@ def check(assertion: dict, view: RoundView) -> str | None:
         return None if not bad else f"这些模拟条目没写怎么验证：{'、'.join(bad)}"
 
     if kind == "inquiry_has_no_quantities":
-        # M10：模拟推演不许出数字（与装配层 `_SIM_NUMERIC` 同一口径，判据写两遍、
-        # 各判各的层：装配层拦回包，eval 拦退化）。
+        # M10：模拟推演不许出数字。判据只有一份（`domain/shared/numeric_assertion.py`）：
+        # 装配层拦回包、eval 拦退化，两边都调同一个纯函数，不再各抄一条正则。
         inquiry = view.sim_inquiry
         if inquiry is None:
             return None
@@ -306,7 +307,7 @@ def check(assertion: dict, view: RoundView) -> str | None:
             item.statement
             for item in (*inquiry.hypotheses, *inquiry.unknowns)
         ] + [item.situation for item in inquiry.slices]
-        bad = sorted({text for text in texts if SIM_NUMERIC.search(text)})
+        bad = sorted({text for text in texts if find_numeric_assertion(text)})
         return None if not bad else f"模拟产物出现了数量断言：{bad[0][:30]}"
 
     if kind == "sim_review_proposals_stay_proposed":

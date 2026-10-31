@@ -620,6 +620,7 @@ def proposal_to_json(proposal: Proposal) -> dict:
         # add 防线（2026-10-29）：机械判定快照随草案落库；**无条件写**——
         # 键存在而值是 None 与键不存在语义不同（后者是旧轮，没有这只手表）。
         "overlap": proposal.overlap,
+        "base_version_no": proposal.base_version_no,
     }
 
 
@@ -640,6 +641,7 @@ def proposal_from_json(data: dict) -> Proposal:
         allow_manual_override=bool(data.get("allow_manual_override", False)),
         # 旧轮没有这把键 → None（先例：allow_manual_override 的可选键缺省）
         overlap=data.get("overlap"),
+        base_version_no=data.get("base_version_no"),
     )
 
 
@@ -1368,6 +1370,8 @@ def _research_to_payload(research: ResearchReport | None) -> dict | None:
     if research is None:
         return None
     return {
+        "answer": research.answer,
+        "answer_refs": [str(ref) for ref in research.answer_refs],
         "findings": [
             {
                 "finding_id": item.finding_id,
@@ -1406,26 +1410,44 @@ def _research_from_payload(data: object) -> ResearchReport | None:
         raise ValueError(str(error)) from error
 
 
-def _build_research(data: dict) -> ResearchReport:
+def _build_research(data: dict) -> ResearchReport | None:
+    findings = tuple(
+        ResearchFinding(
+            finding_id=str(item.get("finding_id") or ""),
+            statement=str(item.get("statement") or ""),
+            refs=tuple(EvidenceId(str(ref)) for ref in item.get("refs") or ()),
+        )
+        for item in data.get("findings") or ()
+    )
+    sources = tuple(
+        ResearchSource(
+            eid=EvidenceId(str(item["eid"])),
+            material_id=str(item.get("material_id") or ""),
+            title=str(item.get("title") or ""),
+            url=str(item.get("url") or ""),
+            excerpt=str(item.get("excerpt") or ""),
+        )
+        for item in data.get("sources") or ()
+    )
+    if "answer" in data:
+        answer = str(data.get("answer") or "")
+        answer_refs = tuple(
+            EvidenceId(str(ref)) for ref in data.get("answer_refs") or ()
+        )
+    elif findings:
+        # S4 之前的报告没有 answer：用第一条 finding 重建，旧行不丢。
+        answer = findings[0].statement
+        answer_refs = findings[0].refs
+    elif sources:
+        answer = sources[0].excerpt or sources[0].title
+        answer_refs = (sources[0].eid,)
+    else:
+        return None
     return ResearchReport(
-        findings=tuple(
-            ResearchFinding(
-                finding_id=str(item.get("finding_id") or ""),
-                statement=str(item.get("statement") or ""),
-                refs=tuple(EvidenceId(str(ref)) for ref in item.get("refs") or ()),
-            )
-            for item in data.get("findings") or ()
-        ),
-        sources=tuple(
-            ResearchSource(
-                eid=EvidenceId(str(item["eid"])),
-                material_id=str(item.get("material_id") or ""),
-                title=str(item.get("title") or ""),
-                url=str(item.get("url") or ""),
-                excerpt=str(item.get("excerpt") or ""),
-            )
-            for item in data.get("sources") or ()
-        ),
+        answer=answer,
+        answer_refs=answer_refs,
+        findings=findings,
+        sources=sources,
         open_questions=tuple(str(item) for item in data.get("open_questions") or ()),
         notes=tuple(str(item) for item in data.get("notes") or ()),
     )

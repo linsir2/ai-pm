@@ -35,32 +35,10 @@ import { setSchema as publishSchema } from "./schema";
 import { initialState, reduce } from "./workspace";
 import { useEvents } from "./useEvents";
 
-export type PendingAction =
-  | "start"
-  | "opening"
-  | "answers"
-  | "confirm"
-  | "retry"
-  | "dig"
-  | "edit"
-  /** 材料库上的动作（删 / 重解析）：与"这一轮"无关，但仍然串行，不并发点。 */
-  | "material"
-  /** 搜索框「带进本轮」：轮内动作，串行不并发。 */
-  | "round_material"
-  /** 记忆抽屉上的动作（M6）：删一条记忆——同样串行，不与"这一轮"的动作并发。 */
-  | "memory"
-  /** 过目台上的动作（M8）：发起 / 重试 / 放弃 / 收下 / 删掉，串行不并发。 */
-  | "exploration"
-  /** 研究来源挂当前轮（P3b-1）：轮内动作，与其它轮内动作一样串行。 */
-  | "research"
-  /** 讨论区上的动作（M9）：开聊 / 说 / 总结 / 收卡 / 关掉，同样串行不并发。 */
-  | "discussion"
-  /** 模拟抽屉上的动作（M10）：跑一趟 / 收下勾选，同样串行不并发。 */
-  | "simulation"
-  /** 模拟评测上的动作（M11）：跑一趟——同样串行不并发。 */
-  | "sim_review"
-  /** 联网申请逐条决策（P3a）：批准即执行，串行不并发。 */
-  | "web_request";
+import { pendingBlockedMessage } from "./pending";
+import type { PendingAction } from "./pending";
+
+export type { PendingAction } from "./pending";
 
 const PROJECT_PARAM = "project";
 
@@ -137,11 +115,16 @@ export function useWorkspaceData() {
       .explorations(projectId)
       .then(owned(setExplorations))
       .catch(ownedClear(() => setExplorations([])));
-    // 讨论线程列表（讨论 tab）同理
+    // 讨论线程列表（讨论 tab）同理。读失败**保留旧列表**并报错：清空会把
+    // "后端读不到"伪装成"还没开过讨论"。
     void api
       .discussions(projectId)
       .then(owned(setDiscussions))
-      .catch(ownedClear(() => setDiscussions([])));
+      .catch((error: unknown) => {
+        if (selected.current === projectId) {
+          dispatch({ type: "error", message: describe(error) });
+        }
+      });
     return workspace;
   }, []);
 
@@ -357,17 +340,23 @@ export function useWorkspaceData() {
       });
   }, [state.discussionStale, state.projectId]);
 
-  /** 跑一个长时间动作：串行、出错只提示、成功就把新的这一轮换进状态。 */
+  /** 跑一个长时间动作：串行、出错只提示、成功就把新的这一轮换进状态。
+   *  返回是否真的跑完（busy 被拦 / 失败都是 false），调用方据此决定要不要假装开跑了。 */
   const run = useCallback(
-    async (action: PendingAction, work: () => Promise<void>) => {
-      if (pending !== null) return;
+    async (action: PendingAction, work: () => Promise<void>): Promise<boolean> => {
+      if (pending !== null) {
+        dispatch({ type: "error", message: pendingBlockedMessage(pending) });
+        return false;
+      }
       setPending(action);
       dispatch({ type: "error", message: null });
       try {
         await work();
+        return true;
       } catch (error) {
-        if (abandoning.current) return; // 是我们自己取消的这一轮，不弹错
+        if (abandoning.current) return false; // 是我们自己取消的这一轮，不弹错
         dispatch({ type: "error", message: describe(error) });
+        return false;
       } finally {
         setPending(null);
       }
@@ -585,7 +574,7 @@ export function useWorkspaceData() {
       if (projectId === null) return null;
       let findingExplorationId: string | null = null;
       let thread: ThreadView | null = null;
-      await run("discussion", async () => {
+      const started = await run("discussion", async () => {
         if (runInquiry) {
           const view = await api.startExploration(
             projectId,
@@ -608,6 +597,7 @@ export function useWorkspaceData() {
         });
         replaceThread(thread);
       });
+      if (!started) return null;
       return thread === null ? null : (thread as ThreadView).thread_id;
     },
     [replaceExploration, replaceThread, run],
@@ -854,12 +844,32 @@ export function useWorkspaceData() {
   );
 
   const confirm = useCallback(
-    (roundId: string, accepted: string[], acceptedMemory: string[] = []) =>
+    (roundId: string, draftId: string, accepted: string[], acceptedMemory: string[] = []) =>
       run("confirm", async () => {
-        const result = await api.confirm(roundId, accepted, acceptedMemory);
-        setHistoryRound(null);
-        dispatch({ type: "round", round: result.round });
         const projectId = selected.current;
+        let result;
+        try {
+          result = await api.confirm(roundId, draftId, accepted, acceptedMemory);
+        } catch (error) {
+          if (selected.current !== projectId) return;
+          // 冲突后重读真相；run仍显示原错误，选择由所见draft身份决定是否重置。
+          try {
+            const fresh = await api.getRound(roundId);
+            if (selected.current === projectId) {
+              dispatch({ type: "round", round: fresh, expectRoundId: roundId });
+            }
+            if (projectId !== null) {
+              const document = await api.document(projectId);
+              if (selected.current === projectId) dispatch({ type: "document", document });
+            }
+          } catch {
+            // 重读失败不覆盖确认的原始错误。
+          }
+          throw error;
+        }
+        if (selected.current !== projectId) return;
+        setHistoryRound(null);
+        dispatch({ type: "round", round: result.round, expectRoundId: roundId });
         if (projectId !== null) await refreshDocument(projectId);
         setProjects((list) =>
           list.map((item) =>
@@ -1078,6 +1088,7 @@ export function useWorkspaceData() {
     booting,
     bootError,
     pending,
+    busy: pending !== null,
     createProject,
     selectProject,
     startRound,

@@ -4,7 +4,8 @@
 所以任一条校验失败，文档一个字节都不会变。
 """
 
-from dataclasses import replace
+from collections import Counter
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from pmstudio.domain.authoring.blocks import Block, Entry, assert_unique_fields
@@ -14,6 +15,7 @@ from pmstudio.domain.authoring.version import Snapshot, Version, VersionTrigger
 from pmstudio.domain.authoring.views import BlockView, DocumentView, Gap, SectionView
 from pmstudio.domain.shared.errors import (
     BlockManuallyEdited,
+    DomainError,
     DuplicateBlockId,
     EmptyApply,
     FeatureNotAllowedHere,
@@ -24,6 +26,7 @@ from pmstudio.domain.shared.errors import (
     UnknownBlock,
     UnknownEntry,
     UnknownVersion,
+    WriteConflict,
 )
 from pmstudio.domain.shared.ids import (
     PREFERENCE_AREA_ID,
@@ -42,7 +45,14 @@ from pmstudio.domain.shared.template import (
     TemplateRole,
     standard_template,
 )
-from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from pmstudio.domain.shared.writing import BlockKind, WriteOp, normalize
+
+
+@dataclass(frozen=True, slots=True)
+class EntryLocation:
+    entry: Entry
+    block: Block | None
+    target: Target
 
 
 class Document:
@@ -165,6 +175,67 @@ class Document:
                 return block
         raise UnknownBlock(block_id)
 
+    def snapshot(self, *, version_no: int | None = None) -> Snapshot:
+        """指定版读不可变历史；省略版号读实际当前头，不从墓碑重建正文。"""
+
+        if version_no is not None:
+            return self.version(version_no).snapshot
+        return Snapshot(blocks=self._blocks, preference_entries=self._preference_entries)
+
+    def locate_entry(
+        self, entry_id: EntryId, *, version_no: int | None = None
+    ) -> EntryLocation:
+        snapshot = self.snapshot(version_no=version_no)
+        matches = [
+            (entry, block)
+            for block in snapshot.blocks
+            for entry in block.entries
+            if entry.entry_id == entry_id
+        ] + [(entry, None) for entry in snapshot.preference_entries if entry.entry_id == entry_id]
+        if not matches:
+            raise UnknownEntry(entry_id)
+        if len(matches) != 1:
+            raise ShapeError(
+                f"条目 {entry_id} 有多个归属，不能唯一定位",
+                entry_id=str(entry_id), reason="ambiguous_entry",
+            )
+        entry, block = matches[0]
+        target = (
+            Target.preference() if block is None
+            else self.target_of_block(block.block_id, version_no=version_no)
+        )
+        return EntryLocation(entry=entry, block=block, target=target)
+
+    def target_of_block(
+        self, block_id: BlockId, *, version_no: int | None = None
+    ) -> Target:
+        """按真实祖先/field 得逻辑地址；重建槽的 ~2 是物理 ID，不是地址。"""
+
+        blocks = self.snapshot(version_no=version_no).blocks
+        current_id = block_id
+        seen: set[BlockId] = set()
+        slug = None
+        field = None
+        while True:
+            if current_id in seen:
+                raise ShapeError("block 树出现环", block_id=str(block_id))
+            seen.add(current_id)
+            matches = [block for block in blocks if block.block_id == current_id]
+            if not matches:
+                raise UnknownBlock(current_id)
+            if len(matches) != 1:
+                raise DuplicateBlockId(block_id=str(current_id))
+            block = matches[0]
+            if field is None and block.field is not None:
+                field = block.field
+            if block.kind is BlockKind.FEATURE:
+                slug = block.feature_slug
+            if block.kind is BlockKind.SECTION:
+                return Target.body(str(block.block_id), feature_slug=slug, field=field)
+            if block.parent_id is None:
+                raise ShapeError("块没有章节归属", block_id=str(block_id))
+            current_id = block.parent_id
+
     def features(self) -> tuple[Block, ...]:
         return tuple(block for block in self._blocks if block.kind is BlockKind.FEATURE)
 
@@ -245,6 +316,118 @@ class Document:
         )
 
     # —— 写入 ——
+    def assert_write_preconditions(
+        self,
+        instructions: tuple[WriteInstruction, ...] | list[WriteInstruction],
+        *,
+        authorized_new_features: frozenset[FeatureSlug] = frozenset(),
+    ) -> None:
+        """所有原 selected 都对批次起点核验，不用前一条指令的结果签下一条。"""
+
+        added_ids: set[EntryId] = set()
+        single_targets: set[Target] = set()
+        current = self.snapshot()
+        for item in instructions:
+            if item.base_version_no is None:
+                raise self._write_conflict(item, "baseline_missing", "baseline_missing")
+            try:
+                baseline = self.snapshot(version_no=item.base_version_no)
+            except UnknownVersion as error:
+                raise self._write_conflict(item, "baseline_missing", "unknown_baseline") from error
+            try:
+                if item.op is not WriteOp.ADD:
+                    if item.op is WriteOp.REMOVE and any(
+                        str(b.block_id) == str(item.entry_id)
+                        for b in (*baseline.blocks, *current.blocks)
+                    ):
+                        raise self._write_conflict(item, "proposal_stale", "entry_block_collision")
+                    old = self.locate_entry(item.entry_id, version_no=item.base_version_no)
+                    new = self.locate_entry(item.entry_id)
+                    if old.target != item.target or new.target != item.target:
+                        raise self._write_conflict(item, "proposal_stale", "target_mismatch")
+                    if old.entry != new.entry:
+                        raise self._write_conflict(item, "proposal_stale", "entry_changed")
+                    if (
+                        _structure(baseline.blocks, old.block)
+                        != _structure(current.blocks, new.block)
+                    ):
+                        raise self._write_conflict(item, "proposal_stale", "structure_changed")
+                    continue
+                if any(
+                    e.entry_id == item.entry_id for b in current.blocks for e in b.entries
+                ) or any(
+                    e.entry_id == item.entry_id for e in current.preference_entries
+                ) or any(str(b.block_id) == str(item.entry_id) for b in current.blocks):
+                    raise self._write_conflict(item, "proposal_stale", "entry_id_exists")
+                if item.entry_id in added_ids:
+                    raise self._write_conflict(item, "batch_conflict", "added_id_competition")
+                added_ids.add(item.entry_id)
+                if item.target.zone is Zone.PREFERENCE:
+                    continue
+                old_carrier, old_parent = _add_destination(baseline.blocks, item.target, item.kind)
+                carrier, parent = _add_destination(current.blocks, item.target, item.kind)
+                if (
+                    (None if old_carrier is None else old_carrier.block_id)
+                    != (None if carrier is None else carrier.block_id)
+                    or _structure(baseline.blocks, old_carrier or old_parent)
+                    != _structure(current.blocks, carrier or parent)
+                ):
+                    raise self._write_conflict(item, "proposal_stale", "target_structure_changed")
+                for block, version_no in ((old_carrier, item.base_version_no), (carrier, None)):
+                    if block is not None and (
+                        self.target_of_block(block.block_id, version_no=version_no) != item.target
+                    ):
+                        raise self._write_conflict(item, "proposal_stale", "target_mismatch")
+                if item.target.feature_slug is not None and parent.kind is BlockKind.SECTION:
+                    if item.target.feature_slug not in authorized_new_features:
+                        raise FeatureRequiresUserNaming(feature_slug=item.target.feature_slug)
+                    if item.target.section_id != self._template.anchor(TemplateRole.FEATURE):
+                        raise FeatureNotAllowedHere(section_id=item.target.section_id,
+                                                    feature_slug=item.target.feature_slug,
+                                                    feature_home=self._template.anchor(TemplateRole.FEATURE))
+                single = (item.target.feature_slug is not None and item.target.field is not None
+                          and not field_spec(item.target.field).multiple)
+                if single:
+                    if (old_carrier is not None and old_carrier.entries) or (
+                        carrier is not None and carrier.entries
+                    ):
+                        raise self._write_conflict(item, "proposal_stale", "single_not_empty")
+                    if item.target in single_targets:
+                        raise self._write_conflict(item, "batch_conflict", "single_add_competition")
+                    single_targets.add(item.target)
+            except ShapeError as error:
+                raise self._write_conflict(
+                    item, "proposal_stale", str(error.details.get("reason", "address_unavailable"))
+                ) from error
+
+    def assert_no_added_duplicates(
+        self, instructions: tuple[WriteInstruction, ...] | list[WriteInstruction],
+    ) -> None:
+        """只拒绝 selected ADD 在最终候选中造成的整段重复，不整理旧重复。"""
+
+        counts = Counter(
+            (self.target_of_block(b.block_id), normalize(e.text))
+            for b in self._blocks for e in b.entries
+        )
+        counts.update((Target.preference(), normalize(e.text)) for e in self._preference_entries)
+        for item in instructions:
+            if item.op is WriteOp.ADD:
+                location = self.locate_entry(item.entry_id)
+                if counts[(location.target, normalize(location.entry.text))] > 1:
+                    error = self._write_conflict(item, "batch_conflict", "added_duplicate")
+                    # 本方法消费刚 apply 的候选；current 指批次起点，不是未保存的新版本。
+                    error.details["current_version_no"] = self._versions[-2].version_no
+                    raise error
+
+    def _write_conflict(self, item: WriteInstruction, code: str, reason: str) -> WriteConflict:
+        return WriteConflict(
+            f"提案 {item.instruction_id} 不能写入（{reason}），请重新过目或整合",
+            code=code, proposal_id=item.instruction_id, entry_id=str(item.entry_id),
+            base_version_no=item.base_version_no,
+            current_version_no=self.current_version.version_no,
+            target=item.target.label(), reason=reason,
+        )
+
     def apply(
         self,
         instructions: tuple[WriteInstruction, ...] | list[WriteInstruction],
@@ -264,7 +447,17 @@ class Document:
             template=self._template,
         )
         for instruction in instructions:
-            working.apply(instruction, authorized_new_features=authorized_new_features)
+            try:
+                working.apply(instruction, authorized_new_features=authorized_new_features)
+            except DomainError as error:
+                error.details.update(
+                    proposal_id=instruction.instruction_id,
+                    entry_id=str(instruction.entry_id),
+                    base_version_no=instruction.base_version_no,
+                    current_version_no=self.current_version.version_no,
+                    reason="candidate_conflict",
+                )
+                raise
         # 候选状态也要过一遍校验：不然会出现"写得进去、读不出来"——
         # 校验只在 Document 构造时跑，写坏了要等下一个人读它才发现。
         Document(
@@ -431,6 +624,58 @@ def _signature(
     signature: dict[str, object] = {str(block.block_id): block.entries for block in blocks}
     signature[str(PREFERENCE_AREA_ID)] = preference_entries
     return signature
+
+
+def _unique_block(blocks: tuple[Block, ...], block_id: BlockId) -> Block:
+    matches = [b for b in blocks if b.block_id == block_id]
+    if not matches:
+        raise UnknownBlock(block_id)
+    if len(matches) != 1:
+        raise DuplicateBlockId(block_id=str(block_id))
+    return matches[0]
+
+
+def _structure(blocks: tuple[Block, ...], block: Block | None) -> tuple[object, ...]:
+    """只比较身份/结构/D5，不把祖先或同字段其它 Entry 当作前置值。"""
+
+    result = []
+    seen = set()
+    while block is not None:
+        if block.block_id in seen:
+            raise ShapeError("block 树出现环", block_id=str(block.block_id))
+        seen.add(block.block_id)
+        result.append((block.block_id, block.parent_id, block.kind, block.field,
+                       block.feature_slug, block.manually_edited))
+        block = None if block.parent_id is None else _unique_block(blocks, block.parent_id)
+    return tuple(result)
+
+
+def _add_destination(
+    blocks: tuple[Block, ...], target: Target, kind: BlockKind | None,
+) -> tuple[Block | None, Block]:
+    """ADD 实际承载选择；缺失时返回尚存祖先。apply 和基线核验共用。"""
+
+    section = _unique_block(blocks, BlockId(str(target.section_id)))
+    parent = section
+    if target.feature_slug is not None:
+        roots = [b for b in blocks
+                 if b.kind is BlockKind.FEATURE and b.feature_slug == target.feature_slug]
+        if len(roots) > 1:
+            raise ShapeError("功能归属不唯一", reason="ambiguous_feature")
+        if not roots:
+            return None, section
+        parent = roots[0]
+    if target.field is not None:
+        fields = [b for b in blocks if b.parent_id == parent.block_id and b.field == target.field]
+        if len(fields) > 1:
+            raise ShapeError("字段归属不唯一", reason="ambiguous_field")
+        return (fields[0] if fields else None), parent
+    if target.feature_slug is not None:
+        return parent, parent
+    candidates = [b for b in blocks if b.parent_id == section.block_id
+                  and b.feature_slug is None and b.field is None
+                  and b.kind == (kind or BlockKind.TEXT) and not b.manually_edited]
+    return (max(candidates, key=lambda b: str(b.block_id)) if candidates else None), section
 
 
 class _WorkingTree:
@@ -607,6 +852,9 @@ class _WorkingTree:
     def _parent_for_write(
         self, target: Target, *, authorized_new_features: frozenset[FeatureSlug]
     ) -> BlockId:
+        existing, _ = _add_destination(self.blocks, target, None)
+        if existing is not None:
+            return existing.block_id
         if target.feature_slug is None:
             if target.field is not None:
                 return self._section_slot_parent(target)
@@ -617,9 +865,6 @@ class _WorkingTree:
         if target.field is None:
             return parent_id
         spec = field_spec(target.field)
-        existing = self._field_block(parent_id, target.field)
-        if existing is not None:
-            return existing.block_id
         block_id = self._free_id(BlockId(f"{parent_id}.{spec.name}"))
         self._add(
             Block.field_block(
@@ -637,9 +882,6 @@ class _WorkingTree:
         section_id = str(target.section_id)
         slot = self._template.slot(section_id, target.field or "")
         assert slot is not None  # 适配器已经校验过（`02` §11.0.69）
-        existing = self._field_block(BlockId(section_id), slot.name)
-        if existing is not None:
-            return existing.block_id
         block_id = self._free_id(slot_block_id(section_id, slot.name))
         self._add(
             Block(
@@ -675,12 +917,6 @@ class _WorkingTree:
         )
         return block_id
 
-    def _field_block(self, parent_id: BlockId, field: str) -> Block | None:
-        for block in self._blocks.values():
-            if block.parent_id == parent_id and block.field == field:
-                return block
-        return None
-
     def _locate_entry(self, entry_id: EntryId) -> tuple[BlockId, int]:
         for key in self._order:
             block = self._blocks.get(key)
@@ -708,18 +944,7 @@ class _WorkingTree:
         找不到返回 None，由调用方走"新建"路径。不碰手改块——AI 不 append 到人写过的块。
         """
         section_str = str(section_id)
-        candidates = [
-            block
-            for block in self._blocks.values()
-            if str(block.parent_id) == section_str
-            and block.feature_slug is None
-            and block.field is None
-            and block.kind == kind
-            and not block.manually_edited
-        ]
-        if not candidates:
-            return None
-        return max(candidates, key=lambda b: str(b.block_id))
+        return _add_destination(self.blocks, Target.body(section_str), kind)[0]
 
     def _free_id(self, base: BlockId) -> BlockId:
         if base not in self._blocks and base not in self._tombstone_ids:

@@ -1,6 +1,7 @@
 """唯一写入路径。界面只传 proposal_id，提案内容以 Round 里存的那份为准。"""
 
 from collections.abc import Sequence
+from copy import copy
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -25,13 +26,16 @@ from pmstudio.domain.round.step import Step, WaitingOn
 from pmstudio.domain.services.scope_guard import ScopeGuard, ScopeViolation
 from pmstudio.domain.services.traceability import TraceabilityChecker
 from pmstudio.domain.shared.errors import (
+    DraftMismatch,
     IllegalStepTransition,
     NothingToCommit,
+    UnknownEntry,
     UnknownMemoryProposal,
     UnknownProposal,
     UntraceableContent,
+    WriteConflict,
 )
-from pmstudio.domain.shared.ids import BlockId, ProjectId, ProposalId, RoundId
+from pmstudio.domain.shared.ids import BlockId, DraftId, ProjectId, ProposalId, RoundId
 from pmstudio.domain.shared.memory import MemoryChange
 
 TRACEABLE_ORIGINS = (OriginType.USER, OriginType.DERIVED)
@@ -82,28 +86,47 @@ class ProposalCommitter:
         self,
         *,
         round_id: RoundId,
+        draft_id: DraftId,
         accepted: Sequence[ProposalId],
         now: datetime,
         accepted_memory: Sequence[str] = (),
     ) -> CommitResult:
         with self._uow:
-            round_ = self._rounds.get(round_id)
+            round_ = self._rounds.get_for_update(round_id)
             # 写入端先自查前置条件：不要在写完文档之后才发现状态不对
             if round_.waiting_on is not WaitingOn.DRAFT:
                 raise IllegalStepTransition(current=round_.step, target=Step.AWAITING_CONFIRM)
-            proposals, merged = self._resolve(round_, accepted)
+            if round_.draft is None:
+                raise NothingToCommit()
+            if round_.draft.draft_id != draft_id:
+                raise DraftMismatch(draft_id=draft_id, current_draft_id=round_.draft.draft_id)
+            selected = self._resolve(round_, accepted)
+            document: Document = self._documents.get_for_update(round_.project_id)
+            document.assert_write_preconditions(
+                tuple(self._to_instruction(p) for p in selected),
+                authorized_new_features=round_.authorized_new_features,
+            )
+            proposals, merged = merge_duplicate_removes(selected)
             ledger = self._evidence.get(round_.project_id)
             for proposal in proposals:
                 self._assert_traceable(proposal, ledger=ledger)
             advisories = self._scope.check(proposals, write_scope=round_.write_scope)
-            document: Document = self._documents.get(round_.project_id)
-            version = document.apply(
-                tuple(self._to_instruction(proposal) for proposal in proposals),
-                now=now,
-                summary=f"第 {round_id} 轮确认写入 {len(proposals)} 条",
-                authorized_new_features=round_.authorized_new_features,
-            )
-            self._writer.save(document)
+            instructions = tuple(self._to_instruction(proposal) for proposal in proposals)
+            candidate = copy(document)
+            try:
+                version = candidate.apply(
+                    instructions,
+                    now=now,
+                    summary=f"第 {round_id} 轮确认写入 {len(proposals)} 条",
+                    authorized_new_features=round_.authorized_new_features,
+                )
+            except UnknownEntry as error:
+                # 原 selected 已逐条核验；这里条目消失只能是候选组合的顺序冲突。
+                raise WriteConflict(
+                    error.message, code="batch_conflict", **error.details
+                ) from error
+            candidate.assert_no_added_duplicates(instructions)
+            self._writer.save(candidate)
             # 记忆与文档**同一个事务**（M6）：要么一起成，要么一起回滚。
             # 顺序上先写文档再写记忆只是可读性——`MemoryWriter` 不可用/`ids` 缺失时
             # 直接跳过（老测试只测文档那一支，不给记忆注入）。
@@ -150,7 +173,7 @@ class ProposalCommitter:
         """
 
         with self._uow:
-            document: Document = self._documents.get(project_id)
+            document: Document = self._documents.get_for_update(project_id)
             version = document.apply(
                 [instruction],
                 now=now,
@@ -174,7 +197,7 @@ class ProposalCommitter:
         """
 
         with self._uow:
-            document: Document = self._documents.get(project_id)
+            document: Document = self._documents.get_for_update(project_id)
             version = document.rollback_to(version_no, now=now, summary=summary)
             self._writer.save(document)
         return CommitResult(
@@ -185,7 +208,7 @@ class ProposalCommitter:
 
     def _resolve(
         self, round_: Round, accepted: Sequence[ProposalId]
-    ) -> tuple[tuple[Proposal, ...], tuple[ProposalId, ...]]:
+    ) -> tuple[Proposal, ...]:
         """用户勾的那些提案 → 真正要执行的（+ 被合并掉的重复 `remove`）。
 
         合并这一步是**保底**：装配层已经不让重复的 `remove` 进卡片了，但**修好之前存下来的
@@ -203,7 +226,8 @@ class ProposalCommitter:
         for proposal_id in accepted:
             if proposal_id not in by_id:
                 raise UnknownProposal(proposal_id=proposal_id)
-        return merge_duplicate_removes(tuple(by_id[proposal_id] for proposal_id in accepted))
+        taken = set(accepted)
+        return tuple(p for p in draft.proposals if p.proposal_id in taken)
 
     def _assert_traceable(self, proposal: Proposal, *, ledger: EvidenceLedger) -> None:
         if proposal.origin.type not in TRACEABLE_ORIGINS:
@@ -273,4 +297,5 @@ def to_write_instruction(proposal: Proposal) -> WriteInstruction:
         refs=proposal.origin.refs,
         kind=proposal.kind,
         allow_manual_override=proposal.allow_manual_override,
+        base_version_no=proposal.base_version_no,
     )

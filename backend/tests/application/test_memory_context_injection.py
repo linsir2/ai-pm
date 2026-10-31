@@ -60,6 +60,7 @@ INTEGRATION_REPLY = json.dumps({
     "proposals": [
         {
             "op": "add",
+            "entry_id": None,
             "target": {
                 "zone": "body",
                 "section_id": "s5",
@@ -101,6 +102,7 @@ async def _run_full_round(harness, project_id, user_input):
     round_view = await harness.get_round()(round_id=round_id)
     if round_view.draft:
         await harness.confirm_draft()(
+            draft_id=str(harness.rounds.get(round_id).draft.draft_id),
             round_id=round_id,
             accepted=tuple(p.proposal_id for p in round_view.draft.proposals),
         )

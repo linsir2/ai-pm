@@ -84,6 +84,58 @@ def test_validate_inquiry_rejects_numeric_claims() -> None:
         validate_inquiry((hypo(statement="调查显示多数人会这么干"),), (), known_eids=KNOWN)
 
 
+def test_validate_inquiry_numeric_scan_only_looks_at_statement() -> None:
+    """盲区只扫 statement：falsification/evidence_needed 里的 `30%` 不再拉整包下水。"""
+
+    from pmstudio.application.exploration import validate_inquiry
+
+    item = hypo(falsification="访谈中提到 30% 的人这么做", evidence_needed="一份 30% 抽样的问卷")
+    validate_inquiry((item,), (), known_eids=KNOWN)
+
+
+@pytest.mark.parametrize("text", ("2026 成功", "3 成本", "按比例缩放", "缩放比例"))
+def test_validate_inquiry_does_not_reject_lookalike_words(text: str) -> None:
+    """旧判据的两处同形误伤：`成` 吞年份/成本，裸词"比例"吞缩放。"""
+
+    from pmstudio.application.exploration import validate_inquiry
+
+    validate_inquiry((hypo(statement=text),), (), known_eids=KNOWN)
+
+
+def test_validate_inquiry_numeric_failure_names_field_and_local_id() -> None:
+    """失败消息要点名字段与 local_id，但不回显违规原串。"""
+
+    from pmstudio.application.exploration import validate_inquiry
+
+    with pytest.raises(ShapeError) as caught:
+        validate_inquiry((hypo(statement="约 30% 的用户会按客户名找单"),), (), known_eids=KNOWN)
+
+    message = caught.value.message
+    assert "statement" in message
+    assert "H1" in message
+    assert "30%" not in message
+    assert caught.value.details["local_id"] == "H1"
+
+
+def test_validate_inquiry_blind_spot_numeric_statement_fails() -> None:
+    from pmstudio.application.exploration import validate_inquiry
+
+    spot = BlindSpot(local_id="B1", statement="覆盖率达到 30%", next_step="去问数据组")
+    with pytest.raises(ShapeError) as caught:
+        validate_inquiry((), (spot,), known_eids=KNOWN)
+
+    assert caught.value.details["local_id"] == "B1"
+    assert "statement" in caught.value.message
+    assert "30%" not in caught.value.message
+
+
+def test_validate_inquiry_blind_spot_numeric_next_step_is_ignored() -> None:
+    from pmstudio.application.exploration import validate_inquiry
+
+    spot = BlindSpot(local_id="B1", statement="覆盖率未知", next_step="去问 30% 抽样的数据")
+    validate_inquiry((), (spot,), known_eids=KNOWN)
+
+
 def test_validate_inquiry_passes_clean_produce() -> None:
     from pmstudio.application.exploration import validate_inquiry
 

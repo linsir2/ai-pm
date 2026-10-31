@@ -13,10 +13,16 @@ from pmstudio.application.errors import (
     UnsupportedMaterial,
     WebMaterialNotAttachable,
 )
+from pmstudio.application.ports import FetchedPage
 from pmstudio.application.use_cases import AttachMaterials, DeleteMaterial, ReparseMaterial
 from pmstudio.domain.shared.ids import ProjectId
 from tests.support.builders import PROJECT, document_with_feature
-from tests.support.doubles import LoopScriptedGateway, RecordingWebSearch, ToolStep
+from tests.support.doubles import (
+    LoopScriptedGateway,
+    RecordingWebFetch,
+    RecordingWebSearch,
+    ToolStep,
+)
 from tests.support.harness import Harness
 
 
@@ -46,7 +52,8 @@ def _page(url: str, text: str):
 def _synthesis() -> str:
     return json.dumps(
         {
-            "basis": "依据 S1",
+            "answer": "内网线走背板槽位，这是这一趟来源给出的答案。",
+            "answer_refs": ["S1"],
             "findings": [{"text": "结论", "refs": ["S1"]}],
             "open_questions": [],
         },
@@ -68,6 +75,16 @@ async def _researched() -> tuple[Harness, str]:
         gateway=gateway,
         web_search=RecordingWebSearch(
             returns=(_page("https://example.com/a", "内网线走背板槽位"),)
+        ),
+        fetcher=RecordingWebFetch(
+            returns=(
+                FetchedPage(
+                    content="<html><body><p>内网线走背板槽位</p></body></html>".encode(),
+                    media_type="text/html",
+                    final_url="https://example.com/a",
+                    title="网页",
+                ),
+            )
         ),
     )
     harness.seed_project()

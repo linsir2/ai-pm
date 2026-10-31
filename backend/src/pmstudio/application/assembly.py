@@ -43,7 +43,7 @@ from pmstudio.domain.round.questionnaire import (
 )
 from pmstudio.domain.round.round import DroppedItem, DropSource, Round
 from pmstudio.domain.services.traceability import TraceabilityChecker
-from pmstudio.domain.shared.errors import DomainError
+from pmstudio.domain.shared.errors import DomainError, ShapeError, UnknownEntry
 from pmstudio.domain.shared.evidence_kind import EvidenceKind
 from pmstudio.domain.shared.ids import (
     DraftId,
@@ -58,7 +58,7 @@ from pmstudio.domain.shared.ids import (
 from pmstudio.domain.shared.label import Zone
 from pmstudio.domain.shared.target import Target, target_from_label
 from pmstudio.domain.shared.template_adapter import TemplateAdapter, adapt
-from pmstudio.domain.shared.writing import BlockKind, WriteOp
+from pmstudio.domain.shared.writing import BlockKind, WriteOp, normalize
 from pmstudio.harness.errors import PacketParseError
 
 PURPOSE = "integration"
@@ -151,8 +151,69 @@ class LandedAnswers:
     dropped: tuple[DroppedItem, ...] = ()
 
 
-def normalize(text: str) -> str:
-    return " ".join(text.split()).casefold()
+def normalize_proposal(proposal: Proposal, document: Document) -> Proposal:
+    """创建时绑定真实条目/去处并盖实际输入基线；已盖章的提案整体保留。"""
+
+    if proposal.base_version_no is not None:
+        return proposal
+    target = proposal.target
+    if (
+        proposal.op is WriteOp.ADD and target.feature_slug is not None
+        and target.field is not None and not field_spec(target.field).multiple
+    ):
+        block = document.field_block(target.feature_slug, target.field)
+        if block is not None and len(block.entries) > 1:
+            raise ShapeError("单值字段有多个条目", target=target.label(), reason="ambiguous_single")
+        if block is not None and block.entries:
+            proposal = replace(proposal, op=WriteOp.REPLACE,
+                               entry_id=block.entries[0].entry_id, overlap=None)
+    if proposal.op in (WriteOp.REPLACE, WriteOp.REMOVE):
+        if proposal.op is WriteOp.REMOVE and any(
+            str(block.block_id) == str(proposal.entry_id) for block in document.blocks
+        ):
+            raise ShapeError("AI 删除条目编号与块编号碰撞", entry_id=str(proposal.entry_id),
+                             reason="entry_block_collision")
+        location = document.locate_entry(proposal.entry_id)
+        if target != location.target:
+            raise ShapeError(
+                f"条目 {proposal.entry_id} 的 target 与真实归属不一致："
+                f"{target.label()} ≠ {location.target.label()}",
+                entry_id=str(proposal.entry_id), target=target.label(),
+                actual_target=location.target.label(), reason="target_mismatch",
+            )
+        proposal = replace(
+            proposal, target=location.target,
+            text=location.entry.text if proposal.op is WriteOp.REMOVE else proposal.text,
+            kind=None if location.block is None else location.block.kind,
+        )
+    return replace(proposal, base_version_no=document.current_version.version_no)
+
+
+def normalize_mechanical_proposals(
+    proposals: Sequence[Proposal], document: Document,
+) -> LandedAnswers:
+    """只处理新创建的机械候选；用户重述保留卡片，地址失败逐条交代。"""
+
+    existing = _existing_content(document)
+    lines = _existing_lines(document)
+    normalized: list[Proposal] = []
+    notes: list[str] = []
+    for proposal in proposals:
+        try:
+            item = normalize_proposal(proposal, document)
+        except DomainError as error:
+            if isinstance(error, UnknownEntry) and proposal.op is WriteOp.REMOVE:
+                notes.append(f"未决条目 {proposal.entry_id} 已不在正文，已撤下；答案仍单独落地")
+            else:
+                notes.append(f"候选 {proposal.proposal_id} 没能归位：{error}")
+            continue
+        if proposal.base_version_no is None and proposal.op is WriteOp.ADD:
+            overlap = _overlap_note(proposal.text, target=proposal.target, existing_lines=lines)
+            if overlap is None and (proposal.target.label(), normalize(proposal.text)) in existing:
+                overlap = "1/1"
+            item = replace(item, overlap=overlap)
+        normalized.append(item)
+    return LandedAnswers(proposals=tuple(normalized), notes=tuple(notes))
 
 
 #: 内部条目地址：模型把 `_render_open_items` 给它的 entry_id（`open61`）抄进了标题。
@@ -593,16 +654,11 @@ def assemble(
             continue
         refs = _refs(draft.evidence_refs, known=known)
         slug = str(target.feature_slug) if target.feature_slug is not None else None
-        if slug is not None and slug not in existing_features and slug not in authorized:
+        if (
+            draft.op == WriteOp.ADD.value and slug is not None
+            and slug not in existing_features and slug not in authorized
+        ):
             pending_features.setdefault(slug, []).extend(_asking_seats(refs, ledger=ledger))
-            continue
-        # 去重只对 `add` 生效：`replace` / `remove` 是在**改既有内容**，拿它们的文本去跟
-        # 文档比"是不是已经有了"没有意义——踩到过的那种坏后果是：模型写一条 `remove`、
-        # 文本正好照抄了被删那条，就被当成"重复"静默跳过，那条本该撤下的内容留在文档里。
-        #
-        # 判重键用**原始 draft.text**（评审 3.2 拍板）：清洗只影响判空与最终 text，
-        # 这里的既有语义不变——编号括号进不进判重，是"模型写没写同一件事"的一部分。
-        if draft.op == WriteOp.ADD.value and (target.label(), normalize(draft.text)) in existing:
             continue
         # 清洗（编号括号出正文）：`remove` 的文本是展示（撤哪一条看 entry_id），
         # 不清洗；`add` / `replace` 用清洗后的文本判空与落笔。清洗后剩空 → 走下面
@@ -628,20 +684,10 @@ def assemble(
             )
             continue
         text = usable.text
-        if usable.op == WriteOp.REMOVE.value and not text.strip():
-            # `remove` 的文本可以留空（撤哪一条看 entry_id）：这里补上**被撤下那条的正文**，
-            # 卡片上就是「删除｜<那句话>」而不是一行空白；也守住"每条写入指令都有文本"。
-            # 从文档里引用，不是编内容（条目文本本身非空，`Entry.__post_init__` 保证）。
-            text = _entry_text(document, usable.entry_id or "") or ""
-        # 整块重述判据（add 防线）：只对 `add` 算——`replace` / `remove` 是在改既有内容，
-        # 长着旧条目的样子是它们的本分，"和已有内容重合"不是要拦的事。
-        overlap = (
-            _overlap_note(text, target=target, existing_lines=existing_lines)
-            if usable.op == WriteOp.ADD.value
-            else None
-        )
-        proposals.append(
-            _proposal(
+        if usable.op == WriteOp.REMOVE.value:
+            text = document.locate_entry(EntryId(usable.entry_id)).entry.text
+        try:
+            proposal = normalize_proposal(_proposal(
                 usable,
                 adapter=adapter,
                 text=text,
@@ -651,9 +697,23 @@ def assemble(
                 round_id=round_.round_id,
                 document=document,
                 ledger=ledger,
-                overlap=overlap,
-            )
-        )
+            ), document)
+        except DomainError as error:
+            dropped.append(DroppedItem(
+                handle=f"提案 #{index}", reason=error.message, source=DropSource.ASSEMBLY,
+                seat_id=None, pass_index=pass_index,
+            ))
+            continue
+        # 显式 add（包括单值转换前）先清洗，再比较真正待写的整段；replace/remove 不判重。
+        if draft.op == WriteOp.ADD.value and (
+            proposal.target.label(), normalize(proposal.text)
+        ) in existing:
+            continue
+        if proposal.op is WriteOp.ADD:
+            proposal = replace(proposal, overlap=_overlap_note(
+                proposal.text, target=proposal.target, existing_lines=existing_lines,
+            ))
+        proposals.append(proposal)
 
     for slug, seats in pending_features.items():
         feature_questions.append(
@@ -862,17 +922,17 @@ def draft_of(
 ) -> Draft | None:
     """新草案的**唯一构造点**（`use_cases.py` 那条路只走这里）。
 
-    收口在这里：同一条目被两族提案各撤一次时（整合者那条路 vs 机械清理那条路），
+    收口在这里：同一条目、同一基线被两族提案各撤一次时，
     卡片上只该留一行"删除"——真跑里两行都被勾了，确认写入时第二条撞 `UnknownEntry`，
     **整批一条都没写**（P30 · F28）。规则本身在 `domain/round/draft.py`，这里只调用。
 
-    合并掉的那条**不算丢东西**：条目照样被撤下，它只是同一件事的第二次陈述——
+    不同基线保留供用户选择。同基线合并掉的那条**不算丢东西**：它只是同一件事的第二次陈述——
     所以不进 `DroppedItem`，也不进 `gaps`。
     """
 
     if not proposals:
         return None
-    proposals, _merged = merge_duplicate_removes(proposals)
+    proposals, _merged = merge_duplicate_removes(proposals, same_baseline=True)
     return Draft(
         draft_id=draft_id, round_id=round_id, proposals=tuple(proposals), gaps=tuple(gaps)
     )
@@ -1339,7 +1399,10 @@ def is_blocking(target: Target, adapter: TemplateAdapter) -> bool:
 
 def _target(draft: schemas.TargetDraft, *, adapter: TemplateAdapter) -> Target:
     try:
-        return schemas.target_of(draft, adapter=adapter)
+        target = schemas.target_of(draft, adapter=adapter)
+        if target.feature_slug is not None and target.field is not None:
+            field_spec(target.field)
+        return target
     except DomainError as error:
         # 把模型给的原样 target 带回给它：重装一次时它得看得见自己错在哪，
         # 否则只会重犯同一处（真模型冒烟实测过这一条）。
@@ -1367,6 +1430,10 @@ def _target_or_drop(
     """
 
     try:
+        if what == "提案" and draft.zone == "body" and not any(
+            (draft.section_id, draft.feature_slug, draft.field)
+        ):
+            raise PacketParseError("提案的正文 target 不能为空", purpose=PURPOSE)
         return _target(draft, adapter=adapter)
     except PacketParseError as error:
         dropped.append(
@@ -1535,19 +1602,6 @@ def _kind_for(target: Target, name: str | None, adapter: TemplateAdapter) -> Blo
         ) from error
 
 
-def _entry_target_missing(draft: schemas.ProposalDraft, *, document: Document) -> bool:
-    """这一条是不是"要改 / 要删一个根本不存在的条目"？
-
-    规则只写一处：`assemble` 用它决定"丢这一条"，`_proposal` 用它做自证（见那里的注释）。
-    **缺 `entry_id` 字段不算**——那是字段缺失（`entry_id` 在 `_WRITE_SEMANTICS_FIELDS`
-    黑名单里），照旧判死；这里只管"给了、但指不到东西"。
-    """
-
-    if draft.op == WriteOp.ADD.value or not draft.entry_id:
-        return False
-    return not _entry_exists(document, draft.entry_id)
-
-
 def _proposal_unusable_reason(
     draft: schemas.ProposalDraft, *, document: Document
 ) -> str | None:
@@ -1565,8 +1619,13 @@ def _proposal_unusable_reason(
 
     if draft.op != WriteOp.REMOVE.value and not draft.text.strip():
         return "提案文本为空：add / replace 没有内容可写"
-    if _entry_target_missing(draft, document=document):
-        return f"要改的条目不存在：{draft.entry_id}"
+    if draft.op != WriteOp.ADD.value:
+        try:
+            document.locate_entry(EntryId(draft.entry_id))
+        except UnknownEntry:
+            return f"要改的条目不存在：{draft.entry_id}"
+        except DomainError as error:
+            return error.message
     return None
 
 
@@ -1607,7 +1666,7 @@ def _proposal(
                 refs=refs,
                 rationale=draft.rationale,
             ),
-            kind=_kind_for(target, draft.kind, adapter),
+            kind=_kind_for(target, draft.kind, adapter) if op is WriteOp.ADD else None,
             # 机械判定快照（add 防线）：随草案落库，前端据此默认不勾。
             overlap=overlap,
         )
@@ -1709,52 +1768,21 @@ def _question(
         ) from error
 
 
-def _entry_exists(document: Document, entry_id: str) -> bool:
-    return _entry_text(document, entry_id) is not None
-
-
-def _entry_text(document: Document, entry_id: str) -> str | None:
-    """按 id 找一条既有内容的正文（找不到返回 `None`）。**整份文档只走这一遍**。
-
-    用途有两个：判断"要改的条目存不存在"（`_entry_exists`），以及给**空文本的 `remove`**
-    补上"要撤下的是哪一句"——那是从文档里引用，不是编内容。
-    """
-
-    for block in document.blocks:
-        for entry in block.entries:
-            if str(entry.entry_id) == entry_id:
-                return entry.text
-    for entry in document.preference_entries:
-        if str(entry.entry_id) == entry_id:
-            return entry.text
-    return None
-
-
 def _entries_by_label(document: Document) -> Iterator[tuple[str, str]]:
     """文档每个条目的 (去处 label, 全文)——**label 公式在这里只写一处**：
 
     `_existing_content`（整段判重）与 `_existing_lines`（行级判重）用的是同一份。
-    键里的章前缀取**模板的功能锚点**（不是 s5）——否则自定义模板下键与 `Target.label()`
-    对不上，重复内容会静默进文档。
+    去处由 Document 的真实祖先定位给出，再调用 Target.label()；章节槽 ~2 不改变逻辑去处。
     """
 
-    home = str(adapt(document.template).feature_home)
-    by_id = {block.block_id: block for block in document.blocks}
     for block in document.blocks:
-        if block.field is not None:
-            parent = by_id.get(block.parent_id) if block.parent_id is not None else None
-            slug = parent.feature_slug if parent is not None else None
-            label = f"{home}/{slug}.{block.field}" if slug else str(block.block_id)
-        elif block.kind is BlockKind.FEATURE:
-            label = f"{home}/{block.feature_slug}"
-        elif block.parent_id is not None:
-            label = str(block.parent_id)
-        else:
+        if not block.entries:
             continue
+        label = document.target_of_block(block.block_id).label()
         for entry in block.entries:
             yield label, entry.text
     for entry in document.preference_entries:
-        yield "preference", entry.text
+        yield Target.preference().label(), entry.text
 
 
 def _existing_content(document: Document) -> set[tuple[str, str]]:

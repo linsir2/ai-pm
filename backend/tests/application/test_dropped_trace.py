@@ -65,6 +65,7 @@ def draft_reply(*, refs: list[str], dropped: list[dict[str, str]]) -> str:
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s8"},
                     "text": "单次导出应在 60 秒内完成",
                     "origin_type": "derived",
@@ -439,6 +440,7 @@ def overflow_reply(count: int) -> str:
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s1"},
                     "text": f"第 {index} 条",
                     "origin_type": "derived",

@@ -120,7 +120,7 @@ class RoundContextPreparer:
         with self._uow:
             # 写锁内**重新读**：检索在事务外，另一个 worker 可能已经把这步做完了。
             # 发号也必须在这里——账本整份 JSON 覆盖写，事务外读会互相覆盖。
-            target = self._rounds.get(round_id)
+            target = self._rounds.get_for_update(round_id)
             pass_index = self._pass_index(target, stage)
             existing = self._trace_of(target, stage, pass_index)
             eid_of = {
@@ -162,7 +162,7 @@ class RoundContextPreparer:
 
             ledger = None
             if existing is None:
-                ledger = self._evidence.get(target.project_id)
+                ledger = self._evidence.get_for_update(target.project_id)
                 new_refs: list[MaterialRef] = []
                 for material_id, chunk in selection.chunks:
                     key = (material_id, chunk.chunk_id)

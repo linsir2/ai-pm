@@ -4,6 +4,8 @@
 "拿账本/文档算集合、把丢条记进 Round.dropped"，判断逻辑全在这里，一处说了算。
 """
 
+import pytest
+
 from pmstudio.application.sim_inquiry import (
     ORIGIN_SIMULATION,
     duplicate_of,
@@ -21,7 +23,7 @@ def test_demographic_table_hits_identity_words() -> None:
 
 
 def test_demographic_table_does_not_catch_numbers_or_units() -> None:
-    """岁/秒不沾边：数字断言是 _NUMERIC 的活（exploration 那边），这里只抓身份词。"""
+    """岁/秒不沾边：数字断言由 `domain.shared.numeric_assertion` 判，这里只抓身份词。"""
 
     assert sim_demographic_hits("单次导出应在 60 秒内完成") == ()
     assert sim_demographic_hits("支持 5000 行大批量") == ()
@@ -107,9 +109,38 @@ def test_synthesize_sim_material_makes_one_chunk_per_item() -> None:
     assert content == "\n\n".join(chunk.text for chunk in parsed.chunks).encode("utf-8")
 
 
-def test_sim_numeric_hit_catches_quantities() -> None:
+@pytest.mark.parametrize(
+    "text",
+    (
+        "约 62% 用户会用导出",
+        "3 成运营这么干",
+        "2 倍工作量",
+        "3.5 倍开销",
+        "占比 20%",
+        "大多数运营都这么干",
+        "高比例场景",
+        "数据显示运营会这么干",
+    ),
+)
+def test_sim_numeric_hit_catches_quantities(text: str) -> None:
     from pmstudio.application.sim_inquiry import sim_numeric_hit
 
-    assert sim_numeric_hit("约 62% 用户会用导出")
-    assert sim_numeric_hit("大多数运营都这么干")
+    assert sim_numeric_hit(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("按比例缩放", "缩放比例", "2026 成功", "3 成本", "团队成员 3 人", "O(1)", "3 类", "第 3 版"),
+)
+def test_sim_numeric_hit_does_not_catch_lookalikes(text: str) -> None:
+    """同一个判据在 sim 侧也要修掉旧误伤（两处消费者各自钉死）。"""
+
+    from pmstudio.application.sim_inquiry import sim_numeric_hit
+
+    assert not sim_numeric_hit(text)
+
+
+def test_sim_numeric_hit_passes_clean_statement() -> None:
+    from pmstudio.application.sim_inquiry import sim_numeric_hit
+
     assert not sim_numeric_hit("运营宁愿等一分钟也不愿分两次导")

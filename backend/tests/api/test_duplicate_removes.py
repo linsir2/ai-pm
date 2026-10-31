@@ -42,6 +42,7 @@ def remove(proposal_id: str, *, text: str) -> Proposal:
         target=Target.body("s2"),
         text=text,
         origin=Origin(OriginType.SYSTEM_DEFAULT, (EvidenceId("E1"),), None),
+        base_version_no=2,
     )
 
 
@@ -116,7 +117,8 @@ async def test_an_old_draft_with_duplicate_removes_still_confirms():
         before = harness.documents.get(ProjectId(project_id)).current_version.version_no
         round_id = seed_round_with_duplicate_removes(harness, project_id)
         response = await client.post(
-            f"/api/rounds/{round_id}/confirm", json={"accepted": ["p01", "p02"]}
+            f"/api/rounds/{round_id}/confirm",
+            json={"draft_id": "d-dup", "accepted": ["p01", "p02"]}
         )
 
     assert response.status_code == 200, response.text
@@ -153,7 +155,7 @@ async def test_confirming_only_the_duplicate_still_works():
         round_id = seed_round_with_duplicate_removes(harness, project_id)
 
         response = await client.post(
-            f"/api/rounds/{round_id}/confirm", json={"accepted": ["p02"]}
+            f"/api/rounds/{round_id}/confirm", json={"draft_id": "d-dup", "accepted": ["p02"]}
         )
 
     assert response.status_code == 200, response.text

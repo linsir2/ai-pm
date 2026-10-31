@@ -5,8 +5,6 @@
 用户指的条目不存在抛 `UnknownEntryId`（资源不在 = 404）。
 """
 
-import re
-
 from pmstudio.application.deliverable import iter_document_entries
 from pmstudio.application.dto import MaterialChunk, ParsedMaterial
 from pmstudio.application.errors import UnknownEntryId
@@ -16,14 +14,12 @@ from pmstudio.domain.exploration.exploration import ExplorationScope, ScopeKind
 from pmstudio.domain.exploration.item import BlindSpot, Candidate, Hypothesis
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import EvidenceId
+from pmstudio.domain.shared.numeric_assertion import find_numeric_assertion
 
 #: 材料库里的来源标签（与 `context.ORIGIN_TITLES` / 前端 ORIGIN_TEXT 三处同步）
 ORIGIN_EXPLORATION = "exploration"
 PARSER_ID_EXPLORATION = "exploration"
 PARSER_VERSION_EXPLORATION = "1"
-
-#: 模拟推演不许出数量断言（比例 / 百分比 / “调查显示”这类伪数据话术）。
-_NUMERIC = re.compile(r"\d+\s*(%|％|成|倍)|占比|百分比|比例|数据显示|调查显示|大多数|多数人")
 
 _SCOPE_LABELS = {ScopeKind.ENTRY: "某一条内容", ScopeKind.DOCUMENT: "整份文档"}
 
@@ -54,12 +50,6 @@ def scope_line(scope: ExplorationScope, *, focus: str | None = None) -> str:
     return "\n".join(parts)
 
 
-def _searchable_text(item: Hypothesis | BlindSpot) -> str:
-    if isinstance(item, Hypothesis):
-        return " ".join((item.statement, item.falsification, item.evidence_needed))
-    return " ".join((item.statement, item.next_step))
-
-
 def validate_inquiry(
     hypotheses: tuple[Hypothesis, ...] | list[Hypothesis],
     blind_spots: tuple[BlindSpot, ...] | list[BlindSpot],
@@ -80,10 +70,11 @@ def validate_inquiry(
                     "假设引用了账本里没有的编号：" + "、".join(unknown),
                     local_id=item.local_id,
                 )
-        if _NUMERIC.search(_searchable_text(item)):
+        if find_numeric_assertion(item.statement) is not None:
             raise ShapeError(
                 "模拟推演不许出数量断言（比例 / 百分比 / 调查显示）："
-                "请改成可证伪的定性假设",
+                "请改成可证伪的定性假设"
+                f"（字段 statement，条目 {item.local_id}）",
                 local_id=item.local_id,
             )
 

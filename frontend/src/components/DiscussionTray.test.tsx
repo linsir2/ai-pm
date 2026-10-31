@@ -167,6 +167,24 @@ describe("DiscussionTray", () => {
     expect(screen.getByText(/开题调研底稿 3 条/)).toBeTruthy();
   });
 
+  it("别的动作在途：开跑按钮禁用，按钮旁写明正在做什么（S1）", () => {
+    const props = draw({ busy: true, busyText: "正在调研…" });
+
+    fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "导出要不要做筛选" } });
+
+    expect(screen.getByRole("button", { name: "开跑" })).toHaveProperty("disabled", true);
+    expect(screen.getByText("正在调研…")).toBeTruthy();
+    expect(props.onStartPanel).not.toHaveBeenCalled();
+  });
+
+  it("空闲且主题/名单齐：开跑可点（S1）", () => {
+    draw({ busy: false });
+
+    fireEvent.change(screen.getByLabelText("讨论主题"), { target: { value: "导出要不要做筛选" } });
+
+    expect(screen.getByRole("button", { name: "开跑" })).toHaveProperty("disabled", false);
+  });
+
   it("主题留空时不发请求（后端 topic 必填，界面不点亮一个必然 422 的按钮）", () => {
     const props = draw();
 

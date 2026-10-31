@@ -307,6 +307,7 @@ def test_research_limits_are_pinned_to_the_shared_vocabulary():
     assert shared.MAX_RESEARCH_FINDINGS == 12
     assert shared.MAX_RESEARCH_OPEN_QUESTIONS == 5
     assert shared.MAX_RESEARCH_TOPIC_CHARS == 500
+    assert shared.MAX_RESEARCH_ANSWER_CHARS == 1200
     assert shared.RESEARCH_SOURCE_CARD_CHARS == 800
     assert research_module.MAX_RESEARCH_ATTEMPTS == 2
     assert research_module.RESEARCH_TIMEOUT_SECONDS == 600

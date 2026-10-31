@@ -589,7 +589,7 @@ class WebResearch:
             return None
         with self._uow:
             target = self._rounds.get_for_update(round_id)
-            ledger = self._evidence.get(target.project_id)
+            ledger = self._evidence.get_for_update(target.project_id)
             self.apply(target, ledger, execution)
             self._evidence_writer.save(ledger)
             self._round_writer.save(target)

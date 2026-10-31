@@ -299,7 +299,8 @@ def test_render_document_state_appends_gaps_after_the_document():
 def test_render_existing_entries_lists_entry_ids_for_rewrites():
     text = context.render_existing_entries(document_with_one_feature())
     assert "en1" in text
-    assert "把订单导出成表格" in text
+    assert text == "- en1 → s5/order-export.one_liner"
+    assert "把订单导出成表格" not in text  # 正文只在全文入口出现
 
 
 def round_after_one_answer_one_skip() -> Round:

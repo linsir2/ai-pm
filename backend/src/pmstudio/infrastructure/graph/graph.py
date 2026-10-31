@@ -397,6 +397,7 @@ class RoundRunner:
         await self._confirm_draft(
             round_id=round_id,
             accepted=command.accepted,
+            draft_id=command.draft_id,
             accepted_memory=command.accepted_memory,
         )
         return {"view": await self._get_round(round_id=round_id)}

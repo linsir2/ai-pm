@@ -243,8 +243,12 @@ def test_round_view_groups_draft_proposals_in_three_groups():
 
 def test_round_view_marks_out_of_scope_proposals_and_top_advisories():
     round_ = make_round()
-    round_.integrate(draft=make_draft(out_of_scope=True))
-    view = dto.round_view(round_)
+    document = make_document()
+    draft = make_draft(out_of_scope=True)
+    round_.integrate(draft=dataclasses.replace(draft, proposals=tuple(
+        dataclasses.replace(p, base_version_no=1) for p in draft.proposals
+    )))
+    view = dto.round_view(round_, document=document)
 
     assert view.advisories  # 顶部提示
     assert "s8" in view.advisories[0]
@@ -1511,6 +1515,8 @@ def test_exploration_view_projects_the_research_report():
     )
     research.complete_research(
         ResearchReport(
+            answer="同类产品多把批量导出上限设在 60 秒；超大文件需要分片。",
+            answer_refs=(EvidenceId("E7"),),
             findings=(
                 ResearchFinding(
                     finding_id="F1",
@@ -1534,6 +1540,8 @@ def test_exploration_view_projects_the_research_report():
     view = dto.exploration_view(research)
     assert view.candidates == ()
     assert view.research is not None
+    assert view.research.answer.startswith("同类产品多把批量导出上限")
+    assert view.research.answer_refs == ("E7",)
     assert view.research.sources[0].eid == "E7"
     assert view.research.sources[0].url == "https://example.com/a"
     assert view.research.findings[0].refs == ("E7",)

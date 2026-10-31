@@ -30,7 +30,7 @@ function round(): RoundView {
   return {
     round_id: "r1",
     step: "awaiting_confirm",
-    waiting_on: "draft",
+    waiting_on: "draft_card",
     seat_round_count: 2,
     seats: ["seat.a"],
     nominated_seats: [],
@@ -60,6 +60,7 @@ function draw(over: Partial<Parameters<typeof DraftDrawer>[0]> = {}) {
     accepted: ["p01"],
     memoryAccepted: [],
     pending: false,
+    selectionMatches: true,
     onToggle: vi.fn(),
     onToggleMemory: vi.fn(),
     onSetAccepted: vi.fn(),
@@ -80,6 +81,45 @@ function draw(over: Partial<Parameters<typeof DraftDrawer>[0]> = {}) {
 }
 
 describe("DraftDrawer", () => {
+  it("replace给出真实old→new与旧refs，跳转携带精确Entry含#", () => {
+    const item = { ...proposal, op: "replace", before: {
+      entry_id: "r1#01", text: "基线旧文", refs: ["E0"],
+    }, text: "修订后正文", base_version_no: 2 };
+    const base = round();
+    const props = draw({ round: { ...base, draft: {
+      ...base.draft!, proposals: [item], groups: [["你说过的", [item]]],
+    } }, onOpenTarget: vi.fn() });
+    expect(screen.getByText("基线旧文")).toBeTruthy();
+    expect(screen.getByText("修订后正文")).toBeTruthy();
+    expect(screen.getByText(/E0/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "s5" }));
+    expect(props.onOpenTarget).toHaveBeenCalledWith("s5", "r1#01");
+  });
+
+  it("remove显示被撤基线而非payload/current；未知旧值明确说未知", () => {
+    const base = round();
+    const items = [{ ...proposal, op: "remove", text: "不是基线", before: {
+      entry_id: "r1#01", text: "实际旧文", refs: ["E0"],
+    } }, { ...proposal, proposal_id: "p02", op: "replace", before: null }];
+    draw({ round: { ...base, draft: { ...base.draft!, proposals: items,
+      groups: [["你说过的", items]],
+    } } });
+    expect(screen.getByText("实际旧文")).toBeTruthy();
+    expect(screen.queryByText("不是基线")).toBeNull();
+    expect(screen.getByText(/基线旧值未知/)).toBeTruthy();
+  });
+
+  it("身份未匹配的短窗口与done历史卡都禁提交/记忆选择", () => {
+    const props = draw({ selectionMatches: false });
+    fireEvent.click(screen.getByRole("button", { name: /确认写入/ }));
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    cleanup();
+    const done = draw({ round: { ...round(), step: "done", waiting_on: "none" } });
+    expect(screen.getByRole("button", { name: /确认写入/ }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /确认写入/ }));
+    expect(done.onSubmit).not.toHaveBeenCalled();
+  });
+
   it("M6：记忆那一档默认不勾，勾了才调 onToggleMemory", () => {
     const onToggleMemory = vi.fn();
     const base = round();

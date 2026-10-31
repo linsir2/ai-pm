@@ -34,6 +34,19 @@ class ShapeError(DomainError):
 
 
 # —— authoring ——
+class WriteConflict(DomainError):
+    """合法候选与其真实基线/所选批次冲突，需要重新过目或生成。"""
+
+    def __init__(self, message: str, *, code: str, **details: object) -> None:
+        super().__init__(message, code=code, **details)
+
+
+class DraftMismatch(DomainError):
+    def __init__(self, *, draft_id: object, current_draft_id: object) -> None:
+        super().__init__("所见草案已经换了，请重读草案后确认", code="draft_mismatch",
+                         draft_id=str(draft_id), current_draft_id=str(current_draft_id))
+
+
 class BadTemplateDefinition(InvariantViolation):
     """模板本身形状不对（锚点缺/重复、章节 id 重复、空模板、id 为空）。
 

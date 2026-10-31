@@ -3,9 +3,11 @@
 三条口径写在这里，因为它们都是**机器判得了**的：
 
 1. **一条来源 = 一个出处编号**：`sources[].eid` 是账本里的 E，不是第二个编号空间；
-2. **结论只能引用来源**：`findings[].refs ⊆ {source.eid}`——结论不是出处，
+2. **必须有答案**：`answer` 是一段非空的结论，`answer_refs` 只能引用这一趟的来源；
+   `findings` 可以空——答案可以不拆成证据点，但整份报告不能没有答案；
+3. **结论只能引用来源**：`findings[].refs ⊆ {source.eid}`——结论不是出处，
    它说的是"根据这几条来源，我判断……"；
-3. **上限是产物上限，不是调用上限**：跑几次工具由 `run_tool_loop` 管（6 轮 / 12 次），
+4. **上限是产物上限，不是调用上限**：跑几次工具由 `run_tool_loop` 管（6 轮 / 12 次），
    这里管的是最后交回来几条。
 
 **零来源不是领域错误**：搜不到东西是运行结果（用例判失败），不是数据不自洽。
@@ -24,6 +26,7 @@ from pmstudio.domain.shared.ids import EvidenceId
 # 这里再导出一次，让"研究产物"这个概念只有一个入口（与 `provenance/evidence.py`
 # 再导出 `EvidenceKind` 同一条做法）。
 from pmstudio.domain.shared.research import (
+    MAX_RESEARCH_ANSWER_CHARS,
     MAX_RESEARCH_FINDINGS,
     MAX_RESEARCH_OPEN_QUESTIONS,
     MAX_RESEARCH_SOURCES,
@@ -33,6 +36,7 @@ from pmstudio.domain.shared.research import (
 )
 
 __all__ = [
+    "MAX_RESEARCH_ANSWER_CHARS",
     "MAX_RESEARCH_FINDINGS",
     "MAX_RESEARCH_OPEN_QUESTIONS",
     "MAX_RESEARCH_SOURCES",
@@ -107,6 +111,8 @@ class ResearchReport:
 
     findings: tuple[ResearchFinding, ...]
     sources: tuple[ResearchSource, ...]
+    answer: str
+    answer_refs: tuple[EvidenceId, ...]
     open_questions: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
 
@@ -132,6 +138,17 @@ class ResearchReport:
                 limit=MAX_RESEARCH_OPEN_QUESTIONS,
                 run_label="研究",
             )
+        if not self.answer.strip():
+            raise ShapeError("研究必须给出一段答案", field="answer")
+        if len(self.answer) > MAX_RESEARCH_ANSWER_CHARS:
+            raise ShapeError(
+                f"研究答案最多 {MAX_RESEARCH_ANSWER_CHARS} 字，这段 {len(self.answer)} 字",
+                field="answer",
+                chars=len(self.answer),
+                limit=MAX_RESEARCH_ANSWER_CHARS,
+            )
+        if not self.answer_refs:
+            raise ShapeError("研究答案必须引用至少一条来源", field="answer_refs")
         known_eids = {source.eid for source in self.sources}
         if len(known_eids) != len(self.sources):
             raise ShapeError(
@@ -144,6 +161,14 @@ class ResearchReport:
         finding_ids = [item.finding_id for item in self.findings]
         if len(set(finding_ids)) != len(finding_ids):
             raise ShapeError("结论的 finding_id 重复", finding_ids=finding_ids)
+        unknown_answer_refs = [
+            str(ref) for ref in self.answer_refs if ref not in known_eids
+        ]
+        if unknown_answer_refs:
+            raise ShapeError(
+                "答案引用了这一趟没有的来源：" + "、".join(unknown_answer_refs),
+                field="answer_refs",
+            )
         for item in self.findings:
             unknown = [str(ref) for ref in item.refs if ref not in known_eids]
             if unknown:

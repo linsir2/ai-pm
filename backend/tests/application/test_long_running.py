@@ -254,6 +254,7 @@ async def test_six_rounds_full_pipeline(tmp_path):
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {
                         "zone": "body",
                         "section_id": "s5",
@@ -308,7 +309,9 @@ async def test_six_rounds_full_pipeline(tmp_path):
         rv = await h.get_round()(round_id=rid)
         if rv.draft:
             accepted = tuple(p.proposal_id for p in rv.draft.proposals)
-            await h.confirm_draft()(round_id=rid, accepted=accepted)
+            await h.confirm_draft()(
+                round_id=rid, draft_id=str(h.rounds.get(rid).draft.draft_id), accepted=accepted,
+            )
         round_ids.append(rid)
 
     # 验证

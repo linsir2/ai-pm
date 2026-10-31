@@ -47,8 +47,14 @@ class Proposal:
     #: 它是**草案当时对着当时文档**的判定记录，随草案落库；旧轮没有这把键 → None，
     #: 回放不漂（序列化先例：`allow_manual_override` 的可选键缺省）。
     overlap: str | None = None
+    #: 实际生成输入的不可变版本；旧载荷缺键为 None，不推测当前版。
+    base_version_no: int | None = None
 
     def __post_init__(self) -> None:
+        if self.base_version_no is not None and (
+            type(self.base_version_no) is not int or self.base_version_no <= 0
+        ):
+            raise ShapeError("基线版本必须是正整数", base_version_no=self.base_version_no)
         if not self.text.strip():
             raise ShapeError("提案文本不能为空", proposal_id=str(self.proposal_id))
         if not self.origin.refs:
@@ -92,8 +98,12 @@ class Draft:
 
 def merge_duplicate_removes(
     proposals: Sequence[Proposal],
+    *,
+    same_baseline: bool = False,
 ) -> tuple[tuple[Proposal, ...], tuple[ProposalId, ...]]:
     """同一 `entry_id` 的多条 `remove` 是**同一条指令**：留第一条，其余合并。
+
+    创建时传 `same_baseline=True`，只合并同版号（含旧 None）；确认逐条核验后默认按条目合并。
 
     为什么要合并：`remove` 撤下哪一条**只由 `entry_id` 决定**（`02` §11.0.2a），
     文本只是卡片上的展示、不入库（快照记的是结果文档）。所以两条 `remove` 指向同一条目时，
@@ -118,10 +128,11 @@ def merge_duplicate_removes(
 
     kept: list[Proposal] = []
     merged: list[ProposalId] = []
-    removed_entries: dict[EntryId, int] = {}
+    removed_entries: dict[tuple[EntryId, int | None], int] = {}
     for proposal in proposals:
         if proposal.op is WriteOp.REMOVE:
-            index = removed_entries.get(proposal.entry_id)
+            key = (proposal.entry_id, proposal.base_version_no if same_baseline else None)
+            index = removed_entries.get(key)
             if index is not None:
                 merged.append(proposal.proposal_id)
                 # 被合并的这条带着 D5 例外位（用户勾过评测的那次删除）→ 并给保留的那条，
@@ -129,6 +140,6 @@ def merge_duplicate_removes(
                 if proposal.allow_manual_override and not kept[index].allow_manual_override:
                     kept[index] = replace(kept[index], allow_manual_override=True)
                 continue
-            removed_entries[proposal.entry_id] = len(kept)
+            removed_entries[key] = len(kept)
         kept.append(proposal)
     return tuple(kept), tuple(merged)

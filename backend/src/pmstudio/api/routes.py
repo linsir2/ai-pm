@@ -516,6 +516,7 @@ async def confirm(request: Request, round_id: str, body: ConfirmRequest, user: C
             round_id=round_id,
             accepted=tuple(body.accepted),
             accepted_memory=tuple(body.accepted_memory),
+            draft_id=body.draft_id,
         )
     )
     return as_json({"version_no": view.confirmed_version_no, "round": view})

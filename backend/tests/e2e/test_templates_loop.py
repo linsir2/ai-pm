@@ -155,7 +155,8 @@ async def test_light_project_runs_a_full_loop_over_http(make_app):
             if proposal["origin_type"] != "proposed"
         ]
         confirmed = await client.post(
-            f"/api/rounds/{started['round_id']}/confirm", json={"accepted": accepted}
+            f"/api/rounds/{started['round_id']}/confirm",
+            json={"draft_id": draft["draft"]["draft_id"], "accepted": accepted}
         )
         assert confirmed.status_code == 200, confirmed.text
         assert confirmed.json()["version_no"] == 2
@@ -278,6 +279,7 @@ DRAFT_CITING_ONLY_E1_REPLY = json.dumps(
         "proposals": [
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {"zone": "body", "section_id": "s2"},
                 "text": "把手工登记换成线上订餐",
                 "origin_type": "derived",
@@ -341,7 +343,8 @@ async def test_an_uncited_claim_lands_at_its_own_target_in_the_draft(make_app):
         ]
         assert landed[0]["proposal_id"] in accepted  # USER 默认勾选：不勾等于静默丢
         confirmed = await client.post(
-            f"/api/rounds/{started['round_id']}/confirm", json={"accepted": accepted}
+            f"/api/rounds/{started['round_id']}/confirm",
+            json={"draft_id": draft["draft"]["draft_id"], "accepted": accepted}
         )
         assert confirmed.status_code == 200, confirmed.text
 

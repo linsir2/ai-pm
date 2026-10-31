@@ -305,7 +305,9 @@ def _validate_trimming[T: BaseModel](
         overflows = _overflows_of(error)
         if not overflows or not _only_too_long(error):
             raise PacketParseError(
-                "模型返回的报文过不了 schema", purpose=purpose, errors=error.errors()
+                "模型返回的报文过不了 schema",
+                purpose=purpose,
+                errors=error.errors(include_input=False),
             ) from error
         trimmed = copy.deepcopy(payload)
         for item in overflows:
@@ -314,7 +316,9 @@ def _validate_trimming[T: BaseModel](
             return model.model_validate(trimmed), tuple(overflows)
         except ValidationError as second:
             raise PacketParseError(
-                "模型返回的报文过不了 schema", purpose=purpose, errors=second.errors()
+                "模型返回的报文过不了 schema",
+                purpose=purpose,
+                errors=second.errors(include_input=False),
             ) from second
 
 

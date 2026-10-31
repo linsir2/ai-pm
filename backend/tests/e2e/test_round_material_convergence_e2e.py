@@ -20,6 +20,7 @@ from pmstudio.domain.authoring.readiness import ReadinessChecker
 from pmstudio.domain.services.assigner import EvidenceAssigner
 from pmstudio.domain.shared.ids import UserId
 from pmstudio.domain.shared.template import standard_template
+from pmstudio.infrastructure.postgres.leases import PgLeaseStore
 from pmstudio.infrastructure.postgres.materials import SqliteHybridRetriever, SqliteMaterialStore
 from pmstudio.infrastructure.postgres.owner_scope import set_owner_scope
 from pmstudio.infrastructure.postgres.project_factory import SqliteProjectFactory
@@ -33,6 +34,7 @@ from pmstudio.infrastructure.postgres.repositories import (
 from pmstudio.infrastructure.postgres.unit_of_work import PgUnitOfWork
 from tests.support.builders import NOW, PROJECT
 from tests.support.doubles import FixedClock, RecordingPublisher
+from tests.support.leases import TTL_MS, prepare_lease_scope
 from tests.support.postgres import open_direct
 
 OWNER = UserId("u-convergence")
@@ -101,6 +103,7 @@ async def test_a_real_round_converges_from_the_whole_library(tmp_path):
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
+    leases = PgLeaseStore(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT, title="收敛核验", now=NOW, template=standard_template()
     )
@@ -128,11 +131,17 @@ async def test_a_real_round_converges_from_the_whole_library(tmp_path):
         discussions=SqliteDiscussionRepository(connection),
         # **真**检索器：词法路走真 PG（没有 embedder → 它内部退回纯词法检索）。
         retriever=SqliteHybridRetriever(connection, None),
+        leases=leases,
+        lease_ttl_ms=TTL_MS,
     )
 
+    scope = prepare_lease_scope(owner=OWNER)
     round_id = await start.create(
         project_id=PROJECT, user_input=INPUT, material_ids=[pinned.material_id]
     )
+    token = scope.ensure_held()
+    assert token.target_id == str(round_id)
+    assert leases.holds(token)
 
     round_ = rounds.get(round_id)
     selected = {ref.material_id for ref in round_.materials}
@@ -171,6 +180,7 @@ async def test_a_real_round_caps_a_huge_pinned_block_and_keeps_the_auto_segment(
     documents = SqliteDocumentRepository(connection)
     rounds = SqliteRoundRepository(connection)
     evidences = SqliteEvidenceRepository(connection)
+    leases = PgLeaseStore(connection)
     SqliteProjectFactory(connection, ids=ids).create(
         project_id=PROJECT, title="切分核验", now=NOW, template=standard_template()
     )
@@ -195,11 +205,17 @@ async def test_a_real_round_caps_a_huge_pinned_block_and_keeps_the_auto_segment(
         explorations=SqliteExplorationRepository(connection),
         discussions=SqliteDiscussionRepository(connection),
         retriever=SqliteHybridRetriever(connection, None),
+        leases=leases,
+        lease_ttl_ms=TTL_MS,
     )
 
+    scope = prepare_lease_scope(owner=OWNER)
     round_id = await start.create(
         project_id=PROJECT, user_input=INPUT, material_ids=[pinned.material_id]
     )
+    token = scope.ensure_held()
+    assert token.target_id == str(round_id)
+    assert leases.holds(token)
 
     round_ = rounds.get(round_id)
     selected = {ref.material_id for ref in round_.materials}

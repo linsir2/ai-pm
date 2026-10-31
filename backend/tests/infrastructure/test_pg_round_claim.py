@@ -520,6 +520,7 @@ def test_skip_seat_and_review_lock_the_same_round_row(conn, database: _Database)
                     clock=FixedClock(),
                     viewer=GetRound(
                         rounds=rounds,
+                        documents=SqliteDocumentRepository(other),
                         evidence=evidence,
                         catalog=StaticSeatCatalog((make_seat(),)),
                         tools=TomlToolCatalog(DEFINITIONS_DIR),

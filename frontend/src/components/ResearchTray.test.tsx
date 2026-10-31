@@ -25,6 +25,8 @@ function run(over: Partial<ExplorationView> = {}): ExplorationView {
     overflow_count: 0,
     candidates: [],
     research: {
+      answer: "同类产品多把批量导出上限设在 60 秒；超大文件需要分片。",
+      answer_refs: ["E1"],
       findings: [{ finding_id: "F1", statement: "主流同类产品 60 秒上限", refs: ["E1"] }],
       sources: [
         {
@@ -61,14 +63,53 @@ function draw(over: Partial<Parameters<typeof ResearchTray>[0]> = {}) {
 }
 
 describe("ResearchTray", () => {
-  it("画结论、来源、开放问题与这一趟的实况", () => {
+  it("画答案、结论、来源、开放问题与这一趟的实况", () => {
     draw();
 
+    expect(
+      screen.getByText(/同类产品多把批量导出上限设在 60 秒；超大文件需要分片。/),
+    ).toBeTruthy();
     expect(screen.getByText(/主流同类产品 60 秒上限/)).toBeTruthy();
-    expect(screen.getAllByText(/〔E1〕/).length).toBe(2); // 结论的引用 + 来源卡
+    expect(screen.getAllByText(/〔E1〕/).length).toBe(3); // 答案引用 + 结论引用 + 来源卡
     expect(screen.getByText("https://example.com/a")).toBeTruthy();
     expect(screen.getByText("要不要断点续传？")).toBeTruthy();
     expect(screen.getByText("工具调用 2 次")).toBeTruthy();
+  });
+
+  it("答案渲染在结论之前（段落）", () => {
+    const { container } = render(
+      <ResearchTray
+        runs={[run()]}
+        pending={false}
+        topicLimit={500}
+        round={round}
+        onStart={vi.fn()}
+        onRetry={vi.fn()}
+        onAbandon={vi.fn()}
+        onAttach={vi.fn()}
+      />,
+    );
+
+    const text = container.textContent ?? "";
+    expect(text.indexOf("同类产品多把批量导出上限")).toBeLessThan(
+      text.indexOf("主流同类产品 60 秒上限"),
+    );
+  });
+
+  it("没有 answer 的旧数据说清只找到来源", () => {
+    draw({
+      runs: [
+        run({
+          research: {
+            ...run().research!,
+            answer: undefined,
+            answer_refs: undefined,
+          },
+        }),
+      ],
+    });
+
+    expect(screen.getByText("这一趟只找到来源")).toBeTruthy();
   });
 
   it("开始研究：空主题按钮灰着，填了才调 onStart（带 trim 后的主题）", () => {
@@ -82,6 +123,32 @@ describe("ResearchTray", () => {
     expect(start.disabled).toBe(false);
     fireEvent.click(start);
 
+    expect(props.onStart).toHaveBeenCalledWith("导出上限");
+  });
+
+  it("别的动作在途：开始研究禁用并显示在途动作（S1 评审）", () => {
+    const props = draw({ runs: [], busy: true, busyText: "正在讨论…" });
+
+    fireEvent.change(screen.getByLabelText("研究什么"), {
+      target: { value: "导出上限" },
+    });
+
+    const start = screen.getByText("正在讨论…") as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    fireEvent.click(start);
+    expect(props.onStart).not.toHaveBeenCalled();
+  });
+
+  it("非 busy：填写后照常可用，文案仍是「开始研究」（S1 评审）", () => {
+    const props = draw({ runs: [], busy: false, busyText: "正在处理…" });
+
+    fireEvent.change(screen.getByLabelText("研究什么"), {
+      target: { value: "导出上限" },
+    });
+
+    const start = screen.getByText("开始研究") as HTMLButtonElement;
+    expect(start.disabled).toBe(false);
+    fireEvent.click(start);
     expect(props.onStart).toHaveBeenCalledWith("导出上限");
   });
 

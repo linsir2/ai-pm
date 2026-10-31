@@ -82,6 +82,7 @@ DRAFT_REPLY = json.dumps(
         "proposals": [
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {
                     "zone": "body",
                     "section_id": "s5",
@@ -189,7 +190,8 @@ async def test_graph_confirm_writes_the_document():
     accepted = tuple(proposal.proposal_id for proposal in view.draft.proposals)
 
     view = await runner.run(
-        RoundCommand(kind="confirm", round_id=view.round_id, accepted=accepted)
+        RoundCommand(kind="confirm", round_id=view.round_id, draft_id=view.draft.draft_id,
+                     accepted=accepted)
     )
 
     assert view.step == "done"

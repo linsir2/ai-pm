@@ -63,6 +63,7 @@ def _harness() -> Harness:
                         "proposals": [
                             {
                                 "op": "add",
+                                "entry_id": None,
                                 "target": {
                                     "zone": "body",
                                     "section_id": "s5",

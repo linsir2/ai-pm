@@ -78,6 +78,8 @@ def _research(exploration_id: str = "x-1") -> Exploration:
 
 def _report() -> ResearchReport:
     return ResearchReport(
+        answer="同类产品多把批量导出上限设在 60 秒；超大文件需要分片。",
+        answer_refs=(EvidenceId("E7"),),
         findings=(
             ResearchFinding(
                 finding_id="F1",
@@ -220,6 +222,67 @@ def test_a_corrupt_research_row_is_skipped_instead_of_breaking_the_list(conn) ->
         listed = repository.list_for_project(PROJECT)
 
         assert [str(item.exploration_id) for item in listed] == ["x-good"]
+    finally:
+        clear_owner_scope()
+
+
+def test_a_legacy_research_row_without_answer_still_lists_and_gets(conn) -> None:  # type: ignore[no-untyped-def]
+    """S4 之前的报告没有 answer：旧行要能回读，不能从列表里静默消失或在 get 时 500。"""
+
+    set_owner_scope(OWNER)
+    try:
+        SqliteDocumentRepository(conn).save(document_with_feature())
+        repository = SqliteExplorationRepository(conn)
+        payload = {
+            "scope": {"kind": "topic", "ref": None, "text": "旧研究"},
+            "hypotheses": [],
+            "blind_spots": [],
+            "states": {},
+            "kept": {},
+            "kept_ref": {},
+            "failure": None,
+            "abandon_reason": None,
+            "overflow_count": 0,
+            "research": {
+                "findings": [
+                    {
+                        "finding_id": "F1",
+                        "statement": "旧报告留下的结论",
+                        "refs": ["E7"],
+                    }
+                ],
+                "sources": [
+                    {
+                        "eid": "E7",
+                        "material_id": "m-1",
+                        "title": "旧来源",
+                        "url": "https://example.com/legacy",
+                        "excerpt": "旧来源正文。",
+                    }
+                ],
+                "open_questions": [],
+                "notes": [],
+            },
+        }
+        conn.execute(
+            """
+            INSERT INTO explorations (exploration_id, project_id, owner_id, kind,
+                                      status, payload, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, now(), now())
+            """,
+            ("x-legacy", str(PROJECT), str(OWNER), "web_research", "done", Jsonb(payload)),
+        )
+        conn.commit()
+
+        listed = repository.list_for_project(PROJECT)
+        loaded = repository.get(ExplorationId("x-legacy"))
+
+        assert [str(item.exploration_id) for item in listed] == ["x-legacy"]
+        assert listed[0].research is not None
+        assert listed[0].research.answer == "旧报告留下的结论"
+        assert loaded.research is not None
+        assert loaded.research.answer == "旧报告留下的结论"
+        assert loaded.research.answer_refs == (EvidenceId("E7"),)
     finally:
         clear_owner_scope()
 

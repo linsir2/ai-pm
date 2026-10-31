@@ -276,9 +276,9 @@ def build_container(
     # argon2 每次约 64MB，这个数同时是内存上限——登录风暴排队，而不是把机器打死。
     configure_gate(settings.login_hash_concurrency)
 
-    # 向量 embedder 单一实例：懒加载（首次 `embed_many` 才下载/载入模型），
-    # 迁移回填与向量索引共用同一个，避免同一进程里装两份模型内存。
-    embedder = FastEmbedEmbedder()
+    # 向量 embedder 单一实例：懒加载，运行期只从本地缓存载入模型。
+    # 向量索引与材料检索共用同一个，避免同一进程里装两份模型内存。
+    embedder = FastEmbedEmbedder(local_files_only=True)
     connection = PgConnection(settings.database_url)
     clock = SystemClock()
     ids = UuidIdGenerator()
@@ -536,6 +536,7 @@ def build_container(
     )
     get_round = GetRound(
         rounds=rounds,
+        documents=documents,
         evidence=evidences,
         catalog=catalog,
         tools=tools,
@@ -548,6 +549,7 @@ def build_container(
     )
     attach_research_sources = AttachResearchSources(
         rounds=rounds,
+        documents=documents,
         round_writer=rounds,
         explorations=explorations,
         uow=uow,
@@ -722,6 +724,7 @@ def build_container(
         dig_round=dig_round,
         abandon_round=AbandonRound(
             rounds=rounds,
+            documents=documents,
             round_writer=rounds,
             uow=uow,
             clock=clock,

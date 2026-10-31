@@ -63,7 +63,9 @@ class ResearchToolbox:
         self._fetcher = fetcher
         self._parser = parser
         self._sources: list[ResearchHit] = []
+        self._read: list[ResearchHit] = []
         self._seen: set[str] = set()
+        self._read_urls: set[str] = set()
         self._attempts = 0
         self._overflowed = 0
 
@@ -72,6 +74,16 @@ class ResearchToolbox:
     @property
     def sources(self) -> tuple[ResearchHit, ...]:
         return tuple(self._sources)
+
+    @property
+    def read_sources(self) -> tuple[ResearchHit, ...]:
+        """真正抓到了正文的来源（按抓取顺序；没有读过的搜索结果不在里面）。"""
+
+        return tuple(self._read)
+
+    @property
+    def read_count(self) -> int:
+        return len(self._read)
 
     @property
     def attempts(self) -> int:
@@ -220,11 +232,11 @@ class ResearchToolbox:
         url = _text_argument(arguments, "url", tool=FETCH_TOOL)
         if not url.startswith(("http://", "https://")):
             raise ToolCallFailed(f"只能抓 http/https 网址：{url}", tool_id=FETCH_TOOL)
-        if url in self._seen:
+        if url in self._read_urls:
             return f"这条网址已经收过了，不重复收：{url}"
-        if len(self._sources) >= MAX_RESEARCH_SOURCES:
+        if len(self._sources) >= MAX_RESEARCH_SOURCES and not self._has_unread_source():
             raise ToolCallFailed(
-                f"已达来源上限（{MAX_RESEARCH_SOURCES} 条），本次抓取未执行：{url}",
+                f"来源已满（{MAX_RESEARCH_SOURCES} 条）且都已读，本次抓取未执行：{url}",
                 tool_id=FETCH_TOOL,
             )
         if self._fetcher is None:
@@ -243,14 +255,44 @@ class ResearchToolbox:
             raise ToolCallFailed(
                 f"抓取失败：{url}（{type(error).__name__}: {error}）", tool_id=FETCH_TOOL
             ) from error
+        if page.final_url in self._read_urls:
+            # 跳转落点已经读过（可能是另一条候选）：不再追加第二张同 URL 的卡。
+            self._read_urls.add(url)
+            return f"这条网址已经收过了，不重复收：{page.final_url}"
         hit = self._accept_page(url, page)
+        # 抓取成功后才腾位：失败时候选还在，模型可以换一条再试。
+        # 同一条搜索命中被读了正文时，用正文那条替换掉它，而不是留两张同 URL 的卡。
+        self._drop_unread_source(url)
+        self._drop_unread_source(hit.url)
+        if len(self._sources) >= MAX_RESEARCH_SOURCES:
+            self._evict_oldest_unread_source()
         self._sources.append(hit)
+        self._read.append(hit)
+        self._read_urls.add(url)
+        self._read_urls.add(hit.url)
         # 回灌给模型的是**正文**（≤4000 字），不是 800 字的来源卡：
         # 卡是给上下文与账本用的，工具这一趟要够模型判断"这页是不是我要的"。
         body = parsed_text(hit.parsed)
         return _clipped_text(body, len(body))
 
     # —— 内部 ——
+
+    def _has_unread_source(self) -> bool:
+        return any(hit.url not in self._read_urls for hit in self._sources)
+
+    def _drop_unread_source(self, url: str) -> None:
+        """丢掉同 URL 的**未读**搜索卡（已读的不动，防止把正文来源误删）。"""
+
+        for index, hit in enumerate(self._sources):
+            if hit.url == url and hit.url not in self._read_urls:
+                self._sources.pop(index)
+                return
+
+    def _evict_oldest_unread_source(self) -> None:
+        for index, hit in enumerate(self._sources):
+            if hit.url not in self._read_urls:
+                self._sources.pop(index)
+                return
 
     def _accept_search_hit(self, url: str, item: ParsedMaterial) -> ResearchHit | None:
         body = parsed_text(item)

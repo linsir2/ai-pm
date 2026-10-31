@@ -68,7 +68,8 @@ def resolve_evidence_refs(
 ) -> tuple[EvidenceId, ...]:
     """`based_on` 原串 → 规范 E 编号元组；未知编号抛 `PacketParseError`（带 candidates 供重装）。
 
-    inquiry 与 discussion 共用（`_NUMERIC` 不搬：discussion 不验数量，M8.1 结论）。
+    inquiry 与 discussion 共用（数字判据见 `domain.shared.numeric_assertion`；
+    discussion 不验数量，M8.1 结论）。
     `purpose` 默认 inquiry（调用方 inquirer 的口径）；discusser 按自己那一趟传。
     """
 

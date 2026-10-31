@@ -58,6 +58,11 @@ class InMemoryDocumentRepository(_InMemoryRepository):
             raise UnknownProject(project_id)
         return deepcopy(document)
 
+    def get_for_update(self, project_id: ProjectId, owner=None) -> Document:
+        """内存没有 PG 行锁：只委托 get，不作为并发证明。"""
+
+        return self.get(project_id)
+
     def save(self, document: Document) -> None:
         self.saves += 1
         self._items[document.project_id] = deepcopy(document)
@@ -297,6 +302,11 @@ class InMemoryEvidenceRepository(_InMemoryRepository):
         if ledger is None:
             raise UnknownProject(project_id)
         return deepcopy(ledger)
+
+    def get_for_update(self, project_id: ProjectId, owner=None) -> EvidenceLedger:
+        """内存没有 PG 行锁：只委托 get，不作为并发证明。"""
+
+        return self.get(project_id)
 
     def save(self, ledger: EvidenceLedger) -> None:
         self.saves += 1

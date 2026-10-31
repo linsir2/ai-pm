@@ -48,6 +48,7 @@ INTEGRATION_DRAFT = json.dumps(
         "proposals": [
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {"zone": "body", "section_id": "s1"},
                 "text": "订单导出用于把订单批量导出成表格。",
                 "origin_type": "derived",

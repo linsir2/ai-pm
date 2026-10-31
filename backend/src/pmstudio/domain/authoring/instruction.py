@@ -26,8 +26,13 @@ class WriteInstruction:
     #: 用户显式确认过的写入（M11 的评测提案）：放行 D5，但**不**给块盖"手改"章——
     #: 例外只关于"这次允许写"，不改变这块以后算谁的（与 `manual` 分工不同）。
     allow_manual_override: bool = False
+    base_version_no: int | None = None
 
     def __post_init__(self) -> None:
+        if self.base_version_no is not None and (
+            type(self.base_version_no) is not int or self.base_version_no <= 0
+        ):
+            raise ShapeError("基线版本必须是正整数", base_version_no=self.base_version_no)
         if not self.text.strip():
             raise ShapeError("写入指令的文本不能为空", instruction_id=self.instruction_id)
         if not self.refs:

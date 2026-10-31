@@ -4,7 +4,7 @@ import type { ExplorationView, RoundView } from "../api/types";
 import {
   buildResearchBody,
   canStartResearch,
-  hasFindings,
+  hasAnswer,
   researchStatusText,
   researchTopicError,
   sourceAction,
@@ -20,6 +20,8 @@ import {
 export function ResearchTray({
   runs,
   pending,
+  busy = false,
+  busyText = "正在处理…",
   topicLimit,
   sourceLimit,
   round,
@@ -30,6 +32,10 @@ export function ResearchTray({
 }: {
   runs: ExplorationView[];
   pending: boolean;
+  /** 有任何动作在途（全局串行闸）：开始研究也禁掉，并写明正在做什么。 */
+  busy?: boolean;
+  /** busy 时的界面说法（由 `pendingActionLabel` 派生，组件不自己拼文案）。 */
+  busyText?: string;
   topicLimit?: number;
   /** 一轮最多挂几张来源卡（拿不到就不拦，靠后端 422）。 */
   sourceLimit?: number;
@@ -41,7 +47,7 @@ export function ResearchTray({
 }) {
   const [topic, setTopic] = useState("");
   const error = researchTopicError(topic, topicLimit);
-  const canStart = canStartResearch(runs, pending) && error === null;
+  const canStart = canStartResearch(runs, pending) && error === null && !busy;
 
   return (
     <div className="loop__scroll">
@@ -73,7 +79,7 @@ export function ResearchTray({
             disabled={!canStart}
             onClick={() => onStart(buildResearchBody(topic).topic)}
           >
-            {pending ? "正在研究…" : "开始研究"}
+            {busy ? busyText : pending ? "正在研究…" : "开始研究"}
           </button>
           {error !== null && <span className="input__hint">{error}</span>}
           {error === null && !canStartResearch(runs, pending) && (
@@ -105,7 +111,21 @@ export function ResearchTray({
 
             {run.status === "done" && (
               <>
-                {hasFindings(run) ? (
+                {hasAnswer(run) ? (
+                  <p>
+                    {run.research?.answer}
+                    {(run.research?.answer_refs ?? []).length > 0 && (
+                      <span className="muted small">
+                        {" "}
+                        〔{(run.research?.answer_refs ?? []).join("、")}〕
+                      </span>
+                    )}
+                  </p>
+                ) : (
+                  <p className="muted small">这一趟只找到来源</p>
+                )}
+
+                {(run.research?.findings ?? []).length > 0 && (
                   <ul className="list">
                     {(run.research?.findings ?? []).map((finding) => (
                       <li key={finding.finding_id}>
@@ -114,8 +134,6 @@ export function ResearchTray({
                       </li>
                     ))}
                   </ul>
-                ) : (
-                  <p className="muted small">这一趟只找到来源，没有能下的结论。</p>
                 )}
 
                 {(run.research?.sources ?? []).length > 0 && (

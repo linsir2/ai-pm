@@ -86,6 +86,7 @@ def _proposal(
         text=text,
         origin=Origin(origin_type, refs, "见草案卡"),
         kind=kind,
+        base_version_no=1,
     )
 
 
@@ -447,7 +448,9 @@ def test_case_a_from_input_to_version_two():
         uow=transaction,
     )
     accepted = tuple(ProposalId(f"p{n}") for n in range(1, 7))
-    result = committer.commit(round_id=ROUND_ID, accepted=accepted, now=NOW)
+    result = committer.commit(
+        round_id=ROUND_ID, draft_id=draft.draft_id, accepted=accepted, now=NOW,
+    )
 
     assert result.version.version_no == 2
     assert transaction.commits == 1

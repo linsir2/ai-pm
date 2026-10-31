@@ -905,14 +905,14 @@ def _answer_eid(
 
 
 def render_existing_entries(document: Document) -> str:
-    """给整合者看的既有条目清单：要改 / 要删旧内容时得用它给的 entry id。"""
+    """真实 Entry ID → 逻辑 Target 索引；逐字正文/层级/refs在 document_state 一份。"""
 
     lines: list[str] = []
     for block in document.blocks:
         for entry in block.entries:
-            lines.append(f"- 条目 {entry.entry_id}：{entry.text}")
+            lines.append(f"- {entry.entry_id} → {document.target_of_block(block.block_id).label()}")
     for entry in document.preference_entries:
-        lines.append(f"- 条目 {entry.entry_id}：（偏好区）{entry.text}")
+        lines.append(f"- {entry.entry_id} → preference")
     return "\n".join(lines) or "（文档现在没有任何条目）"
 
 

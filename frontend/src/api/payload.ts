@@ -92,8 +92,18 @@ export function defaultAccepted(draft: DraftView): string[] {
   // overlap 有值（如 "3/4"）= 装配层判到与字段已有内容行级逐字重叠 → 默认不勾（看清再勾）；
   // undefined（老轮次无键）与 null 都照旧保留：宽松相等 `== null` 把两者一并覆盖。
   return draft.proposals
-    .filter((proposal) => proposal.origin_type !== "proposed" && proposal.overlap == null)
+    .filter((proposal) => proposal.origin_type !== "proposed" && proposal.overlap == null
+      && proposal.simulation_based !== true && proposal.requires_review !== true)
     .map((proposal) => proposal.proposal_id);
+}
+
+/** 所见卡与所选身份必须完全一致；重置effect之前也不能给旧选择盖新章。 */
+export function canConfirmDraft(
+  round: RoundView | null,
+  selection: { round_id: string | null; draft_id: string | null },
+): boolean {
+  return round !== null && round.waiting_on === "draft_card" && round.draft !== null
+    && selection.round_id === round.round_id && selection.draft_id === round.draft.draft_id;
 }
 
 /** `04-未决.md` C4 的"本批全接受"：含"它提议的"那组（默认不勾的那些）。 */

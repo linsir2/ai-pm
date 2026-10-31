@@ -24,6 +24,13 @@ if TYPE_CHECKING:
 class DocumentReader(Protocol):
     def get(self, project_id: ProjectId) -> "Document": ...
 
+    def get_for_update(
+        self, project_id: ProjectId, owner: UserId | None = None
+    ) -> "Document":
+        """UoW 内先锁文档行再读正文与版本；锁持续到外层事务结束。"""
+
+        ...
+
 
 @runtime_checkable
 class DocumentWriter(Protocol):
@@ -87,6 +94,13 @@ class DiscussionWriter(Protocol):
 @runtime_checkable
 class EvidenceReader(Protocol):
     def get(self, project_id: ProjectId) -> "EvidenceLedger": ...
+
+    def get_for_update(
+        self, project_id: ProjectId, owner: UserId | None = None
+    ) -> "EvidenceLedger":
+        """发 E 的 UoW 首次读取账本就锁行，不能读旧对象后只在 save 时锁。"""
+
+        ...
 
 
 @runtime_checkable

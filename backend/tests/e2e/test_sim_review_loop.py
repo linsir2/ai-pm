@@ -40,7 +40,8 @@ async def test_sim_review_proposal_writes_a_document_removal() -> None:
     assert sim_proposals[0].origin_type == "proposed", "评测提案落「它提议的」"
     assert sim_proposals[0].op == "remove"
 
-    result = await harness.confirm_draft()(round_id=round_id, accepted=("sim#1",))
+    result = await harness.confirm_draft()(round_id=round_id, draft_id=view.draft.draft_id,
+                                           accepted=("sim#1",))
 
     assert result.version.version_no == before_version + 1
     after = harness.documents.get(PROJECT).view()
@@ -81,7 +82,8 @@ async def test_r2_replace_proposal_writes_the_priority_entry() -> None:
     proposal_id = replace[0].proposal_id
     assert replace[0].text == "待复核（模拟评测：3/3 个模拟使用者未能走通）"
 
-    result = await harness.confirm_draft()(round_id=round_id, accepted=(proposal_id,))
+    result = await harness.confirm_draft()(round_id=round_id, draft_id=view.draft.draft_id,
+                                           accepted=(proposal_id,))
 
     assert result.version.version_no == before_version + 1
     after = harness.documents.get(PROJECT).view()
@@ -139,7 +141,7 @@ async def test_sim_review_replace_writes_even_when_block_was_hand_edited() -> No
     before_version = harness.documents.get(PROJECT).current_version.version_no
 
     result = await harness.confirm_draft()(
-        round_id=round_id, accepted=(replace[0].proposal_id,)
+        round_id=round_id, draft_id=view.draft.draft_id, accepted=(replace[0].proposal_id,)
     )
 
     assert result.version.version_no == before_version + 1

@@ -12,6 +12,13 @@ import type { AnswerDraft, AwaitingMode, ClaimEdit } from "../api/payload";
 import { defaultAccepted, defaultSeats, initialClaimEdits } from "../api/payload";
 import type { RoundView } from "../api/types";
 
+export interface DraftSelection {
+  round_id: string | null;
+  draft_id: string | null;
+  accepted: string[];
+  memoryAccepted: string[];
+}
+
 export interface RoundDrafts {
   answers: Record<string, AnswerDraft>;
   seats: string[];
@@ -25,6 +32,8 @@ export interface RoundDrafts {
   accepted: string[];
   /** 草案卡上勾中的**记忆提议**（M6）：**默认一条都不勾**——记忆写错会污染以后每一轮。 */
   memoryAccepted: string[];
+  selection: DraftSelection;
+  selectionMatches: boolean;
   collapsed: boolean;
   setCollapsed: (collapsed: boolean) => void;
   changeAnswer: (questionId: string, draft: AnswerDraft) => void;
@@ -45,8 +54,9 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
   const [approvedRequestIds, setApprovedRequestIds] = useState<string[]>([]);
   const [allowWeb, setAllowWebState] = useState(false);
   const [edits, setEdits] = useState<Record<string, ClaimEdit>>({});
-  const [accepted, setAccepted] = useState<string[]>([]);
-  const [memoryAccepted, setMemoryAccepted] = useState<string[]>([]);
+  const [selection, setSelection] = useState<DraftSelection>({
+    round_id: null, draft_id: null, accepted: [], memoryAccepted: [],
+  });
   const [collapsed, setCollapsed] = useState(false);
 
   const roundId = round?.round_id ?? null;
@@ -57,8 +67,6 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
   // 之前按 [roundId, round] 重置，结果是每来一条事件就把用户正在打的字清空。
   useEffect(() => {
     setAnswers({});
-    setAccepted([]);
-    setMemoryAccepted([]);
     // 新轮的决策卡必须重新弹出（旧轮上的"收起"不许带过来）
     setCollapsed(false);
     setSeats(round === null ? [] : defaultSeats(round));
@@ -79,8 +87,9 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
 
   // 草案一到位，默认勾上"你说过的 + 它替你判断的"（它提议的默认不勾）。
   useEffect(() => {
-    if (round?.draft != null) setAccepted(defaultAccepted(round.draft));
-  }, [draftId]);
+    setSelection({ round_id: roundId, draft_id: draftId,
+      accepted: round?.draft == null ? [] : defaultAccepted(round.draft), memoryAccepted: [] });
+  }, [roundId, draftId]);
 
   const changeAnswer = useCallback((questionId: string, draft: AnswerDraft) => {
     setAnswers((current) => ({ ...current, [questionId]: draft }));
@@ -115,25 +124,22 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
   }, []);
 
   const toggleAccepted = useCallback((proposalId: string) => {
-    setAccepted((current) =>
-      current.includes(proposalId)
-        ? current.filter((item) => item !== proposalId)
-        : [...current, proposalId],
-    );
-  }, []);
+    setSelection((current) => current.round_id !== roundId || current.draft_id !== draftId
+      ? current : { ...current, accepted: current.accepted.includes(proposalId)
+        ? current.accepted.filter((item) => item !== proposalId) : [...current.accepted, proposalId] });
+  }, [roundId, draftId]);
 
   const toggleMemory = useCallback((proposalId: string) => {
-    setMemoryAccepted((current) =>
-      current.includes(proposalId)
-        ? current.filter((item) => item !== proposalId)
-        : [...current, proposalId],
-    );
-  }, []);
+    setSelection((current) => current.round_id !== roundId || current.draft_id !== draftId
+      ? current : { ...current, memoryAccepted: current.memoryAccepted.includes(proposalId)
+        ? current.memoryAccepted.filter((item) => item !== proposalId) : [...current.memoryAccepted, proposalId] });
+  }, [roundId, draftId]);
 
   /** 本批全接受 / 全不勾：一次替换整批，不走逐条 toggle。 */
   const setAcceptedIds = useCallback((proposalIds: string[]) => {
-    setAccepted([...proposalIds]);
-  }, []);
+    setSelection((current) => current.round_id !== roundId || current.draft_id !== draftId
+      ? current : { ...current, accepted: [...proposalIds] });
+  }, [roundId, draftId]);
 
   return {
     answers,
@@ -142,8 +148,10 @@ export function useRoundDrafts(round: RoundView | null, mode: AwaitingMode): Rou
     approvedRequestIds,
     allowWeb,
     edits,
-    accepted,
-    memoryAccepted,
+    accepted: selection.accepted,
+    memoryAccepted: selection.memoryAccepted,
+    selection,
+    selectionMatches: selection.round_id === roundId && selection.draft_id === draftId && draftId !== null,
     collapsed,
     setCollapsed,
     changeAnswer,

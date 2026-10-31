@@ -32,6 +32,7 @@ def test_caps_fit_a_complete_feature_tree():
 def proposal(index: int) -> dict:
     return {
         "op": "add",
+        "entry_id": None,
         "target": {"zone": "body", "section_id": "s1"},
         "text": f"第 {index} 条",
         "origin_type": "derived",
@@ -70,7 +71,7 @@ def test_seventy_proposals_are_trimmed_to_the_cap_and_reported():
 def test_still_rejects_real_shape_errors():
     with pytest.raises(PacketParseError) :
         schemas.parse_packet_lenient(
-            '{"proposals": [{"op": "add"}]}',
+            '{"proposals": [{"op": "add", "entry_id": null}]}',
             schemas.IntegrationPacket,
             purpose="integration",
         )
@@ -111,6 +112,7 @@ MINIMAL_ITEM = {
     },
     "proposals": {
         "op": "add",
+        "entry_id": None,
         "target": {"zone": "body", "section_id": "s1"},
         "text": "t",
         "origin_type": "derived",
@@ -364,6 +366,7 @@ def test_content_fields_are_never_invented():
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s1"},
                     "text": None,
                     "origin_type": "derived",
@@ -558,6 +561,7 @@ def integration_packet_with(**overrides: object) -> str:
 def integration_proposal(index: int = 1) -> dict:
     return {
         "op": "add",
+        "entry_id": None,
         "target": {"zone": "body", "section_id": "s1"},
         "text": f"第 {index} 条",
         "origin_type": "derived",

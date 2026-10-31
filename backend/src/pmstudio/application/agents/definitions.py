@@ -216,6 +216,7 @@ RESEARCHER = AgentDefinition(
         "topic",
         "sources",
         "tool_notes",
+        "brief",
         "schema_json",
         "validation_error",
     ),

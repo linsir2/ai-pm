@@ -11,6 +11,7 @@ import {
   awaitingMode,
   buildAnswers,
   buildOpeningBody,
+  canConfirmDraft,
   materialHitNotice,
   materialHitTarget,
   searchHitAction,
@@ -18,6 +19,7 @@ import {
 import type { ExplorationAnchor } from "./api/payload";
 import { discussionTopic } from "./state/discussions";
 import type { DiscussionAnchor } from "./state/discussions";
+import { pendingActionLabel } from "./state/pending";
 import { loopBadgeCount, needsLoopAttention } from "./state/progress";
 import { inquiryRuns, researchRuns } from "./state/research";
 import { DocumentPane } from "./components/DocumentPane";
@@ -253,7 +255,18 @@ function Workspace() {
 
   /** 点去处（问卷/草案）：跳到文档那一条；文档列收着就展开；指不到位置就说实话。 */
   const openTarget = useCallback(
-    (label: string) => {
+    (label: string, entryId?: string) => {
+      if (entryId !== undefined) {
+        const sectionId = sectionOfEntry(doc, entryId);
+        if (sectionId === null) {
+          data.notify(`这条内容现在无法唯一定位（${entryId}，可能已撤下或在历史版本里）`);
+          return;
+        }
+        setDocOpen(true);
+        setActiveSection(sectionId);
+        setPendingScroll(`entry-${entryId}`);
+        return;
+      }
       const hit = resolveTarget(doc, label);
       if (hit === null) {
         data.notify(`这条去处现在指不到文档里的位置（${label}）`);
@@ -594,6 +607,8 @@ function Workspace() {
             onStartResearch={() => setResearchAnchor({ kind: "document" })}
             researches={researchRuns(data.explorations)}
             researchesPending={data.pending === "research" || data.explorationsPending}
+            researchBusy={data.busy}
+            researchBusyText={pendingActionLabel(data.pending)}
             researchSourceLimit={data.schema?.limits.max_research_sources}
             researchTopicLimit={data.schema?.limits.max_research_topic_chars}
             onStartWebResearch={(topic) => void data.startWebResearch(topic)}
@@ -627,6 +642,8 @@ function Workspace() {
             onVerifyCard={(statement) => void data.verifyCard(statement)}
             discussions={data.discussions}
             discussionsPending={data.discussionsPending}
+            discussionBusy={data.busy}
+            discussionBusyText={pendingActionLabel(data.pending)}
             discussionAnchor={discussionAnchor}
             onStartDiscussion={(start, runInquiry) => data.startPanel(start, runInquiry)}
             onRunPanelRound={(threadId, signal) => data.runPanelRound(threadId, signal)}
@@ -694,10 +711,12 @@ function Workspace() {
                 ),
               })
             }
-            onConfirm={() =>
-              round !== null &&
-              void data.confirm(round.round_id, drafts.accepted, drafts.memoryAccepted)
-            }
+            onConfirm={(roundId, draftId) => {
+              if (readingHistory || shownRound?.round_id !== roundId
+                  || drafts.selection.draft_id !== draftId
+                  || !canConfirmDraft(shownRound, drafts.selection)) return;
+              void data.confirm(roundId, draftId, drafts.selection.accepted, drafts.selection.memoryAccepted);
+            }}
             onDig={() => {
               if (round !== null) void data.dig(round.round_id);
             }}

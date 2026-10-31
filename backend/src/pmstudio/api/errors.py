@@ -11,7 +11,12 @@ from pmstudio.harness.errors import (
 )
 
 CODE_STATUS = {
+    "draft_mismatch": 409,
+    "baseline_missing": 409,
+    "proposal_stale": 409,
+    "batch_conflict": 409,
     "unknown_project": 404,
+    "document_version_conflict": 409,
     "unknown_round": 404,
     # 读一个不存在的版本 / 编号是"资源不在"，不是形状错误
     "unknown_version": 404,

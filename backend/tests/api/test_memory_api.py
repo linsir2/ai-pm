@@ -58,6 +58,7 @@ DRAFT_REPLY = json.dumps(
         "proposals": [
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {
                     "zone": "body",
                     "section_id": "s5",
@@ -164,7 +165,8 @@ async def test_confirm_accepts_accepted_memory_and_returns_the_round():
     async with async_client(app) as client:
         response = await client.post(
             f"/api/rounds/{round_id}/confirm",
-            json={"accepted": accepted, "accepted_memory": ["mem#1"]},
+            json={"draft_id": str(round_.draft.draft_id),
+                  "accepted": accepted, "accepted_memory": ["mem#1"]},
         )
 
     assert response.status_code == 200
@@ -186,7 +188,8 @@ async def test_confirm_without_accepted_memory_writes_no_memory():
 
     async with async_client(app) as client:
         response = await client.post(
-            f"/api/rounds/{round_id}/confirm", json={"accepted": accepted}
+            f"/api/rounds/{round_id}/confirm",
+            json={"draft_id": str(round_.draft.draft_id), "accepted": accepted}
         )
 
     assert response.status_code == 200

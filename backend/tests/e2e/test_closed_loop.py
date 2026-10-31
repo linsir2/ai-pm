@@ -137,6 +137,7 @@ DRAFT_REPLY = json.dumps(
         "proposals": [
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {
                     "zone": "body",
                     "section_id": "s5",
@@ -150,6 +151,7 @@ DRAFT_REPLY = json.dumps(
             },
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {
                     "zone": "body",
                     "section_id": "s5",
@@ -163,6 +165,7 @@ DRAFT_REPLY = json.dumps(
             },
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {"zone": "body", "section_id": "s8"},
                 "text": "单次导出 60 秒内完成",
                 "origin_type": "derived",
@@ -172,6 +175,7 @@ DRAFT_REPLY = json.dumps(
             },
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {
                     "zone": "body",
                     "section_id": "s5",
@@ -185,6 +189,7 @@ DRAFT_REPLY = json.dumps(
             },
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {"zone": "preference"},
                 "text": "登录页配色偏冷淡风",
                 "origin_type": "user",
@@ -298,7 +303,8 @@ async def test_loop_with_questionnaire_and_a_skipped_question(make_app):
             if proposal["origin_type"] != "proposed"
         ]
         confirmed = await client.post(
-            f"/api/rounds/{started['round_id']}/confirm", json={"accepted": accepted}
+            f"/api/rounds/{started['round_id']}/confirm",
+            json={"draft_id": answered_body["draft"]["draft_id"], "accepted": accepted}
         )
         assert confirmed.status_code == 200, confirmed.text
         assert confirmed.json()["version_no"] == 2

@@ -11,7 +11,7 @@ import math
 import secrets
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
@@ -48,6 +48,8 @@ from pmstudio.application.assembly import (
     landed_answer_proposals,
     landed_claim_proposals,
     normalize,
+    normalize_mechanical_proposals,
+    normalize_proposal,
     open_item_keys,
     open_item_proposal,
     open_question_proposals,
@@ -314,7 +316,7 @@ from pmstudio.domain.ports import (
 from pmstudio.domain.provenance.evidence import EvidenceKind, EvidenceSource
 from pmstudio.domain.provenance.ledger import EvidenceLedger
 from pmstudio.domain.round.claim import Claim
-from pmstudio.domain.round.draft import Origin, OriginType, Proposal
+from pmstudio.domain.round.draft import Origin, OriginType, Proposal, merge_duplicate_removes
 from pmstudio.domain.round.opinion import SeatReview
 from pmstudio.domain.round.questionnaire import (
     MAX_OPEN_ITEMS_PER_BATCH,
@@ -357,15 +359,21 @@ from pmstudio.domain.services.committer import (
     to_write_instruction,
 )
 from pmstudio.domain.shared.errors import (
+    BlockManuallyEdited,
     DomainError,
+    DraftMismatch,
+    FeatureNotAllowedHere,
+    FeatureRequiresUserNaming,
     IllegalStepTransition,
     NotAwaitingAnswers,
+    NothingToCommit,
     ShapeError,
     ThreadClosed,
     ThreadFull,
     TooManySimInquiries,
     TooManySimReviews,
     WaitingOnHuman,
+    WriteConflict,
 )
 from pmstudio.domain.shared.ids import (
     PREFERENCE_AREA_ID,
@@ -520,7 +528,6 @@ class StartRound:
         # 种子同样是事务外的只读校验：必须存在、同项目、跑完了、且被收下为「下一轮输入」
         seeds = self._resolve_seeds(project_id, seed_ids)
         with self._uow:
-            self._documents.get(project_id)
             round_id = RoundId(self._ids.new("r"))
             round_ = Round.start(
                 round_id=round_id,
@@ -531,6 +538,10 @@ class StartRound:
             )
             # pin 是投影的输入：手勾的形状不写进轮次，后面的每步投影就没有"手勾优先"。
             round_.pin_materials(material_ids)
+            # 先 INSERT 建立控制行，再拿项目级锁；不存在的 Round 不能锁读。
+            self._round_writer.save(round_)
+            self._acquire_lease(round_id)
+            self._documents.get_for_update(project_id)
             if picked:
                 # 逐块记 `external` 出处：**只有带进这一轮的块才有编号**（口径见 02 §11.0.28）
                 #
@@ -539,7 +550,7 @@ class StartRound:
                 # 提示词里材料节也按文档序渲染（U 型已撤回：`context.ushape` 不再存在，
                 # 见 02 §11.0.54 的撤回注）。`select_chunks` 只决定"挑哪些块进预算"，
                 # 不决定怎么摆——所以呈现、存储、编号现在是同一个序。
-                ledger = self._evidence.get(project_id)
+                ledger = self._evidence.get_for_update(project_id)
                 # `order` 是**手勾序 + 自动检索序**：自动进来的材料也要有位次，
                 # 否则下面 `position[item[0]]` 直接 KeyError（v2 的崩点）。
                 position = {
@@ -653,9 +664,6 @@ class StartRound:
                     ]
                 )
             self._round_writer.save(round_)
-            # 同一 UoW：INSERT 与租约一起提交。acquire 失败就整笔回滚——
-            # 不允许"库里已经有这一轮、但没人持有它"的窗口。
-            self._acquire_lease(round_id)
         _publish(self._events, self._clock, round_)
         return round_id
 
@@ -982,9 +990,9 @@ class StartRound:
         else:
             raise AssertionError("不可能走到这里")
         with self._uow:
-            round_ = self._rounds.get(round_id)
-            document = self._documents.get(round_.project_id)
-            ledger = self._evidence.get(round_.project_id)
+            round_ = self._rounds.get_for_update(round_id)
+            document = self._documents.get_for_update(round_.project_id)
+            ledger = self._evidence.get_for_update(round_.project_id)
             assigned = self._assigner.assign_claims(
                 analysis.claims, ledger=ledger, round_id=round_id, now=self._clock.now()
             )
@@ -1316,7 +1324,7 @@ class SubmitOpening:
                 web_queries_chosen=chosen,
             )
             if execution is not None:
-                ledger = self._evidence.get(round_.project_id)
+                ledger = self._evidence.get_for_update(round_.project_id)
                 self._web_research.apply(round_, ledger, execution)
                 self._evidence_writer.save(ledger)
             self._round_writer.save(round_)
@@ -1444,7 +1452,7 @@ class DecideWebRequest:
             return
         with self._uow:
             target = self._rounds.get_for_update(round_id)
-            ledger = self._evidence.get(target.project_id)
+            ledger = self._evidence.get_for_update(target.project_id)
             self._web_research.apply(target, ledger, execution)
             self._evidence_writer.save(ledger)
             self._round_writer.save(target)
@@ -1558,7 +1566,7 @@ class RecoverWebRequest:
             return
         with self._uow:
             target = self._rounds.get_for_update(round_id)
-            ledger = self._evidence.get(target.project_id)
+            ledger = self._evidence.get_for_update(target.project_id)
             self._web_research.apply(target, ledger, execution)
             self._evidence_writer.save(ledger)
             self._round_writer.save(target)
@@ -1836,7 +1844,10 @@ class RunSeatRound:
             return
         with self._uow:
             self._ensure_lease_held(round_id)
-            ledger = self._evidence.get(round_.project_id)
+            round_ = self._rounds.get_for_update(round_id)
+            if round_.pending_seats:
+                return
+            ledger = self._evidence.get_for_update(round_.project_id)
             self._assigner.assign_opinions(
                 round_.current_reviews,
                 ledger=ledger,
@@ -2563,9 +2574,9 @@ class IntegrateRound:
         memory_proposals, memory_notes = await self._curate(round_id=round_id, result=result)
 
         with self._uow:
-            round_ = self._rounds.get(round_id)
-            ledger = self._evidence.get(round_.project_id)
-            document = self._documents.get(round_.project_id)
+            round_ = self._rounds.get_for_update(round_id)
+            document = self._documents.get_for_update(round_.project_id)
+            ledger = self._evidence.get_for_update(round_.project_id)
             adapter = adapt(document.template)
             now = self._clock.now()
             # 整合者提名的联网申请：**最终 UoW 才挂载**，本轮不执行（P3a）。
@@ -2592,6 +2603,14 @@ class IntegrateRound:
             )
             round_.defer(assembled.deferred)
             proposals = list(assembled.proposals)
+            gaps = list(gaps)
+
+            def append_created(items: Sequence[Proposal]) -> tuple[Proposal, ...]:
+                created = normalize_mechanical_proposals(items, document)
+                proposals.extend(created.proposals)
+                gaps.extend(created.notes)
+                return created.proposals
+
             degraded = 0
             if assembled.degrade_reason is not None:
                 degraded_proposals = degraded_question_proposals(
@@ -2603,12 +2622,11 @@ class IntegrateRound:
                     start_index=_next_proposal_index(proposals),
                     reason=assembled.degrade_reason,
                 )
-                degraded = len(degraded_proposals)
-                proposals += list(degraded_proposals)
+                degraded = len(append_created(degraded_proposals))
             system_defaults = _system_defaults(round_, ledger=ledger, now=now)
             # s11 里已经活跃的条目身份：下面三处落地都拿它判重（P13 C6）
             known_open_items = open_item_keys(document)
-            proposals += list(
+            append_created(
                 open_question_proposals(
                     round_,
                     adapter=adapter,
@@ -2618,7 +2636,6 @@ class IntegrateRound:
                 )
             )
             questions = assembled.questions
-            gaps = list(gaps)
             # 跳过的席位要在这里点名（`02` §11.0.67）：`skipped_seats` 是轮级的，
             # 后续每趟整合都带——问卷路没有 gaps 通道所以只落在草案卡，闭环区留痕折叠行两边都有。
             for seat_id in round_.skipped_seats:
@@ -2646,7 +2663,7 @@ class IntegrateRound:
                         ),
                         now=now,
                     )
-                proposals += list(
+                append_created(
                     downgraded_question_proposals(
                         landable,
                         adapter=adapter,
@@ -2677,7 +2694,7 @@ class IntegrateRound:
                         now=now,
                         reason="本批没排上",
                     )
-                    proposals += list(
+                    append_created(
                         downgraded_question_proposals(
                             landable_leftover,
                             adapter=adapter,
@@ -2689,7 +2706,7 @@ class IntegrateRound:
                     )
                     gaps += [f"未决（本批没排上）：{item.title}" for item in leftover]
                 # 被回答过的未决项：机械出 remove 把它撤下（不指望模型自觉，`02` §11.0.10）
-                proposals += list(
+                append_created(
                     _retire_answered_open_items(
                         round_,
                         ledger=ledger,
@@ -2705,7 +2722,7 @@ class IntegrateRound:
                     cited=_cited_eids(proposals, assembled.questions),
                     start_index=_next_proposal_index(proposals),
                 )
-                proposals += list(landed.proposals)
+                append_created(landed.proposals)
                 gaps += list(landed.notes)
                 # 主张要么被引用、要么机械落地（D3 向 claims 延伸，`02` §11.0.71）：
                 # claims 与 answers 的编号空间不交（不同账本项），谁先谁后结果一样。
@@ -2715,13 +2732,16 @@ class IntegrateRound:
                     cited=_cited_eids(proposals, assembled.questions),
                     start_index=_next_proposal_index(proposals),
                 )
-                proposals += list(landed_claims.proposals)
+                created_claims = append_created(landed_claims.proposals)
                 gaps += list(landed_claims.notes)
                 # **留痕**（2026-10-21，批 15，`04-未决.md` C1）：这条输入没被整合者
                 # 引用、是被系统机械落地的 → 记进 `Round.dropped`，闭环区按来源分组显示，
                 # 用户看得见哪条是"系统替它落地的"。
                 if landed_claims.dropped:
-                    round_.note_dropped(landed_claims.dropped)
+                    landed_refs = frozenset(ref for p in created_claims for ref in p.origin.refs)
+                    round_.note_dropped(tuple(
+                        item for item in landed_claims.dropped if item.handle in landed_refs
+                    ))
                 # 清单项的去向（A2）：没人处理的那些落 s11——非阻塞、带去处，
                 # 下一轮的 carried 才问得回原章节，不会"轮一结束就没了"。
                 unhandled = _unhandled_list_items(
@@ -2756,8 +2776,7 @@ class IntegrateRound:
                             ),
                             now=now,
                         )
-                        proposals.append(
-                            open_item_proposal(
+                        append_created((open_item_proposal(
                                 adapter=adapter,
                                 title=item.text,
                                 consequence="先搁着，不影响本轮交付",
@@ -2767,11 +2786,16 @@ class IntegrateRound:
                                 index=start + offset,
                                 round_id=round_id,
                                 rationale="清单项没被处理，落 s11 继续排队",
-                            )
-                        )
+                        ),))
                     gaps.append(
                         f"还有 {len(landable_items)} 条清单项没被处理，已记进 s11（不阻塞交付）："
                         + "；".join(item.text for item in landable_items[:3])
+                    )
+                gaps.extend(dry_run(document, proposals, round_=round_, now=now))
+                overlapping = sum(p.overlap is not None for p in proposals)
+                if overlapping:
+                    gaps.append(
+                        f"本轮有 {overlapping} 条提案与字段已有内容重叠（已默认不勾，看清再勾）"
                     )
             dropped = _dropped_items_for(
                 round_,
@@ -2943,9 +2967,7 @@ class IntegrateRound:
                 packet_id=outcome.envelope.packet_id,
             ),
         )
-        gaps = dry_run(
-            document, assembled.proposals, round_=round_, now=self._clock.now()
-        )
+        gaps: tuple[str, ...] = ()
         if outcome.overflow:
             count = sum(item.dropped for item in outcome.overflow)
             gaps = gaps + (
@@ -2956,20 +2978,12 @@ class IntegrateRound:
                 f"本轮有 {len(outcome.discarded)} 条内容因为报文形状不对没进卡片"
                 "（模型交回的那一条不是对象，可在下一轮继续提）",
             )
-        # add 防线（缺口行走**既有通道**，前端一个字不用改）：整块重述过的提案已默认不勾，
-        # 这里把条数报出来——用户在收起状态的卡片上也能看见"这一轮有重提的旧内容"。
-        overlapping = sum(1 for item in assembled.proposals if item.overlap is not None)
+        overlapping = sum(item.overlap is not None for item in assembled.proposals)
         if overlapping:
-            gaps = gaps + (
-                f"本轮有 {overlapping} 条提案与字段已有内容重叠（已默认不勾，看清再勾）",
+            gaps += (
+                f"模型阶段：本轮有 {overlapping} 条提案与字段已有内容重叠"
+                "（已默认不勾，看清再勾）",
             )
-        # 骨架六章还空着就说一句（报告 F18）：走 `gaps` 这条既有通道，
-        # 前端 `DraftDrawer` 已经在渲染它（"写入后仍然空着的必填项"），一个字都不用改。
-        gaps = gaps + backbone_gap_lines(
-            readiness=self._checker.check(document.view(), adapter=adapt(document.template)),
-            proposals=assembled.proposals,
-            adapter=adapt(document.template),
-        )
         return assembled, gaps
 
     def _build_observations_index(self, project_id) -> str:
@@ -3164,8 +3178,12 @@ class IntegrateRound:
                     # "重装 → 仍不行就降级"出口；不判的话会一路走到 `draft_of(...) is None`
                     # → `ShapeError` → **HTTP 409**，用户看到的是一句莫名其妙的错。
                     # 判据用**装配后**的产物（不是报文）：那才是用户真能拿到的东西。
+                    dropped_reasons = "\n".join(
+                        f"{item.handle}：{item.reason}" for item in assembled.dropped
+                    )
                     raise PacketParseError(
-                        "装配完什么都不剩：题、提案、清单项都没有（这一趟等于没给东西）",
+                        "装配完什么都不剩：题、提案、清单项都没有（这一趟等于没给东西）"
+                        + (f"\n{dropped_reasons}" if dropped_reasons else ""),
                         purpose="integration",
                     )
             except ModelCallFailed as error:
@@ -3496,8 +3514,8 @@ class SubmitAnswers:
         skipped: Sequence[str] = (),
     ) -> None:
         with self._uow:
-            round_ = self._rounds.get(round_id)
-            ledger = self._evidence.get(round_.project_id)
+            round_ = self._rounds.get_for_update(round_id)
+            ledger = self._evidence.get_for_update(round_.project_id)
             questionnaire = round_.questionnaire
             if questionnaire is None:
                 raise NotAwaitingAnswers(step=round_.step)
@@ -3646,6 +3664,7 @@ class AttachResearchSources:
         self,
         *,
         rounds: RoundReader,
+        documents: DocumentReader,
         round_writer: RoundWriter,
         explorations: ExplorationReader,
         uow: UnitOfWork,
@@ -3653,6 +3672,7 @@ class AttachResearchSources:
         clock: Clock,
     ) -> None:
         self._rounds = rounds
+        self._documents = documents
         self._round_writer = round_writer
         self._explorations = explorations
         self._uow = uow
@@ -3728,7 +3748,7 @@ class AttachResearchSources:
             round_.attach_research_sources(sources)
             self._round_writer.save(round_)
         _publish(self._events, self._clock, round_)
-        return round_view(round_)
+        return round_view(round_, document=self._documents.get(round_.project_id))
 
 class ConfirmDraft:
     """唯一写入路径的入口。编排层、席位、整合者都拿不到 `DocumentWriter`。"""
@@ -3753,11 +3773,13 @@ class ConfirmDraft:
         *,
         round_id: RoundId,
         accepted: Sequence[str],
+        draft_id: str,
         accepted_memory: Sequence[str] = (),
     ) -> CommitResult:
         result = self._committer.commit(
             round_id=round_id,
             accepted=tuple(ProposalId(item) for item in accepted),
+            draft_id=DraftId(draft_id),
             now=self._clock.now(),
             # 记忆与文档同一次确认、同一个事务（M6）：勾了才写，没勾就什么都不发生
             accepted_memory=tuple(accepted_memory),
@@ -3995,8 +4017,8 @@ class EditEntry:
         text: str = "",
     ) -> EditResult:
         with self._uow:
-            document: Document = self._documents.get(project_id)
-            ledger = self._evidence.get(project_id)
+            document: Document = self._documents.get_for_update(project_id)
+            ledger = self._evidence.get_for_update(project_id)
             now = self._clock.now()
             resolved, existing = _resolve_manual_target(
                 document, op=op, entry_id=entry_id, block_id=block_id, requested=target
@@ -4320,16 +4342,17 @@ class GetWorkspace:
         self._memory = memory
 
     async def __call__(self, *, project_id: ProjectId) -> WorkspaceView:
-        document = self._documents.get(project_id)
         round_id = self._index.latest_round_id(project_id)
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
         round_ = None if round_id is None else self._rounds.get(round_id)
+        document = self._documents.get(project_id)
         ledger = None if round_ is None else self._evidence.get(project_id)
         view = document.view()
         web_tool = web_search_tool(self._tools, keys=self._available_tool_keys)
         return workspace_view(
             project=self._index.summary(project_id),
             document=view,
+            source_document=document,
             round_=round_,
             seat_titles=titles,
             catalog=self._catalog,
@@ -4994,6 +5017,7 @@ class AbandonRound:
         self,
         *,
         rounds: RoundReader,
+        documents: DocumentReader,
         round_writer: RoundWriter,
         uow: UnitOfWork,
         clock: Clock,
@@ -5003,6 +5027,7 @@ class AbandonRound:
         lease_ttl_ms: int = LEASE_TTL_SECONDS * 1000,
     ) -> None:
         self._rounds = rounds
+        self._documents = documents
         self._round_writer = round_writer
         self._uow = uow
         self._clock = clock
@@ -5058,7 +5083,8 @@ class AbandonRound:
 
         # 写完了再取消：取消会把那个任务炸在 await 点，而它不会碰业务状态。
         await self._canceller.cancel(round_id)
-        return round_view(self._rounds.get(round_id))
+        round_ = self._rounds.get(round_id)
+        return round_view(round_, document=self._documents.get(round_.project_id))
 
 
 class GetRound:
@@ -5066,6 +5092,7 @@ class GetRound:
         self,
         *,
         rounds: RoundReader,
+        documents: DocumentReader,
         evidence: EvidenceReader,
         catalog: SeatCatalog,
         tools: ToolCatalog,
@@ -5073,6 +5100,7 @@ class GetRound:
         materials: MaterialStore,
     ) -> None:
         self._rounds = rounds
+        self._documents = documents
         self._evidence = evidence
         self._catalog = catalog
         self._tools = tools
@@ -5082,9 +5110,11 @@ class GetRound:
     async def __call__(self, *, round_id: RoundId) -> RoundView:
         titles = {seat.seat_id: seat.title for seat in self._catalog.all()}
         round_ = self._rounds.get(round_id)
+        document = self._documents.get(round_.project_id)
         web_tool = web_search_tool(self._tools, keys=self._available_tool_keys)
         return round_view(
             round_,
+            document=document,
             seat_titles=titles,
             catalog=self._catalog,
             ledger=self._evidence.get(round_.project_id),
@@ -5206,17 +5236,32 @@ def dry_run(
     后面才是逐字段的"仍然为空"。
     """
 
-    probe = deepcopy(document)
+    probe = copy(document)
+    warning: tuple[str, ...] = ()
     if proposals:
-        probe.apply(
-            tuple(to_write_instruction(proposal) for proposal in proposals),
-            now=now,
-            summary="干跑：不落库",
-            authorized_new_features=round_.authorized_new_features,
-        )
+        try:
+            probe.assert_write_preconditions(
+                tuple(to_write_instruction(p) for p in proposals),
+                authorized_new_features=round_.authorized_new_features,
+            )
+            merged, _ = merge_duplicate_removes(proposals)
+            instructions = tuple(to_write_instruction(p) for p in merged)
+            probe.apply(instructions, now=now, summary="干跑：不落库",
+                        authorized_new_features=round_.authorized_new_features)
+            probe.assert_no_added_duplicates(instructions)
+        except (WriteConflict, ShapeError, BlockManuallyEdited,
+                FeatureRequiresUserNaming, FeatureNotAllowedHere) as error:
+            probe = document
+            warning = (f"全部候选不能同时写入，未生成全选结果预览：{error}",
+                       "以下仅报告当前已确认正文的缺口，不是写入后的结果")
     gaps = tuple(f"{gap.feature_slug}·{gap.title} 仍然为空" for gap in probe.gaps())
     progress = _feature_progress(probe)
-    return gaps if progress is None else (progress, *gaps)
+    result = gaps if progress is None else (progress, *gaps)
+    backbone = backbone_gap_lines(
+        readiness=ReadinessChecker().check(probe.view(), adapter=adapt(probe.template)),
+        proposals=(), adapter=adapt(probe.template),
+    )
+    return (*warning, *result, *backbone)
 
 
 def _feature_progress(probe: Document) -> str | None:
@@ -6981,7 +7026,7 @@ class RunSimInquiry:
             for handle, reason in ref_drops
         )
         with self._uow:
-            stored = self._rounds.get(round_id)
+            stored = self._rounds.get_for_update(round_id)
             stored.record_sim_inquiry(
                 slices=clean_slices,
                 hypotheses=[
@@ -7133,6 +7178,7 @@ class KeepSimInquiry:
             now=self._clock.now().isoformat(),
         )
         with self._uow:
+            stored = self._rounds.get_for_update(round_id)
             packet = self._materials.put(
                 project_id=round_.project_id,
                 parsed=parsed,
@@ -7140,7 +7186,6 @@ class KeepSimInquiry:
                 content=content,
                 now=self._clock.now(),
             )
-            stored = self._rounds.get(round_id)
             stored.choose_sim_inquiry(kept)
             self._round_writer.save(stored)
         self._store_inspirations(round_)
@@ -7275,7 +7320,7 @@ class RunSimReview:
         if failure is not None:
             note = _review_failure_note(failure)
             with self._uow:
-                stored = self._rounds.get(round_id)
+                stored = self._rounds.get_for_update(round_id)
                 stored.augment_draft(gaps=(f"模拟评测未完成（{note}），没有产出——可重跑",))
                 self._round_writer.save(stored)
             raise failure
@@ -7283,8 +7328,14 @@ class RunSimReview:
         reviews = [item for item in results if isinstance(item, dict)]
         outcome = evaluate_rules(reviews, anchors=anchors, requested=feature_slugs)
         with self._uow:
-            stored = self._rounds.get(round_id)
-            ledger = self._evidence.get(stored.project_id)
+            stored = self._rounds.get_for_update(round_id)
+            current = self._documents.get_for_update(stored.project_id)
+            if stored.draft is None or round_.draft is None:
+                raise NothingToCommit()
+            if stored.draft.draft_id != round_.draft.draft_id:
+                raise DraftMismatch(draft_id=round_.draft.draft_id,
+                                    current_draft_id=stored.draft.draft_id)
+            ledger = self._evidence.get_for_update(stored.project_id)
             citations = list(outcome.citations)
             eids = self._assigner.assign_sim_review(
                 [(review_source_ref(str(round_id), item), item.text) for item in citations],
@@ -7292,10 +7343,9 @@ class RunSimReview:
                 round_id=round_id,
                 now=self._clock.now(),
             )
-            self._evidence_writer.save(ledger)
             by_key = {item.key: eid for item, eid in zip(citations, eids, strict=True)}
             proposals = tuple(
-                Proposal(
+                normalize_proposal(Proposal(
                     proposal_id=ProposalId(draft.proposal_id),
                     entry_id=EntryId(draft.entry_id),
                     op=draft.op,
@@ -7310,9 +7360,14 @@ class RunSimReview:
                     # 确认时允许改动被手改过的块；但不给它盖"手改"章
                     # （放行与留痕分工不同，见 `02` §11.0.48）。
                     allow_manual_override=True,
-                )
+                ), document)
                 for draft in outcome.proposals
             )
+            current.assert_write_preconditions(
+                tuple(to_write_instruction(p) for p in proposals),
+                authorized_new_features=stored.authorized_new_features,
+            )
+            self._evidence_writer.save(ledger)
             stored.augment_draft(proposals=proposals)
             stored.record_sim_review(
                 {

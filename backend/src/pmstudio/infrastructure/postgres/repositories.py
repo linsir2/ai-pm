@@ -23,6 +23,7 @@ from pmstudio.application.dto import (
     round_head_view,
 )
 from pmstudio.application.errors import (
+    ApplicationError,
     ExplorationBusy,
     LeaseLost,
     UnknownDiscussion,
@@ -102,11 +103,37 @@ class SqliteDocumentRepository:
 
     def get(self, project_id: ProjectId, *, owner: UserId | None = None) -> Document:
         resolved = require_owner(owner)
-        row = self._row(project_id, owner=resolved)
+        row = self._connection.execute(
+            """
+            SELECT d.*, COALESCE(history.versions, '[]'::jsonb) AS versions
+            FROM documents d
+            LEFT JOIN LATERAL (
+                SELECT jsonb_agg(to_jsonb(v) ORDER BY v.version_no) AS versions
+                FROM document_versions v
+                WHERE v.project_id = d.project_id AND v.owner_id = d.owner_id
+            ) history ON true
+            WHERE d.project_id = %s AND d.owner_id = %s
+            """,
+            (str(project_id), str(resolved)),
+        ).fetchone()
+        if row is None:
+            raise UnknownProject(project_id)
+        return self._load(row, tuple(ser.version_from_row(item) for item in row["versions"]))
+
+    def get_for_update(
+        self, project_id: ProjectId, owner: UserId | None = None
+    ) -> Document:
+        resolved = require_owner(owner)
+        row = self._row(project_id, owner=resolved, for_update=True)
+        # 等待行锁期间前者可能提交新版本；拿到锁后另开语句快照读取历史，
+        # 不把等待前的 history 快照和等待后的正文拼在一起。
         versions = tuple(
             ser.version_from_row(item)
             for item in self.version_rows(project_id, owner=resolved)
         )
+        return self._load(row, versions)
+
+    def _load(self, row: dict, versions: tuple) -> Document:
         return ser.document_from_row(
             {
                 **row,
@@ -119,8 +146,15 @@ class SqliteDocumentRepository:
 
     def save(self, document: Document, *, owner: UserId | None = None) -> None:
         resolved = require_owner(owner)
+        # psycopg transaction 在已有 UoW 中建 savepoint；独立 save 则开事务。
+        # PgConnection 持有的仍是原连接，不提交/释放外层 UoW 的锁。
+        connection = getattr(self._connection, "connection", self._connection)
+        with connection.transaction():
+            self._save(document, owner=resolved)
+
+    def _save(self, document: Document, *, owner: UserId) -> None:
         row = ser.document_to_row(document, now=_now())
-        self._connection.execute(
+        cursor = self._connection.execute(
             """
             INSERT INTO documents (project_id, owner_id, document_id, title, template, blocks,
                                    preference_entries, tombstones, created_at, updated_at)
@@ -136,7 +170,7 @@ class SqliteDocumentRepository:
             """,
             (
                 row["project_id"],
-                str(resolved),
+                str(owner),
                 row["document_id"],
                 row["title"],
                 Jsonb(row["template"]),
@@ -145,38 +179,63 @@ class SqliteDocumentRepository:
                 Jsonb(row["tombstones"]),
                 ser._unwhen(row["created_at"]),
                 ser._unwhen(row["updated_at"]),
-                str(resolved),
+                str(owner),
             ),
         )
-        # 越权 save 是空操作：不属于本 owner 的行既不更新、也不落版本
-        # （`document_versions` 的 ON CONFLICT DO NOTHING 若照跑，会往别人项目塞版本行）。
-        owned = self._connection.execute(
-            "SELECT 1 FROM documents WHERE project_id = %s AND owner_id = %s",
-            (str(document.project_id), str(resolved)),
-        ).fetchone()
-        if owned is None:
+        # upsert 已持有文档行锁；owner 不匹配仍是空操作，不落任何版本。
+        if cursor.rowcount == 0:
             return
+        head = self._connection.execute(
+            "SELECT MAX(version_no) AS version_no FROM document_versions"
+            " WHERE project_id = %s AND owner_id = %s",
+            (str(document.project_id), str(owner)),
+        ).fetchone()
+        if (
+            head["version_no"] is not None
+            and document.current_version.version_no < head["version_no"]
+        ):
+            raise ApplicationError(
+                "文档版本已前进，不能保存陈旧头部", code="document_version_conflict",
+                project_id=str(document.project_id), reason="stale_head",
+                version_no=document.current_version.version_no,
+                current_version_no=head["version_no"],
+            )
         for version in document.versions:
             payload = ser.version_to_row(document.project_id, version)
-            self._connection.execute(
+            params = (
+                payload["project_id"], str(owner), payload["version_no"], payload["trigger"],
+                payload["summary"], payload["changed_block_ids"], Jsonb(payload["snapshot"]),
+                ser._unwhen(payload["created_at"]),
+            )
+            inserted = self._connection.execute(
                 """
                 INSERT INTO document_versions
                     (project_id, owner_id, version_no, trigger, summary, changed_block_ids,
                      snapshot, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(project_id, version_no) DO NOTHING
+                RETURNING version_no
                 """,
-                (
-                    payload["project_id"],
-                    str(resolved),
-                    payload["version_no"],
-                    payload["trigger"],
-                    payload["summary"],
-                    payload["changed_block_ids"],
-                    Jsonb(payload["snapshot"]),
-                    ser._unwhen(payload["created_at"]),
-                ),
-            )
+                params,
+            ).fetchone()
+            if inserted is not None:
+                continue
+            # 历史重放仍幂等，但碰撞必须逐字段相等；时间按 PG 的 UTC timestamptz 比较。
+            identical = self._connection.execute(
+                """
+                SELECT 1 FROM document_versions
+                WHERE project_id = %s AND owner_id = %s AND version_no = %s
+                  AND trigger = %s AND summary = %s AND changed_block_ids = %s
+                  AND snapshot = %s AND created_at = %s
+                """,
+                params,
+            ).fetchone()
+            if identical is None:
+                raise ApplicationError(
+                    "文档版本号已被不同内容占用", code="document_version_conflict",
+                    project_id=str(document.project_id), reason="version_mismatch",
+                    version_no=version.version_no, current_version_no=head["version_no"],
+                )
 
     def version_rows(
         self, project_id: ProjectId, *, owner: UserId | None = None
@@ -190,9 +249,10 @@ class SqliteDocumentRepository:
             )
         )
 
-    def _row(self, project_id: ProjectId, *, owner: UserId) -> dict:
+    def _row(self, project_id: ProjectId, *, owner: UserId, for_update: bool = False) -> dict:
         row = self._connection.execute(
-            "SELECT * FROM documents WHERE project_id = %s AND owner_id = %s",
+            "SELECT * FROM documents WHERE project_id = %s AND owner_id = %s"
+            + (" FOR UPDATE" if for_update else ""),
             (str(project_id), str(owner)),
         ).fetchone()
         if row is None:
@@ -637,9 +697,20 @@ class SqliteEvidenceRepository:
         self._connection = connection
 
     def get(self, project_id: ProjectId, *, owner: UserId | None = None) -> EvidenceLedger:
+        return self._get(project_id, owner=owner, for_update=False)
+
+    def get_for_update(
+        self, project_id: ProjectId, owner: UserId | None = None
+    ) -> EvidenceLedger:
+        return self._get(project_id, owner=owner, for_update=True)
+
+    def _get(
+        self, project_id: ProjectId, *, owner: UserId | None, for_update: bool
+    ) -> EvidenceLedger:
         resolved = require_owner(owner)
         row = self._connection.execute(
-            "SELECT payload FROM evidence_ledgers WHERE project_id = %s AND owner_id = %s",
+            "SELECT payload FROM evidence_ledgers WHERE project_id = %s AND owner_id = %s"
+            + (" FOR UPDATE" if for_update else ""),
             (str(project_id), str(resolved)),
         ).fetchone()
         if row is None:

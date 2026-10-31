@@ -19,6 +19,8 @@ export function DraftDrawer({
   accepted,
   memoryAccepted,
   pending,
+  selectionMatches = false,
+  readOnly = false,
   onToggle,
   onToggleMemory,
   onSetAccepted,
@@ -35,10 +37,12 @@ export function DraftDrawer({
   /** 勾中的记忆提议 id（M6）：**默认空**，勾了才随确认写进跨轮记忆。 */
   memoryAccepted: string[];
   pending: boolean;
+  selectionMatches?: boolean;
+  readOnly?: boolean;
   onToggle: (proposalId: string) => void;
   onToggleMemory: (proposalId: string) => void;
   onSetAccepted: (proposalIds: string[]) => void;
-  onSubmit: () => void;
+  onSubmit: (roundId: string, draftId: string) => void;
   /** 草案卡上的"继续深挖"：回到提问，把刚才没问上的题问出来（C6）。 */
   onDig: () => void;
   /** 草案卡上的"去模拟调研"：轮内动作，缺需求信息时去推一轮假设（M10）。 */
@@ -46,7 +50,7 @@ export function DraftDrawer({
   /** 草案卡上的"模拟评测"：轮内动作，模拟使用者走查（M11）。 */
   onSimReview: () => void;
   /** 提案的去处可点：跳到文档那一条（传了才出按钮，老消费者不受影响）。 */
-  onOpenTarget?: (label: string) => void;
+  onOpenTarget?: (label: string, entryId?: string) => void;
   onCollapse: () => void;
 }) {
   const draft: DraftView | null = round.draft;
@@ -54,6 +58,7 @@ export function DraftDrawer({
   const total = draft.proposals.length;
   const memory: MemoryProposalView[] = round.memory_proposals ?? [];
   const advisories = groupAdvisories(round.advisories);
+  const disabled = pending || readOnly || round.waiting_on !== "draft_card" || !selectionMatches;
 
   return (
     <aside className="drawer" role="dialog" aria-modal="false" aria-labelledby="drawer-title">
@@ -104,6 +109,7 @@ export function DraftDrawer({
                     key={proposal.proposal_id}
                     proposal={proposal}
                     accepted={accepted.includes(proposal.proposal_id)}
+                    disabled={disabled}
                     doc={doc}
                     onToggle={() => onToggle(proposal.proposal_id)}
                     onOpenTarget={onOpenTarget}
@@ -122,6 +128,7 @@ export function DraftDrawer({
                   key={proposal.proposal_id}
                   proposal={proposal}
                   accepted={accepted.includes(proposal.proposal_id)}
+                  disabled={disabled}
                   doc={doc}
                   onToggle={() => onToggle(proposal.proposal_id)}
                   onOpenTarget={onOpenTarget}
@@ -152,6 +159,7 @@ export function DraftDrawer({
                 key={item.proposal_id}
                 item={item}
                 accepted={memoryAccepted.includes(item.proposal_id)}
+                disabled={disabled}
                 onToggle={() => onToggleMemory(item.proposal_id)}
               />
             ))}
@@ -168,7 +176,8 @@ export function DraftDrawer({
           {memory.length > 0 && `  记忆：勾了 ${memoryAccepted.length} / ${memory.length} 条。`}
         </p>
         <div className="row">
-          <button type="button" className="btn btn--primary" disabled={pending} onClick={onSubmit}>
+          <button type="button" className="btn btn--primary" disabled={disabled}
+            onClick={() => { if (!disabled) onSubmit(round.round_id, draft.draft_id); }}>
             {pending ? "正在写入…" : `确认写入 ${accepted.length} 条`}
           </button>
           {/* C4：本批全接受要有，但"它提议的"那组单独计——别让人一条条点 */}
@@ -176,7 +185,7 @@ export function DraftDrawer({
             type="button"
             className="btn btn--sm"
             onClick={() => onSetAccepted(allProposalIds(draft))}
-            disabled={pending || accepted.length === total}
+            disabled={disabled || accepted.length === total}
           >
             本批全接受（{total} 条）
           </button>
@@ -184,7 +193,7 @@ export function DraftDrawer({
             type="button"
             className="btn btn--sm btn--ghost"
             onClick={() => onSetAccepted(NO_PROPOSALS)}
-            disabled={pending || accepted.length === 0}
+            disabled={disabled || accepted.length === 0}
           >
             全不勾
           </button>
@@ -194,7 +203,7 @@ export function DraftDrawer({
             type="button"
             className="btn btn--sm btn--ghost"
             onClick={onDig}
-            disabled={pending}
+            disabled={disabled}
           >
             继续深挖（再问一批）
           </button>
@@ -202,7 +211,7 @@ export function DraftDrawer({
             type="button"
             className="btn btn--sm btn--ghost"
             onClick={onSimInquiry}
-            disabled={pending}
+            disabled={disabled}
           >
             去模拟调研
           </button>
@@ -210,7 +219,7 @@ export function DraftDrawer({
             type="button"
             className="btn btn--sm btn--ghost"
             onClick={onSimReview}
-            disabled={pending}
+            disabled={disabled}
           >
             模拟评测
           </button>
@@ -236,10 +245,12 @@ const MEMORY_OP_TEXT: Record<string, string> = {
 function MemoryRow({
   item,
   accepted,
+  disabled,
   onToggle,
 }: {
   item: MemoryProposalView;
   accepted: boolean;
+  disabled: boolean;
   onToggle: () => void;
 }) {
   return (
@@ -249,6 +260,7 @@ function MemoryRow({
           type="button"
           className={accepted ? "prop__verdict prop__verdict--on" : "prop__verdict"}
           aria-pressed={accepted}
+          disabled={disabled}
           onClick={onToggle}
         >
           {accepted ? "记" : "不记"}
@@ -275,15 +287,17 @@ function MemoryRow({
 function Proposal({
   proposal,
   accepted,
+  disabled,
   doc,
   onToggle,
   onOpenTarget,
 }: {
   proposal: ProposalView;
   accepted: boolean;
+  disabled: boolean;
   doc: DocumentView | null;
   onToggle: () => void;
-  onOpenTarget?: (label: string) => void;
+  onOpenTarget?: (label: string, entryId?: string) => void;
 }) {
   return (
     <article className={proposal.origin_type === "proposed" ? "prop prop--proposed" : "prop"}>
@@ -292,6 +306,7 @@ function Proposal({
           type="button"
           className={accepted ? "prop__verdict prop__verdict--on" : "prop__verdict"}
           aria-pressed={accepted}
+          disabled={disabled}
           onClick={onToggle}
         >
           {accepted ? "要" : "不要"}
@@ -299,7 +314,18 @@ function Proposal({
         <span className="prop__target">{OP_TEXT[proposal.op] ?? proposal.op}</span>
       </div>
       <div>
-        <p className="prop__text">{proposal.text}</p>
+        {proposal.op !== "add" && (
+          <div>
+            <p className="muted small">
+              {proposal.op === "remove" ? "撤下的基线旧文" : "基线旧文"}
+              {proposal.base_version_no != null && ` · v${proposal.base_version_no}`}
+            </p>
+            <p className="prop__text">{proposal.before?.text ?? "基线旧值未知（不以当前正文代替）"}</p>
+            {proposal.before != null && <EvidenceChip eids={proposal.before.refs} />}
+            {proposal.op === "replace" && <p className="muted small">→ 替换为</p>}
+          </div>
+        )}
+        {proposal.op !== "remove" && <p className="prop__text">{proposal.text}</p>}
         <div className="prop__foot">
           <span className="tag">{ORIGIN_TEXT[proposal.origin_type] ?? proposal.origin_type}</span>
           {proposal.simulation_based === true && (
@@ -309,7 +335,8 @@ function Proposal({
             <button
               type="button"
               className="targetlink"
-              onClick={() => onOpenTarget(proposal.target_label)}
+              onClick={() => proposal.op === "add" ? onOpenTarget(proposal.target_label)
+                : onOpenTarget(proposal.target_label, proposal.entry_id)}
               title="跳到文档那一条"
             >
               {targetText(proposal.target_label, doc?.sections)}

@@ -210,6 +210,57 @@ describe("探索端点的路径与请求体（M8）", () => {
   });
 });
 
+describe("跑模型/网络的端点用长超时（S1）", () => {
+  function timeoutOf(init: RequestInit): number | undefined {
+    return (init as { timeoutMs?: number }).timeoutMs;
+  }
+
+  it("发起调研带 timeoutMs=900s", async () => {
+    const calls = captureFetch({ exploration_id: "x-1" });
+
+    await api.startExploration("p1", {
+      kind: "inquiry",
+      scope: { kind: "document", ref: null, text: "导出优化" },
+    });
+
+    expect(timeoutOf(calls[0]!.init)).toBe(900_000);
+  });
+
+  it("项目级研究带 timeoutMs=900s", async () => {
+    const calls = captureFetch({ exploration_id: "x-1" });
+
+    await api.startWebResearch("p1", "导出优化");
+
+    expect(timeoutOf(calls[0]!.init)).toBe(900_000);
+  });
+
+  it("重试一趟调研带 timeoutMs=900s", async () => {
+    const calls = captureFetch({ exploration_id: "x-1" });
+
+    await api.retryExploration("x-1");
+
+    expect(timeoutOf(calls[0]!.init)).toBe(900_000);
+  });
+
+  it("跑一趟模拟调研带 timeoutMs=900s", async () => {
+    const calls = captureFetch({ round_id: "r-1" });
+
+    await api.runSimInquiry("r-1");
+
+    expect(timeoutOf(calls[0]!.init)).toBe(900_000);
+  });
+
+  it("panel 每轮带 timeoutMs=900s（AbortSignal 仍照传）", async () => {
+    const calls = captureFetch({ thread_id: "d-1" });
+    const controller = new AbortController();
+
+    await api.runPanelRound("d-1", controller.signal);
+
+    expect(timeoutOf(calls[0]!.init)).toBe(900_000);
+    expect(calls[0]!.init.signal).toBeTruthy();
+  });
+});
+
 describe("讨论卡端点的路径与请求体（M12）", () => {
   it("收卡：POST 带上 `as`（种子 / 材料）", async () => {
     const calls = captureFetch({ thread_id: "d-1" });

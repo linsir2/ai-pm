@@ -4,11 +4,13 @@
 失败不留孤儿、空文档也能研究。工具边界在 `tests/infrastructure/test_research_tools.py`。
 """
 
+import asyncio
 import json
 
 import pytest
 
 from pmstudio.application.errors import UnknownProject
+from pmstudio.application.ports import FetchedPage
 from pmstudio.application.project_research import (
     research_material_key,
     resolve_source_refs,
@@ -16,11 +18,19 @@ from pmstudio.application.project_research import (
     sources_for_prompt,
 )
 from pmstudio.domain.exploration.exploration import ExplorationKind, ExplorationStatus
-from pmstudio.domain.exploration.research import MAX_RESEARCH_SOURCES
+from pmstudio.domain.exploration.research import (
+    MAX_RESEARCH_ANSWER_CHARS,
+    MAX_RESEARCH_SOURCES,
+)
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import ProjectId
 from tests.support.builders import PROJECT, document_with_feature, make_document
-from tests.support.doubles import LoopScriptedGateway, RecordingWebSearch, ToolStep
+from tests.support.doubles import (
+    LoopScriptedGateway,
+    RecordingWebFetch,
+    RecordingWebSearch,
+    ToolStep,
+)
 from tests.support.harness import Harness
 
 
@@ -47,10 +57,25 @@ def _page(url: str = "https://example.com/a", text: str = "同类产品默认 60
     )
 
 
-def _synthesis(*refs: str, open_questions: tuple[str, ...] = ()) -> str:
+def _fetched(url: str, *, title: str = "导出上限白皮书", text: str = "同类产品默认 60 秒上限。"):
+    return FetchedPage(
+        content=f"<html><body><p>{text}</p></body></html>".encode(),
+        media_type="text/html",
+        final_url=url,
+        title=title,
+    )
+
+
+def _synthesis(
+    *refs: str,
+    open_questions: tuple[str, ...] = (),
+    answer: str = "同类产品多把批量导出上限设在 60 秒，超大文件需要分片",
+    answer_refs: tuple[str, ...] | None = None,
+) -> str:
     return json.dumps(
         {
-            "basis": "依据 S1 的白皮书",
+            "answer": answer,
+            "answer_refs": list(answer_refs if answer_refs is not None else refs),
             "findings": [
                 {"text": "主流同类产品的导出上限是 60 秒", "refs": list(refs)}
             ],
@@ -78,14 +103,26 @@ def _harness(
     gateway=None,
     filled: bool = True,
     returns=None,
+    fetcher=None,
 ):  # type: ignore[no-untyped-def]
+    search_returns = returns if returns is not None else (_page(),)
+    if fetcher is None:
+        fetcher = RecordingWebFetch(
+            returns=tuple(
+                _fetched(
+                    hit.source_ref,
+                    title=hit.title,
+                    text=hit.chunks[0].text if hit.chunks else "",
+                )
+                for hit in search_returns
+            )
+        )
     harness = Harness(
         replies={},
         seat_replies={},
         gateway=gateway or _gateway(),
-        web_search=RecordingWebSearch(
-            returns=returns if returns is not None else (_page(),)
-        ),
+        web_search=RecordingWebSearch(returns=search_returns),
+        fetcher=fetcher,
     )
     harness.seed_project()
     harness.documents.seed(document_with_feature() if filled else make_document())
@@ -106,6 +143,8 @@ async def test_a_successful_run_records_one_eid_and_one_material_per_source() ->
     source = view.research.sources[0]
     assert source.url == "https://example.com/a"
     assert source.eid == "E1"
+    assert view.research.answer.startswith("同类产品多把批量导出上限")
+    assert view.research.answer_refs == ("E1",)
     assert [finding.refs for finding in view.research.findings] == [("E1",)]
 
     # 账本里那条 E 的正文 == 来源卡（逐字）
@@ -150,6 +189,178 @@ async def test_zero_sources_fail_and_touch_nothing() -> None:
     assert harness.materials.list_for_project(PROJECT, current=frozenset()) == ()
 
 
+async def test_a_search_only_loop_gets_a_deterministic_read_before_synthesis() -> None:
+    gateway = _gateway(
+        steps=(
+            ToolStep(calls=(("web_search", {"query": "导出上限"}),)),
+            ToolStep(text="只搜到了线索，没有读正文"),
+        )
+    )
+    harness = _harness(
+        gateway=gateway,
+        fetcher=RecordingWebFetch(returns=(_fetched("https://example.com/read"),)),
+    )
+
+    view = await harness.exploration_runner().start_research(
+        project_id=ProjectId(PROJECT), topic="批量导出的性能上限"
+    )
+
+    assert view.status == ExplorationStatus.DONE.value
+    assert harness.fetcher.calls == ["https://example.com/a"]
+    assert view.research is not None
+    assert [source.url for source in view.research.sources] == [
+        "https://example.com/read"
+    ]
+    notes = "；".join(view.research.notes)
+    assert "系统补读" in notes
+
+
+class _UrlFetcher:
+    """按 URL 决定成功/失败：让"前几条失败、后面某条可读"可被精确断言。"""
+
+    def __init__(self, *, readable: set[str]) -> None:
+        self._readable = readable
+        self.calls: list[str] = []
+
+    async def fetch(self, *, url: str) -> FetchedPage:
+        self.calls.append(url)
+        if url in self._readable:
+            return _fetched(url)
+        raise RuntimeError(f"boom:{url}")
+
+
+async def test_fallback_switches_to_the_next_candidate_after_a_failure() -> None:
+    many = tuple(
+        _page(f"https://example.com/{index}", text=f"第 {index} 份结果")
+        for index in range(MAX_RESEARCH_SOURCES)
+    )
+    gateway = _gateway(
+        steps=(
+            ToolStep(calls=(("web_search", {"query": "导出上限"}),)),
+            ToolStep(text="只搜到了线索"),
+        )
+    )
+    fetcher = _UrlFetcher(readable={"https://example.com/1"})
+    harness = _harness(gateway=gateway, returns=many, fetcher=fetcher)
+
+    view = await harness.exploration_runner().start_research(
+        project_id=ProjectId(PROJECT), topic="批量导出的性能上限"
+    )
+
+    assert view.status == ExplorationStatus.DONE.value
+    assert fetcher.calls[:2] == [
+        "https://example.com/0",
+        "https://example.com/1",
+    ]
+    assert view.research is not None
+    assert [source.url for source in view.research.sources] == [
+        "https://example.com/1"
+    ]
+    notes = "；".join(view.research.notes)
+    assert "成功 1 篇 / 失败 4 篇 / 剩余未试 0 篇" in notes
+    assert "https://example.com/0" in notes
+    assert "boom" in notes
+
+
+async def test_fallback_keeps_trying_past_the_first_three_failures() -> None:
+    many = tuple(
+        _page(f"https://example.com/{index}", text=f"第 {index} 份结果")
+        for index in range(MAX_RESEARCH_SOURCES)
+    )
+    gateway = _gateway(
+        steps=(
+            ToolStep(calls=(("web_search", {"query": "导出上限"}),)),
+            ToolStep(text="只搜到了线索"),
+        )
+    )
+    fetcher = _UrlFetcher(readable={"https://example.com/3"})
+    harness = _harness(gateway=gateway, returns=many, fetcher=fetcher)
+
+    view = await harness.exploration_runner().start_research(
+        project_id=ProjectId(PROJECT), topic="批量导出的性能上限"
+    )
+
+    assert view.status == ExplorationStatus.DONE.value
+    assert fetcher.calls[:4] == [
+        "https://example.com/0",
+        "https://example.com/1",
+        "https://example.com/2",
+        "https://example.com/3",
+    ]
+    assert view.research is not None
+    assert [source.url for source in view.research.sources] == [
+        "https://example.com/3"
+    ]
+    notes = "；".join(view.research.notes)
+    assert "成功 1 篇 / 失败 4 篇 / 剩余未试 0 篇" in notes
+    assert "https://example.com/2" in notes
+
+
+async def test_synthesis_receives_the_loop_brief_and_the_read_source_cards() -> None:
+    brief = "查到 60 秒上限，但只有一份来源"
+    gateway = _gateway(
+        steps=(
+            ToolStep(calls=(("web_search", {"query": "导出上限"}),)),
+            ToolStep(text=brief),
+        )
+    )
+    harness = _harness(gateway=gateway)
+
+    await harness.exploration_runner().start_research(
+        project_id=ProjectId(PROJECT), topic="批量导出的性能上限"
+    )
+
+    synthesis = next(
+        request for request in reversed(gateway.requests) if request.purpose == "research"
+    )
+    content = synthesis.messages[0].content
+    assert f"brief={brief}" in content
+    assert "[S1] 导出上限白皮书" in content
+    assert "https://example.com/a" in content
+
+
+class _SlowGateway:
+    def __init__(
+        self, inner: LoopScriptedGateway, *, loop_delay: float, synthesis_delay: float
+    ) -> None:
+        self._inner = inner
+        self._loop_delay = loop_delay
+        self._synthesis_delay = synthesis_delay
+
+    @property
+    def requests(self):  # type: ignore[no-untyped-def]
+        return self._inner.requests
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        delay = self._loop_delay if request.tools else self._synthesis_delay
+        await asyncio.sleep(delay)
+        return await self._inner.complete(request)
+
+
+async def test_one_total_deadline_covers_loop_and_synthesis(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from pmstudio.application import project_research as module
+
+    monkeypatch.setattr(module, "RESEARCH_TIMEOUT_SECONDS", 1)
+    gateway = _SlowGateway(
+        _gateway(
+            steps=(
+                ToolStep(calls=(("web_search", {"query": "导出上限"}),)),
+                ToolStep(text="够了"),
+            )
+        ),
+        loop_delay=0.3,
+        synthesis_delay=0.6,
+    )
+    harness = _harness(gateway=gateway)
+
+    view = await harness.exploration_runner().start_research(
+        project_id=ProjectId(PROJECT), topic="批量导出的性能上限"
+    )
+
+    assert view.status == ExplorationStatus.FAILED.value
+    assert "超过总时限" in (view.failure_reason or "")
+
+
 async def test_unknown_project_is_rejected_before_any_network_call() -> None:
     harness = _harness()
 
@@ -181,6 +392,95 @@ async def test_synthesis_rejects_unknown_source_refs_then_repairs() -> None:
     assert sum(1 for purpose in gateway.purposes if purpose == "research") == 2
 
 
+async def test_an_answer_that_repeats_the_topic_is_rejected_without_echoing_it() -> None:
+    topic = "批量导出的性能上限"
+    restated = _synthesis("S1", answer=topic)
+    gateway = LoopScriptedGateway(
+        loop=(
+            ToolStep(calls=(("web_search", {"query": "导出上限"}),)),
+            ToolStep(text="够了"),
+        ),
+        structured={"research": [restated, restated]},
+    )
+    harness = _harness(gateway=gateway)
+
+    view = await harness.exploration_runner().start_research(
+        project_id=ProjectId(PROJECT), topic=topic
+    )
+
+    assert view.status == ExplorationStatus.FAILED.value
+    reason = view.failure_reason or ""
+    assert "不要复述主题" in reason
+    assert topic not in reason
+
+
+async def test_an_open_question_that_repeats_the_topic_is_rejected() -> None:
+    topic = "批量导出的性能上限"
+    restated = _synthesis("S1", open_questions=(topic,))
+    gateway = LoopScriptedGateway(
+        loop=(
+            ToolStep(calls=(("web_search", {"query": "导出上限"}),)),
+            ToolStep(text="够了"),
+        ),
+        structured={"research": [restated, restated]},
+    )
+    harness = _harness(gateway=gateway)
+
+    view = await harness.exploration_runner().start_research(
+        project_id=ProjectId(PROJECT), topic=topic
+    )
+
+    assert view.status == ExplorationStatus.FAILED.value
+    reason = view.failure_reason or ""
+    assert "不要复述主题" in reason
+    assert topic not in reason
+
+
+async def test_answer_refs_must_point_at_a_source_that_was_given() -> None:
+    bad = _synthesis("S1", answer_refs=("S9",))
+    gateway = LoopScriptedGateway(
+        loop=(
+            ToolStep(calls=(("web_search", {"query": "导出上限"}),)),
+            ToolStep(text="够了"),
+        ),
+        structured={"research": [bad, bad]},
+    )
+    harness = _harness(gateway=gateway)
+
+    view = await harness.exploration_runner().start_research(
+        project_id=ProjectId(PROJECT), topic="批量导出的性能上限"
+    )
+
+    assert view.status == ExplorationStatus.FAILED.value
+    reason = view.failure_reason or ""
+    assert "S9" in reason
+    assert "答案引用了" in reason
+
+
+async def test_an_overlong_answer_fails_without_echoing_it() -> None:
+    """S4/B2：1200 上限写进 schema 后，超长在解析层就被拦下（不是落库才炸）。"""
+
+    too_long = "字" * (MAX_RESEARCH_ANSWER_CHARS + 1)
+    bad = _synthesis("S1", answer=too_long)
+    gateway = LoopScriptedGateway(
+        loop=(
+            ToolStep(calls=(("web_search", {"query": "导出上限"}),)),
+            ToolStep(text="够了"),
+        ),
+        structured={"research": [bad, bad]},
+    )
+    harness = _harness(gateway=gateway)
+
+    view = await harness.exploration_runner().start_research(
+        project_id=ProjectId(PROJECT), topic="批量导出的性能上限"
+    )
+
+    assert view.status == ExplorationStatus.FAILED.value
+    reason = view.failure_reason or ""
+    assert "报文过不了 schema" in reason
+    assert too_long not in reason
+
+
 async def test_two_bad_syntheses_fail_without_writing_materials() -> None:
     gateway = LoopScriptedGateway(
         loop=(
@@ -189,7 +489,12 @@ async def test_two_bad_syntheses_fail_without_writing_materials() -> None:
         ),
         structured={
             "research": json.dumps(
-                {"findings": [{"text": "结论", "refs": ["S9"]}], "open_questions": []},
+                {
+                    "answer": "这一趟给出了结论",
+                    "answer_refs": ["S1"],
+                    "findings": [{"text": "结论", "refs": ["S9"]}],
+                    "open_questions": [],
+                },
                 ensure_ascii=False,
             )
         },
@@ -213,7 +518,12 @@ async def test_empty_findings_are_a_legitimate_result() -> None:
         ),
         structured={
             "research": json.dumps(
-                {"basis": "只找到来源，没有可下的判断", "findings": [], "open_questions": []},
+                {
+                    "answer": "现有来源只说明了现状，还不足以回答这个问题",
+                    "answer_refs": ["S1"],
+                    "findings": [],
+                    "open_questions": [],
+                },
                 ensure_ascii=False,
             )
         },
@@ -226,6 +536,8 @@ async def test_empty_findings_are_a_legitimate_result() -> None:
 
     assert view.status == ExplorationStatus.DONE.value
     assert view.research is not None
+    assert view.research.answer == "现有来源只说明了现状，还不足以回答这个问题"
+    assert view.research.answer_refs == ("E1",)
     assert view.research.findings == ()
     assert len(view.research.sources) == 1
 
@@ -235,7 +547,25 @@ async def test_notes_record_tool_attempts_and_overflow() -> None:
         _page(f"https://example.com/{index}", text=f"第 {index} 份结果")
         for index in range(MAX_RESEARCH_SOURCES + 2)
     )
-    harness = _harness(returns=many)
+    gateway = _gateway(
+        steps=(
+            ToolStep(calls=(("web_search", {"query": "导出上限"}),)),
+            ToolStep(
+                calls=tuple(
+                    ("fetch_url", {"url": f"https://example.com/{index}"})
+                    for index in range(3)
+                )
+            ),
+            ToolStep(
+                calls=tuple(
+                    ("fetch_url", {"url": f"https://example.com/{index}"})
+                    for index in range(3, MAX_RESEARCH_SOURCES)
+                )
+            ),
+            ToolStep(text="够了"),
+        )
+    )
+    harness = _harness(gateway=gateway, returns=many)
 
     view = await harness.exploration_runner().start_research(
         project_id=ProjectId(PROJECT), topic="导出上限"
@@ -259,6 +589,18 @@ def test_source_refs_are_normalized_and_lenient_mode_drops_strangers() -> None:
     with pytest.raises(ShapeError):
         resolve_source_refs(["E7"], count=2, lenient=False)
     assert resolve_source_refs(["S3", "S1"], count=2, lenient=True) == (1,)
+
+
+def test_source_ref_errors_name_the_consumer() -> None:
+    """答案的 refs 出错要说"答案"，不能复用"结论"那套文案。"""
+
+    with pytest.raises(ShapeError) as caught:
+        resolve_source_refs(["S9"], count=1, lenient=False, what="答案")
+
+    message = caught.value.message
+    assert "答案引用了没有给出的来源" in message
+    assert "结论引用了" not in message
+    assert "S9" in message
 
 
 def test_material_key_is_namespaced_away_from_p3a() -> None:

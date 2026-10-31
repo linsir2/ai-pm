@@ -23,6 +23,7 @@ import { roundElapsed, roundOrdinal } from "../state/progress";
 import type { RoundDrafts } from "../state/useRoundDrafts";
 import { DiscussionTray } from "./DiscussionTray";
 import { DraftDrawer } from "./DraftDrawer";
+import { canConfirmDraft } from "../api/payload";
 import { InboxTray } from "./InboxTray";
 import { ResearchTray } from "./ResearchTray";
 import { LoopComposer } from "./LoopComposer";
@@ -51,6 +52,8 @@ export function LoopColumn({
   explorationsPending = false,
   researches = [],
   researchesPending = false,
+  researchBusy = false,
+  researchBusyText = "正在处理…",
   researchTopicLimit,
   researchSourceLimit,
   onStartWebResearch,
@@ -59,6 +62,8 @@ export function LoopColumn({
   onAttachResearchSources,
   discussions = [],
   discussionsPending = false,
+  discussionBusy = false,
+  discussionBusyText = "正在处理…",
   discussionAnchor = null,
   collapsed = false,
   badgeCount = 0,
@@ -165,7 +170,7 @@ export function LoopColumn({
   onSubmitOpening: () => void;
   onSubmitAnswers: () => void;
   onSkipAll: () => void;
-  onConfirm: () => void;
+  onConfirm: (roundId: string, draftId: string) => void;
   onDig: () => void;
   /** 草案卡上的"去模拟调研"（M10）：调用方跑完打开模拟抽屉。 */
   onSimInquiry: () => void;
@@ -202,6 +207,9 @@ export function LoopColumn({
   /** 研究 tab 的数据源（P3b-1）：这个项目跑过的研究（最新在前）。 */
   researches?: ExplorationView[];
   researchesPending?: boolean;
+  /** 有任何动作在途（全局串行闸）：开始研究禁用并显示在途动作。 */
+  researchBusy?: boolean;
+  researchBusyText?: string;
   /** 研究主题字数上限（`/schema.limits`）：输入框与"超长"提示读它。 */
   researchTopicLimit?: number;
   /** 一轮最多挂几张来源卡（`/schema.limits`）：给了就在满额时禁用按钮。 */
@@ -213,6 +221,9 @@ export function LoopColumn({
   /** 讨论 tab 的数据源（M9）：这个项目开过的线程（最新在前）。 */
   discussions?: ThreadView[];
   discussionsPending?: boolean;
+  /** 有任何动作在途（全局串行闸）：开跑按钮禁用并显示在途动作。 */
+  discussionBusy?: boolean;
+  discussionBusyText?: string;
   /** 问卷里点「聊聊」带过来的题面与问的人（null = 自由开聊）。 */
   discussionAnchor?: DiscussionAnchor | null;
   onStartDiscussion: (anchor: PanelStart, runInquiry: boolean) => Promise<string | null>;
@@ -227,7 +238,7 @@ export function LoopColumn({
   /** 问卷题行上的「聊聊」：只把锚点交上去（不直接发请求）。 */
   onDiscussQuestion: (anchor: DiscussionAnchor) => void;
   /** 问卷/草案里去处的跳转（到文档那一条）：不传就不出可点去处。 */
-  onOpenTarget?: (label: string) => void;
+  onOpenTarget?: (label: string, entryId?: string) => void;
   /** 右底 composer（旧 BottomStrip 整块搬入）：与旧 foot 收到的 mode 同一个值。 */
   composerProjectId: string;
   composerMode: AwaitingMode;
@@ -346,6 +357,8 @@ export function LoopColumn({
         <ResearchTray
           runs={researches}
           pending={researchesPending ?? false}
+          busy={researchBusy}
+          busyText={researchBusyText}
           topicLimit={researchTopicLimit}
           sourceLimit={researchSourceLimit}
           round={round}
@@ -361,6 +374,8 @@ export function LoopColumn({
           turnLimit={discussionTurnLimit(schema?.limits)}
           anchor={discussionAnchor}
           pending={discussionsPending}
+          busy={discussionBusy}
+          busyText={discussionBusyText}
           onStartPanel={onStartDiscussion}
           onRunRound={onRunPanelRound}
           onJoin={onJoinPanel}
@@ -493,9 +508,11 @@ export function LoopColumn({
               <DraftDrawer
                 round={round}
                 doc={doc}
-                accepted={drafts.accepted}
-                memoryAccepted={drafts.memoryAccepted}
+                accepted={history === null ? drafts.accepted : []}
+                memoryAccepted={history === null ? drafts.memoryAccepted : []}
                 pending={pending === "confirm"}
+                selectionMatches={drafts.selectionMatches && canConfirmDraft(round, drafts.selection)}
+                readOnly={history !== null}
                 onToggle={drafts.toggleAccepted}
                 onToggleMemory={drafts.toggleMemory}
                 onSetAccepted={drafts.setAccepted}

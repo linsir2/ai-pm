@@ -670,6 +670,25 @@ def test_inquiry_no_quantities_catches_numbers() -> None:
     assert failure is not None and "62%" in failure
 
 
+def test_inquiry_no_quantities_reuses_the_shared_criterion() -> None:
+    """eval 是数字判据的第三个消费者：必须与领域共用同一份实现。
+
+    `2026 成功` 是 S2 修掉的误伤（年份 + "成功"不是数量断言），`30%` 仍该命中。
+    如果这里复制一份正则，三条消费线迟早会漂。
+    """
+
+    from evals.assertions import check
+
+    round_ = _sim_round()
+    round_.sim_hypotheses[0]["statement"] = "2026 成功交付一版导出"
+    assert check({"type": "inquiry_has_no_quantities"}, view_of(round_)) is None
+
+    round_ = _sim_round()
+    round_.sim_hypotheses[0]["statement"] = "覆盖 30% 的月底结账用户"
+    failure = check({"type": "inquiry_has_no_quantities"}, view_of(round_))
+    assert failure is not None and "30%" in failure
+
+
 # ── M11：模拟评测的两条默认断言 ─────────────────────────────────────────────
 
 

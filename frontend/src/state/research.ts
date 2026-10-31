@@ -88,7 +88,7 @@ export function sourceActionReason(
   return "这一轮已经出了草案，等下一轮再挂";
 }
 
-/** 这一趟研究的结论里，有几条能点回来源（给"空结论"那句提示用）。 */
-export function hasFindings(item: ExplorationView): boolean {
-  return (item.research?.findings.length ?? 0) > 0;
+/** 这一趟研究有没有给出答案（旧报告没有 `answer`，要能说清"只找到来源"）。 */
+export function hasAnswer(item: ExplorationView): boolean {
+  return (item.research?.answer ?? "").trim().length > 0;
 }

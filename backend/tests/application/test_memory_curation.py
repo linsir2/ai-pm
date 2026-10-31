@@ -73,6 +73,7 @@ def draft_packet() -> str:
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {
                         "zone": "body",
                         "section_id": "s5",
@@ -375,7 +376,8 @@ async def test_confirmed_memory_is_written_in_the_same_transaction():
     accepted = [str(item.proposal_id) for item in round_.draft.proposals]
 
     result = await harness.confirm_draft()(
-        round_id=round_id, accepted=accepted, accepted_memory=["mem#1"]
+        round_id=round_id, draft_id=str(round_.draft.draft_id),
+        accepted=accepted, accepted_memory=["mem#1"]
     )
 
     memory = harness.memory.get(PROJECT)
@@ -405,7 +407,8 @@ async def test_unconfirmed_memory_proposals_change_nothing():
     round_ = harness.rounds.get(round_id)
     accepted = [str(item.proposal_id) for item in round_.draft.proposals]
 
-    await harness.confirm_draft()(round_id=round_id, accepted=accepted)
+    await harness.confirm_draft()(round_id=round_id, draft_id=str(round_.draft.draft_id),
+                                 accepted=accepted)
 
     assert harness.memory.get(PROJECT).entries == ()
     assert harness.memory.saves == 0
@@ -431,7 +434,8 @@ async def test_a_rejected_memory_proposal_id_rolls_the_whole_confirm_back():
 
     with pytest.raises(UnknownMemoryProposal):
         await harness.confirm_draft()(
-            round_id=round_id, accepted=accepted, accepted_memory=["mem#404"]
+            round_id=round_id, draft_id=str(round_.draft.draft_id),
+            accepted=accepted, accepted_memory=["mem#404"]
         )
 
     assert harness.documents.get(PROJECT).current_version.version_no == 1   # 文档没写
@@ -481,7 +485,8 @@ async def test_confirmed_memory_is_injected_into_the_seat_and_the_integrator():
     round_ = harness.rounds.get(round_id)
     accepted = [str(item.proposal_id) for item in round_.draft.proposals]
     await harness.confirm_draft()(
-        round_id=round_id, accepted=accepted, accepted_memory=["mem#1"]
+        round_id=round_id, draft_id=str(round_.draft.draft_id),
+        accepted=accepted, accepted_memory=["mem#1"]
     )
 
     # 第 2 轮：同一份记忆要出现在**席位**与**整合者**两处提示词里

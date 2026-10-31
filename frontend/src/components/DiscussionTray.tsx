@@ -36,6 +36,8 @@ export function DiscussionTray({
   turnLimit,
   anchor = null,
   pending,
+  busy = false,
+  busyText = "正在处理…",
   onStartPanel,
   onRunRound,
   onJoin,
@@ -59,6 +61,10 @@ export function DiscussionTray({
   anchor?: DiscussionAnchor | null;
   /** 有讨论动作在途（开聊 / 说 / 总结 / 收卡 / 关掉）：按钮先禁掉，防连点。 */
   pending: boolean;
+  /** 有任何动作在途（全局串行闸）：开跑按钮也禁掉，并写明正在做什么。 */
+  busy?: boolean;
+  /** busy 时的界面说法（由 `pendingActionLabel` 派生，组件不自己拼文案）。 */
+  busyText?: string;
   /** 开跑一个 panel（M18）：建线程后调用方自动循环跑 N 轮；返回线程 id（失败 null）。 */
   onStartPanel: (start: PanelStart, runInquiry: boolean) => Promise<string | null>;
   /** 跑一轮（M18）：panel 内并行发言 + 综合；返回最新线程（失败/被停 null）。 */
@@ -105,6 +111,7 @@ export function DiscussionTray({
   const roles = roleChoices(anchorRole, roleOptionsProp);
   const trimmed = topic.trim();
   const panelProblem = validatePanel(roleIds, rounds);
+  const canStart = trimmed !== "" && panelProblem === null;
   const researchBusy = explorationsPending || isRunning(explorations);
 
   const isStopped = (threadId: string): boolean => stopRef.current[threadId] === true;
@@ -139,7 +146,7 @@ export function DiscussionTray({
   };
 
   const startAndRun = async (): Promise<void> => {
-    if (trimmed === "" || panelProblem !== null) return;
+    if (busy || !canStart) return;
     const threadId = await onStartPanel(
       { topic: trimmed, role_ids: roleIds, question: anchor?.question ?? null },
       runInquiry,
@@ -260,12 +267,16 @@ export function DiscussionTray({
           <button
             type="button"
             className="btn"
-            disabled={pending || trimmed === "" || panelProblem !== null}
+            disabled={pending || busy || !canStart}
             onClick={() => void startAndRun()}
           >
             开跑
           </button>
-          {panelProblem !== null && <span className="input__hint">{panelProblem}</span>}
+          {busy ? (
+            <span className="input__hint">{busyText}</span>
+          ) : (
+            panelProblem !== null && <span className="input__hint">{panelProblem}</span>
+          )}
         </div>
       </section>
 

@@ -204,6 +204,7 @@ def draft_packet(*, field: str = "exceptions") -> str:
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {
                         "zone": "body",
                         "section_id": "s5",
@@ -777,6 +778,7 @@ def packet_with_one_bad_target() -> str:
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s2", "field": "goal"},
                     "text": "这条去处写错了",
                     "origin_type": "derived",
@@ -785,6 +787,7 @@ def packet_with_one_bad_target() -> str:
                 },
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s8", "field": "performance"},
                     "text": "5 万条 60 秒内可下载",
                     "origin_type": "derived",
@@ -842,6 +845,7 @@ def packet_with_an_untraceable_judgment() -> str:
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s8", "field": "performance"},
                     "text": "5 万条 60 秒内可下载",
                     "origin_type": "derived",
@@ -850,6 +854,7 @@ def packet_with_an_untraceable_judgment() -> str:
                 },
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s8", "field": "observability"},
                     "text": "外部调用都要接链路追踪",
                     "origin_type": "derived",
@@ -897,7 +902,10 @@ async def test_untraceable_proposal_lands_in_proposed_and_confirm_succeeds():
     assert by_text["外部调用都要接链路追踪"] == "proposed"
 
     accepted = tuple(str(proposal.proposal_id) for proposal in round_.draft.proposals)
-    result = await harness.confirm_draft()(round_id=round_id, accepted=accepted)
+    result = await harness.confirm_draft()(
+        round_id=round_id, draft_id=str(harness.rounds.get(round_id).draft.draft_id),
+        accepted=accepted,
+    )
 
     assert result.version.version_no == 2  # 写进去了：不再被 invariant:E4 拦住
 
@@ -912,6 +920,7 @@ def packet_with_a_dropped_middle_proposal() -> str:
             "proposals": [
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {
                         "zone": "body",
                         "section_id": "s5",
@@ -924,6 +933,7 @@ def packet_with_a_dropped_middle_proposal() -> str:
                 },
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s9", "field": "compatibility"},
                     "text": "这条的去处不合法（s9 没有这个槽）",
                     "origin_type": "derived",
@@ -931,6 +941,7 @@ def packet_with_a_dropped_middle_proposal() -> str:
                 },
                 {
                     "op": "add",
+                    "entry_id": None,
                     "target": {"zone": "body", "section_id": "s1"},
                     "text": "现状：导出靠手工复制",
                     "origin_type": "derived",
@@ -1210,14 +1221,42 @@ async def test_answering_an_open_item_retires_it_from_s11():
         skipped=(),
     )
     await harness.run_seat_round()(round_id=round_id)
+    input_version = harness.documents.get(PROJECT).current_version
+    before_entry = next(
+        entry for block in input_version.snapshot.blocks for entry in block.entries
+        if entry.entry_id == EntryId("r0#open01")
+    )
+    answer_eid = next(
+        item.eid for item in harness.evidences.get(PROJECT).evidences()
+        if item.kind is EvidenceKind.CARD_ANSWER
+        and item.source.round_id == round_id
+        and item.source.question_id == question.question_id
+    )
     await harness.integrate_round()(round_id=round_id)
 
     round_ = harness.rounds.get(round_id)
     assert round_.draft is not None
-    removals = [item for item in round_.draft.proposals if str(item.op) == "remove"]
+    removals = [item for item in round_.draft.proposals if item.op is WriteOp.REMOVE]
     assert [str(item.entry_id) for item in removals] == ["r0#open01"]
-    assert "本轮已回答" in removals[0].text
+    assert removals[0].op is WriteOp.REMOVE
+    assert removals[0].target == Target.body("s11")
+    assert removals[0].base_version_no == input_version.version_no
+    assert removals[0].text == before_entry.text
     assert removals[0].origin.type is OriginType.SYSTEM_DEFAULT
+    assert removals[0].origin.refs == (answer_eid,)
+
+    await harness.confirm_draft()(
+        round_id=round_id, draft_id=str(round_.draft.draft_id),
+        accepted=tuple(str(item.proposal_id) for item in round_.draft.proposals),
+    )
+    document = harness.documents.get(PROJECT)
+    s11 = tuple(entry for block in document.blocks
+                if document.target_of_block(block.block_id) == Target.body("s11")
+                for entry in block.entries)
+    assert all(entry.entry_id != before_entry.entry_id for entry in s11)
+    assert before_entry.text not in [entry.text for entry in s11]
+    assert any("按设备台数算" in entry.text and answer_eid in entry.refs for entry in s11)
+    assert document.current_version.version_no == input_version.version_no + 1
 
 
 async def test_skipping_an_open_item_does_not_retire_it():
@@ -1851,12 +1890,49 @@ async def test_a_list_item_already_in_s11_is_not_landed_a_second_time():
         skipped=(),
     )
     await harness.run_seat_round()(round_id=round_id)
+    input_version = harness.documents.get(PROJECT).current_version
+    before_entry = next(
+        entry for block in input_version.snapshot.blocks for entry in block.entries
+        if entry.entry_id == EntryId("r0#open01")
+    )
+    carried = next(item for item in first.questions if item.from_entry == "r0#open01")
+    answer_eid = next(
+        item.eid for item in harness.evidences.get(PROJECT).evidences()
+        if item.kind is EvidenceKind.CARD_ANSWER
+        and item.source.round_id == round_id
+        and item.source.question_id == carried.question_id
+    )
     await harness.integrate_round()(round_id=round_id)  # 第二批：出草案
 
     draft = harness.rounds.get(round_id).draft
-    s11 = [item.text for item in draft.proposals if str(item.target.section_id) == "s11"]
+    s11 = [item.text for item in draft.proposals
+           if item.op is WriteOp.ADD and str(item.target.section_id) == "s11"]
     assert [text for text in s11 if "模板字段要不要可配置" in text] == []  # 不再落第二遍
     assert any("已经在 s11" in gap for gap in draft.gaps)
+    removals = [item for item in draft.proposals if item.op is WriteOp.REMOVE]
+    assert [str(item.entry_id) for item in removals] == ["r0#open01"]
+    assert removals[0].target == Target.body("s11")
+    assert removals[0].base_version_no == input_version.version_no
+    assert removals[0].text == before_entry.text
+    assert removals[0].origin.type is OriginType.SYSTEM_DEFAULT
+    assert removals[0].origin.refs == (answer_eid,)
+
+    carried_answers = tuple(item for item in draft.proposals
+                            if item.op is WriteOp.ADD and answer_eid in item.origin.refs)
+    assert len(carried_answers) == 1
+    await harness.confirm_draft()(
+        round_id=round_id, draft_id=str(draft.draft_id),
+        accepted=tuple(str(item.proposal_id) for item in (*removals, *carried_answers)),
+    )
+    document = harness.documents.get(PROJECT)
+    s11_entries = tuple(entry for block in document.blocks
+                        if document.target_of_block(block.block_id) == Target.body("s11")
+                        for entry in block.entries)
+    assert all(entry.entry_id != before_entry.entry_id for entry in s11_entries)
+    assert not any("模板字段要不要可配置" in entry.text for entry in s11_entries)
+    assert any("第一批的答案" in entry.text and answer_eid in entry.refs
+               for block in document.blocks for entry in block.entries)
+    assert document.current_version.version_no == input_version.version_no + 1
 
 
 # —— C4：出草案时算"连续几轮没采用席位提议"（P14）——
@@ -2069,6 +2145,7 @@ def packet_with_a_missing_entry(*, only_bad: bool = False) -> str:
         proposals.append(
             {
                 "op": "add",
+                "entry_id": None,
                 "target": {
                     "zone": "body",
                     "section_id": "s5",

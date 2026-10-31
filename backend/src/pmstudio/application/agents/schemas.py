@@ -15,7 +15,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from pmstudio.domain.exploration.item import (
     MAX_INQUIRY_BLIND_SPOTS,
@@ -30,6 +30,7 @@ from pmstudio.domain.exploration.research import (
 )
 from pmstudio.domain.shared.errors import ShapeError
 from pmstudio.domain.shared.ids import FeatureSlug, SectionId
+from pmstudio.domain.shared.research import MAX_RESEARCH_ANSWER_CHARS
 from pmstudio.domain.shared.target import Target
 from pmstudio.domain.shared.template_adapter import TemplateAdapter
 from pmstudio.harness.model.normalize import (
@@ -229,12 +230,27 @@ class ResearchFindingDraft(BaseModel):
 
 
 class ResearchPacket(BaseModel):
-    #: 研究综合回包（P3b-1）：结论 + 开放问题。**结论可以空**（只搜到来源、没下判断是合法结果）；
+    #: 研究综合回包（P3b-1 / S4）：**答案 + 依据 + 结论 + 开放问题**。
+    #:
+    #: `answer` 是这一趟必须交回的东西：只搜到来源、下不了判断也必须说明"为什么下不了"，
+    #: 而不是交一份空报告。`findings` 仍可为空（证据点可以不拆）。
     #: 零来源不是报文能表达的事，由用例判失败。
     #:
-    #: 没有 `basis`：结论自带的 `refs` 就是依据，"我读了哪几张卡"这句话没有消费者
-    #: （界面显示结论 + 引用，不显示一句总结），多一个必填字段只是多一种失败模式。
+    #: 没有 `basis`：`answer_refs` 与 conclusion 的 `refs` 就是依据，
+    #: "我读了哪几张卡"这句话没有消费者，多一个必填字段只是多一种失败模式。
 
+    answer: str = Field(
+        min_length=1,
+        max_length=MAX_RESEARCH_ANSWER_CHARS,
+        description=(
+            "这一趟的结论（一段话）：给出取舍、边界与依据；"
+            "不许把研究主题再问一遍，也不许只罗列来源摘要"
+        ),
+    )
+    answer_refs: list[str] = Field(
+        min_length=1,
+        description="结论依据的来源序号（S1、S2…），至少一个；只写卡前面的 S 号",
+    )
     findings: list[ResearchFindingDraft] = Field(
         default_factory=list, max_length=MAX_RESEARCH_FINDINGS
     )
@@ -449,13 +465,14 @@ class TargetDraft(BaseModel):
     )
     feature_slug: str | None = Field(
         default=None,
-        description="功能标识，如 order-export；**给了 field 就必须给 feature_slug**",
+        description="功能标识，如 order-export；功能字段必须给，章节槽不要给",
     )
     field: str | None = Field(
         default=None,
         description=(
-            "功能字段名，只能取功能字段表里的名字（如 acceptance / exceptions / one_liner）；"
-            "必须与 feature_slug 一起给；章节级内容不要给 field"
+            "功能字段名（如 acceptance / exceptions / one_liner）与 feature_slug 一起给；"
+            "章节槽名按章节表填写（如 field=cost、section_id=s8），"
+            "不给 feature_slug；普通章节内容不带 field"
         ),
     )
 
@@ -492,7 +509,7 @@ class ListItemDraft(BaseModel):
 
 
 class ProposalDraft(BaseModel):
-    op: Literal["add", "replace", "remove"] = "add"
+    op: Literal["add", "replace", "remove"]
     target: TargetDraft
     text: str = Field(
         description=(
@@ -507,8 +524,18 @@ class ProposalDraft(BaseModel):
         default=None, description="章节级内容才给：text/acceptance/nfr/bullet_list/…"
     )
     entry_id: str | None = Field(
-        default=None, description="replace/remove 必填，用既有条目清单里的 id"
+        description="键必填：add 明确给 null；replace/remove 给既有条目清单里的非空 id"
     )
+
+    @field_validator("entry_id")
+    @classmethod
+    def check_entry_id(cls, value: str | None, info: ValidationInfo) -> str | None:
+        op = info.data.get("op")
+        if op == "add" and value is not None:
+            raise ValueError("add 的 entry_id 必须明确为 null")
+        if op in ("replace", "remove") and (value is None or not value.strip()):
+            raise ValueError("replace/remove 必须给非空 entry_id")
+        return value
 
 
 class DroppedOpinionDraft(BaseModel):
@@ -637,9 +664,8 @@ def target_of(draft: TargetDraft, *, adapter: TemplateAdapter) -> Target:
     section = SectionId(draft.section_id) if draft.section_id else adapter.feature_home
     if draft.field is not None:
         if draft.feature_slug is not None:
-            target = Target.feature_field(
-                FeatureSlug(draft.feature_slug), draft.field, home=adapter.feature_home
-            )
+            target = Target.body(section, feature_slug=FeatureSlug(draft.feature_slug),
+                                 field=draft.field)
         else:
             # 没有 feature_slug 时，field 只能是**章节槽**（standard 里是那六块，P5a）。
             # 真模型实测：这里以前一律要求 feature_slug，于是六个槽对 AI 路径根本不可达。
