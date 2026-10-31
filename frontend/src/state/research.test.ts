@@ -6,7 +6,7 @@ import type { ExplorationView, RoundView } from "../api/types";
 import {
   buildResearchBody,
   canStartResearch,
-  hasFindings,
+  hasAnswer,
   inquiryRuns,
   researchRuns,
   researchStatusText,
@@ -30,6 +30,8 @@ function run(over: Partial<ExplorationView> = {}): ExplorationView {
     overflow_count: 0,
     candidates: [],
     research: {
+      answer: "同类产品多把批量导出上限设在 60 秒。",
+      answer_refs: ["E1"],
       findings: [{ finding_id: "F1", statement: "60 秒上限", refs: ["E1"] }],
       sources: [
         {
@@ -110,8 +112,13 @@ describe("research 页签的判据", () => {
     expect(sourceActionReason("blocked", drafted)).toContain("出了草案");
   });
 
-  it("空结论要能说出来（只找到来源不算失败）", () => {
-    expect(hasFindings(run())).toBe(true);
-    expect(hasFindings(run({ research: { ...run().research!, findings: [] } }))).toBe(false);
+  it("有 answer 才算给了答案（旧数据没有 answer 要能说出来）", () => {
+    expect(hasAnswer(run())).toBe(true);
+    expect(
+      hasAnswer(run({ research: { ...run().research!, answer: undefined } })),
+    ).toBe(false);
+    expect(
+      hasAnswer(run({ research: { ...run().research!, answer: "   " } })),
+    ).toBe(false);
   });
 });

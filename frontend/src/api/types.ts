@@ -807,8 +807,12 @@ export interface ResearchSourceView {
   excerpt: string;
 }
 
-/** 一趟研究的只读产物：结论 + 来源 + 开放问题 + 这一趟的实况。 */
+/** 一趟研究的只读产物：答案 + 证据点 + 来源 + 开放问题 + 这一趟的实况。 */
 export interface ResearchView {
+  /** 这一趟的结论（S4）。旧后端没有这把键，读侧按可选处理。 */
+  answer?: string;
+  /** 答案依据的账本编号（E）；旧数据没有。 */
+  answer_refs?: string[];
   findings: ResearchFindingView[];
   sources: ResearchSourceView[];
   open_questions: string[];

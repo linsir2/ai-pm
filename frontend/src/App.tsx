@@ -19,6 +19,7 @@ import {
 import type { ExplorationAnchor } from "./api/payload";
 import { discussionTopic } from "./state/discussions";
 import type { DiscussionAnchor } from "./state/discussions";
+import { pendingActionLabel } from "./state/pending";
 import { loopBadgeCount, needsLoopAttention } from "./state/progress";
 import { inquiryRuns, researchRuns } from "./state/research";
 import { DocumentPane } from "./components/DocumentPane";
@@ -606,6 +607,8 @@ function Workspace() {
             onStartResearch={() => setResearchAnchor({ kind: "document" })}
             researches={researchRuns(data.explorations)}
             researchesPending={data.pending === "research" || data.explorationsPending}
+            researchBusy={data.busy}
+            researchBusyText={pendingActionLabel(data.pending)}
             researchSourceLimit={data.schema?.limits.max_research_sources}
             researchTopicLimit={data.schema?.limits.max_research_topic_chars}
             onStartWebResearch={(topic) => void data.startWebResearch(topic)}
@@ -639,6 +642,8 @@ function Workspace() {
             onVerifyCard={(statement) => void data.verifyCard(statement)}
             discussions={data.discussions}
             discussionsPending={data.discussionsPending}
+            discussionBusy={data.busy}
+            discussionBusyText={pendingActionLabel(data.pending)}
             discussionAnchor={discussionAnchor}
             onStartDiscussion={(start, runInquiry) => data.startPanel(start, runInquiry)}
             onRunPanelRound={(threadId, signal) => data.runPanelRound(threadId, signal)}

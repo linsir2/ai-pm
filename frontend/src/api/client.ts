@@ -493,13 +493,14 @@ export const api = {
     request<ExplorationView>(`/projects/${projectId}/explorations`, {
       method: "POST",
       body: JSON.stringify(body),
+      timeoutMs: RUN_TIMEOUT_MS,
     }),
 
   /** 重跑一趟失败的调研：只补没跑完的那次调用。 */
   retryExploration: (explorationId: string) =>
     request<ExplorationView>(
       `/explorations/${encodeURIComponent(explorationId)}/retry`,
-      { method: "POST" },
+      { method: "POST", timeoutMs: RUN_TIMEOUT_MS },
     ),
 
   /** 放弃一趟调研：先记状态、再取消正在跑的调用。 */
@@ -514,6 +515,7 @@ export const api = {
     request<ExplorationView>(`/projects/${projectId}/research`, {
       method: "POST",
       body: JSON.stringify({ topic }),
+      timeoutMs: RUN_TIMEOUT_MS,
     }),
 
   /** 把研究来源挂到当前轮（1..5 张）：只读快照，不进材料池。 */
@@ -602,6 +604,7 @@ export const api = {
       method: "POST",
       body: "{}",
       signal,
+      timeoutMs: RUN_TIMEOUT_MS,
     }),
 
   /** 中途拉人进 panel（M18）：下一轮生效，不追补、不重跑。 */
@@ -689,7 +692,11 @@ export const api = {
 
   /** 草案卡上的"去模拟调研"：轮内动作（不碰 step），跑完读回最新投影。 */
   runSimInquiry: (roundId: string) =>
-    request<RoundView>(`/rounds/${roundId}/sim-inquiry`, { method: "POST", body: "{}" }),
+    request<RoundView>(`/rounds/${roundId}/sim-inquiry`, {
+      method: "POST",
+      body: "{}",
+      timeoutMs: RUN_TIMEOUT_MS,
+    }),
 
   /** 收下模拟的勾选为材料（空选择后端直接拒；同选择重复收下幂等）。 */
   keepSimInquiry: (roundId: string, chosen: string[]) =>

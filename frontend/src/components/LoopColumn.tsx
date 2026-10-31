@@ -52,6 +52,8 @@ export function LoopColumn({
   explorationsPending = false,
   researches = [],
   researchesPending = false,
+  researchBusy = false,
+  researchBusyText = "正在处理…",
   researchTopicLimit,
   researchSourceLimit,
   onStartWebResearch,
@@ -60,6 +62,8 @@ export function LoopColumn({
   onAttachResearchSources,
   discussions = [],
   discussionsPending = false,
+  discussionBusy = false,
+  discussionBusyText = "正在处理…",
   discussionAnchor = null,
   collapsed = false,
   badgeCount = 0,
@@ -203,6 +207,9 @@ export function LoopColumn({
   /** 研究 tab 的数据源（P3b-1）：这个项目跑过的研究（最新在前）。 */
   researches?: ExplorationView[];
   researchesPending?: boolean;
+  /** 有任何动作在途（全局串行闸）：开始研究禁用并显示在途动作。 */
+  researchBusy?: boolean;
+  researchBusyText?: string;
   /** 研究主题字数上限（`/schema.limits`）：输入框与"超长"提示读它。 */
   researchTopicLimit?: number;
   /** 一轮最多挂几张来源卡（`/schema.limits`）：给了就在满额时禁用按钮。 */
@@ -214,6 +221,9 @@ export function LoopColumn({
   /** 讨论 tab 的数据源（M9）：这个项目开过的线程（最新在前）。 */
   discussions?: ThreadView[];
   discussionsPending?: boolean;
+  /** 有任何动作在途（全局串行闸）：开跑按钮禁用并显示在途动作。 */
+  discussionBusy?: boolean;
+  discussionBusyText?: string;
   /** 问卷里点「聊聊」带过来的题面与问的人（null = 自由开聊）。 */
   discussionAnchor?: DiscussionAnchor | null;
   onStartDiscussion: (anchor: PanelStart, runInquiry: boolean) => Promise<string | null>;
@@ -347,6 +357,8 @@ export function LoopColumn({
         <ResearchTray
           runs={researches}
           pending={researchesPending ?? false}
+          busy={researchBusy}
+          busyText={researchBusyText}
           topicLimit={researchTopicLimit}
           sourceLimit={researchSourceLimit}
           round={round}
@@ -362,6 +374,8 @@ export function LoopColumn({
           turnLimit={discussionTurnLimit(schema?.limits)}
           anchor={discussionAnchor}
           pending={discussionsPending}
+          busy={discussionBusy}
+          busyText={discussionBusyText}
           onStartPanel={onStartDiscussion}
           onRunRound={onRunPanelRound}
           onJoin={onJoinPanel}
