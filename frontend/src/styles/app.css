@@ -76,18 +76,19 @@ a {
 
 .shell {
   display: grid;
-  grid-template-columns: 208px minmax(0, 1fr) 500px;
-  grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-columns: var(--nav-width) minmax(0, 1fr) var(--loop-width);
+  grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "top top top"
     "nav doc loop";
   height: 100vh;
+  height: 100dvh;
   transition: grid-template-columns var(--dur-short) var(--ease-out);
 }
 
 /* 文档列收起（想看才打开）：左栏 + 右列，文档不占位 */
 .shell--nodoc {
-  grid-template-columns: 208px minmax(0, 1fr);
+  grid-template-columns: var(--nav-width) minmax(0, 1fr);
   grid-template-areas:
     "top top"
     "nav loop";
@@ -109,7 +110,7 @@ a {
 /* 右栏折叠（06 §2.4 §3）：中栏独占，右列只剩 56px rail（DESIGN.md 顶栏同宽）。
    rail 里只有一个竖按钮（图标 + 徽标数），`topbar__action` 样式复用，不新开类。 */
 .shell--noloop {
-  grid-template-columns: 208px minmax(0, 1fr) 56px;
+  grid-template-columns: var(--nav-width) minmax(0, 1fr) 56px;
   grid-template-areas:
     "top top top"
     "nav doc loop";
@@ -129,7 +130,7 @@ a {
    中列（doc 位）空着（`.doc` 仍 `display: none`），rail 落在右列；
    `padding-inline: 0` 盖掉上面 `.shell--nodoc .loop` 的居中限宽（56px 列里它本来也就算出 0）。 */
 .shell--nodoc.shell--noloop {
-  grid-template-columns: 208px minmax(0, 1fr) 56px;
+  grid-template-columns: var(--nav-width) minmax(0, 1fr) 56px;
   grid-template-areas:
     "top top top"
     "nav doc loop";
@@ -148,7 +149,7 @@ a {
 
 .shell--plain {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "top"
     "doc";
@@ -159,7 +160,9 @@ a {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 var(--space-3);
+  flex-wrap: wrap;
+  min-height: 56px;
+  padding: var(--space-2) var(--space-4);
   background: var(--surface);
   border-bottom: var(--hairline);
   min-width: 0;
@@ -207,21 +210,74 @@ a {
   margin-bottom: var(--space-6);
 }
 
-/* 门户主界面：**不是阅读面**，是导航面。文档区限宽 60em 是给"每行 60–80 个汉字"
-   定的（DESIGN.md 阅读参数），列表页没有那段正文，所以单独放宽到 68em——
-   否则"标题 + 版本 + 日期"三列挤在 60em 里显得空。 */
-/* 门户这两屏（项目库 / 模板库）不是文档区：纸按内容高度收，不铺满一屏。
-   真实 `.doc__inner` 有 `min-height: 100%`（工作台里文档要铺满），门户照搬会让
-   两行内容底下留半屏白纸，看着像没做完。 */
-/* `min-height: 0` 必须比 `.doc__inner` 的 `min-height: 100%` 更具体：
-   两者在同一个元素上（`doc__inner home`），同特异度时**后者胜**，
-   于是纸照样铺满一屏。 */
+/* 门户是宽版导航面，容器规则要比后面的文档纸样式更具体。 */
 .doc__inner.home {
   min-height: 0;
+  max-width: 1440px;
+  padding: var(--space-4) 0;
+  background: transparent;
+  border: 0;
 }
 
-.home {
-  max-width: 68em;
+.home__heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.home__new {
+  flex: none;
+}
+
+.home__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.home__panel {
+  min-width: 0;
+  background: var(--surface);
+  border: var(--hairline);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  scroll-margin-top: var(--space-4);
+}
+
+.home__panel-head {
+  margin-bottom: var(--space-5);
+}
+
+.home__section-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--step-5);
+  font-weight: 600;
+}
+
+.home__create .tpl-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.home__create .field-inline {
+  flex-wrap: wrap;
+}
+
+.home__create .text-input {
+  width: 100%;
+}
+
+.home__create .btn--primary {
+  width: 100%;
+}
+
+.home__back {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  padding: var(--space-2) 0;
+  font: inherit;
+  cursor: pointer;
 }
 
 /* 页面标识 + 标题区：40px primary 方块里放同一个 Logo（复用 `.logo`，不做新图标）。
@@ -232,7 +288,7 @@ a {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
-  margin-bottom: var(--space-5);
+  margin-bottom: 0;
 }
 
 .home__mark {
@@ -362,7 +418,8 @@ a {
   align-items: center;
   gap: var(--space-3);
   width: 100%;
-  padding: var(--space-3) var(--space-2);
+  min-height: 80px;
+  padding: var(--space-4) var(--space-2);
   border: 0;
   background: none;
   border-radius: var(--radius-sm);
@@ -393,9 +450,7 @@ a {
 }
 
 .projects__title {
-  /* 密行就该是密行：原来 step-5（20px）比正文还大，长项目名折成两行，一屏放不下几行。
-     收到 step-3（14px）并单行截断——完整标题留给 title 与详情。 */
-  font-size: var(--step-3);
+  font-size: var(--step-4);
   font-weight: 500;
   min-width: 0;
   white-space: nowrap;
@@ -406,9 +461,9 @@ a {
 .projects__meta {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   margin-left: auto;
-  font-size: var(--step-0);
+  font-size: var(--step-2);
   color: var(--open);
   white-space: nowrap;
 }
@@ -430,14 +485,11 @@ a {
   opacity: 1;
 }
 
-/* 首页分栏（Word/WPS 起始屏同构）：左导航壳 + 右内容（上画廊下密行）。
-   左栏现在三项，全是页内锚点——多用户那天导航变视图，壳不动。
-   窄屏（980 以下）导航折成顶上一横排，不挤内容。 */
+/* 门户导航与内容分栏；阅读面限宽不参与这块布局。 */
 .home--split {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
   gap: var(--space-6);
-  max-width: 80em;
 }
 
 .home__nav {
@@ -453,7 +505,7 @@ a {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   color: var(--open);
-  font-size: var(--step-2);
+  font-size: var(--step-3);
   text-decoration: none;
   white-space: nowrap;
 }
@@ -488,7 +540,7 @@ button.home__navlink {
 .home__meta {
   margin: 0;
   color: var(--open);
-  font-size: var(--step-1);
+  font-size: var(--step-2);
 }
 
 /* 模板画廊：横排卡，点选。选中态只用 primary 的边框 + 淡底——
@@ -598,6 +650,22 @@ button.home__navlink {
   font-size: var(--step-2);
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
+  min-height: 32px;
+}
+
+.topbar__user {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.topbar__user-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .topbar__action:hover {
@@ -833,6 +901,8 @@ button.home__navlink {
   background: var(--app-bg);
   padding: var(--space-4);
   scroll-behavior: smooth;
+  min-width: 0;
+  min-height: 0;
 }
 
 .doc__inner {
@@ -2508,7 +2578,7 @@ details.drawer__history[open] > summary::before {
   min-height: 0;
   /* **不受 52em 限宽约束**：那是给正文阅读的行长上限，这一屏是数据表——
      八个列挤在阅读宽度里只能横向滚动。表格要的是宽度，不是行宽。 */
-  max-width: 86em;
+  max-width: 1440px;
 }
 
 .adm__head {
@@ -3607,11 +3677,25 @@ details.loop__group[open] > summary::before {
 
 @media (max-width: 1240px) {
   .shell {
-    grid-template-columns: 152px minmax(0, 1fr) 425px;
+    --nav-width: 176px;
+    --loop-width: 360px;
   }
 
-  .shell--nodoc {
-    grid-template-columns: 152px minmax(0, 1fr);
+  .home__content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .home__create .tpl-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  }
+
+  .home__create .text-input {
+    width: auto;
+    flex: 1 1 220px;
+  }
+
+  .home__create .btn--primary {
+    width: auto;
   }
 
   .conn__label {
@@ -3627,20 +3711,38 @@ details.loop__group[open] > summary::before {
 @media (max-width: 980px) {
   .shell {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 48px auto minmax(0, 1fr) minmax(320px, 62vh);
+    grid-template-rows: auto auto auto minmax(320px, 62dvh);
     grid-template-areas:
       "top"
       "nav"
       "doc"
       "loop";
+    height: auto;
+    min-height: 100dvh;
+    align-content: start;
   }
 
   .shell--nodoc {
-    grid-template-rows: 48px auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(320px, 80dvh);
     grid-template-areas:
       "top"
       "nav"
       "loop";
+  }
+
+  .shell--noloop,
+  .shell--nodoc.shell--noloop {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+    grid-template-areas: "top" "nav" "doc" "loop";
+  }
+
+  .shell--noloop .loop > .topbar__action {
+    writing-mode: horizontal-tb;
+  }
+
+  .shell--noloop .loop {
+    padding: var(--space-2);
   }
 
   /* 门户三屏（项目库 / 模板库 / 管理后台）只有顶栏 + 一块内容，不套工作台那套
@@ -3648,10 +3750,12 @@ details.loop__group[open] > summary::before {
      `.doc` 被压到 226px，正文整段裁掉、底部一条横向滚动条。
      上面那条 `.shell` 规则同特异度且更早，所以这里必须显式复位。 */
   .shell--plain {
-    grid-template-rows: 48px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas:
       "top"
       "doc";
+    height: 100dvh;
+    min-height: 0;
   }
 
   /* 窄屏 loop 矮：composer 收紧，把高度让给线程 */
@@ -3686,6 +3790,7 @@ details.loop__group[open] > summary::before {
 
   .rail {
     display: flex;
+    align-items: flex-start;
     gap: var(--space-1);
     overflow-x: auto;
     padding: var(--space-2) var(--space-3);
@@ -3708,13 +3813,40 @@ details.loop__group[open] > summary::before {
     white-space: nowrap;
   }
 
+  .projects__row {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .projects__glyph {
+    grid-row: 1 / 3;
+  }
+
+  .projects__meta {
+    grid-column: 2;
+    margin-left: 0;
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .home__panel {
+    padding: var(--space-4);
+  }
+
+  .doc__inner {
+    min-height: 0;
+    padding: var(--space-4);
+  }
+
   .search {
     min-width: 120px;
   }
 
   .rail__head,
   .rail__doc-header,
-  .rail__readiness {
+  .rail__readiness,
+  .rail__legend {
     display: none;
   }
 
@@ -3762,12 +3894,20 @@ details.loop__group[open] > summary::before {
 
    展开态（`.shell`）不改：那时 loop 列本来就是 500px，抽屉填满它正是想要的。 */
 .shell--noloop .overlay-slot {
-  position: fixed;
-  top: 48px;
-  right: 0;
-  bottom: 0;
-  width: min(500px, 100vw);
+  width: min(500px, 100dvw);
+  justify-self: end;
   z-index: 6;
+}
+
+/* 单列时浮层不跟随折叠栏的短行；窄屏抽屉使用视口高度，保留自己的收起按钮。 */
+@media (max-width: 980px) {
+  .overlay-slot,
+  .shell--noloop .overlay-slot {
+    position: fixed;
+    inset: 0 0 0 auto;
+    width: min(500px, 100dvw);
+    height: 100dvh;
+  }
 }
 
 .versions {

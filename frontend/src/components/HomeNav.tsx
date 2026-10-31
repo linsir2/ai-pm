@@ -50,8 +50,8 @@ export function HomeNav({ active, plain = false, onNavigate, onTemplates }: Home
 
   return (
     <nav className="home__nav" aria-label="项目页导航">
-      {item("new", "新建项目")}
       {item("recent", "最近项目")}
+      {item("new", "新建项目")}
       <button type="button" className={cls("templates")} onClick={onTemplates}>
         模板库
       </button>

@@ -8,7 +8,7 @@
 1. 空章显式写出"本章为空 + 差什么"，**不许静默省略**；
 2. **s13 版本历史由 `Version[]` 生成**，不读 block 树；
 3. 偏好区不进正文，只作附录 B，并标明"不进交付物"；
-4. 附录 A 只给 `编号 + 类型 + 一句话摘要`，原话（`raw_span`）留在系统内（`04` D5）；
+4. 附录 A 按类型与来源归并编号，原话与逐条摘要留在系统内；
    而且**只列本文引用过的编号**——账本是项目级、跨轮、只增的，没进正文的那些
    （未被采纳的提案、被跳过的题、更早的轮次）读者查不回去，进交付物只会稀释真正的出处
    （2026-10-02 P31；真跑 59 份导出实测：附录占全文 51%（中位），其中 63% 从未被引用）。
@@ -60,6 +60,7 @@ TRIGGER_LABELS = {
 }
 
 SUMMARY_LIMIT = 60
+EXPORTED_VERSION_LIMIT = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,9 +94,6 @@ def render_markdown(
     parts.append(_appendix_a(view, ledger, adapter))
     if view.preference_entries:
         parts.append(_appendix_b(view))
-    unfinished = _unfinished(readiness)
-    if unfinished:
-        parts.append(unfinished)
     return Deliverable(
         filename=f"{view.title}-v{view.version_no}.md",
         version_no=view.version_no,
@@ -117,6 +115,7 @@ def _header(
     return "\n".join(
         [
             f"# 产品文档 · {view.title}（v{view.version_no}）",
+            "",
             f"> 导出时间 {exported_at:%Y-%m-%d %H:%M} · 文档版本 v{view.version_no}",
             f"> {stamp}",
         ]
@@ -131,7 +130,7 @@ def _section(
     versions: Sequence[Version],
     adapter: TemplateAdapter,
 ) -> str:
-    lines = [f"## {number} {section.title}"]
+    lines = [f"## {number} {section.title}", ""]
     # 版本历史章由**角色**指认：模板里这一章可能叫 s13，也可能叫 history。
     if adapter.role_of(section.section_id) is TemplateRole.VERSION_HISTORY:
         lines += _versions_table(versions)
@@ -146,6 +145,7 @@ def _section(
         lines += _block_lines(block)
     if not _has_entries(section) and not features:
         lines.append(_empty_note(section.section_id, readiness))
+    lines += _section_notes(section, readiness, has_features=bool(features))
     return "\n".join(lines)
 
 
@@ -158,10 +158,12 @@ def _feature(feature: BlockView, *, index: int, chapter: int) -> list[str]:
         # 名称也是正文内容，界面在功能名旁边挂了出处胶囊（`FeatureBlock.tsx`）；
         # 导出以前把它的编号吞了，于是附录里会出现一个正文根本看不见的编号
         # （P31 真跑对账抓到：L2 的 E170、L3 的 E28 都是 `s5/…name` 那条）
-        title = f"### {chapter}.{index} {name}（{slug}）" + (f"〔{refs}〕" if refs else "")
+        title = f"### {chapter}.{index} {name}"
     else:
-        title = f"### {chapter}.{index} {slug}（{slug}）"
-    lines = [title]
+        title = f"### {chapter}.{index} {slug}"
+        refs = ""
+    identity = f"> 标识：`{slug}`" + (f" · 依据：〔{refs}〕" if refs else "")
+    lines = [title, "", identity, ""]
     missing: list[str] = []
     for spec in FEATURE_FIELDS:
         if spec.name == "name":
@@ -170,23 +172,23 @@ def _feature(feature: BlockView, *, index: int, chapter: int) -> list[str]:
         if block is None or not block.entries:
             missing.append(spec.title)
             continue
-        if spec.multiple:
-            lines.append(f"- **{spec.title}**：")
-            for entry in block.entries:
-                lines += _entry_bullet(entry, indent="  ")
-        else:
-            lines.append(f"- **{spec.title}**：{_entry_line(block.entries[0])}")
+        lines += [f"#### {spec.title}", ""]
+        for entry in block.entries:
+            lines += _entry_lines(entry, kind=block.kind, paragraph=not spec.multiple)
+        lines.append("")
     if missing:
-        lines.append(f"- （待补：{'、'.join(missing)}）")
+        lines.append(f"> 待补：{'、'.join(missing)}")
     return lines
 
 
-def _block_lines(block: BlockView, *, indent: str = "") -> list[str]:
+def _block_lines(block: BlockView) -> list[str]:
     lines: list[str] = []
+    if block.field_title and block.entries:
+        lines += ["", f"### {block.field_title}", ""]
     for entry in block.entries:
-        lines += _entry_bullet(entry, indent=indent)
+        lines += _entry_lines(entry, kind=block.kind)
     for child in block.children:
-        lines += _block_lines(child, indent=indent)
+        lines += _block_lines(child)
     return lines
 
 
@@ -194,12 +196,51 @@ def _block_lines(block: BlockView, *, indent: str = "") -> list[str]:
 #: `- - `）。后面必须跟空白（`-5` 不动）；有序编号不动（`"- 1. xxx"` 是合法 markdown，
 #: 无 artifact，不碰）。
 _BULLET_HEAD = re.compile(r"^([-*+])\s+")
+_ORDERED_HEAD = re.compile(r"^\s*(\d+)[.)、]\s+(.+)$")
+_STEP_SEPARATOR = re.compile(r"\n|[；;]\s*(?=\d+[.)、]\s+)")
+_FENCE_HEAD = re.compile(r"^\s*(?:`{3,}|~{3,})", re.MULTILINE)
+_TABLE_RULE = re.compile(
+    r"^[ \t]*(?=.*\|)\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$",
+    re.MULTILINE,
+)
 
 
 def _bullet_head(text: str) -> str:
     """剥掉**一个**行首无序列表符（只剥一个：`"- - x"` 这种正文自带两层的只剥外层）。"""
 
     return _BULLET_HEAD.sub("", text, count=1)
+
+
+def _entry_lines(entry: Entry, *, kind: BlockKind, paragraph: bool = False) -> list[str]:
+    refs = " ".join(str(eid) for eid in entry.refs)
+    if kind is BlockKind.TABLE or _FENCE_HEAD.search(entry.text) or _TABLE_RULE.search(entry.text):
+        # 引用不能粘在闭合围栏 / 最后一个表格单元格上。
+        lines = entry.text.rstrip("\n").split("\n")
+        if refs:
+            lines += ["", f"依据：〔{refs}〕"]
+        return lines + [""]
+    if kind is BlockKind.STEPS:
+        items = [line.strip() for line in _STEP_SEPARATOR.split(entry.text) if line.strip()]
+        marked = [_ORDERED_HEAD.fullmatch(item) for item in items]
+        if all(marked) and [int(match[1]) for match in marked if match] == list(
+            range(1, len(items) + 1)
+        ):
+            items = [match[2] for match in marked if match]
+        else:
+            # 未连续编号时不猜分号的含义；年份、小数等普通数字仍是内容。
+            items = [_bullet_head(line.strip()) for line in entry.text.splitlines() if line.strip()]
+        lines = [f"{index}. {item}" for index, item in enumerate(items, start=1)]
+    elif kind in (BlockKind.BULLET_LIST, BlockKind.ACCEPTANCE):
+        lines = [
+            f"- {_bullet_head(line.strip())}" for line in entry.text.splitlines() if line.strip()
+        ]
+    elif paragraph:
+        return [_entry_line(entry)]
+    else:
+        return _entry_bullet(entry, indent="")
+    if refs:
+        lines[-1] += f"〔{refs}〕"
+    return lines
 
 
 def _entry_bullet(entry, *, indent: str) -> list[str]:  # type: ignore[no-untyped-def]
@@ -226,10 +267,9 @@ def _entry_bullet(entry, *, indent: str) -> list[str]:  # type: ignore[no-untype
 
 
 def _entry_line(entry) -> str:  # type: ignore[no-untyped-def]
-    """内联形状（`- **字段标题**：正文`)用的单行渲染：只剥行首列表符，不处理换行。
+    """字段标题下面的段落：保留换行，剥一个列表符，引用挂末尾。
 
-    多行正文落进单值字段是另一个形状问题（内联形装不下列表），不在这里解——
-    解它要改这一行的形状（`04-未决.md` §N2 只报 bullet 列表那两处）。refs 仍挂末尾。
+    代码围栏与表格已由 `_entry_lines` 分流，引用不会粘进它们的结构。
     """
 
     refs = " ".join(str(eid) for eid in entry.refs)
@@ -259,14 +299,49 @@ def _empty_note(section_id: object, readiness: Sequence[ReadinessItem]) -> str:
     return f"（本章为空：{item.detail}）"
 
 
+def _section_notes(
+    section: SectionView, readiness: Sequence[ReadinessItem], *, has_features: bool
+) -> list[str]:
+    relevant = [item for item in readiness if item.section_id == str(section.section_id)]
+    has_entries = _has_entries(section)
+    empty_gap = next(
+        (item for item in relevant if item.code == "section_min_entries"), None
+    ) if not has_entries and not has_features else None
+    lines: list[str] = []
+    for item in relevant:
+        if item is empty_gap:
+            continue  # 空章说明已经给出这条结构缺口。
+        if item.code == "feature_field_empty" and has_features:
+            continue  # 每个功能末尾已列出未填字段。
+        if item.code == "open_blocking_question" and has_entries:
+            continue  # 未决正文已完整给出问题，不再复述。
+        tag = "待补" if item.severity is Severity.BLOCKER else "提示"
+        detail = "" if item.code in ("section_kind_present", "cross_section_link") else item.detail
+        note = f"> {tag}：{item.title}" + (f"：{detail}" if detail else "")
+        lines += ["", note]
+    return lines
+
+
+def _table_cell(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+
+
 def _versions_table(versions: Sequence[Version]) -> list[str]:
-    lines = ["", "| 版本 | 时间 | 触发 | 摘要 |", "|---|---|---|---|"]
-    for version in reversed(tuple(versions)):
+    lines = ["| 版本 | 时间 | 触发 | 摘要 |", "|---|---|---|---|"]
+    recent = tuple(versions)[-EXPORTED_VERSION_LIMIT:]
+    for version in reversed(recent):
         trigger = TRIGGER_LABELS.get(version.trigger, str(version.trigger))
         lines.append(
             f"| v{version.version_no} | {version.created_at:%Y-%m-%d %H:%M} | {trigger} "
-            f"| {version.summary} |"
+            f"| {_table_cell(version.summary)} |"
         )
+    if len(versions) > EXPORTED_VERSION_LIMIT:
+        lines += [
+            "",
+            f"共 {len(versions)} 版，展示最近 {EXPORTED_VERSION_LIMIT} 版；"
+            "完整历史可在系统内查看。",
+        ]
     return lines
 
 
@@ -285,8 +360,10 @@ def _appendix_a(view: DocumentView, ledger: EvidenceLedger, adapter: TemplateAda
 
     listed_ids = cited_evidence_ids(view, skip_sections=frozenset({str(adapter.open_home)}))
     open_only_ids = cited_evidence_ids(view) - listed_ids
-    lines = ["## 附录 A · 出处（只给编号与一句话摘要）"]
+    lines = ["## 附录 A · 出处索引", ""]
     total = listed = open_only = 0
+    groups: dict[tuple[EvidenceKind, str], list[EvidenceId]] = {}
+    simulated = False
     for evidence in ledger.evidences():
         total += 1
         if evidence.eid in listed_ids:
@@ -296,52 +373,60 @@ def _appendix_a(view: DocumentView, ledger: EvidenceLedger, adapter: TemplateAda
             continue
         else:
             continue
-        label = KIND_LABELS.get(evidence.kind, str(evidence.kind))
-        # 外部材料要写清"哪份材料的哪一块 / 哪个 URL"，否则读者不知道这句话从哪来（工具层 C-2）
-        where = evidence.source.external_ref
-        source = f"{where} · " if where else ""
-        lines.append(f"- {evidence.eid} · {label} · {source}{_summarize(evidence.text)}")
+        where = evidence.source.external_ref or "—"
+        if not where.lower().startswith(("http://", "https://")):
+            where = re.sub(r"#c\d{2,}$", "", where)
+        groups.setdefault((evidence.kind, where), []).append(evidence.eid)
+        simulated |= evidence.kind is EvidenceKind.SIMULATED
+    if groups:
+        lines += ["| 类型 | 来源 | 编号 |", "|---|---|---|"]
+        for (kind, where), ids in groups.items():
+            label = KIND_LABELS.get(kind, str(kind))
+            source = _table_cell(where)
+            if where.lower().startswith(("http://", "https://")):
+                source = f"<{source}>"
+            lines.append(f"| {label} | {source} | {_compact_ids(ids)} |")
     if not listed:
         lines.append("（还没有任何出处）" if not total else "（本文没有引用任何出处）")
+    omitted: list[str] = []
     if open_only:
         chapter = adapter.number_of(adapter.open_home)
-        lines.append(
-            f"（另有 {open_only} 条出处只被第 {chapter} 章未决清单引用，未列入本附录——"
-            "它们是系统对「还没定的事」的记账，按编号仍可在系统里查）"
+        omitted.append(
+            f"另有 {open_only} 条出处只被第 {chapter} 章未决清单引用"
         )
-    if any(
-        evidence.eid in listed_ids and evidence.kind is EvidenceKind.SIMULATED
-        for evidence in ledger.evidences()
-    ):
-        lines.append(SIMULATION_DISCLAIMER)
+    if simulated:
+        lines += ["", SIMULATION_DISCLAIMER]
     uncited = total - listed - open_only
     if uncited:
-        lines.append(
-            f"（另有 {uncited} 条出处没有被本文引用——未被采纳的提案、"
-            "被跳过的题与更早的轮次都留在系统里，可按编号查）"
-        )
+        omitted.append(f"另有 {uncited} 条出处没有被本文引用")
+    if omitted:
+        lines += ["", f"（{'；'.join(omitted)}；可在系统内按编号查询。）"]
     return "\n".join(lines)
+
+
+def _compact_ids(ids: Sequence[EvidenceId]) -> str:
+    numbers = sorted({int(str(eid)[1:]) for eid in ids})
+    parts: list[str] = []
+    start = end = numbers[0]
+    for number in numbers[1:]:
+        if number == end + 1:
+            end = number
+        else:
+            parts.append(f"E{start}–E{end}" if start != end else f"E{start}")
+            start = end = number
+    parts.append(f"E{start}–E{end}" if start != end else f"E{start}")
+    return "、".join(parts)
 
 
 def _appendix_b(view: DocumentView) -> str:
-    lines = ["## 附录 B · 偏好区（不进交付物）"]
+    lines = ["## 附录 B · 偏好备注（不进交付物）", ""]
     for entry in view.preference_entries:
-        lines += _entry_bullet(entry, indent="")
-    return "\n".join(lines)
-
-
-def _unfinished(readiness: Sequence[ReadinessItem]) -> str:
-    if not readiness:
-        return ""
-    lines = ["## 附录 C · 未完成项（系统按合格标准算的）"]
-    for item in readiness:
-        tag = "阻塞" if item.severity is Severity.BLOCKER else "提示"
-        lines.append(f"- 〔{tag}〕{item.section_id} {item.title}：{item.detail}")
+        lines += _entry_lines(entry, kind=BlockKind.TEXT)
     return "\n".join(lines)
 
 
 def summarize_line(text: str) -> str:
-    """一句话摘要：章节、出处附录、出处查询共用同一条压缩规则。"""
+    """共享的一句话摘要（出处查询等消费者使用）；导出索引不再复述摘要。"""
 
     flat = " ".join(text.split())
     return flat if len(flat) <= SUMMARY_LIMIT else f"{flat[:SUMMARY_LIMIT]}…"

@@ -50,6 +50,13 @@ import { useWorkspaceData } from "./state/useWorkspaceData";
 
 const THEME_KEY = "pmstudio-theme";
 
+function clearProjectLocation() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("project");
+  url.hash = "";
+  window.history.replaceState(null, "", url);
+}
+
 /* 装配点：Provider 在外，守卫在内。未登录（或身份还没读回来）时**不挂载工作区**——
    否则 useWorkspaceData 的启动 effect 会在未登录时报一堆 401，登录后又不重跑。 */
 export default function App() {
@@ -80,6 +87,10 @@ function ThemeGate() {
 
 function AppRoot() {
   const { user, ready } = useAuth();
+  // 恢复有效会话时保留项目链接；需要重新登录时回文档中心。
+  useEffect(() => {
+    if (ready && user === null) clearProjectLocation();
+  }, [ready, user]);
   if (!ready) {
     return (
       <div className="shell shell--plain">
@@ -124,21 +135,19 @@ function Workspace() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("s1");
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
-  /** 顶层视图：项目列表 ⇄ 工作区。**纯 UI 态，不进 URL、不进后端**——
-      `?project=` 才是要留着刷新恢复的那一个（两者性质不同，混在一起就要回答
-      "刷新时有 view=projects 没 project 该去哪"）。 */
   /** 文档列开着没（想看才打开；默认开，顶栏可收）。纯 UI 态。 */
   const [docOpen, setDocOpen] = useState(true);
   /** 右栏开着没（06 §2.4 §3）：null = 按判据初判，点 rail/收起后记 true/false 手动覆盖。
       纯 UI 态，不持久化、不进 URL/后端。 */
   const [loopOpen, setLoopOpen] = useState<boolean | null>(null);
-  /** 顶层视图：工作区 ⇄ 项目列表 ⇄ 模板库（`06` §2.3）。**纯 UI 态，不进 URL、不进后端**——
-      `?project=` 才是要留着刷新恢复的那一个（两者性质不同，混在一起就要回答
-      "刷新时有 view=projects 没 project 该去哪"）。
-      用枚举而不是两个 boolean：两个 boolean 表达互斥视图迟早会出第四种组合。 */
+  /** 普通进入先到文档中心；显式项目链接允许已登录的工作区刷新恢复。 */
   const [view, setView] = useState<"workspace" | "projects" | "templates" | "admin">(
-    "workspace",
+    () => new URLSearchParams(window.location.search).has("project") ? "workspace" : "projects",
   );
+  const showHome = () => {
+    clearProjectLocation();
+    setView("projects");
+  };
   /** 从模板库点「用这个建项目」带回来的模板（null = 不预选，回到既有默认）。 */
   const [pickedTemplateId, setPickedTemplateId] = useState<string | null>(null);
   const listing = view === "projects";
@@ -403,7 +412,8 @@ function Workspace() {
           connection={state.connection}
           onSelectProject={data.selectProject}
           onExport={() => void data.exportMarkdown()}
-          onHome={() => setView("workspace")}
+          onHome={showHome}
+          homeActive
           onTemplates={() => setView("templates")}
           templatesActive={false}
           theme={theme}
@@ -412,7 +422,7 @@ function Workspace() {
           onLogout={() => void logout()}
           onAdmin={() => setView("admin")}
         />
-        <main className="doc" aria-label="项目列表">
+        <main className="doc" aria-label="文档中心">
           <ProjectList
             projects={projects}
             onOpen={(projectId) => {
@@ -443,7 +453,7 @@ function Workspace() {
           connection={state.connection}
           onSelectProject={data.selectProject}
           onExport={() => void data.exportMarkdown()}
-          onHome={() => setView("projects")}
+          onHome={showHome}
           onTemplates={() => setView("templates")}
           templatesActive
           theme={theme}
@@ -455,12 +465,12 @@ function Workspace() {
         <main className="doc" aria-label="模板库">
           <TemplateLibraryScreen
             active
-            onNavigate={() => setView("projects")}
+            onNavigate={showHome}
             onTemplates={() => setView("templates")}
             onUse={(templateId) => {
               // 回项目列表，并把这份模板预选上（"用这个建项目"不许让用户再选一遍）
               setPickedTemplateId(templateId);
-              setView("projects");
+              showHome();
             }}
           />
         </main>
@@ -479,7 +489,7 @@ function Workspace() {
           connection={state.connection}
           onSelectProject={data.selectProject}
           onExport={() => void data.exportMarkdown()}
-          onHome={() => setView("projects")}
+          onHome={showHome}
           onTemplates={() => setView("templates")}
           theme={theme}
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
@@ -487,7 +497,7 @@ function Workspace() {
           onLogout={() => void logout()}
           onAdmin={() => setView("admin")}
         />
-        <AdminView />
+        <AdminView onHome={showHome} />
       </div>
     );
   }
@@ -538,7 +548,7 @@ function Workspace() {
             connection={state.connection}
             onSelectProject={data.selectProject}
             onExport={() => void data.exportMarkdown()}
-            onHome={() => setView("projects")}
+            onHome={showHome}
             docOpen={docOpen}
             onToggleDoc={() => setDocOpen((open) => !open)}
             libraryCount={data.materials.length}

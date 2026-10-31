@@ -1,6 +1,4 @@
-/* 项目列表：门户主界面。左导航壳 + 右内容（上画廊下密行），Word/WPS 起始屏同构：
-   上面解决"开个新的"（模板点选即建），下面解决"回去接着写"（密行，一行看全）。
-   左栏现在三项，全是页内锚点——多用户那天导航变视图，壳不动（`02` §11.0.68 planning）。
+/* 文档中心：最近项目是主内容，新建表单是右侧辅助区，窄屏移到列表下面。
 
 **为什么是"顶层视图"而不是一条路由**：本仓前端零路由依赖（三栏工作区是"一个页面"的
 心智），而 `useWorkspaceData` 早就在用 `window.history.replaceState` + `?project=` 记项目。
@@ -47,7 +45,7 @@ export function ProjectList({
   /** 模板库入口（`06` §2.4 §1）：与 TopBar 模板按钮同一动作（`setView("templates")`）。 */
   onManageTemplates: () => void;
 }) {
-  const [active, setActive] = useState("home-new");
+  const [active, setActive] = useState("home-recent");
   useEffect(() => {
     // jsdom / 非浏览器环境没有 IntersectionObserver：没有就不高亮，不炸。
     if (typeof IntersectionObserver === "undefined") return;
@@ -101,10 +99,13 @@ export function ProjectList({
           <span className="home__mark" aria-hidden="true">
             <Logo />
           </span>
-          <h1 className="home__title">你的项目</h1>
-          <p className="home__lede">
-            点一行回去接着写；也可以另开一个——先选模板，再起名。
-          </p>
+          <div className="home__heading">
+            <h1 className="home__title">文档中心</h1>
+            <p className="home__lede">找到你的产品文档，接着上次的想法继续写。</p>
+          </div>
+          <button type="button" className="btn btn--primary home__new" onClick={() => document.getElementById("new-project-title")?.focus()}>
+            + 新建项目
+          </button>
         </header>
 
         {/* **不摆模型名与席位轮上限**：那是运行信息，属于设置与调试。一个"资料库"
@@ -114,43 +115,52 @@ export function ProjectList({
           {projects.length} 个项目 · 最近更新 {newestOf(projects) ?? "—"}
         </p>
 
-        <section id="home-new" aria-label="新建项目">
-          <NewProjectForm
-            templates={templates}
-            onCreate={onCreate}
-            pending={pending}
-            error={error}
-            initialTemplateId={initialTemplateId}
-          />
-          <button type="button" className="home__navlink" onClick={onManageTemplates}>管理模板 →</button>
-        </section>
-
-        <section id="home-recent" aria-label="最近项目">
-          <ul className="projects" role="list">
-            {projects.map((item) => (
-              <li key={item.project_id} className="projects__item">
-                <button
-                  type="button"
-                  className="projects__row"
-                  onClick={() => onOpen(item.project_id)}
-                >
-                  <span className="projects__glyph" aria-hidden="true">
-                    {glyphOf(item.title)}
-                  </span>
-                  <span className="projects__title">{item.title}</span>
-                  <span className="projects__meta">
-                    <span className="projects__version">v{item.version_no}</span>
-                    <span className="projects__time">{item.updated_at.slice(0, 10)}</span>
-                    <span className="projects__template">{item.template_title}</span>
-                    <span className="projects__go" aria-hidden="true">
-                      ›
+        <div className="home__content">
+          <section id="home-recent" className="home__panel" aria-label="最近项目">
+            <header className="home__panel-head">
+              <h2 className="home__section-title">最近项目</h2>
+              <p className="home__meta">按最近更新排序 · 点击项目打开文档</p>
+            </header>
+            <ul className="projects" role="list">
+              {projects.map((item) => (
+                <li key={item.project_id} className="projects__item">
+                  <button
+                    type="button"
+                    className="projects__row"
+                    onClick={() => onOpen(item.project_id)}
+                  >
+                    <span className="projects__glyph" aria-hidden="true">
+                      {glyphOf(item.title)}
                     </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
+                    <span className="projects__title" title={item.title}>{item.title}</span>
+                    <span className="projects__meta">
+                      <span className="projects__version">v{item.version_no}</span>
+                      <span className="projects__time">{item.updated_at.slice(0, 10)}</span>
+                      <span className="projects__template">{item.template_title}</span>
+                      <span className="projects__go" aria-hidden="true">
+                        ›
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+          <section id="home-new" className="home__panel home__create" aria-label="新建项目">
+            <header className="home__panel-head">
+              <h2 className="home__section-title">新建项目</h2>
+              <p className="home__meta">选一套文档骨架，再给产品起个名字。</p>
+            </header>
+            <NewProjectForm
+              templates={templates}
+              onCreate={onCreate}
+              pending={pending}
+              error={error}
+              initialTemplateId={initialTemplateId}
+            />
+            <button type="button" className="home__navlink" onClick={onManageTemplates}>管理模板 →</button>
+          </section>
+        </div>
       </div>
     </div>
   );

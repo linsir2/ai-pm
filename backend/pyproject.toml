@@ -41,6 +41,7 @@ dev = [
     "httpx>=0.28",
     "ruff>=0.7",
     "playwright>=1.64.0",
+    "markdown-it-py>=4.0",
 ]
 
 [tool.uv]
